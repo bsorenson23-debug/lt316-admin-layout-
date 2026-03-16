@@ -10,15 +10,33 @@
 // Bed configuration
 // ---------------------------------------------------------------------------
 
+export type WorkspaceMode = "flat-bed" | "tumbler-wrap";
+
 export interface BedConfig {
-  /** Bed width in mm */
+  /** Active workspace mode */
+  workspaceMode: WorkspaceMode;
+  /** Flat-bed base width in mm */
+  flatWidth: number;
+  /** Flat-bed base height in mm */
+  flatHeight: number;
+  /** Tumbler diameter in mm */
+  tumblerDiameterMm: number;
+  /** Tumbler printable height in mm */
+  tumblerPrintableHeightMm: number;
+  /** Active workspace width in mm (flat width or tumbler circumference) */
   width: number;
-  /** Bed height in mm */
+  /** Active workspace height in mm (flat height or tumbler printable height) */
   height: number;
   /** Grid cell spacing in mm */
   gridSpacing: number;
+  /** Snap dragged item movement to the current grid spacing */
+  snapToGrid: boolean;
   /** Show origin indicator on the canvas */
   showOrigin: boolean;
+  /** Show guide crosshair overlays on the canvas */
+  showCrosshair: boolean;
+  /** Which crosshair guides are visible */
+  crosshairMode: "origin" | "center" | "both";
   /**
    * Which corner is (0, 0).
    * Currently only 'top-left' is fully supported; 'bottom-left' is reserved
@@ -27,17 +45,49 @@ export interface BedConfig {
   originPosition: "top-left" | "bottom-left";
 }
 
+export function computeTumblerWrapWidthMm(diameterMm: number): number {
+  return Math.PI * diameterMm;
+}
+
+export function normalizeBedConfig(config: BedConfig): BedConfig {
+  const isTumbler = config.workspaceMode === "tumbler-wrap";
+  const width = isTumbler
+    ? computeTumblerWrapWidthMm(config.tumblerDiameterMm)
+    : config.flatWidth;
+  const height = isTumbler ? config.tumblerPrintableHeightMm : config.flatHeight;
+  return {
+    ...config,
+    width,
+    height,
+  };
+}
+
 export const DEFAULT_BED_CONFIG: BedConfig = {
+  workspaceMode: "flat-bed",
+  flatWidth: 300,
+  flatHeight: 300,
+  tumblerDiameterMm: 87,
+  tumblerPrintableHeightMm: 145,
   width: 300,
   height: 300,
-  gridSpacing: 20,
+  gridSpacing: 25,
+  snapToGrid: false,
   showOrigin: true,
+  showCrosshair: true,
+  crosshairMode: "center",
   originPosition: "top-left",
 };
 
 // ---------------------------------------------------------------------------
 // SVG asset (uploaded file)
 // ---------------------------------------------------------------------------
+
+export interface SvgBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 export interface SvgAsset {
   /** Unique identifier */
@@ -52,6 +102,10 @@ export interface SvgAsset {
   naturalWidth?: number;
   /** Intrinsic height derived from viewBox or height attribute (px) */
   naturalHeight?: number;
+  /** SVG document bounds (typically viewBox bounds) */
+  documentBounds: SvgBounds;
+  /** Visible artwork bounds measured from rendered SVG content */
+  artworkBounds: SvgBounds;
   /** When the asset was added to the session */
   uploadedAt: Date;
 }
@@ -60,11 +114,34 @@ export interface SvgAsset {
 // Placed item (an asset instance on the bed)
 // ---------------------------------------------------------------------------
 
+export interface PlacedItemDefaults {
+  /** Default X position in mm (top-left of item box) */
+  x: number;
+  /** Default Y position in mm (top-left of item box) */
+  y: number;
+  /** Default width in mm */
+  width: number;
+  /** Default height in mm */
+  height: number;
+  /** Default rotation in degrees */
+  rotation: number;
+}
+
 export interface PlacedItem {
   /** Unique identifier for this instance */
   id: string;
   /** References the SvgAsset.id it was sourced from */
   assetId: string;
+  /** Snapshot name from source asset at creation time */
+  name: string;
+  /** Snapshot SVG payload from source asset at creation time */
+  svgText: string;
+  /** Preserves the imported source payload for optional normalization workflows */
+  sourceSvgText: string;
+  /** Document bounds snapshot used for placement math */
+  documentBounds: SvgBounds;
+  /** Artwork bounds snapshot used for alignment math */
+  artworkBounds: SvgBounds;
   /** X position in mm from the origin */
   x: number;
   /** Y position in mm from the origin */
@@ -75,8 +152,32 @@ export interface PlacedItem {
   height: number;
   /** Rotation in degrees (clockwise) */
   rotation: number;
+  /** Initial values used by inspector reset */
+  defaults: PlacedItemDefaults;
   /** Future: prevent editing / moving */
   locked?: boolean;
   /** Future: hide without deleting */
   visible?: boolean;
 }
+
+export type PlacedItemPatch = Partial<
+  Omit<
+    PlacedItem,
+    | "id"
+    | "assetId"
+    | "name"
+    | "svgText"
+    | "sourceSvgText"
+    | "documentBounds"
+    | "artworkBounds"
+    | "defaults"
+    | "locked"
+    | "visible"
+  >
+>;
+
+export type ItemAlignmentMode =
+  | "center-bed"
+  | "center-x"
+  | "center-y"
+  | "fit-bed";

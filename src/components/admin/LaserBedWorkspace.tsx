@@ -6,7 +6,7 @@
  * The center panel SVG canvas that renders:
  *   - A scaled laser bed outline with grid overlay
  *   - Placed SVG items (draggable, selectable)
- *   - Click-to-place behavior when an active asset is selected
+ *   - One-shot click-to-place behavior when placement is armed
  *   - An origin indicator (top-left by default)
  *
  * Coordinate system: origin = top-left corner of the bed.
@@ -16,35 +16,59 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { BedConfig, PlacedItem, SvgAsset } from "@/types/admin";
+import { BedConfig, PlacedItem, PlacedItemPatch, SvgAsset } from "@/types/admin";
 import { calcBedScale, mmToPx, pxToMm } from "@/utils/geometry";
 import { svgToDataUrl } from "@/utils/svg";
+import { BedNudgeControl, BED_NUDGE_PANEL_SIZE_PX } from "./BedNudgeControl";
 import styles from "./LaserBedWorkspace.module.css";
 
 /** Length of the origin axis arrows in canvas pixels (fixed, decorative). */
-const ORIGIN_ARROW_PX = 20;
+const ORIGIN_ARROW_PX = 16;
+const ORIGIN_GUIDE_INSET_PX = 8;
+const ORIGIN_WIDGET_OFFSET_PX = 12;
+const CENTER_TARGET_OUTER_PX = 5.5;
+const CENTER_TARGET_INNER_PX = 1.8;
+const BED_VERTICAL_LIFT_PX = 14;
+const BOTTOM_LABEL_OFFSET_PX = 12;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function snapToStep(value: number, step: number): number {
+  if (!Number.isFinite(step) || step <= 0) return value;
+  return Math.round(value / step) * step;
+}
+
+function formatMm(value: number): string {
+  return Number.isInteger(value)
+    ? `${value}`
+    : value.toFixed(2).replace(/\.?0+$/, "");
+}
 
 interface Props {
   bedConfig: BedConfig;
-  svgAssets: SvgAsset[];
   placedItems: PlacedItem[];
   selectedItemId: string | null;
-  activeAsset: SvgAsset | null;
+  placementAsset: SvgAsset | null;
+  isPlacementArmed: boolean;
   onPlaceAsset: (xMm: number, yMm: number) => void;
   onSelectItem: (id: string | null) => void;
-  onUpdateItem: (id: string, patch: Partial<Omit<PlacedItem, "id" | "assetId">>) => void;
+  onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
+  onNudgeSelected: (dxMm: number, dyMm: number) => void;
   onClearWorkspace: () => void;
 }
 
 export function LaserBedWorkspace({
   bedConfig,
-  svgAssets,
   placedItems,
   selectedItemId,
-  activeAsset,
+  placementAsset,
+  isPlacementArmed,
   onPlaceAsset,
   onSelectItem,
   onUpdateItem,
+  onNudgeSelected,
   onClearWorkspace,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -84,7 +108,16 @@ export function LaserBedWorkspace({
   const bedPxH = mmToPx(bedConfig.height, scale);
   // Centre the bed within the container
   const bedOffsetX = (containerSize.w - bedPxW) / 2;
-  const bedOffsetY = (containerSize.h - bedPxH) / 2;
+  const bedOffsetY = Math.max(
+    8,
+    (containerSize.h - bedPxH) / 2 - BED_VERTICAL_LIFT_PX
+  );
+  const selectedItem = placedItems.find((item) => item.id === selectedItemId) ?? null;
+  const nudgeStepMm = bedConfig.snapToGrid ? bedConfig.gridSpacing : 1;
+  const workspaceTitle =
+    bedConfig.workspaceMode === "tumbler-wrap"
+      ? "Tumbler Wrap Workspace"
+      : "Laser Bed Workspace";
 
   // -------------------------------------------------------------------------
   // Drag state
@@ -95,21 +128,45 @@ export function LaserBedWorkspace({
     startMouseY: number;
     startItemX: number; // mm
     startItemY: number; // mm
+    itemWidth: number; // mm
+    itemHeight: number; // mm
   } | null>(null);
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
       if (!dragRef.current) return;
-      const { itemId, startMouseX, startMouseY, startItemX, startItemY } =
+      const {
+        itemId,
+        startMouseX,
+        startMouseY,
+        startItemX,
+        startItemY,
+        itemWidth,
+        itemHeight,
+      } =
         dragRef.current;
       const dx = pxToMm(e.clientX - startMouseX, scale);
       const dy = pxToMm(e.clientY - startMouseY, scale);
+
+      let nextX = startItemX + dx;
+      let nextY = startItemY + dy;
+      const disableSnap = e.altKey || e.shiftKey;
+      if (bedConfig.snapToGrid && !disableSnap) {
+        nextX = snapToStep(nextX, bedConfig.gridSpacing);
+        nextY = snapToStep(nextY, bedConfig.gridSpacing);
+      }
+
+      const maxX = Math.max(0, bedConfig.width - itemWidth);
+      const maxY = Math.max(0, bedConfig.height - itemHeight);
+      nextX = clamp(nextX, 0, maxX);
+      nextY = clamp(nextY, 0, maxY);
+
       onUpdateItem(itemId, {
-        x: Math.max(0, startItemX + dx),
-        y: Math.max(0, startItemY + dy),
+        x: Number(nextX.toFixed(3)),
+        y: Number(nextY.toFixed(3)),
       });
     },
-    [scale, onUpdateItem]
+    [scale, onUpdateItem, bedConfig.snapToGrid, bedConfig.gridSpacing, bedConfig.width, bedConfig.height]
   );
 
   const handleMouseUp = useCallback(() => {
@@ -117,11 +174,11 @@ export function LaserBedWorkspace({
   }, []);
 
   // -------------------------------------------------------------------------
-  // Canvas click: place active asset or deselect
+  // Canvas click: place armed asset once or deselect
   // -------------------------------------------------------------------------
   const handleBedClick = useCallback(
     (e: React.MouseEvent<SVGRectElement>) => {
-      if (!activeAsset) {
+      if (!isPlacementArmed || !placementAsset) {
         // Deselect when clicking empty bed
         onSelectItem(null);
         return;
@@ -131,30 +188,25 @@ export function LaserBedWorkspace({
       const yPx = e.clientY - rect.top;
       onPlaceAsset(pxToMm(xPx, scale), pxToMm(yPx, scale));
     },
-    [activeAsset, scale, onPlaceAsset, onSelectItem]
+    [isPlacementArmed, placementAsset, scale, onPlaceAsset, onSelectItem]
   );
-
-  // -------------------------------------------------------------------------
-  // Grid line generation
-  // -------------------------------------------------------------------------
-  const gridLines = buildGridLines(bedConfig, bedPxW, bedPxH);
 
   return (
     <div className={styles.wrapper} ref={containerRef}>
       {/* Toolbar row */}
       <div className={styles.toolbar}>
-        <span className={styles.toolbarTitle}>Laser Bed Workspace</span>
+        <span className={styles.toolbarTitle}>{workspaceTitle}</span>
         <span className={styles.bedInfo}>
-          {bedConfig.width} × {bedConfig.height} mm &nbsp;|&nbsp; grid:{" "}
-          {bedConfig.gridSpacing} mm
+          {formatMm(bedConfig.width)} x {formatMm(bedConfig.height)} mm
+          &nbsp;|&nbsp; grid: {formatMm(bedConfig.gridSpacing)} mm
         </span>
-        {activeAsset ? (
+        {isPlacementArmed && placementAsset ? (
           <span className={styles.activeTip}>
-            Click bed to place &quot;{activeAsset.name.replace(/\.svg$/i, "")}&quot;
+            Click bed once to place &quot;{placementAsset.name.replace(/\.svg$/i, "")}&quot;
           </span>
         ) : (
           <span className={styles.activeTip} style={{ color: "#555" }}>
-            Select an asset from the left panel
+            Select an asset, then click &quot;Place on Bed&quot;
           </span>
         )}
         {placedItems.length > 0 && (
@@ -172,7 +224,7 @@ export function LaserBedWorkspace({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        style={{ cursor: activeAsset ? "crosshair" : "default" }}
+        style={{ cursor: isPlacementArmed ? "crosshair" : "default" }}
       >
         {/* Defs: grid pattern + arrow markers for origin indicator */}
         <defs>
@@ -193,38 +245,15 @@ export function LaserBedWorkspace({
             />
           </pattern>
           <marker id="arrowX" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-            <path d="M0,0 L6,3 L0,6 Z" fill="#e05050" />
+            <path d="M0,0 L6,3 L0,6 Z" fill="#a54444" />
           </marker>
           <marker id="arrowY" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-            <path d="M0,0 L6,3 L0,6 Z" fill="#50b050" />
+            <path d="M0,0 L6,3 L0,6 Z" fill="#2f7b48" />
           </marker>
         </defs>
 
         {/* Bed group (offset to centre) */}
         <g transform={`translate(${bedOffsetX}, ${bedOffsetY})`}>
-                    {/* Light grey grid, 50mm apart */}
-                    {[...Array(Math.floor(bedConfig.width / 50) + 1)].map((_, i) => (
-                      <line
-                        key={`grid-x-${i}`}
-                        x1={mmToPx(i * 50, scale)}
-                        y1={0}
-                        x2={mmToPx(i * 50, scale)}
-                        y2={bedPxH}
-                        stroke="#b0b0b0"
-                        strokeWidth={1}
-                      />
-                    ))}
-                    {[...Array(Math.floor(bedConfig.height / 50) + 1)].map((_, i) => (
-                      <line
-                        key={`grid-y-${i}`}
-                        x1={0}
-                        y1={mmToPx(i * 50, scale)}
-                        x2={bedPxW}
-                        y2={mmToPx(i * 50, scale)}
-                        stroke="#b0b0b0"
-                        strokeWidth={1}
-                      />
-                    ))}
           {/* Bed background */}
           <rect
             x={0}
@@ -242,10 +271,47 @@ export function LaserBedWorkspace({
             width={bedPxW}
             height={bedPxH}
             fill="none"
-            stroke="#222"
-            strokeWidth="2"
+            stroke="#1f2328"
+            strokeWidth="1.85"
             rx={1}
           />
+
+          {/* Light grey grid, 25mm apart */}
+          {Array.from({ length: Math.floor(bedConfig.width / bedConfig.gridSpacing) + 1 }, (_, i) => {
+            const x = -bedConfig.width / 2 + i * bedConfig.gridSpacing;
+            return (
+              <line
+                key={`grid-x-${x}`}
+                x1={mmToPx(x + bedConfig.width / 2, scale)}
+                y1={0}
+                x2={mmToPx(x + bedConfig.width / 2, scale)}
+                y2={bedPxH}
+                stroke="#9a9a9a"
+                strokeWidth={0.8}
+                opacity={0.62}
+              />
+            );
+          })}
+          {Array.from({ length: Math.floor(bedConfig.height / bedConfig.gridSpacing) + 1 }, (_, i) => {
+            const y = -bedConfig.height / 2 + i * bedConfig.gridSpacing;
+            return (
+              <line
+                key={`grid-y-${y}`}
+                x1={0}
+                y1={mmToPx(y + bedConfig.height / 2, scale)}
+                x2={bedPxW}
+                y2={mmToPx(y + bedConfig.height / 2, scale)}
+                stroke="#9a9a9a"
+                strokeWidth={0.8}
+                opacity={0.62}
+              />
+            );
+          })}
+
+          {/* Crosshair overlays render above grid and below items */}
+          {bedConfig.showCrosshair && (
+            <BedGuideCrosshair bedConfig={bedConfig} scale={scale} />
+          )}
 
           {/* Click target for placement (behind items) */}
           <rect
@@ -255,24 +321,16 @@ export function LaserBedWorkspace({
             height={bedPxH}
             fill="transparent"
             onClick={handleBedClick}
-            style={{ cursor: activeAsset ? "crosshair" : "default" }}
+            style={{ cursor: isPlacementArmed ? "crosshair" : "default" }}
           />
 
           {/* Origin indicator */}
           {bedConfig.showOrigin && (
-            <g>
-              <line x1={0} y1={0} x2={ORIGIN_ARROW_PX} y2={0} stroke="#e05050" strokeWidth={1.5} markerEnd="url(#arrowX)" />
-              <line x1={0} y1={0} x2={0} y2={ORIGIN_ARROW_PX} stroke="#50b050" strokeWidth={1.5} markerEnd="url(#arrowY)" />
-              <circle cx={0} cy={0} r={2.5} fill="#f97316" />
-              <text x={ORIGIN_ARROW_PX + 2} y={4} fill="#e05050" fontSize={9} fontFamily="monospace">X</text>
-              <text x={3} y={ORIGIN_ARROW_PX + 6} fill="#50b050" fontSize={9} fontFamily="monospace">Y</text>
-            </g>
+            <OriginMarker bedConfig={bedConfig} scale={scale} />
           )}
 
           {/* Placed items */}
           {placedItems.map((item) => {
-            const asset = svgAssets.find((a) => a.id === item.assetId);
-            if (!asset) return null;
             const isSelected = item.id === selectedItemId;
             const px = mmToPx(item.x, scale);
             const py = mmToPx(item.y, scale);
@@ -285,13 +343,20 @@ export function LaserBedWorkspace({
               <g
                 key={item.id}
                 transform={`rotate(${item.rotation}, ${cx}, ${cy})`}
-                style={{ cursor: "grab" }}
+                style={{ cursor: isSelected ? "grab" : "pointer" }}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectItem(item.id);
                 }}
                 onMouseDown={(e) => {
+                  if (e.button !== 0) return;
                   e.stopPropagation();
+
+                  if (!isSelected) {
+                    onSelectItem(item.id);
+                    return;
+                  }
+
                   onSelectItem(item.id);
                   dragRef.current = {
                     itemId: item.id,
@@ -299,6 +364,8 @@ export function LaserBedWorkspace({
                     startMouseY: e.clientY,
                     startItemX: item.x,
                     startItemY: item.y,
+                    itemWidth: item.width,
+                    itemHeight: item.height,
                   };
                 }}
               >
@@ -308,8 +375,8 @@ export function LaserBedWorkspace({
                   y={py}
                   width={pw}
                   height={ph}
-                  href={svgToDataUrl(asset.content)}
-                  preserveAspectRatio="xMidYMid meet"
+                  href={svgToDataUrl(item.svgText)}
+                  preserveAspectRatio="none"
                 />
 
                 {/* Selection outline */}
@@ -350,6 +417,15 @@ export function LaserBedWorkspace({
             );
           })}
 
+          {selectedItem && (
+            <BedNudgeControl
+              x={Math.max(8, bedPxW - BED_NUDGE_PANEL_SIZE_PX - 10)}
+              y={10}
+              stepMm={nudgeStepMm}
+              onNudge={onNudgeSelected}
+            />
+          )}
+
           {/* Coordinate labels along edges */}
           <CoordLabels
             bedConfig={bedConfig}
@@ -373,20 +449,20 @@ function CoordLabels({
   bedConfig: BedConfig;
   scale: number;
 }) {
-  // Centered coordinate system: X from -150 to 150, Y from -150 to 150
-  const step = bedConfig.gridSpacing * 5;
+  // Centered grid numbers: X from -150 to 150, Y from -150 to 150
+  const step = bedConfig.gridSpacing;
   const labels: React.ReactNode[] = [];
   const w = bedConfig.width;
   const h = bedConfig.height;
-  // X axis: center horizontal
+  // X axis: bottom edge
   for (let x = -w / 2; x <= w / 2; x += step) {
     labels.push(
       <text
         key={`x-${x}`}
         x={mmToPx(x + w / 2, scale)}
-        y={h / 2 * scale - 8}
-        fill="#444"
-        fontSize={8}
+        y={mmToPx(h, scale) + BOTTOM_LABEL_OFFSET_PX}
+        fill="#222"
+        fontSize={10}
         fontFamily="monospace"
         textAnchor="middle"
       >
@@ -394,15 +470,15 @@ function CoordLabels({
       </text>
     );
   }
-  // Y axis: center vertical
+  // Y axis: left edge
   for (let y = -h / 2; y <= h / 2; y += step) {
     labels.push(
       <text
         key={`y-${y}`}
-        x={w / 2 * scale - 8}
-        y={mmToPx(y + h / 2, scale) + 3}
-        fill="#444"
-        fontSize={8}
+        x={-12}
+        y={mmToPx(y + h / 2, scale) + 4}
+        fill="#222"
+        fontSize={10}
         fontFamily="monospace"
         textAnchor="end"
       >
@@ -414,28 +490,226 @@ function CoordLabels({
 }
 
 // ---------------------------------------------------------------------------
-// Grid major lines (every 5 × gridSpacing)
+// Guide overlay helpers
 // ---------------------------------------------------------------------------
 
-function buildGridLines(
+function getOriginPointPx(
   bedConfig: BedConfig,
-  bedPxW: number,
-  bedPxH: number
-): { x1: number; y1: number; x2: number; y2: number }[] {
-  const lines: { x1: number; y1: number; x2: number; y2: number }[] = [];
-  const majorSpacing = bedConfig.gridSpacing * 5;
-  const scaleX = bedPxW / bedConfig.width;
-  const scaleY = bedPxH / bedConfig.height;
+  scale: number
+): { x: number; y: number } {
+  if (bedConfig.originPosition === "bottom-left") {
+    return { x: 0, y: mmToPx(bedConfig.height, scale) };
+  }
+  return { x: 0, y: 0 };
+}
 
-  // Vertical
-  for (let xMm = 0; xMm <= bedConfig.width; xMm += majorSpacing) {
-    const xPx = xMm * scaleX;
-    lines.push({ x1: xPx, y1: 0, x2: xPx, y2: bedPxH });
-  }
-  // Horizontal
-  for (let yMm = 0; yMm <= bedConfig.height; yMm += majorSpacing) {
-    const yPx = yMm * scaleY;
-    lines.push({ x1: 0, y1: yPx, x2: bedPxW, y2: yPx });
-  }
-  return lines;
+function BedGuideCrosshair({
+  bedConfig,
+  scale,
+}: {
+  bedConfig: BedConfig;
+  scale: number;
+}) {
+  const bedPxW = mmToPx(bedConfig.width, scale);
+  const bedPxH = mmToPx(bedConfig.height, scale);
+  const centerX = bedPxW / 2;
+  const centerY = bedPxH / 2;
+  const origin = getOriginPointPx(bedConfig, scale);
+
+  const showOriginGuides =
+    bedConfig.crosshairMode === "origin" || bedConfig.crosshairMode === "both";
+  const showCenterGuides =
+    bedConfig.crosshairMode === "center" || bedConfig.crosshairMode === "both";
+
+  const originGuideX = origin.x + ORIGIN_GUIDE_INSET_PX;
+  const originGuideY =
+    bedConfig.originPosition === "bottom-left"
+      ? origin.y - ORIGIN_GUIDE_INSET_PX
+      : origin.y + ORIGIN_GUIDE_INSET_PX;
+
+  return (
+    <g pointerEvents="none">
+      {showCenterGuides && (
+        <g>
+          <line
+            x1={centerX}
+            y1={0}
+            x2={centerX}
+            y2={bedPxH}
+            stroke="#0e6984"
+            strokeWidth={1.9}
+            strokeDasharray="10 6"
+            strokeLinecap="round"
+            opacity={0.92}
+          />
+          <line
+            x1={0}
+            y1={centerY}
+            x2={bedPxW}
+            y2={centerY}
+            stroke="#0e6984"
+            strokeWidth={1.9}
+            strokeDasharray="10 6"
+            strokeLinecap="round"
+            opacity={0.92}
+          />
+          {/* Center target marker (rendered above guide dashes) */}
+          <circle
+            cx={centerX}
+            cy={centerY}
+            r={CENTER_TARGET_OUTER_PX}
+            fill="#f5f5f5"
+            fillOpacity={0.86}
+            stroke="#0a5a72"
+            strokeWidth={1.35}
+          />
+          <circle
+            cx={centerX}
+            cy={centerY}
+            r={CENTER_TARGET_INNER_PX}
+            fill="#0a5a72"
+          />
+        </g>
+      )}
+
+      {showOriginGuides && (
+        <g>
+          <line
+            x1={originGuideX}
+            y1={0}
+            x2={originGuideX}
+            y2={bedPxH}
+            stroke="#9f683e"
+            strokeWidth={1.35}
+            strokeDasharray="4 7"
+            strokeLinecap="round"
+            opacity={0.76}
+          />
+          <line
+            x1={0}
+            y1={originGuideY}
+            x2={bedPxW}
+            y2={originGuideY}
+            stroke="#9f683e"
+            strokeWidth={1.35}
+            strokeDasharray="4 7"
+            strokeLinecap="round"
+            opacity={0.76}
+          />
+          <line
+            x1={origin.x}
+            y1={origin.y}
+            x2={originGuideX}
+            y2={origin.y}
+            stroke="#9f683e"
+            strokeWidth={1.35}
+            strokeLinecap="round"
+            opacity={0.78}
+          />
+          <line
+            x1={origin.x}
+            y1={origin.y}
+            x2={origin.x}
+            y2={originGuideY}
+            stroke="#9f683e"
+            strokeWidth={1.35}
+            strokeLinecap="round"
+            opacity={0.78}
+          />
+        </g>
+      )}
+    </g>
+  );
+}
+
+function OriginMarker({
+  bedConfig,
+  scale,
+}: {
+  bedConfig: BedConfig;
+  scale: number;
+}) {
+  const origin = getOriginPointPx(bedConfig, scale);
+  const yAxisDirection = bedConfig.originPosition === "bottom-left" ? -1 : 1;
+  const widgetX = origin.x + ORIGIN_WIDGET_OFFSET_PX;
+  const widgetY = origin.y + ORIGIN_WIDGET_OFFSET_PX * yAxisDirection;
+  const originLabelY = widgetY + (yAxisDirection > 0 ? 11 : -6);
+
+  return (
+    <g pointerEvents="none">
+      {/* True machine-origin anchor point */}
+      <circle
+        cx={origin.x}
+        cy={origin.y}
+        r={2}
+        fill="#f5f5f5"
+        stroke="#8b5f40"
+        strokeWidth={1}
+        opacity={0.92}
+      />
+      <line
+        x1={origin.x}
+        y1={origin.y}
+        x2={widgetX}
+        y2={widgetY}
+        stroke="#8b5f40"
+        strokeWidth={1.1}
+        opacity={0.72}
+      />
+      <line
+        x1={widgetX}
+        y1={widgetY}
+        x2={widgetX + ORIGIN_ARROW_PX}
+        y2={widgetY}
+        stroke="#a54444"
+        strokeWidth={1.75}
+        markerEnd="url(#arrowX)"
+      />
+      <line
+        x1={widgetX}
+        y1={widgetY}
+        x2={widgetX}
+        y2={widgetY + ORIGIN_ARROW_PX * yAxisDirection}
+        stroke="#2f7b48"
+        strokeWidth={1.75}
+        markerEnd="url(#arrowY)"
+      />
+      <circle
+        cx={widgetX}
+        cy={widgetY}
+        r={2.8}
+        fill="#f6c48d"
+        stroke="#825633"
+        strokeWidth={0.85}
+      />
+      <text
+        x={widgetX + ORIGIN_ARROW_PX + 1}
+        y={widgetY + 3}
+        fill="#8f3f3f"
+        fontSize={8}
+        fontFamily="monospace"
+      >
+        X
+      </text>
+      <text
+        x={widgetX + 2}
+        y={widgetY + ORIGIN_ARROW_PX * yAxisDirection + (yAxisDirection > 0 ? 7 : -1)}
+        fill="#2f7b48"
+        fontSize={8}
+        fontFamily="monospace"
+      >
+        Y
+      </text>
+      <text
+        x={widgetX + ORIGIN_ARROW_PX + 4}
+        y={originLabelY}
+        fill="#6e5b4a"
+        fontSize={8}
+        fontWeight={500}
+        fontFamily="monospace"
+      >
+        origin
+      </text>
+    </g>
+  );
 }

@@ -21,7 +21,9 @@ interface Props {
   assets: SvgAsset[];
   selectedAssetId: string | null;
   onSelectAsset: (id: string) => void;
-  onUpload: (files: FileList) => void;
+  onUpload: (files: FileList) => void | Promise<void>;
+  uploadError: string | null;
+  onPlaceSelectedAsset: () => void;
   onRemoveAsset: (id: string) => void;
   onClearAll: () => void;
 }
@@ -31,10 +33,13 @@ export function SvgAssetLibraryPanel({
   selectedAssetId,
   onSelectAsset,
   onUpload,
+  uploadError,
+  onPlaceSelectedAsset,
   onRemoveAsset,
   onClearAll,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeAsset = assets.find((asset) => asset.id === selectedAssetId) ?? null;
 
   const triggerUpload = () => fileInputRef.current?.click();
 
@@ -75,15 +80,30 @@ export function SvgAssetLibraryPanel({
 
       {/* Upload button */}
       <button className={styles.uploadBtn} onClick={triggerUpload}>
-        <span className={styles.uploadIcon}>↑</span>
+        <span className={styles.uploadIcon}>+</span>
         Upload SVG
       </button>
+
+      {uploadError && <div className={styles.uploadError}>{uploadError}</div>}
+
+      <div className={styles.placeBar}>
+        <button
+          className={styles.placeBtn}
+          onClick={onPlaceSelectedAsset}
+          disabled={!activeAsset}
+        >
+          Place on Bed
+        </button>
+        <span className={styles.placeHint}>
+          {activeAsset ? activeAsset.name : "Select an asset to place"}
+        </span>
+      </div>
 
       {/* Asset list */}
       <div className={styles.assetList}>
         {assets.length === 0 ? (
           <div className={styles.emptyState}>
-            <div className={styles.emptyIcon}>⬡</div>
+            <div className={styles.emptyIcon}>[]</div>
             <p>No SVGs loaded.</p>
             <p className={styles.emptyHint}>
               Upload one or more SVG files to get started.
@@ -142,7 +162,7 @@ function AssetCard({ asset, isSelected, onSelect, onRemove }: AssetCardProps) {
         <span className={styles.assetName}>{displayName}</span>
         {(asset.naturalWidth || asset.naturalHeight) && (
           <span className={styles.assetSize}>
-            {asset.naturalWidth ?? "?"}×{asset.naturalHeight ?? "?"}
+            {asset.naturalWidth ?? "?"}x{asset.naturalHeight ?? "?"}
           </span>
         )}
       </div>
@@ -160,7 +180,7 @@ function AssetCard({ asset, isSelected, onSelect, onRemove }: AssetCardProps) {
         title="Remove asset"
         aria-label={`Remove ${asset.name}`}
       >
-        ✕
+        x
       </button>
     </div>
   );

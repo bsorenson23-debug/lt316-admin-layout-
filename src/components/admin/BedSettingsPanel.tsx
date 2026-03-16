@@ -3,16 +3,25 @@
 /**
  * BedSettingsPanel
  *
- * Right-sidebar section for editing laser bed configuration:
- *   - Width (mm)
- *   - Height (mm)
+ * Right-sidebar section for editing workspace configuration:
+ *   - Workspace mode (flat bed / tumbler wrap)
+ *   - Flat-bed dimensions
+ *   - Tumbler dimensions (diameter + printable height)
+ *   - Derived tumbler wrap width (circumference)
  *   - Grid spacing (mm)
+ *   - Snap to grid toggle
  *   - Show origin toggle
  *   - Origin position (reserved for future bottom-left support)
+ *   - Show crosshair toggle
+ *   - Crosshair mode (origin / center / both)
  */
 
 import React from "react";
-import { BedConfig } from "@/types/admin";
+import {
+  BedConfig,
+  computeTumblerWrapWidthMm,
+  normalizeBedConfig,
+} from "@/types/admin";
 import styles from "./BedSettingsPanel.module.css";
 
 interface Props {
@@ -20,21 +29,23 @@ interface Props {
   onUpdateBedConfig: (config: BedConfig) => void;
 }
 
+type NumericConfigField =
+  | "flatWidth"
+  | "flatHeight"
+  | "tumblerDiameterMm"
+  | "tumblerPrintableHeightMm"
+  | "gridSpacing";
+
 export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
   const set = (patch: Partial<BedConfig>) =>
-    onUpdateBedConfig({ ...bedConfig, ...patch });
+    onUpdateBedConfig(normalizeBedConfig({ ...bedConfig, ...patch }));
 
-  const handleNumber = (
-    field: keyof Pick<BedConfig, "width" | "height" | "gridSpacing">,
-    raw: string,
-    min: number,
-    max: number
-  ) => {
-    const n = parseFloat(raw);
-    if (!isNaN(n) && n >= min && n <= max) {
-      set({ [field]: n });
-    }
+  const handleNumber = (field: NumericConfigField, value: number) => {
+    set({ [field]: value } as Partial<BedConfig>);
   };
+
+  const wrapWidthMm = computeTumblerWrapWidthMm(bedConfig.tumblerDiameterMm);
+  const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
 
   return (
     <div className={styles.panel}>
@@ -43,46 +54,104 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
       </div>
 
       <div className={styles.body}>
-        {/* Bed width */}
-        <FieldRow label="Width (mm)">
-          <input
-            type="number"
-            className={styles.numInput}
-            value={bedConfig.width}
-            min={10}
-            max={2000}
-            step={10}
-            onChange={(e) => handleNumber("width", e.target.value, 10, 2000)}
-            aria-label="Bed width in mm"
-          />
+        <FieldRow label="Workspace">
+          <select
+            className={styles.select}
+            value={bedConfig.workspaceMode}
+            onChange={(e) =>
+              set({ workspaceMode: e.target.value as BedConfig["workspaceMode"] })
+            }
+            aria-label="Workspace mode"
+          >
+            <option value="flat-bed">Flat Bed</option>
+            <option value="tumbler-wrap">Tumbler Wrap</option>
+          </select>
         </FieldRow>
 
-        {/* Bed height */}
-        <FieldRow label="Height (mm)">
-          <input
-            type="number"
-            className={styles.numInput}
-            value={bedConfig.height}
-            min={10}
-            max={2000}
-            step={10}
-            onChange={(e) => handleNumber("height", e.target.value, 10, 2000)}
-            aria-label="Bed height in mm"
-          />
-        </FieldRow>
+        {isTumblerMode ? (
+          <>
+            <FieldRow label="Diameter (mm)">
+              <DraftNumberInput
+                className={styles.numInput}
+                value={bedConfig.tumblerDiameterMm}
+                min={10}
+                max={300}
+                step={0.1}
+                onValueChange={(value) => handleNumber("tumblerDiameterMm", value)}
+                aria-label="Tumbler diameter in mm"
+              />
+            </FieldRow>
+
+            <FieldRow label="Print Height (mm)">
+              <DraftNumberInput
+                className={styles.numInput}
+                value={bedConfig.tumblerPrintableHeightMm}
+                min={10}
+                max={500}
+                step={0.1}
+                onValueChange={(value) =>
+                  handleNumber("tumblerPrintableHeightMm", value)
+                }
+                aria-label="Tumbler printable height in mm"
+              />
+            </FieldRow>
+
+            <FieldRow label="Wrap Width (mm)">
+              <span className={styles.readonlyValue}>{wrapWidthMm.toFixed(2)}</span>
+            </FieldRow>
+          </>
+        ) : (
+          <>
+            <FieldRow label="Width (mm)">
+              <DraftNumberInput
+                className={styles.numInput}
+                value={bedConfig.flatWidth}
+                min={10}
+                max={2000}
+                step={10}
+                onValueChange={(value) => handleNumber("flatWidth", value)}
+                aria-label="Bed width in mm"
+              />
+            </FieldRow>
+
+            <FieldRow label="Height (mm)">
+              <DraftNumberInput
+                className={styles.numInput}
+                value={bedConfig.flatHeight}
+                min={10}
+                max={2000}
+                step={10}
+                onValueChange={(value) => handleNumber("flatHeight", value)}
+                aria-label="Bed height in mm"
+              />
+            </FieldRow>
+          </>
+        )}
 
         {/* Grid spacing */}
         <FieldRow label="Grid (mm)">
-          <input
-            type="number"
+          <DraftNumberInput
             className={styles.numInput}
             value={bedConfig.gridSpacing}
             min={1}
             max={200}
             step={1}
-            onChange={(e) => handleNumber("gridSpacing", e.target.value, 1, 200)}
+            onValueChange={(value) => handleNumber("gridSpacing", value)}
             aria-label="Grid spacing in mm"
           />
+        </FieldRow>
+
+        {/* Snap to grid */}
+        <FieldRow label="Snap to Grid">
+          <label className={styles.toggle}>
+            <input
+              type="checkbox"
+              checked={bedConfig.snapToGrid}
+              onChange={(e) => set({ snapToGrid: e.target.checked })}
+              aria-label="Snap dragged items to grid"
+            />
+            <span className={styles.toggleTrack} />
+          </label>
         </FieldRow>
 
         {/* Show origin */}
@@ -117,6 +186,37 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
             </option>
           </select>
         </FieldRow>
+
+        {/* Show crosshair */}
+        <FieldRow label="Show Crosshair">
+          <label className={styles.toggle}>
+            <input
+              type="checkbox"
+              checked={bedConfig.showCrosshair}
+              onChange={(e) => set({ showCrosshair: e.target.checked })}
+              aria-label="Show crosshair overlay"
+            />
+            <span className={styles.toggleTrack} />
+          </label>
+        </FieldRow>
+
+        {/* Crosshair mode */}
+        <FieldRow label="Crosshair Mode">
+          <select
+            className={styles.select}
+            value={bedConfig.crosshairMode}
+            onChange={(e) =>
+              set({
+                crosshairMode: e.target.value as BedConfig["crosshairMode"],
+              })
+            }
+            aria-label="Crosshair mode"
+          >
+            <option value="origin">Origin</option>
+            <option value="center">Center</option>
+            <option value="both">Both</option>
+          </select>
+        </FieldRow>
       </div>
     </div>
   );
@@ -138,5 +238,90 @@ function FieldRow({
       <span className={styles.fieldLabel}>{label}</span>
       <div className={styles.fieldControl}>{children}</div>
     </div>
+  );
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function parseDraftNumber(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (
+    trimmed === "" ||
+    trimmed === "-" ||
+    trimmed === "." ||
+    trimmed === "-."
+  ) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatDraftNumber(value: number): string {
+  return `${value}`;
+}
+
+function DraftNumberInput({
+  value,
+  min,
+  max,
+  step,
+  className,
+  onValueChange,
+  "aria-label": ariaLabel,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  className: string;
+  onValueChange: (value: number) => void;
+  "aria-label": string;
+}) {
+  const [draft, setDraft] = React.useState(() => formatDraftNumber(value));
+
+  React.useEffect(() => {
+    setDraft(formatDraftNumber(value));
+  }, [value]);
+
+  const commitDraft = React.useCallback(() => {
+    const parsed = parseDraftNumber(draft);
+    if (parsed === null) {
+      setDraft(formatDraftNumber(value));
+      return;
+    }
+    const normalized = clamp(parsed, min, max);
+    onValueChange(normalized);
+    setDraft(formatDraftNumber(normalized));
+  }, [draft, value, min, max, onValueChange]);
+
+  return (
+    <input
+      type="number"
+      className={className}
+      value={draft}
+      min={min}
+      max={max}
+      step={step}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setDraft(raw);
+        const parsed = parseDraftNumber(raw);
+        if (parsed === null) return;
+        // Keep live updates responsive while typing.
+        if (parsed > 0) {
+          onValueChange(parsed);
+        }
+      }}
+      onBlur={commitDraft}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          (e.currentTarget as HTMLInputElement).blur();
+        }
+      }}
+      aria-label={ariaLabel}
+    />
   );
 }
