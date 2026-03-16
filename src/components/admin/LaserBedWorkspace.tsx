@@ -202,37 +202,38 @@ export function LaserBedWorkspace({
 
         {/* Bed group (offset to centre) */}
         <g transform={`translate(${bedOffsetX}, ${bedOffsetY})`}>
+                    {/* Light grey grid, 50mm apart */}
+                    {[...Array(Math.floor(bedConfig.width / 50) + 1)].map((_, i) => (
+                      <line
+                        key={`grid-x-${i}`}
+                        x1={mmToPx(i * 50, scale)}
+                        y1={0}
+                        x2={mmToPx(i * 50, scale)}
+                        y2={bedPxH}
+                        stroke="#b0b0b0"
+                        strokeWidth={1}
+                      />
+                    ))}
+                    {[...Array(Math.floor(bedConfig.height / 50) + 1)].map((_, i) => (
+                      <line
+                        key={`grid-y-${i}`}
+                        x1={0}
+                        y1={mmToPx(i * 50, scale)}
+                        x2={bedPxW}
+                        y2={mmToPx(i * 50, scale)}
+                        stroke="#b0b0b0"
+                        strokeWidth={1}
+                      />
+                    ))}
           {/* Bed background */}
           <rect
             x={0}
             y={0}
             width={bedPxW}
             height={bedPxH}
-            fill="#1c1c1c"
+            fill="#f5f5f5"
             stroke="none"
           />
-
-          {/* Grid overlay */}
-          <rect
-            x={0}
-            y={0}
-            width={bedPxW}
-            height={bedPxH}
-            fill="url(#grid-minor)"
-          />
-
-          {/* Major grid lines every 5 minor cells */}
-          {gridLines.map((l, i) => (
-            <line
-              key={i}
-              x1={l.x1}
-              y1={l.y1}
-              x2={l.x2}
-              y2={l.y2}
-              stroke="#2e2e2e"
-              strokeWidth="1"
-            />
-          ))}
 
           {/* Bed boundary */}
           <rect
@@ -241,8 +242,8 @@ export function LaserBedWorkspace({
             width={bedPxW}
             height={bedPxH}
             fill="none"
-            stroke="#f97316"
-            strokeWidth="1.5"
+            stroke="#222"
+            strokeWidth="2"
             rx={1}
           />
 
@@ -372,45 +373,43 @@ function CoordLabels({
   bedConfig: BedConfig;
   scale: number;
 }) {
-  const step = bedConfig.gridSpacing * 5; // label every 5 grid cells
+  // Centered coordinate system: X from -150 to 150, Y from -150 to 150
+  const step = bedConfig.gridSpacing * 5;
   const labels: React.ReactNode[] = [];
-
-  // X axis (top edge)
-  for (let xMm = 0; xMm <= bedConfig.width; xMm += step) {
-    const xPx = mmToPx(xMm, scale);
+  const w = bedConfig.width;
+  const h = bedConfig.height;
+  // X axis: center horizontal
+  for (let x = -w / 2; x <= w / 2; x += step) {
     labels.push(
       <text
-        key={`lx-${xMm}`}
-        x={xPx}
-        y={-4}
+        key={`x-${x}`}
+        x={mmToPx(x + w / 2, scale)}
+        y={h / 2 * scale - 8}
         fill="#444"
         fontSize={8}
         fontFamily="monospace"
         textAnchor="middle"
       >
-        {xMm}
+        {x}
       </text>
     );
   }
-
-  // Y axis (left edge)
-  for (let yMm = 0; yMm <= bedConfig.height; yMm += step) {
-    const yPx = mmToPx(yMm, scale);
+  // Y axis: center vertical
+  for (let y = -h / 2; y <= h / 2; y += step) {
     labels.push(
       <text
-        key={`ly-${yMm}`}
-        x={-4}
-        y={yPx + 3}
+        key={`y-${y}`}
+        x={w / 2 * scale - 8}
+        y={mmToPx(y + h / 2, scale) + 3}
         fill="#444"
         fontSize={8}
         fontFamily="monospace"
         textAnchor="end"
       >
-        {yMm}
+        {y}
       </text>
     );
   }
-
   return <>{labels}</>;
 }
 

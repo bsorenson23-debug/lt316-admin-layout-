@@ -28,7 +28,7 @@ export interface BedConfig {
 }
 
 export const DEFAULT_BED_CONFIG: BedConfig = {
-  width: 400,
+  width: 300,
   height: 300,
   gridSpacing: 20,
   showOrigin: true,
