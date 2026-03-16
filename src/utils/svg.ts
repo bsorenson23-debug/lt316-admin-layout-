@@ -93,7 +93,11 @@ export function defaultPlacedSize(
 ): { width: number; height: number } {
   const w = asset.naturalWidth ?? 100;
   const h = asset.naturalHeight ?? 100;
-  const ratio = w / (h || 1);
+  // Guard against a zero height to avoid division by zero
+  if (h === 0) {
+    return { width: maxSizeMm, height: maxSizeMm };
+  }
+  const ratio = w / h;
   if (w >= h) {
     return { width: maxSizeMm, height: maxSizeMm / ratio };
   }

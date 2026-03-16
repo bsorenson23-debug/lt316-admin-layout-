@@ -21,6 +21,9 @@ import { calcBedScale, mmToPx, pxToMm } from "@/utils/geometry";
 import { svgToDataUrl } from "@/utils/svg";
 import styles from "./LaserBedWorkspace.module.css";
 
+/** Length of the origin axis arrows in canvas pixels (fixed, decorative). */
+const ORIGIN_ARROW_PX = 20;
+
 interface Props {
   bedConfig: BedConfig;
   svgAssets: SvgAsset[];
@@ -171,7 +174,7 @@ export function LaserBedWorkspace({
         onMouseLeave={handleMouseUp}
         style={{ cursor: activeAsset ? "crosshair" : "default" }}
       >
-        {/* Defs: grid pattern */}
+        {/* Defs: grid pattern + arrow markers for origin indicator */}
         <defs>
           <pattern
             id="grid-minor"
@@ -189,6 +192,12 @@ export function LaserBedWorkspace({
               strokeWidth="0.5"
             />
           </pattern>
+          <marker id="arrowX" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="#e05050" />
+          </marker>
+          <marker id="arrowY" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="#50b050" />
+          </marker>
         </defs>
 
         {/* Bed group (offset to centre) */}
@@ -251,11 +260,11 @@ export function LaserBedWorkspace({
           {/* Origin indicator */}
           {bedConfig.showOrigin && (
             <g>
-              <line x1={0} y1={0} x2={20} y2={0} stroke="#e05050" strokeWidth={1.5} markerEnd="url(#arrowX)" />
-              <line x1={0} y1={0} x2={0} y2={20} stroke="#50b050" strokeWidth={1.5} markerEnd="url(#arrowY)" />
+              <line x1={0} y1={0} x2={ORIGIN_ARROW_PX} y2={0} stroke="#e05050" strokeWidth={1.5} markerEnd="url(#arrowX)" />
+              <line x1={0} y1={0} x2={0} y2={ORIGIN_ARROW_PX} stroke="#50b050" strokeWidth={1.5} markerEnd="url(#arrowY)" />
               <circle cx={0} cy={0} r={2.5} fill="#f97316" />
-              <text x={22} y={4} fill="#e05050" fontSize={9} fontFamily="monospace">X</text>
-              <text x={3} y={26} fill="#50b050" fontSize={9} fontFamily="monospace">Y</text>
+              <text x={ORIGIN_ARROW_PX + 2} y={4} fill="#e05050" fontSize={9} fontFamily="monospace">X</text>
+              <text x={3} y={ORIGIN_ARROW_PX + 6} fill="#50b050" fontSize={9} fontFamily="monospace">Y</text>
             </g>
           )}
 
@@ -347,15 +356,6 @@ export function LaserBedWorkspace({
           />
         </g>
 
-        {/* Arrow marker defs */}
-        <defs>
-          <marker id="arrowX" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-            <path d="M0,0 L6,3 L0,6 Z" fill="#e05050" />
-          </marker>
-          <marker id="arrowY" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-            <path d="M0,0 L6,3 L0,6 Z" fill="#50b050" />
-          </marker>
-        </defs>
       </svg>
     </div>
   );
