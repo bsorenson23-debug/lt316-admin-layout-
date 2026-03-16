@@ -23,6 +23,20 @@ export interface BedConfig {
   tumblerDiameterMm: number;
   /** Tumbler printable height in mm */
   tumblerPrintableHeightMm: number;
+  /** Optional tumbler metadata for future tapered workflows */
+  tumblerShapeType?: "straight" | "tapered" | "unknown";
+  tumblerOutsideDiameterMm?: number;
+  tumblerTopDiameterMm?: number;
+  tumblerBottomDiameterMm?: number;
+  tumblerOverallHeightMm?: number;
+  tumblerUsableHeightMm?: number;
+  tumblerCapacityOz?: number;
+  tumblerHasHandle?: boolean;
+  tumblerBrand?: string;
+  tumblerModel?: string;
+  /** Derived template dimensions from raw tumbler spec */
+  tumblerTemplateWidthMm?: number;
+  tumblerTemplateHeightMm?: number;
   /** Active workspace width in mm (flat width or tumbler circumference) */
   width: number;
   /** Active workspace height in mm (flat height or tumbler printable height) */
@@ -51,14 +65,40 @@ export function computeTumblerWrapWidthMm(diameterMm: number): number {
 
 export function normalizeBedConfig(config: BedConfig): BedConfig {
   const isTumbler = config.workspaceMode === "tumbler-wrap";
-  const width = isTumbler
-    ? computeTumblerWrapWidthMm(config.tumblerDiameterMm)
-    : config.flatWidth;
-  const height = isTumbler ? config.tumblerPrintableHeightMm : config.flatHeight;
+  let width = config.flatWidth;
+  let height = config.flatHeight;
+
+  if (isTumbler) {
+    const hasTop = Number.isFinite(config.tumblerTopDiameterMm);
+    const hasBottom = Number.isFinite(config.tumblerBottomDiameterMm);
+    const hasOutside = Number.isFinite(config.tumblerOutsideDiameterMm);
+    const isTapered = config.tumblerShapeType === "tapered" && hasTop && hasBottom;
+
+    if (isTapered) {
+      const top = config.tumblerTopDiameterMm ?? config.tumblerDiameterMm;
+      const bottom = config.tumblerBottomDiameterMm ?? config.tumblerDiameterMm;
+      width = Math.PI * ((top + bottom) / 2);
+    } else if (hasOutside) {
+      width = Math.PI * (config.tumblerOutsideDiameterMm ?? config.tumblerDiameterMm);
+    } else {
+      width = computeTumblerWrapWidthMm(config.tumblerDiameterMm);
+    }
+
+    if (Number.isFinite(config.tumblerUsableHeightMm)) {
+      height = config.tumblerUsableHeightMm ?? config.tumblerPrintableHeightMm;
+    } else if (Number.isFinite(config.tumblerOverallHeightMm)) {
+      height = config.tumblerOverallHeightMm ?? config.tumblerPrintableHeightMm;
+    } else {
+      height = config.tumblerPrintableHeightMm;
+    }
+  }
+
   return {
     ...config,
     width,
     height,
+    tumblerTemplateWidthMm: width,
+    tumblerTemplateHeightMm: height,
   };
 }
 

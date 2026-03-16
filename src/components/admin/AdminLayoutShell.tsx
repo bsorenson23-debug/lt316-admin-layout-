@@ -20,14 +20,17 @@ import {
   SvgAsset,
 } from "@/types/admin";
 import { parseSvgAsset, defaultPlacedSize, normalizeSvgToArtworkBounds } from "@/utils/svg";
+import { TumblerSpecDraft } from "@/types/tumblerAutoSize";
 import {
   computeAlignmentPatch,
   computePlacementFromArtworkRect,
   getPlacedArtworkBounds,
 } from "@/utils/alignment";
+import { applyTumblerSuggestion } from "@/utils/tumblerAutoSize";
 import { SvgAssetLibraryPanel } from "./SvgAssetLibraryPanel";
 import { LaserBedWorkspace } from "./LaserBedWorkspace";
 import { BedSettingsPanel } from "./BedSettingsPanel";
+import { TumblerAutoDetectPanel } from "./TumblerAutoDetectPanel";
 import { SelectedItemInspector } from "./SelectedItemInspector";
 import styles from "./AdminLayoutShell.module.css";
 
@@ -351,6 +354,11 @@ export function AdminLayoutShell() {
     setInspectorNote(null);
   }, []);
 
+  const handleApplyTumblerDraft = useCallback((draft: TumblerSpecDraft) => {
+    setBedConfig((prev) => applyTumblerSuggestion(prev, draft));
+    setInspectorNote("Applied auto-detected tumbler template");
+  }, []);
+
   // -------------------------------------------------------------------------
   // Derived state
   // -------------------------------------------------------------------------
@@ -398,6 +406,10 @@ export function AdminLayoutShell() {
         <BedSettingsPanel
           bedConfig={bedConfig}
           onUpdateBedConfig={setBedConfig}
+        />
+        <TumblerAutoDetectPanel
+          bedConfig={bedConfig}
+          onApplyDraft={handleApplyTumblerDraft}
         />
         <SelectedItemInspector
           selectedItem={selectedItem}

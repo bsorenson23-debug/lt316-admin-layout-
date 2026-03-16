@@ -41,10 +41,33 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
     onUpdateBedConfig(normalizeBedConfig({ ...bedConfig, ...patch }));
 
   const handleNumber = (field: NumericConfigField, value: number) => {
+    if (field === "tumblerDiameterMm") {
+      const isTapered = bedConfig.tumblerShapeType === "tapered";
+      set({
+        tumblerDiameterMm: value,
+        tumblerOutsideDiameterMm: value,
+        ...(isTapered
+          ? {}
+          : {
+              tumblerTopDiameterMm: value,
+              tumblerBottomDiameterMm: value,
+            }),
+      });
+      return;
+    }
+
+    if (field === "tumblerPrintableHeightMm") {
+      set({
+        tumblerPrintableHeightMm: value,
+        tumblerUsableHeightMm: value,
+      });
+      return;
+    }
+
     set({ [field]: value } as Partial<BedConfig>);
   };
 
-  const wrapWidthMm = computeTumblerWrapWidthMm(bedConfig.tumblerDiameterMm);
+  const wrapWidthMm = bedConfig.tumblerTemplateWidthMm ?? computeTumblerWrapWidthMm(bedConfig.tumblerDiameterMm);
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
 
   return (
@@ -96,7 +119,7 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
               />
             </FieldRow>
 
-            <FieldRow label="Wrap Width (mm)">
+            <FieldRow label="Template W (mm)">
               <span className={styles.readonlyValue}>{wrapWidthMm.toFixed(2)}</span>
             </FieldRow>
           </>
