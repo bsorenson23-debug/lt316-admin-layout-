@@ -1,0 +1,125 @@
+.panel {
+  border-bottom: 1px solid #2a2a2a;
+  background: #1a1a1a;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid #242424;
+}
+
+.title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.body {
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---- Field row ---- */
+.fieldRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  color: #999;
+  flex-shrink: 0;
+  min-width: 80px;
+}
+
+.fieldControl {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ---- Number input ---- */
+.numInput {
+  width: 80px;
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 12px;
+  padding: 4px 8px;
+  text-align: right;
+  outline: none;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.numInput::-webkit-outer-spin-button,
+.numInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+}
+.numInput:focus {
+  border-color: #f97316;
+}
+
+/* ---- Select ---- */
+.select {
+  width: 120px;
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 12px;
+  padding: 4px 6px;
+  outline: none;
+}
+.select:focus {
+  border-color: #f97316;
+}
+
+/* ---- Toggle switch ---- */
+.toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggleTrack {
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  background: #333;
+  border-radius: 9px;
+  transition: background 0.2s;
+  position: relative;
+}
+.toggleTrack::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #888;
+  border-radius: 50%;
+  top: 3px;
+  left: 3px;
+  transition: transform 0.2s, background 0.2s;
+}
+.toggle input:checked + .toggleTrack {
+  background: #f97316;
+}
+.toggle input:checked + .toggleTrack::after {
+  transform: translateX(14px);
+  background: #fff;
+}

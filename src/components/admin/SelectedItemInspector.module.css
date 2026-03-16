@@ -1,0 +1,162 @@
+.panel {
+  flex: 1;
+  background: #1a1a1a;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid #242424;
+}
+
+.title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.itemLabel {
+  font-size: 10px;
+  color: #f97316;
+  font-weight: 500;
+}
+
+.body {
+  padding: 10px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---- Section labels ---- */
+.sectionLabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #555;
+  margin-top: 4px;
+}
+
+/* ---- Two-column layout ---- */
+.twoCol {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fieldLabel {
+  font-size: 10px;
+  color: #666;
+}
+
+/* ---- Number input ---- */
+.numInput {
+  width: 100%;
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 12px;
+  padding: 4px 8px;
+  text-align: right;
+  outline: none;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.numInput::-webkit-outer-spin-button,
+.numInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+}
+.numInput:focus {
+  border-color: #f97316;
+}
+
+/* ---- Rotation row ---- */
+.rotRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rotSlider {
+  flex: 1;
+  accent-color: #f97316;
+  cursor: pointer;
+}
+
+.rotRow .numInput {
+  width: 60px;
+  flex-shrink: 0;
+}
+
+/* ---- Actions ---- */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.resetBtn {
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 5px;
+  color: #bbb;
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.resetBtn:hover {
+  background: #2e2e2e;
+  color: #e0e0e0;
+}
+
+.deleteBtn {
+  background: none;
+  border: 1px solid #4a2020;
+  border-radius: 5px;
+  color: #e05050;
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.deleteBtn:hover {
+  background: rgba(224, 80, 80, 0.12);
+}
+
+/* ---- Empty state ---- */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px;
+  gap: 6px;
+  color: #555;
+  text-align: center;
+}
+
+.emptyIcon {
+  font-size: 28px;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.emptyHint {
+  font-size: 11px;
+  color: #444;
+  line-height: 1.5;
+}
