@@ -1,4 +1,5 @@
 import type { BedConfig, TumblerGuideBand } from "../types/admin";
+import { mmToPx } from "./geometry.ts";
 
 function isFinitePositive(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -17,6 +18,15 @@ export function getActiveTumblerGuideBand(
   return band;
 }
 
+export function shouldRenderTumblerGuideBand(
+  bedConfig: Pick<
+    BedConfig,
+    "workspaceMode" | "tumblerGuideBand" | "showTumblerGuideBand"
+  >
+): boolean {
+  return Boolean(bedConfig.showTumblerGuideBand && getActiveTumblerGuideBand(bedConfig));
+}
+
 export function getGuideBandMetrics(
   band: Pick<TumblerGuideBand, "upperGrooveYmm" | "lowerGrooveYmm">
 ): { bandCenterYmm: number; bandHeightMm: number } {
@@ -25,6 +35,28 @@ export function getGuideBandMetrics(
   return {
     bandCenterYmm,
     bandHeightMm,
+  };
+}
+
+export function getGrooveGuideOverlayMetrics(args: {
+  bedWidthMm: number;
+  scale: number;
+  band: Pick<TumblerGuideBand, "upperGrooveYmm" | "lowerGrooveYmm">;
+}): {
+  widthPx: number;
+  upperYpx: number;
+  lowerYpx: number;
+  bandHeightPx: number;
+} {
+  const widthPx = mmToPx(args.bedWidthMm, args.scale);
+  const upperYpx = mmToPx(args.band.upperGrooveYmm, args.scale);
+  const lowerYpx = mmToPx(args.band.lowerGrooveYmm, args.scale);
+  const bandHeightPx = Math.max(0, lowerYpx - upperYpx);
+  return {
+    widthPx,
+    upperYpx,
+    lowerYpx,
+    bandHeightPx,
   };
 }
 
@@ -41,4 +73,29 @@ export function computeCenteredItemYBetweenGuides(args: {
   const rawY = bandCenterYmm - args.itemHeightMm / 2;
   const maxY = Math.max(0, args.workspaceHeightMm - args.itemHeightMm);
   return clamp(rawY, 0, maxY);
+}
+
+export function centerArtworkBetweenGrooves(args: {
+  currentYmm: number;
+  itemHeightMm: number;
+  workspaceHeightMm: number;
+  band: Pick<TumblerGuideBand, "upperGrooveYmm" | "lowerGrooveYmm">;
+}): {
+  yMm: number;
+  bandCenterYmm: number;
+  previousCenterYmm: number;
+  nextCenterYmm: number;
+} {
+  const { bandCenterYmm } = getGuideBandMetrics(args.band);
+  const yMm = computeCenteredItemYBetweenGuides({
+    itemHeightMm: args.itemHeightMm,
+    workspaceHeightMm: args.workspaceHeightMm,
+    band: args.band,
+  });
+  return {
+    yMm,
+    bandCenterYmm,
+    previousCenterYmm: args.currentYmm + args.itemHeightMm / 2,
+    nextCenterYmm: yMm + args.itemHeightMm / 2,
+  };
 }

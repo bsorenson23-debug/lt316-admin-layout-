@@ -43,6 +43,8 @@ export interface BedConfig {
   tumblerModel?: string;
   tumblerProfileId?: string;
   tumblerGuideBand?: TumblerGuideBand;
+  /** Show editor-only groove guide overlays for tumbler profiles */
+  showTumblerGuideBand: boolean;
   /** Derived template dimensions from raw tumbler spec */
   tumblerTemplateWidthMm?: number;
   tumblerTemplateHeightMm?: number;
@@ -106,6 +108,7 @@ export function normalizeBedConfig(config: BedConfig): BedConfig {
     ...config,
     width,
     height,
+    showTumblerGuideBand: config.showTumblerGuideBand ?? true,
     tumblerTemplateWidthMm: width,
     tumblerTemplateHeightMm: height,
   };
@@ -119,6 +122,7 @@ export const DEFAULT_BED_CONFIG: BedConfig = {
   tumblerPrintableHeightMm: 145,
   width: 300,
   height: 300,
+  showTumblerGuideBand: true,
   gridSpacing: 25,
   snapToGrid: false,
   showOrigin: true,

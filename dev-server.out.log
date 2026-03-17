@@ -1,0 +1,14 @@
+
+> lt316-admin@0.1.0 dev
+> next dev
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://100.118.222.10:3000
+
+✓ Starting...
+Creating turbopack project {
+  dir: 'C:\\Users\\brennen\\Documents\\GitHub\\lt316-admin-layout-',
+  testMode: true
+}
+✓ Ready in 675ms

@@ -28,7 +28,7 @@ import {
 } from "@/utils/alignment";
 import { applyTumblerSuggestion } from "@/utils/tumblerAutoSize";
 import {
-  computeCenteredItemYBetweenGuides,
+  centerArtworkBetweenGrooves,
   getActiveTumblerGuideBand,
 } from "@/utils/tumblerGuides";
 import { SvgAssetLibraryPanel } from "./SvgAssetLibraryPanel";
@@ -41,6 +41,10 @@ import styles from "./AdminLayoutShell.module.css";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function isDevEnvironment(): boolean {
+  return process.env.NODE_ENV !== "production";
 }
 
 export function AdminLayoutShell() {
@@ -371,14 +375,24 @@ export function AdminLayoutShell() {
     setPlacedItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
-        const nextY = computeCenteredItemYBetweenGuides({
+        const centered = centerArtworkBetweenGrooves({
+          currentYmm: item.y,
           itemHeightMm: item.height,
           workspaceHeightMm: bedConfig.height,
           band: guideBand,
         });
+        if (isDevEnvironment()) {
+          console.info("[tumbler-guides] centered artwork between guides", {
+            upperGrooveYmm: guideBand.upperGrooveYmm,
+            lowerGrooveYmm: guideBand.lowerGrooveYmm,
+            bandCenterYmm: Number(centered.bandCenterYmm.toFixed(3)),
+            previousYmm: Number(item.y.toFixed(3)),
+            nextYmm: Number(centered.yMm.toFixed(3)),
+          });
+        }
         return {
           ...item,
-          y: Number(nextY.toFixed(3)),
+          y: Number(centered.yMm.toFixed(3)),
         };
       })
     );

@@ -20,7 +20,10 @@ import {
   PlacedItem,
   PlacedItemPatch,
 } from "@/types/admin";
-import { getActiveTumblerGuideBand } from "@/utils/tumblerGuides";
+import {
+  getActiveTumblerGuideBand,
+  getGuideBandMetrics,
+} from "@/utils/tumblerGuides";
 import styles from "./SelectedItemInspector.module.css";
 
 interface Props {
@@ -82,6 +85,9 @@ export function SelectedItemInspector({
   const handleNormalize = () => onNormalizeItem(selectedItem.id);
   const positionLimit = Math.max(bedConfig.width, bedConfig.height) * 2;
   const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
+  const guideMetrics = activeGuideBand
+    ? getGuideBandMetrics(activeGuideBand)
+    : null;
 
   const displayName = selectedItem.name.replace(/\.svg$/i, "");
 
@@ -174,12 +180,24 @@ export function SelectedItemInspector({
           <button className={styles.actionBtn} onClick={() => handleAlign("fit-bed")}>
             Fit to Bed
           </button>
-          {activeGuideBand && (
+        </div>
+
+        {activeGuideBand && guideMetrics && (
+          <>
+            <div className={styles.sectionLabel}>Groove Guides</div>
+            <div className={styles.boundsRow}>
+              <span>Band Height</span>
+              <span>{guideMetrics.bandHeightMm.toFixed(1)} mm</span>
+            </div>
+            <div className={styles.boundsRow}>
+              <span>Center Y</span>
+              <span>{guideMetrics.bandCenterYmm.toFixed(1)} mm</span>
+            </div>
             <button className={styles.actionBtn} onClick={handleCenterBetweenGuides}>
               Center between guides
             </button>
-          )}
-        </div>
+          </>
+        )}
 
         <div className={styles.sectionLabel}>SVG Bounds</div>
         <div className={styles.boundsRow}>

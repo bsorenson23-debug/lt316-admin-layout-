@@ -83,6 +83,51 @@ test("non-rotary path remains unchanged", () => {
   assert.equal(payload.items[0].yMm, 20);
 });
 
+test("groove guides are editor-only and do not appear in export output", () => {
+  const artifacts = buildLightBurnExportArtifacts({
+    includeLightBurnRotarySetup: true,
+    bedConfig: {
+      ...DEFAULT_BED_CONFIG,
+      workspaceMode: "tumbler-wrap",
+      width: 280,
+      height: 160,
+      tumblerGuideBand: {
+        id: "band-1",
+        label: "Main",
+        upperGrooveYmm: 24,
+        lowerGrooveYmm: 124,
+      },
+      showTumblerGuideBand: true,
+    },
+    workspaceMode: "tumbler-wrap",
+    templateWidthMm: 280,
+    templateHeightMm: 160,
+    items: [
+      {
+        id: "item-1",
+        assetId: "asset-1",
+        name: "A",
+        x: 10,
+        y: 20,
+        width: 30,
+        height: 40,
+        rotation: 0,
+        svgText: "<svg />",
+      },
+    ],
+    rotary: {
+      enabled: false,
+      preset: PRESET,
+      anchorMode: "physical-top",
+    },
+  });
+
+  const artworkJson = JSON.stringify(artifacts.artworkPayload);
+  const sidecarJson = JSON.stringify(artifacts.sidecar);
+  assert.doesNotMatch(artworkJson, /upperGrooveYmm|lowerGrooveYmm|guideBand/i);
+  assert.doesNotMatch(sidecarJson, /upperGrooveYmm|lowerGrooveYmm|guideBand/i);
+});
+
 test("items are shifted by preset origin when rotary placement is enabled", () => {
   const payload = buildLightBurnExportPayload({
     workspaceMode: "tumbler-wrap",

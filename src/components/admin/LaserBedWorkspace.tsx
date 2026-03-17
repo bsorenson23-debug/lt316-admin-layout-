@@ -18,7 +18,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { BedConfig, PlacedItem, PlacedItemPatch, SvgAsset } from "@/types/admin";
 import { calcBedScale, mmToPx, pxToMm } from "@/utils/geometry";
-import { getActiveTumblerGuideBand } from "@/utils/tumblerGuides";
+import {
+  getActiveTumblerGuideBand,
+  getGrooveGuideOverlayMetrics,
+  shouldRenderTumblerGuideBand,
+} from "@/utils/tumblerGuides";
 import { svgToDataUrl } from "@/utils/svg";
 import { BedNudgeControl, BED_NUDGE_PANEL_SIZE_PX } from "./BedNudgeControl";
 import styles from "./LaserBedWorkspace.module.css";
@@ -45,6 +49,10 @@ function formatMm(value: number): string {
   return Number.isInteger(value)
     ? `${value}`
     : value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function isDevEnvironment(): boolean {
+  return process.env.NODE_ENV !== "production";
 }
 
 interface Props {
@@ -120,6 +128,22 @@ export function LaserBedWorkspace({
       ? "Tumbler Wrap Workspace"
       : "Laser Bed Workspace";
   const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
+  const showGuideBands = shouldRenderTumblerGuideBand(bedConfig);
+
+  useEffect(() => {
+    if (!isDevEnvironment()) return;
+    if (!activeGuideBand) return;
+    console.info("[tumbler-guides] loaded guide band", {
+      upperGrooveYmm: activeGuideBand.upperGrooveYmm,
+      lowerGrooveYmm: activeGuideBand.lowerGrooveYmm,
+      showGuideBands,
+    });
+  }, [
+    activeGuideBand,
+    activeGuideBand?.upperGrooveYmm,
+    activeGuideBand?.lowerGrooveYmm,
+    showGuideBands,
+  ]);
 
   // -------------------------------------------------------------------------
   // Drag state
@@ -315,7 +339,7 @@ export function LaserBedWorkspace({
             <BedGuideCrosshair bedConfig={bedConfig} scale={scale} />
           )}
 
-          {activeGuideBand && (
+          {showGuideBands && activeGuideBand && (
             <TumblerGuideBandsOverlay
               bedWidthMm={bedConfig.width}
               band={activeGuideBand}
@@ -511,61 +535,68 @@ function TumblerGuideBandsOverlay({
   };
   scale: number;
 }) {
-  const widthPx = mmToPx(bedWidthMm, scale);
-  const upperY = mmToPx(band.upperGrooveYmm, scale);
-  const lowerY = mmToPx(band.lowerGrooveYmm, scale);
-  const bandHeight = Math.max(0, lowerY - upperY);
+  const { widthPx, upperYpx, lowerYpx, bandHeightPx } =
+    getGrooveGuideOverlayMetrics({
+      bedWidthMm,
+      scale,
+      band,
+    });
+  const shouldShowLabels = bandHeightPx >= 22 && widthPx >= 140;
 
   return (
     <g pointerEvents="none">
       <rect
         x={0}
-        y={upperY}
+        y={upperYpx}
         width={widthPx}
-        height={bandHeight}
+        height={bandHeightPx}
         fill="#4e6f82"
         opacity={0.08}
       />
       <line
         x1={0}
-        y1={upperY}
+        y1={upperYpx}
         x2={widthPx}
-        y2={upperY}
+        y2={upperYpx}
         stroke="#4e6f82"
         strokeWidth={1.2}
-        strokeDasharray="2 6"
+        strokeDasharray="2 5"
         strokeLinecap="round"
         opacity={0.9}
       />
       <line
         x1={0}
-        y1={lowerY}
+        y1={lowerYpx}
         x2={widthPx}
-        y2={lowerY}
+        y2={lowerYpx}
         stroke="#4e6f82"
         strokeWidth={1.2}
-        strokeDasharray="2 6"
+        strokeDasharray="2 5"
         strokeLinecap="round"
         opacity={0.9}
       />
-      <text
-        x={6}
-        y={upperY - 4}
-        fill="#315264"
-        fontSize={9}
-        fontFamily="monospace"
-      >
-        Upper groove
-      </text>
-      <text
-        x={6}
-        y={lowerY - 4}
-        fill="#315264"
-        fontSize={9}
-        fontFamily="monospace"
-      >
-        Lower groove
-      </text>
+      {shouldShowLabels && (
+        <>
+          <text
+            x={6}
+            y={upperYpx - 4}
+            fill="#315264"
+            fontSize={9}
+            fontFamily="monospace"
+          >
+            Upper groove
+          </text>
+          <text
+            x={6}
+            y={lowerYpx - 4}
+            fill="#315264"
+            fontSize={9}
+            fontFamily="monospace"
+          >
+            Lower groove
+          </text>
+        </>
+      )}
     </g>
   );
 }

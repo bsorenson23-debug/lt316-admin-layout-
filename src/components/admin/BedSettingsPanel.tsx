@@ -26,6 +26,7 @@ import {
   getTumblerProfileById,
   KNOWN_TUMBLER_PROFILES,
 } from "@/data/tumblerProfiles";
+import { getActiveTumblerGuideBand } from "@/utils/tumblerGuides";
 import styles from "./BedSettingsPanel.module.css";
 
 interface Props {
@@ -73,9 +74,7 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
 
   const wrapWidthMm = bedConfig.tumblerTemplateWidthMm ?? computeTumblerWrapWidthMm(bedConfig.tumblerDiameterMm);
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
-  const activeProfile = bedConfig.tumblerProfileId
-    ? getTumblerProfileById(bedConfig.tumblerProfileId)
-    : null;
+  const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
 
   return (
     <div className={styles.panel}>
@@ -110,6 +109,9 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
                   set({
                     tumblerProfileId: profileId,
                     tumblerGuideBand: profile?.guideBand,
+                    showTumblerGuideBand: profile?.guideBand
+                      ? true
+                      : bedConfig.showTumblerGuideBand,
                   });
                 }}
                 aria-label="Tumbler profile"
@@ -153,17 +155,30 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
               <span className={styles.readonlyValue}>{wrapWidthMm.toFixed(2)}</span>
             </FieldRow>
 
-            {activeProfile?.guideBand && (
+            {activeGuideBand && (
               <>
                 <FieldRow label="Guide Upper">
                   <span className={styles.readonlyValue}>
-                    {activeProfile.guideBand.upperGrooveYmm.toFixed(1)} mm
+                    {activeGuideBand.upperGrooveYmm.toFixed(1)} mm
                   </span>
                 </FieldRow>
                 <FieldRow label="Guide Lower">
                   <span className={styles.readonlyValue}>
-                    {activeProfile.guideBand.lowerGrooveYmm.toFixed(1)} mm
+                    {activeGuideBand.lowerGrooveYmm.toFixed(1)} mm
                   </span>
+                </FieldRow>
+                <FieldRow label="Show Guides">
+                  <label className={styles.toggle}>
+                    <input
+                      type="checkbox"
+                      checked={bedConfig.showTumblerGuideBand}
+                      onChange={(e) =>
+                        set({ showTumblerGuideBand: e.target.checked })
+                      }
+                      aria-label="Show groove guides in workspace"
+                    />
+                    <span className={styles.toggleTrack} />
+                  </label>
                 </FieldRow>
               </>
             )}

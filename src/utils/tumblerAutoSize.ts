@@ -561,6 +561,10 @@ export function applyTumblerSuggestion(
   const nextGuideBand = hasProfileOverride
     ? overriddenProfile?.guideBand
     : autoProfile?.guideBand;
+  const nextShowGuideBand =
+    nextGuideBand && !config.tumblerGuideBand
+      ? true
+      : config.showTumblerGuideBand;
 
   const nextConfig = normalizeBedConfig({
     ...config,
@@ -581,6 +585,7 @@ export function applyTumblerSuggestion(
     tumblerModel: storedModel,
     tumblerProfileId: nextProfileId,
     tumblerGuideBand: nextGuideBand,
+    showTumblerGuideBand: nextShowGuideBand,
   });
 
   if (isDevEnvironment()) {
