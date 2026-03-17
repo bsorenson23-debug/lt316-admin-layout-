@@ -20,6 +20,10 @@ interface Props {
   bedHeightMm: number;
   rotaryCenterXmm: number;
   topAnchorYmm: number;
+  mountFootprintMm?: {
+    widthMm?: number;
+    heightMm?: number;
+  } | null;
   lensInsetMm: number;
   bedOrigin: BedOrigin;
   overlays: CalibrationOverlayToggles;
@@ -37,6 +41,7 @@ export function CalibrationBedReference({
   bedHeightMm,
   rotaryCenterXmm,
   topAnchorYmm,
+  mountFootprintMm,
   lensInsetMm,
   bedOrigin,
   overlays,
@@ -68,6 +73,23 @@ export function CalibrationBedReference({
     (DEFAULT_STAGGERED_BED_PATTERN.holeDiameterMm / Math.max(1, bedWidthMm)) * 100;
   const holeDiameterYPercent =
     (DEFAULT_STAGGERED_BED_PATTERN.holeDiameterMm / Math.max(1, bedHeightMm)) * 100;
+
+  const mountFootprint =
+    typeof mountFootprintMm?.widthMm === "number" &&
+    mountFootprintMm.widthMm > 0 &&
+    typeof mountFootprintMm?.heightMm === "number" &&
+    mountFootprintMm.heightMm > 0
+      ? {
+          leftPercent:
+            ((rotaryCenterXmm - mountFootprintMm.widthMm / 2) / Math.max(1, bedWidthMm)) *
+            100,
+          topPercent: (topAnchorYmm / Math.max(1, bedHeightMm)) * 100,
+          widthPercent:
+            (mountFootprintMm.widthMm / Math.max(1, bedWidthMm)) * 100,
+          heightPercent:
+            (mountFootprintMm.heightMm / Math.max(1, bedHeightMm)) * 100,
+        }
+      : null;
 
   const exportBox =
     exportPlacementPreview &&
@@ -191,6 +213,32 @@ export function CalibrationBedReference({
                 height: `${metrics.lensHeightPercent}%`,
               }}
             />
+          ) : null}
+
+          {isCalibrationOverlayVisible(overlays, "showMountFootprint") &&
+          mountFootprint ? (
+            <>
+              <div
+                className={styles.mountFootprint}
+                style={{
+                  left: `${mountFootprint.leftPercent}%`,
+                  top: `${mountFootprint.topPercent}%`,
+                  width: `${mountFootprint.widthPercent}%`,
+                  height: `${mountFootprint.heightPercent}%`,
+                }}
+              />
+              <span
+                className={styles.mountFootprintLabel}
+                style={{
+                  left: clampLabelOffset(
+                    mountFootprint.leftPercent + mountFootprint.widthPercent / 2
+                  ),
+                  top: clampLabelOffset(mountFootprint.topPercent),
+                }}
+              >
+                Mount footprint
+              </span>
+            </>
           ) : null}
 
           {isCalibrationOverlayVisible(overlays, "showOrigin") ? (

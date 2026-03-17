@@ -11,41 +11,44 @@ import type {
   RotaryPresetFamily,
   TopAnchorMode,
 } from "@/types/export";
-import {
-  DEFAULT_CALIBRATION_OVERLAY_TOGGLES,
-  type CalibrationOverlayKey,
+import type {
+  CalibrationOverlayKey,
+  CalibrationOverlayToggles as CalibrationOverlayToggleState,
 } from "@/utils/calibrationBedReference";
 import { buildExportPlacementPreview } from "@/utils/calibrationExportPreview";
+import {
+  CALIBRATION_MODE_DEFINITIONS,
+  DEFAULT_CALIBRATION_MODE,
+  type CalibrationMode,
+  buildOverlayStateForMode,
+  getDefaultOverlayTogglesForMode,
+  getVisibleOverlayKeysForMode,
+} from "@/utils/calibrationModes";
 import { getBedCenterXmm, resolveRotaryCenterXmm } from "@/utils/rotaryCenter";
 import {
   deleteRotaryPreset,
   getRotaryPresets,
-  resolvePresetMountDetails,
   saveRotaryPreset,
   updateRotaryPreset,
 } from "@/utils/adminCalibrationState";
-import { DEFAULT_STAGGERED_BED_PATTERN } from "@/utils/staggeredBedPattern";
+import {
+  CUSTOM_ROTARY_PRESET_ID,
+  type RotaryModeDraft,
+  buildEmptyRotaryDraft,
+  buildRotaryDraftFromPreset,
+  formatRotaryPresetReadout,
+  formatRotaryValue,
+  resolveMountFootprintFromDraft,
+  validateRotaryPresetDraft,
+} from "@/utils/rotaryMode";
 import { CalibrationBedReference } from "./CalibrationBedReference";
+import { CalibrationModeSwitcher } from "./CalibrationModeSwitcher";
 import { CalibrationOverlayToggles } from "./CalibrationOverlayToggles";
-import { RotaryPresetList } from "./RotaryPresetList";
 import styles from "./CalibrationWorkspace.module.css";
 
 const DEFAULT_TEMPLATE_WIDTH_MM = 276.15;
 const OVERLAY_STORAGE_KEY = "lt316.admin.calibration.overlays";
 const CALIBRATION_BED_WIDTH_MM = DEFAULT_BED_CONFIG.flatWidth;
-const ROTARY_FAMILY_OPTIONS: RotaryPresetFamily[] = [
-  "d80c",
-  "d100c",
-  "rotoboss-talon",
-  "custom",
-];
-const ROTARY_MOUNT_REFERENCE_OPTIONS: RotaryMountReferenceMode[] = [
-  "axis-center",
-  "front-left-bolt",
-  "front-edge-center",
-  "custom",
-];
-const ROTARY_MOUNT_BOLT_OPTIONS: RotaryMountBoltSize[] = ["M6", "unknown"];
 
 const LENS_PROFILES = [
   { id: "standard-100", label: "Standard 100 mm", fieldInsetMm: 8 },
@@ -53,21 +56,34 @@ const LENS_PROFILES = [
   { id: "fine-50", label: "Fine 50 mm", fieldInsetMm: 5 },
 ] as const;
 
-type LensProfileId = (typeof LENS_PROFILES)[number]["id"];
+const ROTARY_FAMILY_OPTIONS: RotaryPresetFamily[] = [
+  "d80c",
+  "d100c",
+  "rotoboss-talon",
+  "custom",
+];
 
-interface RotaryDraft {
-  name: string;
-  family: RotaryPresetFamily;
-  mountPatternXmm: string;
-  mountPatternYmm: string;
-  mountBoltSize: RotaryMountBoltSize;
-  axisHeightMm: string;
-  rotaryCenterXmm: string;
-  rotaryTopYmm: string;
-  chuckOrRoller: RotaryDriveType;
-  mountReferenceMode: RotaryMountReferenceMode;
-  bedOrigin: BedOrigin;
-  notes: string;
+const ROTARY_MOUNT_BOLT_OPTIONS: RotaryMountBoltSize[] = ["M6", "unknown"];
+
+const ROTARY_MOUNT_REFERENCE_OPTIONS: RotaryMountReferenceMode[] = [
+  "axis-center",
+  "front-left-bolt",
+  "front-edge-center",
+  "custom",
+];
+
+type LensProfileId = (typeof LENS_PROFILES)[number]["id"];
+type OverlayStateByMode = Record<CalibrationMode, CalibrationOverlayToggleState>;
+
+function buildDefaultOverlayStateByMode(): OverlayStateByMode {
+  return {
+    rotary: getDefaultOverlayTogglesForMode("rotary"),
+    export: getDefaultOverlayTogglesForMode("export"),
+    lens: getDefaultOverlayTogglesForMode("lens"),
+    geometry: getDefaultOverlayTogglesForMode("geometry"),
+    "red-light": getDefaultOverlayTogglesForMode("red-light"),
+    distortion: getDefaultOverlayTogglesForMode("distortion"),
+  };
 }
 
 function parseNumberInput(value: string): number | null {
@@ -81,142 +97,43 @@ function formatMm(value: number): string {
   return `${value.toFixed(2)} mm`;
 }
 
-function formatOptionalMm(value: number | null | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "Measure on machine";
-  }
-  return formatMm(value);
-}
-
-function buildDraftFromPreset(preset: RotaryPlacementPreset): RotaryDraft {
-  const mountDetails = resolvePresetMountDetails(preset);
-  return {
-    name: preset.name,
-    family: mountDetails.family,
-    mountPatternXmm:
-      typeof mountDetails.mountPatternXmm === "number"
-        ? String(mountDetails.mountPatternXmm)
-        : "",
-    mountPatternYmm:
-      typeof mountDetails.mountPatternYmm === "number"
-        ? String(mountDetails.mountPatternYmm)
-        : "",
-    mountBoltSize: mountDetails.mountBoltSize ?? "unknown",
-    axisHeightMm:
-      typeof mountDetails.axisHeightMm === "number"
-        ? String(mountDetails.axisHeightMm)
-        : "",
-    rotaryCenterXmm: String(preset.rotaryCenterXmm),
-    rotaryTopYmm:
-      typeof preset.rotaryTopYmm === "number" ? String(preset.rotaryTopYmm) : "",
-    chuckOrRoller: preset.chuckOrRoller,
-    mountReferenceMode: mountDetails.mountReferenceMode,
-    bedOrigin: preset.bedOrigin,
-    notes: preset.notes ?? "",
-  };
-}
-
-function buildEmptyDraft(bedCenterXmm: number): RotaryDraft {
-  return {
-    name: "",
-    family: "custom",
-    mountPatternXmm: "",
-    mountPatternYmm: "",
-    mountBoltSize: "unknown",
-    axisHeightMm: "",
-    rotaryCenterXmm: String(bedCenterXmm),
-    rotaryTopYmm: "",
-    chuckOrRoller: "roller",
-    mountReferenceMode: "custom",
-    bedOrigin: "top-left",
-    notes: "",
-  };
-}
-
 function resolveLensProfile(id: LensProfileId) {
-  return (
-    LENS_PROFILES.find((profile) => profile.id === id) ?? LENS_PROFILES[0]
-  );
+  return LENS_PROFILES.find((profile) => profile.id === id) ?? LENS_PROFILES[0];
 }
 
-function validateDraft(
-  draft: RotaryDraft
-): { ok: true; value: Omit<RotaryPlacementPreset, "id"> } | { ok: false; error: string } {
-  const name = draft.name.trim();
-  if (!name) {
-    return { ok: false, error: "Preset name is required." };
-  }
-  const rotaryCenterXmm = parseNumberInput(draft.rotaryCenterXmm);
-  if (rotaryCenterXmm === null || rotaryCenterXmm < 0) {
-    return { ok: false, error: "Rotary Center X must be a valid non-negative mm value." };
-  }
-  const rotaryTopYmm = draft.rotaryTopYmm.trim()
-    ? parseNumberInput(draft.rotaryTopYmm)
-    : null;
-  if (rotaryTopYmm !== null && rotaryTopYmm < 0) {
-    return { ok: false, error: "Rotary Top Y must be a valid non-negative mm value." };
-  }
-  const mountPatternXmm = draft.mountPatternXmm.trim()
-    ? parseNumberInput(draft.mountPatternXmm)
-    : null;
-  if (draft.mountPatternXmm.trim() && (mountPatternXmm === null || mountPatternXmm < 0)) {
-    return { ok: false, error: "Mount Pattern X must be a valid non-negative mm value." };
-  }
-  const mountPatternYmm = draft.mountPatternYmm.trim()
-    ? parseNumberInput(draft.mountPatternYmm)
-    : null;
-  if (draft.mountPatternYmm.trim() && (mountPatternYmm === null || mountPatternYmm < 0)) {
-    return { ok: false, error: "Mount Pattern Y must be a valid non-negative mm value." };
-  }
-  const axisHeightMm = draft.axisHeightMm.trim()
-    ? parseNumberInput(draft.axisHeightMm)
-    : null;
-  if (draft.axisHeightMm.trim() && (axisHeightMm === null || axisHeightMm < 0)) {
-    return { ok: false, error: "Axis Height must be a valid non-negative mm value." };
-  }
 
-  return {
-    ok: true,
-    value: {
-      name,
-      family: draft.family,
-      mountPatternXmm: mountPatternXmm ?? undefined,
-      mountPatternYmm: mountPatternYmm ?? undefined,
-      mountBoltSize: draft.mountBoltSize,
-      axisHeightMm: axisHeightMm ?? undefined,
-      axisCenterXmm: rotaryCenterXmm,
-      rotaryCenterXmm,
-      rotaryTopYmm: rotaryTopYmm ?? undefined,
-      chuckOrRoller: draft.chuckOrRoller,
-      mountReferenceMode: draft.mountReferenceMode,
-      bedOrigin: draft.bedOrigin,
-      notes: draft.notes.trim() || undefined,
-    },
-  };
+function PlaceholderBlock({ title, copy }: { title: string; copy: string }) {
+  return (
+    <section className={styles.card}>
+      <div className={styles.sectionLabel}>{title}</div>
+      <div className={styles.placeholder}>{copy}</div>
+    </section>
+  );
 }
 
 export function CalibrationWorkspace() {
   const bedCenterXmm = getBedCenterXmm(CALIBRATION_BED_WIDTH_MM);
+
+  const [activeMode, setActiveMode] =
+    React.useState<CalibrationMode>(DEFAULT_CALIBRATION_MODE);
+  const [overlayStateByMode, setOverlayStateByMode] = React.useState<OverlayStateByMode>(
+    buildDefaultOverlayStateByMode
+  );
+
   const [isLoading, setIsLoading] = React.useState(true);
   const [presets, setPresets] = React.useState<RotaryPlacementPreset[]>([]);
-  const [selectedPresetId, setSelectedPresetId] = React.useState<string | null>(
-    null
+  const [selectedPresetId, setSelectedPresetId] = React.useState<string | null>(null);
+  const [draft, setDraft] = React.useState<RotaryModeDraft>(() =>
+    buildEmptyRotaryDraft(bedCenterXmm)
   );
-  const [draft, setDraft] = React.useState<RotaryDraft>(() =>
-    buildEmptyDraft(bedCenterXmm)
+  const [customDraft, setCustomDraft] = React.useState<RotaryModeDraft>(() =>
+    buildEmptyRotaryDraft(bedCenterXmm)
   );
-  const [overlayToggles, setOverlayToggles] = React.useState(
-    DEFAULT_CALIBRATION_OVERLAY_TOGGLES
-  );
-  const [lensProfileId, setLensProfileId] = React.useState<LensProfileId>(
-    LENS_PROFILES[0].id
-  );
-  const [templateWidthMm, setTemplateWidthMm] = React.useState(
-    String(DEFAULT_TEMPLATE_WIDTH_MM)
-  );
+  const [lensProfileId, setLensProfileId] = React.useState<LensProfileId>(LENS_PROFILES[0].id);
+
+  const [templateWidthMm, setTemplateWidthMm] = React.useState(String(DEFAULT_TEMPLATE_WIDTH_MM));
   const [templateHeightMm, setTemplateHeightMm] = React.useState("160");
-  const [anchorMode, setAnchorMode] =
-    React.useState<TopAnchorMode>("physical-top");
+  const [anchorMode, setAnchorMode] = React.useState<TopAnchorMode>("physical-top");
   const [printableOffsetMmDraft, setPrintableOffsetMmDraft] = React.useState("");
   const [shapeType, setShapeType] =
     React.useState<"straight" | "tapered" | "unknown">("straight");
@@ -230,10 +147,12 @@ export function CalibrationWorkspace() {
     const loaded = getRotaryPresets();
     setPresets(loaded);
     if (loaded.length > 0) {
-      setSelectedPresetId(loaded[0].id);
-      setDraft(buildDraftFromPreset(loaded[0]));
+      setSelectedPresetId(null);
+      setDraft(buildEmptyRotaryDraft(bedCenterXmm));
+      setCustomDraft(buildEmptyRotaryDraft(bedCenterXmm));
     } else {
-      setDraft(buildEmptyDraft(bedCenterXmm));
+      setDraft(buildEmptyRotaryDraft(bedCenterXmm));
+      setCustomDraft(buildEmptyRotaryDraft(bedCenterXmm));
     }
     setIsLoading(false);
   }, [bedCenterXmm]);
@@ -243,9 +162,11 @@ export function CalibrationWorkspace() {
     const raw = window.localStorage.getItem(OVERLAY_STORAGE_KEY);
     if (!raw) return;
     try {
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw) as Partial<
+        Record<CalibrationMode, CalibrationOverlayToggleState>
+      >;
       if (!parsed || typeof parsed !== "object") return;
-      setOverlayToggles((current) => ({
+      setOverlayStateByMode((current) => ({
         ...current,
         ...parsed,
       }));
@@ -256,106 +177,20 @@ export function CalibrationWorkspace() {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(
-      OVERLAY_STORAGE_KEY,
-      JSON.stringify(overlayToggles)
-    );
-  }, [overlayToggles]);
+    window.localStorage.setItem(OVERLAY_STORAGE_KEY, JSON.stringify(overlayStateByMode));
+  }, [overlayStateByMode]);
+
+  React.useEffect(() => {
+    if (selectedPresetId !== null) return;
+    setCustomDraft(draft);
+  }, [selectedPresetId, draft]);
 
   const selectedPreset = React.useMemo(
     () => presets.find((preset) => preset.id === selectedPresetId) ?? null,
     [presets, selectedPresetId]
   );
-
+  const selectedPresetChoice = selectedPresetId ?? CUSTOM_ROTARY_PRESET_ID;
   const lensProfile = resolveLensProfile(lensProfileId);
-
-  const handleSelectPreset = React.useCallback(
-    (presetId: string) => {
-      const preset = presets.find((entry) => entry.id === presetId);
-      if (!preset) return;
-      setSelectedPresetId(presetId);
-      setDraft(buildDraftFromPreset(preset));
-      setErrorMessage(null);
-      setStatusMessage(null);
-    },
-    [presets]
-  );
-
-  const handleStartNewPreset = React.useCallback(() => {
-    setSelectedPresetId(null);
-    setDraft(buildEmptyDraft(bedCenterXmm));
-    setErrorMessage(null);
-    setStatusMessage("Creating a new rotary preset.");
-  }, [bedCenterXmm]);
-
-  const handleSavePreset = React.useCallback(() => {
-    const parsed = validateDraft(draft);
-    if (!parsed.ok) {
-      setErrorMessage(parsed.error);
-      setStatusMessage(null);
-      return;
-    }
-
-    try {
-      if (selectedPresetId) {
-        const next = updateRotaryPreset(selectedPresetId, parsed.value);
-        setPresets(next);
-        setStatusMessage("Preset updated.");
-      } else {
-        const next = saveRotaryPreset(parsed.value);
-        const created = next[next.length - 1] ?? null;
-        setPresets(next);
-        if (created) {
-          setSelectedPresetId(created.id);
-          setDraft(buildDraftFromPreset(created));
-        }
-        setStatusMessage("Preset created.");
-      }
-      setErrorMessage(null);
-    } catch {
-      setErrorMessage("Could not save preset. Try again.");
-      setStatusMessage(null);
-    }
-  }, [draft, selectedPresetId]);
-
-  const handleDeletePreset = React.useCallback(() => {
-    if (!selectedPresetId) return;
-
-    try {
-      const next = deleteRotaryPreset(selectedPresetId);
-      setPresets(next);
-      if (next.length > 0) {
-        setSelectedPresetId(next[0].id);
-        setDraft(buildDraftFromPreset(next[0]));
-      } else {
-        setSelectedPresetId(null);
-        setDraft(buildEmptyDraft(bedCenterXmm));
-      }
-      setErrorMessage(null);
-      setStatusMessage("Preset deleted.");
-    } catch {
-      setErrorMessage("Could not delete preset. Try again.");
-      setStatusMessage(null);
-    }
-  }, [selectedPresetId, bedCenterXmm]);
-
-  const handleResetInputs = React.useCallback(() => {
-    if (selectedPreset) {
-      setDraft(buildDraftFromPreset(selectedPreset));
-      setStatusMessage("Inputs reset to selected preset.");
-    } else {
-      setDraft(buildEmptyDraft(bedCenterXmm));
-      setStatusMessage("Inputs reset to defaults.");
-    }
-    setErrorMessage(null);
-  }, [selectedPreset, bedCenterXmm]);
-
-  const handleToggleOverlay = React.useCallback(
-    (key: CalibrationOverlayKey, enabled: boolean) => {
-      setOverlayToggles((current) => ({ ...current, [key]: enabled }));
-    },
-    []
-  );
 
   const manualRotaryCenterXmm = parseNumberInput(draft.rotaryCenterXmm);
   const manualRotaryTopYmm = parseNumberInput(draft.rotaryTopYmm);
@@ -391,248 +226,486 @@ export function CalibrationWorkspace() {
     bottomDiameterMm,
   });
 
-  const hasSelectedPreset = selectedPreset !== null;
+  const modeOverlay = overlayStateByMode[activeMode];
+  const visibleOverlayKeys = getVisibleOverlayKeysForMode(activeMode);
+  const activeCanvasOverlaysBase = buildOverlayStateForMode({
+    mode: activeMode,
+    toggles: modeOverlay,
+  });
 
-  return (
-    <section className={styles.workspace}>
-      <aside className={styles.leftPanel}>
-        <section className={styles.card}>
-          <div className={styles.sectionLabel}>Rotary Presets</div>
-          {isLoading ? (
-            <div className={styles.info}>Loading rotary presets...</div>
-          ) : (
-            <RotaryPresetList
-              presets={presets}
-              selectedPresetId={selectedPresetId}
-              onSelectPreset={handleSelectPreset}
-            />
-          )}
-          <div className={styles.inlineActions}>
-            <button type="button" className={styles.secondaryBtn} onClick={handleStartNewPreset}>
-              New Preset
-            </button>
-            {selectedPresetId ? (
+  const mountFootprintMm =
+    activeMode === "rotary" ? resolveMountFootprintFromDraft(draft) : null;
+  const hasRotaryTopAnchor =
+    (typeof manualRotaryTopYmm === "number" && Number.isFinite(manualRotaryTopYmm)) ||
+    (typeof selectedPreset?.rotaryTopYmm === "number" &&
+      Number.isFinite(selectedPreset.rotaryTopYmm));
+
+  const activeCanvasOverlays =
+    activeMode === "rotary"
+      ? {
+          ...activeCanvasOverlaysBase,
+          showTopAnchorLine: activeCanvasOverlaysBase.showTopAnchorLine && hasRotaryTopAnchor,
+          showMountFootprint:
+            activeCanvasOverlaysBase.showMountFootprint && mountFootprintMm !== null,
+        }
+      : activeCanvasOverlaysBase;
+
+  const readout = formatRotaryPresetReadout({
+    preset: selectedPreset,
+    draft,
+    resolvedRotaryCenterXmm: rotaryCenterXmm,
+    resolvedRotaryTopYmm: manualRotaryTopYmm,
+  });
+
+  const rotaryWarnings = [
+    selectedPresetId === null ? "Using bed center as default rotary axis." : null,
+    !hasRotaryTopAnchor
+      ? "Top anchor Y is unset. Measure on machine for production placement."
+      : null,
+    draft.family === "rotoboss-talon" && mountFootprintMm === null
+      ? "RotoBoss Talon mount footprint is not verified. Measure on machine."
+      : null,
+  ].filter((warning): warning is string => Boolean(warning));
+
+  const handleToggleOverlay = React.useCallback(
+    (key: CalibrationOverlayKey, enabled: boolean) => {
+      setOverlayStateByMode((current) => ({
+        ...current,
+        [activeMode]: {
+          ...current[activeMode],
+          [key]: enabled,
+        },
+      }));
+    },
+    [activeMode]
+  );
+
+  const handleSavePreset = React.useCallback(() => {
+    const parsed = validateRotaryPresetDraft(draft);
+    if (!parsed.ok) {
+      setErrorMessage(parsed.error);
+      setStatusMessage(null);
+      return;
+    }
+    try {
+      if (selectedPresetId) {
+        setPresets(updateRotaryPreset(selectedPresetId, parsed.value));
+        setStatusMessage("Preset updated.");
+      } else {
+        const next = saveRotaryPreset(parsed.value);
+        const created = next[next.length - 1] ?? null;
+        setPresets(next);
+        if (created) {
+          setSelectedPresetId(created.id);
+          setDraft(buildRotaryDraftFromPreset(created));
+        }
+        setStatusMessage("Preset created.");
+      }
+      setErrorMessage(null);
+    } catch {
+      setErrorMessage("Could not save preset. Try again.");
+      setStatusMessage(null);
+    }
+  }, [draft, selectedPresetId]);
+
+  const handleResetInputs = React.useCallback(() => {
+    if (selectedPreset) {
+      setDraft(buildRotaryDraftFromPreset(selectedPreset));
+      setStatusMessage("Inputs reset to selected preset.");
+    } else {
+      setDraft(buildEmptyRotaryDraft(bedCenterXmm));
+      setStatusMessage("Inputs reset to defaults.");
+    }
+    setErrorMessage(null);
+  }, [selectedPreset, bedCenterXmm]);
+
+  const renderLeftPanel = () => {
+    if (activeMode === "rotary") {
+      return (
+        <>
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Preset Selector</div>
+            <label className={styles.field}>
+              <span>Rotary Preset</span>
+              <select
+                className={styles.selectInput}
+                value={selectedPresetChoice}
+                onChange={(event) => {
+                  const nextId = event.target.value;
+                  if (nextId === CUSTOM_ROTARY_PRESET_ID) {
+                    setSelectedPresetId(null);
+                    setDraft(customDraft);
+                    setStatusMessage("Using bed center as default rotary axis.");
+                    setErrorMessage(null);
+                    return;
+                  }
+
+                  const preset = presets.find((entry) => entry.id === nextId);
+                  if (!preset) return;
+                  if (selectedPresetId === null) {
+                    setCustomDraft(draft);
+                  }
+                  setSelectedPresetId(nextId);
+                  setDraft(buildRotaryDraftFromPreset(preset));
+                  setStatusMessage(`Loaded preset: ${preset.name}`);
+                  setErrorMessage(null);
+                }}
+              >
+                <option value={CUSTOM_ROTARY_PRESET_ID}>Custom</option>
+                {presets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {isLoading ? <div className={styles.info}>Loading rotary presets...</div> : null}
+            <div className={styles.inlineActions}>
               <button
                 type="button"
-                className={styles.dangerBtn}
-                onClick={handleDeletePreset}
+                className={styles.secondaryBtn}
+                onClick={() => {
+                  const empty = buildEmptyRotaryDraft(bedCenterXmm);
+                  setSelectedPresetId(null);
+                  setCustomDraft(empty);
+                  setDraft(empty);
+                  setStatusMessage("Editing custom rotary values.");
+                  setErrorMessage(null);
+                }}
               >
-                Delete
+                New Custom
               </button>
-            ) : null}
-          </div>
-        </section>
+              {selectedPresetId ? (
+                <button
+                  type="button"
+                  className={styles.dangerBtn}
+                  onClick={() => {
+                    const next = deleteRotaryPreset(selectedPresetId);
+                    setPresets(next);
+                    if (next.length > 0) {
+                      setSelectedPresetId(null);
+                      setDraft(customDraft);
+                      setStatusMessage("Preset deleted. Using custom fallback.");
+                    } else {
+                      setSelectedPresetId(null);
+                      setDraft(customDraft);
+                      setStatusMessage("Preset deleted. Using custom fallback.");
+                    }
+                    setErrorMessage(null);
+                  }}
+                >
+                  Delete
+                </button>
+              ) : null}
+            </div>
+          </section>
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Rotary Controls</div>
+            <div className={styles.fieldGrid}>
+              <label className={styles.field}>
+                <span>Preset Name</span>
+                <input
+                  type="text"
+                  className={styles.textInput}
+                  value={draft.name}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, name: event.target.value }))
+                  }
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Family</span>
+                <select
+                  className={styles.selectInput}
+                  value={draft.family}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      family: event.target.value as RotaryPresetFamily,
+                    }))
+                  }
+                >
+                  {ROTARY_FAMILY_OPTIONS.map((family) => (
+                    <option key={family} value={family}>
+                      {family}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.field}>
+                <span>Rotary Center X (mm)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={draft.rotaryCenterXmm}
+                  step={0.1}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, rotaryCenterXmm: event.target.value }))
+                  }
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Rotary Type</span>
+                <select
+                  className={styles.selectInput}
+                  value={draft.chuckOrRoller}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      chuckOrRoller: event.target.value as RotaryDriveType,
+                    }))
+                  }
+                >
+                  <option value="chuck">Chuck</option>
+                  <option value="roller">Roller</option>
+                </select>
+              </label>
+              <label className={styles.field}>
+                <span>Top Anchor Y (mm)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={draft.rotaryTopYmm}
+                  step={0.1}
+                  placeholder="Measure on machine"
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, rotaryTopYmm: event.target.value }))
+                  }
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Mount Pattern X (mm)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={draft.mountPatternXmm}
+                  step={0.1}
+                  placeholder="Measure on machine"
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, mountPatternXmm: event.target.value }))
+                  }
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Mount Pattern Y (mm)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={draft.mountPatternYmm}
+                  step={0.1}
+                  placeholder="Measure on machine"
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, mountPatternYmm: event.target.value }))
+                  }
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Bolt Size</span>
+                <select
+                  className={styles.selectInput}
+                  value={draft.mountBoltSize}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      mountBoltSize: event.target.value as RotaryMountBoltSize,
+                    }))
+                  }
+                >
+                  {ROTARY_MOUNT_BOLT_OPTIONS.map((boltSize) => (
+                    <option key={boltSize} value={boltSize}>
+                      {boltSize}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.field}>
+                <span>Axis Height (mm)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={draft.axisHeightMm}
+                  step={0.1}
+                  placeholder="Measure on machine"
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, axisHeightMm: event.target.value }))
+                  }
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Mount Reference</span>
+                <select
+                  className={styles.selectInput}
+                  value={draft.mountReferenceMode}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      mountReferenceMode: event.target.value as RotaryMountReferenceMode,
+                    }))
+                  }
+                >
+                  {ROTARY_MOUNT_REFERENCE_OPTIONS.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {mode}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.field}>
+                <span>Bed Origin</span>
+                <select
+                  className={styles.selectInput}
+                  value={draft.bedOrigin}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      bedOrigin: event.target.value as BedOrigin,
+                    }))
+                  }
+                >
+                  <option value="top-left">Top-left</option>
+                  <option value="top-right">Top-right</option>
+                  <option value="bottom-left">Bottom-left</option>
+                  <option value="bottom-right">Bottom-right</option>
+                </select>
+              </label>
+              <label className={`${styles.field} ${styles.fullWidth}`}>
+                <span>Notes</span>
+                <input
+                  type="text"
+                  className={styles.textInput}
+                  value={draft.notes}
+                  placeholder="Optional setup notes"
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, notes: event.target.value }))
+                  }
+                />
+              </label>
+            </div>
+            <CalibrationOverlayToggles
+              value={modeOverlay}
+              onToggle={handleToggleOverlay}
+              visibleKeys={visibleOverlayKeys}
+              title="Rotary Overlays"
+            />
+          </section>
+        </>
+      );
+    }
 
-        <section className={styles.card}>
-          <div className={styles.sectionLabel}>Rotary Offset Inputs</div>
-          <div className={styles.fieldGrid}>
-            <label className={styles.field}>
-              <span>Preset Name</span>
-              <input
-                type="text"
-                value={draft.name}
-                className={styles.textInput}
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, name: event.target.value }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Family</span>
-              <select
-                className={styles.selectInput}
-                value={draft.family}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    family: event.target.value as RotaryPresetFamily,
-                  }))
-                }
-              >
-                {ROTARY_FAMILY_OPTIONS.map((family) => (
-                  <option key={family} value={family}>
-                    {family}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span>Mount Pattern X (mm)</span>
-              <input
-                type="number"
-                value={draft.mountPatternXmm}
-                className={styles.numInput}
-                step={0.1}
-                placeholder="Measure on machine"
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    mountPatternXmm: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Mount Pattern Y (mm)</span>
-              <input
-                type="number"
-                value={draft.mountPatternYmm}
-                className={styles.numInput}
-                step={0.1}
-                placeholder="Measure on machine"
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    mountPatternYmm: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Bolt Size</span>
-              <select
-                className={styles.selectInput}
-                value={draft.mountBoltSize}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    mountBoltSize: event.target.value as RotaryMountBoltSize,
-                  }))
-                }
-              >
-                {ROTARY_MOUNT_BOLT_OPTIONS.map((boltSize) => (
-                  <option key={boltSize} value={boltSize}>
-                    {boltSize}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span>Axis Height (mm)</span>
-              <input
-                type="number"
-                value={draft.axisHeightMm}
-                className={styles.numInput}
-                step={0.1}
-                placeholder="Measure on machine"
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    axisHeightMm: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Rotary Center X (mm)</span>
-              <input
-                type="number"
-                value={draft.rotaryCenterXmm}
-                className={styles.numInput}
-                step={0.1}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    rotaryCenterXmm: event.target.value,
-                  }))
-                }
-              />
-              <small className={styles.helperText}>
-                Defaults to bed center axis.
-              </small>
-            </label>
-            <label className={styles.field}>
-              <span>Top Anchor Y (mm)</span>
-              <input
-                type="number"
-                value={draft.rotaryTopYmm}
-                className={styles.numInput}
-                step={0.1}
-                placeholder="Measure on machine"
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    rotaryTopYmm: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Bed Origin</span>
-              <select
-                className={styles.selectInput}
-                value={draft.bedOrigin}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    bedOrigin: event.target.value as BedOrigin,
-                  }))
-                }
-              >
-                <option value="top-left">Top-left</option>
-                <option value="top-right">Top-right</option>
-                <option value="bottom-left">Bottom-left</option>
-                <option value="bottom-right">Bottom-right</option>
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span>Mount Reference</span>
-              <select
-                className={styles.selectInput}
-                value={draft.mountReferenceMode}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    mountReferenceMode: event.target.value as RotaryMountReferenceMode,
-                  }))
-                }
-              >
-                {ROTARY_MOUNT_REFERENCE_OPTIONS.map((referenceMode) => (
-                  <option key={referenceMode} value={referenceMode}>
-                    {referenceMode}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span>Drive Type</span>
-              <div className={styles.chips}>
-                <button
-                  type="button"
-                  className={
-                    draft.chuckOrRoller === "roller" ? styles.chipActive : styles.chip
-                  }
-                  onClick={() =>
-                    setDraft((current) => ({ ...current, chuckOrRoller: "roller" }))
+    if (activeMode === "export") {
+      return (
+        <>
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Export Controls</div>
+            <div className={styles.fieldGrid}>
+              <label className={styles.field}>
+                <span>Template Width (mm)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={templateWidthMm}
+                  step={0.1}
+                  onChange={(event) => setTemplateWidthMm(event.target.value)}
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Template Height (mm)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={templateHeightMm}
+                  step={0.1}
+                  onChange={(event) => setTemplateHeightMm(event.target.value)}
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Anchor Mode</span>
+                <select
+                  className={styles.selectInput}
+                  value={anchorMode}
+                  onChange={(event) => setAnchorMode(event.target.value as TopAnchorMode)}
+                >
+                  <option value="physical-top">Physical Top</option>
+                  <option value="printable-top">Printable Top</option>
+                </select>
+              </label>
+              {anchorMode === "printable-top" ? (
+                <label className={styles.field}>
+                  <span>Printable Offset (mm)</span>
+                  <input
+                    type="number"
+                    className={styles.numInput}
+                    value={printableOffsetMmDraft}
+                    step={0.1}
+                    onChange={(event) => setPrintableOffsetMmDraft(event.target.value)}
+                  />
+                </label>
+              ) : null}
+              <label className={styles.field}>
+                <span>Shape Type</span>
+                <select
+                  className={styles.selectInput}
+                  value={shapeType}
+                  onChange={(event) =>
+                    setShapeType(event.target.value as "straight" | "tapered" | "unknown")
                   }
                 >
-                  Roller
-                </button>
-                <button
-                  type="button"
-                  className={
-                    draft.chuckOrRoller === "chuck" ? styles.chipActive : styles.chip
-                  }
-                  onClick={() =>
-                    setDraft((current) => ({ ...current, chuckOrRoller: "chuck" }))
-                  }
-                >
-                  Chuck
-                </button>
-              </div>
-            </label>
-            <label className={`${styles.field} ${styles.fullWidth}`}>
-              <span>Notes</span>
-              <input
-                type="text"
-                value={draft.notes}
-                className={styles.textInput}
-                placeholder="Optional setup notes"
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, notes: event.target.value }))
-                }
-              />
-            </label>
+                  <option value="straight">Straight</option>
+                  <option value="tapered">Tapered</option>
+                  <option value="unknown">Unknown</option>
+                </select>
+              </label>
+              <label className={styles.field}>
+                <span>Outside Diameter (mm)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={outsideDiameterMmDraft}
+                  step={0.1}
+                  onChange={(event) => setOutsideDiameterMmDraft(event.target.value)}
+                />
+              </label>
+              {shapeType === "tapered" ? (
+                <>
+                  <label className={styles.field}>
+                    <span>Top Diameter (mm)</span>
+                    <input
+                      type="number"
+                      className={styles.numInput}
+                      value={topDiameterMmDraft}
+                      step={0.1}
+                      onChange={(event) => setTopDiameterMmDraft(event.target.value)}
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    <span>Bottom Diameter (mm)</span>
+                    <input
+                      type="number"
+                      className={styles.numInput}
+                      value={bottomDiameterMmDraft}
+                      step={0.1}
+                      onChange={(event) => setBottomDiameterMmDraft(event.target.value)}
+                    />
+                  </label>
+                </>
+              ) : null}
+            </div>
+            <CalibrationOverlayToggles
+              value={modeOverlay}
+              onToggle={handleToggleOverlay}
+              visibleKeys={visibleOverlayKeys}
+              title="Export Overlays"
+            />
+          </section>
+        </>
+      );
+    }
+
+    if (activeMode === "lens") {
+      return (
+        <>
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Lens Controls</div>
             <label className={styles.field}>
               <span>Lens Profile</span>
               <select
@@ -647,241 +720,100 @@ export function CalibrationWorkspace() {
                 ))}
               </select>
             </label>
-          </div>
-          <CalibrationOverlayToggles value={overlayToggles} onToggle={handleToggleOverlay} />
-          <div className={styles.summaryCard}>
-            <div className={styles.sectionLabel}>Bed Settings Summary</div>
-            <div className={styles.info}>
-              Pattern: 6 mm holes | 25 x 25 mm pitch | staggered rows
-            </div>
-            <div className={styles.info}>Odd rows offset by 12.5 mm in X.</div>
-            <div className={styles.info}>
-              Bed: {DEFAULT_BED_CONFIG.flatWidth} x {DEFAULT_BED_CONFIG.flatHeight} mm
-            </div>
-          </div>
-        </section>
-      </aside>
+            <CalibrationOverlayToggles
+              value={modeOverlay}
+              onToggle={handleToggleOverlay}
+              visibleKeys={visibleOverlayKeys}
+              title="Lens Overlays"
+            />
+          </section>
+        </>
+      );
+    }
 
-      <div className={styles.centerPanel}>
-        <CalibrationBedReference
-          bedWidthMm={DEFAULT_BED_CONFIG.flatWidth}
-          bedHeightMm={DEFAULT_BED_CONFIG.flatHeight}
-          rotaryCenterXmm={rotaryCenterXmm}
-          topAnchorYmm={exportPreview.exportOriginYmm ?? rotaryTopYmm}
-          lensInsetMm={lensProfile.fieldInsetMm}
-          bedOrigin={draft.bedOrigin}
-          overlays={overlayToggles}
-          exportPlacementPreview={exportPreview}
-        />
-      </div>
+    return (
+      <PlaceholderBlock
+        title="Controls"
+        copy={`Compact ${activeMode} controls will be implemented in a follow-up slice.`}
+      />
+    );
+  };
 
-      <aside className={styles.rightPanel}>
-        <section className={styles.card}>
-          <div className={styles.sectionLabel}>Coordinate Readout</div>
-          <dl className={styles.valueGrid}>
-            <dt>Hole Pattern</dt>
-            <dd>6 mm / 25 x 25 / staggered</dd>
-            <dt>Row Offset</dt>
-            <dd>{DEFAULT_STAGGERED_BED_PATTERN.alternateRowOffsetXmm} mm</dd>
-            <dt>Rotary Center X</dt>
-            <dd>{formatMm(rotaryCenterXmm)}</dd>
-            <dt>Rotary Top Y</dt>
-            <dd>{formatOptionalMm(manualRotaryTopYmm)}</dd>
-            <dt>Export Origin X</dt>
-            <dd>
-              {exportPreview.exportOriginXmm !== undefined
-                ? formatMm(exportPreview.exportOriginXmm)
-                : "n/a"}
-            </dd>
-            <dt>Export Origin Y</dt>
-            <dd>
-              {exportPreview.exportOriginYmm !== undefined
-                ? formatMm(exportPreview.exportOriginYmm)
-                : "n/a"}
-            </dd>
-          </dl>
-        </section>
-
-        <section className={styles.card}>
-          <div className={styles.sectionLabel}>Current Values</div>
-          {hasSelectedPreset ? (
+  const renderRightPanel = () => {
+    if (activeMode === "rotary") {
+      return (
+        <>
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Preset Details</div>
             <dl className={styles.valueGrid}>
               <dt>Preset</dt>
-              <dd>{draft.name.trim() || "Unsaved"}</dd>
+              <dd>{readout.presetName}</dd>
               <dt>Family</dt>
-              <dd>{draft.family}</dd>
+              <dd>{readout.family}</dd>
               <dt>Mount Pattern</dt>
-              <dd>
-                {draft.mountPatternXmm.trim() && draft.mountPatternYmm.trim()
-                  ? `${draft.mountPatternXmm} x ${draft.mountPatternYmm} mm`
-                  : "Measure on machine"}
-              </dd>
+              <dd>{readout.mountPattern}</dd>
               <dt>Bolt Size</dt>
-              <dd>{draft.mountBoltSize}</dd>
+              <dd>{readout.boltSize}</dd>
               <dt>Axis Height</dt>
-              <dd>
-                {draft.axisHeightMm.trim()
-                  ? `${draft.axisHeightMm} mm`
-                  : "Measure on machine"}
-              </dd>
+              <dd>{readout.axisHeight}</dd>
+              <dt>Axis Center X</dt>
+              <dd>{readout.axisCenterX}</dd>
               <dt>Top Anchor Y</dt>
-              <dd>
-                {draft.rotaryTopYmm.trim()
-                  ? `${draft.rotaryTopYmm} mm`
-                  : "Measure on machine"}
-              </dd>
-              <dt>Mount Ref.</dt>
-              <dd>{draft.mountReferenceMode}</dd>
-              <dt>Drive</dt>
-              <dd>{draft.chuckOrRoller}</dd>
-              <dt>Origin</dt>
-              <dd>{draft.bedOrigin}</dd>
-              <dt>Lens Profile</dt>
-              <dd>{lensProfile.label}</dd>
+              <dd>{readout.topAnchorY}</dd>
+              <dt>Rotary Type</dt>
+              <dd>{readout.rotaryType}</dd>
+              <dt>Notes</dt>
+              <dd>{readout.notes}</dd>
             </dl>
-          ) : (
-            <div className={styles.info}>
-              No rotary preset selected. Using bed center as default rotary axis.
+            {rotaryWarnings.map((warning) => (
+              <div key={warning} className={styles.warning}>
+                {warning}
+              </div>
+            ))}
+          </section>
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Actions</div>
+            <div className={styles.stackActions}>
+              <button type="button" className={styles.primaryBtn} onClick={handleSavePreset}>
+                Save Preset
+              </button>
+              <button type="button" className={styles.secondaryBtn} onClick={handleResetInputs}>
+                Reset Inputs
+              </button>
             </div>
-          )}
-        </section>
+            {(errorMessage || statusMessage) && (
+              <div className={errorMessage ? styles.error : styles.status}>
+                {errorMessage ?? statusMessage}
+              </div>
+            )}
+          </section>
+        </>
+      );
+    }
 
+    if (activeMode === "export") {
+      return (
         <section className={styles.card}>
-          <div className={styles.sectionLabel}>Export Placement Preview</div>
-          <div className={styles.fieldGrid}>
-            <label className={styles.field}>
-              <span>Template Width (mm)</span>
-              <input
-                type="number"
-                className={styles.numInput}
-                value={templateWidthMm}
-                step={0.1}
-                onChange={(event) => setTemplateWidthMm(event.target.value)}
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Template Height (mm)</span>
-              <input
-                type="number"
-                className={styles.numInput}
-                value={templateHeightMm}
-                step={0.1}
-                onChange={(event) => setTemplateHeightMm(event.target.value)}
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Anchor Mode</span>
-              <select
-                className={styles.selectInput}
-                value={anchorMode}
-                onChange={(event) =>
-                  setAnchorMode(event.target.value as TopAnchorMode)
-                }
-              >
-                <option value="physical-top">Physical Top</option>
-                <option value="printable-top">Printable Top</option>
-              </select>
-            </label>
-            {anchorMode === "printable-top" ? (
-              <label className={styles.field}>
-                <span>Printable Offset (mm)</span>
-                <input
-                  type="number"
-                  className={styles.numInput}
-                  value={printableOffsetMmDraft}
-                  step={0.1}
-                  onChange={(event) =>
-                    setPrintableOffsetMmDraft(event.target.value)
-                  }
-                />
-              </label>
-            ) : null}
-            <label className={styles.field}>
-              <span>Shape Type</span>
-              <select
-                className={styles.selectInput}
-                value={shapeType}
-                onChange={(event) =>
-                  setShapeType(
-                    event.target.value as "straight" | "tapered" | "unknown"
-                  )
-                }
-              >
-                <option value="straight">Straight</option>
-                <option value="tapered">Tapered</option>
-                <option value="unknown">Unknown</option>
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span>Outside Diameter (mm)</span>
-              <input
-                type="number"
-                className={styles.numInput}
-                value={outsideDiameterMmDraft}
-                step={0.1}
-                onChange={(event) => setOutsideDiameterMmDraft(event.target.value)}
-              />
-            </label>
-            {shapeType === "tapered" ? (
-              <>
-                <label className={styles.field}>
-                  <span>Top Diameter (mm)</span>
-                  <input
-                    type="number"
-                    className={styles.numInput}
-                    value={topDiameterMmDraft}
-                    step={0.1}
-                    onChange={(event) => setTopDiameterMmDraft(event.target.value)}
-                  />
-                </label>
-                <label className={styles.field}>
-                  <span>Bottom Diameter (mm)</span>
-                  <input
-                    type="number"
-                    className={styles.numInput}
-                    value={bottomDiameterMmDraft}
-                    step={0.1}
-                    onChange={(event) => setBottomDiameterMmDraft(event.target.value)}
-                  />
-                </label>
-              </>
-            ) : null}
-          </div>
+          <div className={styles.sectionLabel}>Export Readout</div>
           <dl className={styles.valueGrid}>
-            <dt>Rotary preset</dt>
-            <dd>{exportPreview.presetName ?? "None"}</dd>
-            <dt>Anchor mode</dt>
-            <dd>{exportPreview.anchorMode}</dd>
-            <dt>Template width</dt>
-            <dd>
-              {exportPreview.templateWidthMm !== undefined
-                ? formatMm(exportPreview.templateWidthMm)
-                : "n/a"}
-            </dd>
-            <dt>Template height</dt>
-            <dd>
-              {exportPreview.templateHeightMm !== undefined
-                ? formatMm(exportPreview.templateHeightMm)
-                : "n/a"}
-            </dd>
-            <dt>Export origin X</dt>
+            <dt>Origin X</dt>
             <dd>
               {exportPreview.exportOriginXmm !== undefined
                 ? formatMm(exportPreview.exportOriginXmm)
                 : "n/a"}
             </dd>
-            <dt>Export origin Y</dt>
+            <dt>Origin Y</dt>
             <dd>
               {exportPreview.exportOriginYmm !== undefined
                 ? formatMm(exportPreview.exportOriginYmm)
                 : "n/a"}
             </dd>
-            <dt>Recommended diameter</dt>
-            <dd>
-              {exportPreview.recommendedObjectDiameterMm !== undefined
-                ? formatMm(exportPreview.recommendedObjectDiameterMm)
-                : "n/a"}
-            </dd>
+            <dt>Template W</dt>
+            <dd>{templateWidthValue ? formatMm(templateWidthValue) : "n/a"}</dd>
+            <dt>Template H</dt>
+            <dd>{templateHeightValue ? formatMm(templateHeightValue) : "n/a"}</dd>
+            <dt>Recommended Diameter</dt>
+            <dd>{formatRotaryValue(exportPreview.recommendedObjectDiameterMm)}</dd>
           </dl>
           {exportPreview.warnings.map((warning) => (
             <div key={warning} className={styles.warning}>
@@ -889,27 +821,75 @@ export function CalibrationWorkspace() {
             </div>
           ))}
         </section>
+      );
+    }
 
+    if (activeMode === "lens") {
+      return (
         <section className={styles.card}>
-          <div className={styles.sectionLabel}>Actions</div>
-          <div className={styles.stackActions}>
-            <button type="button" className={styles.primaryBtn} onClick={handleSavePreset}>
-              Save Preset
-            </button>
-            <button type="button" className={styles.secondaryBtn} onClick={handleResetInputs}>
-              Reset Inputs
-            </button>
-          </div>
-          {(errorMessage || statusMessage) && (
-            <div className={errorMessage ? styles.error : styles.status}>
-              {errorMessage ?? statusMessage}
-            </div>
-          )}
-          <div className={styles.info}>
-            Bed center and overlay guides are editor-only references for calibration setup.
-          </div>
+          <div className={styles.sectionLabel}>Lens Readout</div>
+          <dl className={styles.valueGrid}>
+            <dt>Lens Profile</dt>
+            <dd>{lensProfile.label}</dd>
+            <dt>Lens Inset</dt>
+            <dd>{formatMm(lensProfile.fieldInsetMm)}</dd>
+          </dl>
         </section>
-      </aside>
+      );
+    }
+
+    return (
+      <PlaceholderBlock
+        title="Readout"
+        copy={`Compact ${activeMode} readout and warnings are staged as placeholders.`}
+      />
+    );
+  };
+
+  return (
+    <section className={styles.workspaceShell}>
+      <header className={styles.modeHeader}>
+        <div className={styles.modeHeaderText}>
+          <div className={styles.sectionLabel}>Calibration Workspace</div>
+          <div className={styles.info}>One shared bed canvas with mode-based overlays.</div>
+        </div>
+        <CalibrationModeSwitcher
+          activeMode={activeMode}
+          modes={CALIBRATION_MODE_DEFINITIONS}
+          onChange={setActiveMode}
+        />
+      </header>
+
+      <div className={styles.workspace}>
+        <aside className={styles.leftPanel}>{renderLeftPanel()}</aside>
+
+        <div className={styles.centerPanel}>
+          <CalibrationBedReference
+            bedWidthMm={DEFAULT_BED_CONFIG.flatWidth}
+            bedHeightMm={DEFAULT_BED_CONFIG.flatHeight}
+            rotaryCenterXmm={rotaryCenterXmm}
+            topAnchorYmm={exportPreview.exportOriginYmm ?? rotaryTopYmm}
+            mountFootprintMm={mountFootprintMm}
+            lensInsetMm={lensProfile.fieldInsetMm}
+            bedOrigin={draft.bedOrigin}
+            overlays={activeCanvasOverlays}
+            exportPlacementPreview={exportPreview}
+          />
+        </div>
+
+        <aside className={styles.rightPanel}>
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Bed Reference</div>
+            <div className={styles.info}>
+              Pattern: 6 mm holes | 25 x 25 mm | staggered rows (12.5 mm offset).
+            </div>
+            <div className={styles.info}>
+              Bed: {DEFAULT_BED_CONFIG.flatWidth} x {DEFAULT_BED_CONFIG.flatHeight} mm
+            </div>
+          </section>
+          {renderRightPanel()}
+        </aside>
+      </div>
     </section>
   );
 }

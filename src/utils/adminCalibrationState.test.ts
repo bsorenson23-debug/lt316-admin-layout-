@@ -122,6 +122,31 @@ test("rotary preset create, update, and delete flow works", () => {
   assert.equal(afterDelete.some((preset) => preset.id === created!.id), false);
 });
 
+test("editing a seeded preset persists updated rotary values", () => {
+  const storage = createMemoryStorage();
+  const updated = updateRotaryPreset(
+    "d80c-chuck",
+    {
+      rotaryCenterXmm: 161.5,
+      mountPatternXmm: 77,
+      notes: "Measured centerline and mount spacing",
+    },
+    storage
+  );
+
+  const d80c = updated.find((preset) => preset.id === "d80c-chuck");
+  assert.ok(d80c);
+  assert.equal(d80c?.rotaryCenterXmm, 161.5);
+  assert.equal(d80c?.mountPatternXmm, 77);
+  assert.equal(d80c?.notes, "Measured centerline and mount spacing");
+
+  const reloaded = getRotaryPresets(storage).find(
+    (preset) => preset.id === "d80c-chuck"
+  );
+  assert.ok(reloaded);
+  assert.equal(reloaded?.rotaryCenterXmm, 161.5);
+});
+
 test("invalid stored preset payload falls back to defaults", () => {
   const storage = createMemoryStorage({
     "lt316.admin.calibration.rotaryPresets": "not-valid-json",

@@ -128,6 +128,29 @@
   z-index: 3;
 }
 
+.mountFootprint {
+  position: absolute;
+  border: 1px dashed rgba(203, 214, 155, 0.84);
+  background: rgba(176, 195, 78, 0.08);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.mountFootprintLabel {
+  position: absolute;
+  pointer-events: none;
+  font-size: 10px;
+  color: #e3e9c8;
+  background: rgba(53, 59, 26, 0.88);
+  border: 1px solid #74813c;
+  border-radius: 999px;
+  padding: 2px 7px;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  z-index: 4;
+}
+
 .centerTarget {
   position: absolute;
   width: 14px;

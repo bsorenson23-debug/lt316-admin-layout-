@@ -66,3 +66,54 @@ Creating turbopack project {
 ✓ Compiled in 9ms
  GET /admin 200 in 86ms (compile: 22ms, render: 64ms)
  GET /admin/calibration 200 in 55ms (compile: 30ms, render: 25ms)
+✓ Compiled in 22ms
+✓ Compiled in 9ms
+✓ Compiled in 13ms
+✓ Compiled in 18ms
+✓ Compiled in 17ms
+✓ Compiled in 13ms
+✓ Compiled in 4ms
+✓ Compiled in 11ms
+✓ Compiled in 9ms
+✓ Compiled in 7ms
+✓ Compiled in 17ms
+✓ Compiled in 12ms
+✓ Compiled in 6ms
+✓ Compiled in 20ms
+✓ Compiled in 30ms
+✓ Compiled in 19ms
+ GET /admin/calibration 200 in 94ms (compile: 25ms, render: 69ms)
+✓ Compiled in 5ms
+✓ Compiled in 8ms
+✓ Compiled in 8ms
+✓ Compiled in 6ms
+✓ Compiled in 6ms
+ GET /admin/calibration 200 in 81ms (compile: 22ms, render: 58ms)
+✓ Compiled in 5ms
+✓ Compiled in 4ms
+✓ Compiled in 4ms
+✓ Compiled in 8ms
+✓ Compiled in 5ms
+✓ Compiled in 30ms
+ GET /admin/calibration 200 in 48ms (compile: 23ms, render: 25ms)
+✓ Compiled in 5ms
+ GET /admin/calibration 200 in 44ms (compile: 22ms, render: 22ms)
+✓ Compiled in 12ms
+✓ Compiled in 12ms
+✓ Compiled in 16ms
+✓ Compiled in 6ms
+✓ Compiled in 20ms
+✓ Compiled in 14ms
+✓ Compiled in 22ms
+ GET /admin/calibration 200 in 91ms (compile: 24ms, render: 67ms)
+✓ Compiled in 15ms
+ GET /admin/calibration 200 in 78ms (compile: 21ms, render: 57ms)
+✓ Compiled in 18ms
+ GET /admin/calibration 200 in 73ms (compile: 23ms, render: 50ms)
+✓ Compiled in 18ms
+ GET /admin/calibration 200 in 91ms (compile: 26ms, render: 65ms)
+✓ Compiled in 17ms
+✓ Compiled in 18ms
+✓ Compiled in 21ms
+✓ Compiled in 19ms
+✓ Compiled in 18ms

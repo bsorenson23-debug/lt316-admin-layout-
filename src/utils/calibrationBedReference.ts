@@ -8,6 +8,7 @@ export type RotaryCalibrationOverlay = {
   showRotaryCenterline: boolean;
   showTopAnchorLine: boolean;
   showLensFieldOutline: boolean;
+  showMountFootprint: boolean;
   showExportPreview: boolean;
 };
 
@@ -43,6 +44,7 @@ export const DEFAULT_CALIBRATION_OVERLAY_TOGGLES: CalibrationOverlayToggles = {
   showRotaryCenterline: true,
   showTopAnchorLine: true,
   showLensFieldOutline: false,
+  showMountFootprint: false,
   showExportPreview: true,
 };
 
