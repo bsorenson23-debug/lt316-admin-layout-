@@ -4,6 +4,7 @@ import React from "react";
 import { DEFAULT_BED_CONFIG } from "@/types/admin";
 import type {
   BedOrigin,
+  LightBurnPathSettings,
   RotaryDriveType,
   RotaryMountBoltSize,
   RotaryMountReferenceMode,
@@ -51,6 +52,7 @@ import {
   saveCalibrationWorkspaceState,
   type CalibrationOverlayStateByMode,
 } from "@/utils/calibrationWorkspaceState";
+import { loadLightBurnPathSettings } from "@/utils/lightBurnPathSettings";
 import {
   CUSTOM_ROTARY_PRESET_ID,
   type RotaryModeDraft,
@@ -132,6 +134,11 @@ function formatAnchorCoordinate(value: number | null | undefined): string {
     : "n/a";
 }
 
+function formatMaybePath(value: string | undefined): string {
+  const normalized = value?.trim();
+  return normalized ? normalized : "Not set";
+}
+
 function getShapeLabel(value: "straight" | "tapered" | "unknown"): string {
   if (value === "straight") return "Straight";
   if (value === "tapered") return "Tapered";
@@ -190,10 +197,13 @@ export function CalibrationWorkspace() {
     React.useState<RotaryHoleAnchorSelection>({});
   const [manualRotaryOverrideEnabled, setManualRotaryOverrideEnabled] =
     React.useState(false);
+  const [lightBurnPathSettings, setLightBurnPathSettings] =
+    React.useState<LightBurnPathSettings>({});
 
   React.useEffect(() => {
     const loadedPresets = getRotaryPresets();
     const persisted = loadCalibrationWorkspaceState();
+    const savedLightBurnPaths = loadLightBurnPathSettings();
     const emptyDraft = buildEmptyRotaryDraft(bedCenterXmm);
     const restoredCustomDraft = persisted.customRotaryDraft ?? emptyDraft;
     const restoredSelectedPresetId =
@@ -215,6 +225,7 @@ export function CalibrationWorkspace() {
     setCustomDraft(restoredCustomDraft);
     setRotaryAnchorSelection(persisted.rotaryAnchorSelection ?? {});
     setManualRotaryOverrideEnabled(Boolean(persisted.manualRotaryOverrideEnabled));
+    setLightBurnPathSettings(savedLightBurnPaths);
     setDraft(
       persisted.currentRotaryDraft ??
         (selectedPreset
@@ -1269,6 +1280,10 @@ export function CalibrationWorkspace() {
               <dd>{formatRotaryValue(exportPreview.recommendedObjectDiameterMm)}</dd>
               <dt>Wrap Width</dt>
               <dd>{formatRotaryValue(exportPreview.recommendedCircumferenceMm)}</dd>
+              <dt>Project Template</dt>
+              <dd>{formatMaybePath(lightBurnPathSettings.templateProjectPath)}</dd>
+              <dt>Output Folder</dt>
+              <dd>{formatMaybePath(lightBurnPathSettings.outputFolderPath)}</dd>
             </dl>
           </section>
 
@@ -1280,6 +1295,12 @@ export function CalibrationWorkspace() {
                 {note}
               </div>
             ))}
+            {(!lightBurnPathSettings.templateProjectPath ||
+              !lightBurnPathSettings.outputFolderPath) && (
+              <div className={styles.warning}>
+                LightBurn paths are incomplete. Configure template and output folder in Export.
+              </div>
+            )}
           </section>
 
           {exportPreview.warnings.map((warning) => (

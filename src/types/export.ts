@@ -137,3 +137,28 @@ export interface LightBurnExportArtifacts {
   setupSummary: string | null;
   setupWarnings: string[];
 }
+
+export interface LightBurnPathSettings {
+  templateProjectPath?: string;
+  outputFolderPath?: string;
+  deviceBundlePath?: string;
+}
+
+export type LightBurnPathValidationStatus =
+  | "valid"
+  | "missing"
+  | "invalid-extension"
+  | "not-found"
+  | "not-writable"
+  | "error";
+
+export interface LightBurnPathValidationItem {
+  status: LightBurnPathValidationStatus;
+  message: string;
+}
+
+export interface LightBurnPathValidationResult {
+  templateProjectPath: LightBurnPathValidationItem;
+  outputFolderPath: LightBurnPathValidationItem;
+  deviceBundlePath: LightBurnPathValidationItem;
+}

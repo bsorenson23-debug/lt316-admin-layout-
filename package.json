@@ -18,7 +18,9 @@
     "test:calibration-workspace-state": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/calibrationWorkspaceState.test.ts",
     "test:calibration-modes": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/calibrationModes.test.ts",
     "test:calibration-bed-reference": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/calibrationBedReference.test.ts",
-    "test:staggered-bed-pattern": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/staggeredBedPattern.test.ts"
+    "test:staggered-bed-pattern": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/staggeredBedPattern.test.ts",
+    "test:lightburn-path-settings": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/lightBurnPathSettings.test.ts",
+    "test:lightburn-path-validation": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/server/lightburn/validateLightBurnPaths.test.ts"
   },
   "dependencies": {
     "next": "16.1.6",

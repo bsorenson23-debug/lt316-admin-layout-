@@ -35,6 +35,23 @@
   gap: 8px;
 }
 
+.integrationSection {
+  border: 1px solid #2f2f2f;
+  border-radius: 5px;
+  background: #202020;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sectionTitle {
+  font-size: 10px;
+  color: #8a8a8a;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -48,6 +65,22 @@
 }
 
 .hint {
+  font-size: 10px;
+  color: #7f7f7f;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  color: #b8b8b8;
+}
+
+.fieldHint {
   font-size: 10px;
   color: #7f7f7f;
 }
@@ -72,6 +105,55 @@
 .numInput::-webkit-outer-spin-button,
 .numInput::-webkit-inner-spin-button {
   -webkit-appearance: none;
+}
+
+.pathInput {
+  width: 100%;
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 11px;
+  padding: 4px 6px;
+}
+
+.statusChip {
+  align-self: flex-start;
+  border-radius: 999px;
+  border: 1px solid #3a3a3a;
+  padding: 2px 7px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.statusValid {
+  border-color: #3f6f5e;
+  color: #a9e0ca;
+  background: #1f352c;
+}
+
+.statusMissing {
+  border-color: #3c3c3c;
+  color: #a7a7a7;
+  background: #272727;
+}
+
+.statusWarning {
+  border-color: #66512f;
+  color: #ebcfaa;
+  background: #312718;
+}
+
+.statusError {
+  border-color: #6d3f3f;
+  color: #f0c9c9;
+  background: #352020;
+}
+
+.inlineActions {
+  display: flex;
+  gap: 6px;
 }
 
 .toggle {
@@ -136,6 +218,13 @@
   border-radius: 5px;
   padding: 6px 8px;
   font-size: 11px;
+}
+
+.pathValue {
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .summary {

@@ -3,6 +3,9 @@
 import React from "react";
 import type { BedConfig, PlacedItem } from "@/types/admin";
 import type {
+  LightBurnPathSettings,
+  LightBurnPathValidationItem,
+  LightBurnPathValidationResult,
   RotaryPlacementPreset,
   TopAnchorMode,
   TumblerPlacementProfile,
@@ -11,6 +14,12 @@ import {
   DEFAULT_ROTARY_PLACEMENT_PRESETS,
 } from "@/data/rotaryPlacementPresets";
 import { getRotaryPresets } from "@/utils/adminCalibrationState";
+import {
+  buildDefaultLightBurnPathValidationResult,
+  loadLightBurnPathSettings,
+  resetLightBurnPathSettings,
+  saveLightBurnPathSettings,
+} from "@/utils/lightBurnPathSettings";
 import {
   buildLightBurnExportArtifacts,
   getLightBurnExportOrigin,
@@ -22,6 +31,12 @@ interface Props {
   placedItems: PlacedItem[];
 }
 
+interface LightBurnPathDraft {
+  templateProjectPath: string;
+  outputFolderPath: string;
+  deviceBundlePath: string;
+}
+
 function toRounded(value: number): string {
   return value.toFixed(2);
 }
@@ -30,6 +45,61 @@ function parseNullableNumber(value: string): number | null {
   if (!value.trim()) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toPathDraft(settings: LightBurnPathSettings): LightBurnPathDraft {
+  return {
+    templateProjectPath: settings.templateProjectPath ?? "",
+    outputFolderPath: settings.outputFolderPath ?? "",
+    deviceBundlePath: settings.deviceBundlePath ?? "",
+  };
+}
+
+function toPathSettings(draft: LightBurnPathDraft): LightBurnPathSettings {
+  const templateProjectPath = draft.templateProjectPath.trim();
+  const outputFolderPath = draft.outputFolderPath.trim();
+  const deviceBundlePath = draft.deviceBundlePath.trim();
+
+  return {
+    templateProjectPath: templateProjectPath || undefined,
+    outputFolderPath: outputFolderPath || undefined,
+    deviceBundlePath: deviceBundlePath || undefined,
+  };
+}
+
+function getValidationTone(status: LightBurnPathValidationItem["status"]): string {
+  if (status === "valid") return styles.statusValid;
+  if (status === "error") return styles.statusError;
+  if (status === "missing") return styles.statusMissing;
+  return styles.statusWarning;
+}
+
+function formatPathStatus(item: LightBurnPathValidationItem | undefined): string {
+  if (!item) return "Missing";
+  if (item.status === "invalid-extension") return "Invalid extension";
+  if (item.status === "not-found") return "Not found";
+  if (item.status === "not-writable") return "Not writable";
+  if (item.status === "error") return "Validation error";
+  return item.message;
+}
+
+function getPathWarnings(validation: LightBurnPathValidationResult): string[] {
+  const warnings: string[] = [];
+
+  if (validation.templateProjectPath.status !== "valid") {
+    warnings.push("LightBurn project template path is not valid.");
+  }
+  if (validation.outputFolderPath.status !== "valid") {
+    warnings.push("LightBurn output folder path is not valid.");
+  }
+  if (
+    validation.deviceBundlePath.status !== "valid" &&
+    validation.deviceBundlePath.status !== "missing"
+  ) {
+    warnings.push("LightBurn device bundle path is not valid.");
+  }
+
+  return warnings;
 }
 
 function inferTopSafeOffsetMm(bedConfig: BedConfig): number | undefined {
@@ -73,6 +143,16 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
   const [rotaryAutoPlacementEnabled, setRotaryAutoPlacementEnabled] =
     React.useState(false);
   const [includeLightBurnSetup, setIncludeLightBurnSetup] = React.useState(false);
+  const [lightBurnPathDraft, setLightBurnPathDraft] =
+    React.useState<LightBurnPathDraft>(() => toPathDraft({}));
+  const [pathValidation, setPathValidation] =
+    React.useState<LightBurnPathValidationResult>(
+      buildDefaultLightBurnPathValidationResult
+    );
+  const [isValidatingPaths, setIsValidatingPaths] = React.useState(false);
+  const [pathStatusMessage, setPathStatusMessage] = React.useState<string | null>(
+    null
+  );
   const [availablePresets, setAvailablePresets] = React.useState<RotaryPlacementPreset[]>(
     DEFAULT_ROTARY_PLACEMENT_PRESETS
   );
@@ -84,6 +164,41 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
   React.useEffect(() => {
     setAvailablePresets(getRotaryPresets());
   }, []);
+
+  const validateLightBurnPaths = React.useCallback(
+    async (settings: LightBurnPathSettings) => {
+      setIsValidatingPaths(true);
+      try {
+        const response = await fetch("/api/admin/lightburn/validate-paths", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ settings }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Validation request failed.");
+        }
+
+        const result = (await response.json()) as LightBurnPathValidationResult;
+        setPathValidation(result);
+        setPathStatusMessage("Path validation complete.");
+      } catch {
+        setPathStatusMessage("Could not validate paths. Check values and try again.");
+      } finally {
+        setIsValidatingPaths(false);
+      }
+    },
+    []
+  );
+
+  React.useEffect(() => {
+    const savedSettings = loadLightBurnPathSettings();
+    const draft = toPathDraft(savedSettings);
+    setLightBurnPathDraft(draft);
+    void validateLightBurnPaths(toPathSettings(draft));
+  }, [validateLightBurnPaths]);
 
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
   const selectedPreset = selectedPresetId
@@ -124,9 +239,39 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
 
   const fromArtworkWarnings = exportArtifacts.artworkPayload.warnings;
   const fromSetupWarnings = includeLightBurnSetup ? exportArtifacts.setupWarnings : [];
+  const pathWarnings = includeLightBurnSetup ? getPathWarnings(pathValidation) : [];
   const allWarnings = Array.from(
-    new Set([...fromArtworkWarnings, ...fromSetupWarnings])
+    new Set([...fromArtworkWarnings, ...fromSetupWarnings, ...pathWarnings])
   );
+
+  const lightBurnPathSettings = toPathSettings(lightBurnPathDraft);
+
+  const handlePathFieldChange = React.useCallback(
+    (key: keyof LightBurnPathDraft, value: string) => {
+      setLightBurnPathDraft((current) => ({
+        ...current,
+        [key]: value,
+      }));
+      setPathStatusMessage("Path values changed. Validate Paths to refresh status.");
+    },
+    []
+  );
+
+  const handleSaveLightBurnPaths = React.useCallback(() => {
+    const normalized = saveLightBurnPathSettings(toPathSettings(lightBurnPathDraft));
+    const normalizedDraft = toPathDraft(normalized);
+    setLightBurnPathDraft(normalizedDraft);
+    setPathStatusMessage("LightBurn paths saved.");
+    void validateLightBurnPaths(normalized);
+  }, [lightBurnPathDraft, validateLightBurnPaths]);
+
+  const handleResetLightBurnPaths = React.useCallback(() => {
+    const reset = resetLightBurnPathSettings();
+    const resetDraft = toPathDraft(reset);
+    setLightBurnPathDraft(resetDraft);
+    setPathValidation(buildDefaultLightBurnPathValidationResult());
+    setPathStatusMessage("LightBurn paths reset.");
+  }, []);
 
   return (
     <section className={styles.panel}>
@@ -212,6 +357,102 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
           </div>
         )}
 
+        <div className={styles.integrationSection}>
+          <div className={styles.sectionTitle}>LightBurn Integration</div>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Project Template</span>
+            <input
+              type="text"
+              className={styles.pathInput}
+              value={lightBurnPathDraft.templateProjectPath}
+              placeholder="C:\\LightBurn\\Templates\\job-template.lbrn2"
+              onChange={(event) =>
+                handlePathFieldChange("templateProjectPath", event.target.value)
+              }
+            />
+            <span className={styles.fieldHint}>Project Template: .lbrn2 or .lbrn</span>
+            <span
+              className={`${styles.statusChip} ${getValidationTone(
+                pathValidation.templateProjectPath.status
+              )}`}
+            >
+              {formatPathStatus(pathValidation.templateProjectPath)}
+            </span>
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Job Output Folder</span>
+            <input
+              type="text"
+              className={styles.pathInput}
+              value={lightBurnPathDraft.outputFolderPath}
+              placeholder="C:\\LightBurn\\LT316\\jobs"
+              onChange={(event) =>
+                handlePathFieldChange("outputFolderPath", event.target.value)
+              }
+            />
+            <span className={styles.fieldHint}>Output Folder: exported LT316 jobs</span>
+            <span
+              className={`${styles.statusChip} ${getValidationTone(
+                pathValidation.outputFolderPath.status
+              )}`}
+            >
+              {formatPathStatus(pathValidation.outputFolderPath)}
+            </span>
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Device Bundle</span>
+            <input
+              type="text"
+              className={styles.pathInput}
+              value={lightBurnPathDraft.deviceBundlePath}
+              placeholder="C:\\LightBurn\\Devices\\machine.lbzip"
+              onChange={(event) =>
+                handlePathFieldChange("deviceBundlePath", event.target.value)
+              }
+            />
+            <span className={styles.fieldHint}>Device Bundle: .lbzip</span>
+            <span
+              className={`${styles.statusChip} ${getValidationTone(
+                pathValidation.deviceBundlePath.status
+              )}`}
+            >
+              {formatPathStatus(pathValidation.deviceBundlePath)}
+            </span>
+          </label>
+
+          <div className={styles.inlineActions}>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              onClick={handleSaveLightBurnPaths}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              onClick={() => void validateLightBurnPaths(lightBurnPathSettings)}
+              disabled={isValidatingPaths}
+            >
+              {isValidatingPaths ? "Validating..." : "Validate Paths"}
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              onClick={handleResetLightBurnPaths}
+            >
+              Reset
+            </button>
+          </div>
+
+          {pathStatusMessage && <div className={styles.hint}>{pathStatusMessage}</div>}
+          <div className={styles.hint}>
+            Use Open in LightBurn for project templates, not Import.
+          </div>
+        </div>
+
         <div className={styles.previewGrid}>
           <span>Export Origin X</span>
           <span>{toRounded(previewOrigin.xMm)} mm</span>
@@ -264,6 +505,17 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
             <span>{exportArtifacts.sidecar.rotary.anchorMode}</span>
           </div>
         )}
+
+        <div className={styles.previewGrid}>
+          <span>Project template</span>
+          <span className={styles.pathValue}>
+            {lightBurnPathSettings.templateProjectPath ?? "Not set"}
+          </span>
+          <span>Output folder</span>
+          <span className={styles.pathValue}>
+            {lightBurnPathSettings.outputFolderPath ?? "Not set"}
+          </span>
+        </div>
 
         {includeLightBurnSetup && exportArtifacts.setupSummary && (
           <div className={styles.summary}>{exportArtifacts.setupSummary}</div>
