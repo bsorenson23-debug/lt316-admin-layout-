@@ -59,3 +59,10 @@ Creating turbopack project {
 ✓ Compiled in 3ms
 ✓ Compiled in 13ms
 ✓ Compiled in 4ms
+✓ Compiled in 17ms
+ GET /admin/calibration 200 in 40ms (compile: 19ms, render: 21ms)
+✓ Compiled in 18ms
+✓ Compiled in 16ms
+✓ Compiled in 9ms
+ GET /admin 200 in 86ms (compile: 22ms, render: 64ms)
+ GET /admin/calibration 200 in 55ms (compile: 30ms, render: 25ms)

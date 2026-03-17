@@ -12,6 +12,7 @@ import {
   generateStaggeredBedHoles,
   mapBedMmToCanvasPercent,
 } from "@/utils/staggeredBedPattern";
+import type { ExportPlacementPreview } from "@/utils/calibrationExportPreview";
 import styles from "./CalibrationBedReference.module.css";
 
 interface Props {
@@ -22,6 +23,7 @@ interface Props {
   lensInsetMm: number;
   bedOrigin: BedOrigin;
   overlays: CalibrationOverlayToggles;
+  exportPlacementPreview?: ExportPlacementPreview | null;
 }
 
 function clampLabelOffset(percent: number): string {
@@ -38,6 +40,7 @@ export function CalibrationBedReference({
   lensInsetMm,
   bedOrigin,
   overlays,
+  exportPlacementPreview,
 }: Props) {
   const metrics = React.useMemo(
     () =>
@@ -65,6 +68,29 @@ export function CalibrationBedReference({
     (DEFAULT_STAGGERED_BED_PATTERN.holeDiameterMm / Math.max(1, bedWidthMm)) * 100;
   const holeDiameterYPercent =
     (DEFAULT_STAGGERED_BED_PATTERN.holeDiameterMm / Math.max(1, bedHeightMm)) * 100;
+
+  const exportBox =
+    exportPlacementPreview &&
+    exportPlacementPreview.exportOriginXmm !== undefined &&
+    exportPlacementPreview.exportOriginYmm !== undefined &&
+    exportPlacementPreview.templateWidthMm !== undefined &&
+    exportPlacementPreview.templateHeightMm !== undefined
+      ? {
+          origin: {
+            xPercent:
+              (exportPlacementPreview.exportOriginXmm / Math.max(1, bedWidthMm)) *
+              100,
+            yPercent:
+              (exportPlacementPreview.exportOriginYmm / Math.max(1, bedHeightMm)) *
+              100,
+          },
+          widthPercent:
+            (exportPlacementPreview.templateWidthMm / Math.max(1, bedWidthMm)) * 100,
+          heightPercent:
+            (exportPlacementPreview.templateHeightMm / Math.max(1, bedHeightMm)) * 100,
+          isWithinBed: exportPlacementPreview.isWithinBed,
+        }
+      : null;
 
   return (
     <section className={styles.panel}>
@@ -178,6 +204,38 @@ export function CalibrationBedReference({
               <span className={styles.originDot} />
               <span className={styles.originLabel}>Origin</span>
             </div>
+          ) : null}
+
+          {isCalibrationOverlayVisible(overlays, "showExportPreview") && exportBox ? (
+            <>
+              <div
+                className={
+                  exportBox.isWithinBed ? styles.exportBox : styles.exportBoxWarning
+                }
+                style={{
+                  left: `${exportBox.origin.xPercent}%`,
+                  top: `${exportBox.origin.yPercent}%`,
+                  width: `${exportBox.widthPercent}%`,
+                  height: `${exportBox.heightPercent}%`,
+                }}
+              />
+              <div
+                className={styles.exportOriginMarker}
+                style={{
+                  left: `${exportBox.origin.xPercent}%`,
+                  top: `${exportBox.origin.yPercent}%`,
+                }}
+              />
+              <span
+                className={styles.exportOriginLabel}
+                style={{
+                  left: clampLabelOffset(exportBox.origin.xPercent),
+                  top: clampLabelOffset(exportBox.origin.yPercent),
+                }}
+              >
+                Export Origin
+              </span>
+            </>
           ) : null}
         </div>
       </div>

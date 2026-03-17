@@ -80,4 +80,12 @@ test("overlay toggles are evaluated per-key", () => {
     ),
     false
   );
+
+  assert.equal(
+    isCalibrationOverlayVisible(
+      { ...DEFAULT_CALIBRATION_OVERLAY_TOGGLES, showExportPreview: true },
+      "showExportPreview"
+    ),
+    true
+  );
 });

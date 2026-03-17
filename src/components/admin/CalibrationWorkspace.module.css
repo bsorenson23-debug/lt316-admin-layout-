@@ -161,7 +161,8 @@
 }
 
 .status,
-.error {
+.error,
+.warning {
   border-radius: 6px;
   padding: 6px 7px;
   font-size: 10px;
@@ -177,6 +178,12 @@
   border: 1px solid #6c3d3d;
   background: #382323;
   color: #f4cccc;
+}
+
+.warning {
+  border: 1px solid #6d5939;
+  background: #352d21;
+  color: #f0ddbf;
 }
 
 @media (max-width: 1300px) {

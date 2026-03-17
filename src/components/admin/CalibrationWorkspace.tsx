@@ -2,15 +2,17 @@
 
 import React from "react";
 import { DEFAULT_BED_CONFIG } from "@/types/admin";
-import type { BedOrigin, RotaryDriveType, RotaryPlacementPreset } from "@/types/export";
-import {
-  buildRotaryPlacementPreview,
-  type RotaryPreviewValues,
-} from "@/utils/rotaryCalibration";
+import type {
+  BedOrigin,
+  RotaryDriveType,
+  RotaryPlacementPreset,
+  TopAnchorMode,
+} from "@/types/export";
 import {
   DEFAULT_CALIBRATION_OVERLAY_TOGGLES,
   type CalibrationOverlayKey,
 } from "@/utils/calibrationBedReference";
+import { buildExportPlacementPreview } from "@/utils/calibrationExportPreview";
 import {
   deleteRotaryPreset,
   getRotaryPresets,
@@ -20,7 +22,6 @@ import {
 import { DEFAULT_STAGGERED_BED_PATTERN } from "@/utils/staggeredBedPattern";
 import { CalibrationBedReference } from "./CalibrationBedReference";
 import { CalibrationOverlayToggles } from "./CalibrationOverlayToggles";
-import { RotaryPlacementPreview } from "./RotaryPlacementPreview";
 import { RotaryPresetList } from "./RotaryPresetList";
 import styles from "./CalibrationWorkspace.module.css";
 
@@ -126,7 +127,15 @@ export function CalibrationWorkspace() {
   const [templateWidthMm, setTemplateWidthMm] = React.useState(
     String(DEFAULT_TEMPLATE_WIDTH_MM)
   );
-  const [topAnchorOffsetMm, setTopAnchorOffsetMm] = React.useState("0");
+  const [templateHeightMm, setTemplateHeightMm] = React.useState("160");
+  const [anchorMode, setAnchorMode] =
+    React.useState<TopAnchorMode>("physical-top");
+  const [printableOffsetMmDraft, setPrintableOffsetMmDraft] = React.useState("");
+  const [shapeType, setShapeType] =
+    React.useState<"straight" | "tapered" | "unknown">("straight");
+  const [outsideDiameterMmDraft, setOutsideDiameterMmDraft] = React.useState("87");
+  const [topDiameterMmDraft, setTopDiameterMmDraft] = React.useState("");
+  const [bottomDiameterMmDraft, setBottomDiameterMmDraft] = React.useState("");
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
 
@@ -168,20 +177,6 @@ export function CalibrationWorkspace() {
     () => presets.find((preset) => preset.id === selectedPresetId) ?? null,
     [presets, selectedPresetId]
   );
-
-  const preview = React.useMemo<RotaryPreviewValues>(() => {
-    const templateWidth = parseNumberInput(templateWidthMm) ?? DEFAULT_TEMPLATE_WIDTH_MM;
-    const rotaryCenter = parseNumberInput(draft.rotaryCenterXmm) ?? 0;
-    const rotaryTop = parseNumberInput(draft.rotaryTopYmm) ?? 0;
-    const topOffset = parseNumberInput(topAnchorOffsetMm) ?? 0;
-
-    return buildRotaryPlacementPreview({
-      templateWidthMm: templateWidth,
-      rotaryCenterXmm: rotaryCenter,
-      rotaryTopYmm: rotaryTop,
-      topAnchorOffsetMm: topOffset,
-    });
-  }, [draft.rotaryCenterXmm, draft.rotaryTopYmm, templateWidthMm, topAnchorOffsetMm]);
 
   const lensProfile = resolveLensProfile(lensProfileId);
 
@@ -275,6 +270,40 @@ export function CalibrationWorkspace() {
 
   const rotaryCenterXmm = parseNumberInput(draft.rotaryCenterXmm) ?? 0;
   const rotaryTopYmm = parseNumberInput(draft.rotaryTopYmm) ?? 0;
+  const templateWidthValue = parseNumberInput(templateWidthMm);
+  const templateHeightValue = parseNumberInput(templateHeightMm);
+  const printableOffsetMm = parseNumberInput(printableOffsetMmDraft);
+  const outsideDiameterMm = parseNumberInput(outsideDiameterMmDraft);
+  const topDiameterMm = parseNumberInput(topDiameterMmDraft);
+  const bottomDiameterMm = parseNumberInput(bottomDiameterMmDraft);
+
+  const activePresetForPreview: RotaryPlacementPreset | null = selectedPresetId
+    ? {
+        id: selectedPresetId,
+        name: draft.name.trim() || selectedPreset?.name || "Selected preset",
+        bedOrigin: draft.bedOrigin,
+        rotaryCenterXmm: rotaryCenterXmm,
+        rotaryTopYmm: rotaryTopYmm,
+        chuckOrRoller: draft.chuckOrRoller,
+        notes: draft.notes.trim() || undefined,
+      }
+    : null;
+
+  const exportPreview = buildExportPlacementPreview({
+    workspaceMode: "tumbler-wrap",
+    bedWidthMm: DEFAULT_BED_CONFIG.flatWidth,
+    bedHeightMm: DEFAULT_BED_CONFIG.flatHeight,
+    rotaryPreset: activePresetForPreview,
+    anchorMode,
+    printableOffsetMm,
+    templateWidthMm: templateWidthValue,
+    templateHeightMm: templateHeightValue,
+    shapeType,
+    outsideDiameterMm,
+    topDiameterMm,
+    bottomDiameterMm,
+  });
+
   const hasSelectedPreset = selectedPreset !== null;
 
   return (
@@ -442,10 +471,11 @@ export function CalibrationWorkspace() {
           bedWidthMm={DEFAULT_BED_CONFIG.flatWidth}
           bedHeightMm={DEFAULT_BED_CONFIG.flatHeight}
           rotaryCenterXmm={rotaryCenterXmm}
-          topAnchorYmm={rotaryTopYmm}
+          topAnchorYmm={exportPreview.exportOriginYmm ?? rotaryTopYmm}
           lensInsetMm={lensProfile.fieldInsetMm}
           bedOrigin={draft.bedOrigin}
           overlays={overlayToggles}
+          exportPlacementPreview={exportPreview}
         />
       </div>
 
@@ -462,9 +492,17 @@ export function CalibrationWorkspace() {
             <dt>Rotary Top Y</dt>
             <dd>{formatMm(rotaryTopYmm)}</dd>
             <dt>Export Origin X</dt>
-            <dd>{formatMm(preview.exportOriginXmm)}</dd>
+            <dd>
+              {exportPreview.exportOriginXmm !== undefined
+                ? formatMm(exportPreview.exportOriginXmm)
+                : "n/a"}
+            </dd>
             <dt>Export Origin Y</dt>
-            <dd>{formatMm(preview.exportOriginYmm)}</dd>
+            <dd>
+              {exportPreview.exportOriginYmm !== undefined
+                ? formatMm(exportPreview.exportOriginYmm)
+                : "n/a"}
+            </dd>
           </dl>
         </section>
 
@@ -487,7 +525,7 @@ export function CalibrationWorkspace() {
         </section>
 
         <section className={styles.card}>
-          <div className={styles.sectionLabel}>Export Origin Preview</div>
+          <div className={styles.sectionLabel}>Export Placement Preview</div>
           <div className={styles.fieldGrid}>
             <label className={styles.field}>
               <span>Template Width (mm)</span>
@@ -500,17 +538,134 @@ export function CalibrationWorkspace() {
               />
             </label>
             <label className={styles.field}>
-              <span>Top Anchor Offset (mm)</span>
+              <span>Template Height (mm)</span>
               <input
                 type="number"
                 className={styles.numInput}
-                value={topAnchorOffsetMm}
+                value={templateHeightMm}
                 step={0.1}
-                onChange={(event) => setTopAnchorOffsetMm(event.target.value)}
+                onChange={(event) => setTemplateHeightMm(event.target.value)}
               />
             </label>
+            <label className={styles.field}>
+              <span>Anchor Mode</span>
+              <select
+                className={styles.selectInput}
+                value={anchorMode}
+                onChange={(event) =>
+                  setAnchorMode(event.target.value as TopAnchorMode)
+                }
+              >
+                <option value="physical-top">Physical Top</option>
+                <option value="printable-top">Printable Top</option>
+              </select>
+            </label>
+            {anchorMode === "printable-top" ? (
+              <label className={styles.field}>
+                <span>Printable Offset (mm)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={printableOffsetMmDraft}
+                  step={0.1}
+                  onChange={(event) =>
+                    setPrintableOffsetMmDraft(event.target.value)
+                  }
+                />
+              </label>
+            ) : null}
+            <label className={styles.field}>
+              <span>Shape Type</span>
+              <select
+                className={styles.selectInput}
+                value={shapeType}
+                onChange={(event) =>
+                  setShapeType(
+                    event.target.value as "straight" | "tapered" | "unknown"
+                  )
+                }
+              >
+                <option value="straight">Straight</option>
+                <option value="tapered">Tapered</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span>Outside Diameter (mm)</span>
+              <input
+                type="number"
+                className={styles.numInput}
+                value={outsideDiameterMmDraft}
+                step={0.1}
+                onChange={(event) => setOutsideDiameterMmDraft(event.target.value)}
+              />
+            </label>
+            {shapeType === "tapered" ? (
+              <>
+                <label className={styles.field}>
+                  <span>Top Diameter (mm)</span>
+                  <input
+                    type="number"
+                    className={styles.numInput}
+                    value={topDiameterMmDraft}
+                    step={0.1}
+                    onChange={(event) => setTopDiameterMmDraft(event.target.value)}
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span>Bottom Diameter (mm)</span>
+                  <input
+                    type="number"
+                    className={styles.numInput}
+                    value={bottomDiameterMmDraft}
+                    step={0.1}
+                    onChange={(event) => setBottomDiameterMmDraft(event.target.value)}
+                  />
+                </label>
+              </>
+            ) : null}
           </div>
-          <RotaryPlacementPreview values={preview} />
+          <dl className={styles.valueGrid}>
+            <dt>Rotary preset</dt>
+            <dd>{exportPreview.presetName ?? "None"}</dd>
+            <dt>Anchor mode</dt>
+            <dd>{exportPreview.anchorMode}</dd>
+            <dt>Template width</dt>
+            <dd>
+              {exportPreview.templateWidthMm !== undefined
+                ? formatMm(exportPreview.templateWidthMm)
+                : "n/a"}
+            </dd>
+            <dt>Template height</dt>
+            <dd>
+              {exportPreview.templateHeightMm !== undefined
+                ? formatMm(exportPreview.templateHeightMm)
+                : "n/a"}
+            </dd>
+            <dt>Export origin X</dt>
+            <dd>
+              {exportPreview.exportOriginXmm !== undefined
+                ? formatMm(exportPreview.exportOriginXmm)
+                : "n/a"}
+            </dd>
+            <dt>Export origin Y</dt>
+            <dd>
+              {exportPreview.exportOriginYmm !== undefined
+                ? formatMm(exportPreview.exportOriginYmm)
+                : "n/a"}
+            </dd>
+            <dt>Recommended diameter</dt>
+            <dd>
+              {exportPreview.recommendedObjectDiameterMm !== undefined
+                ? formatMm(exportPreview.recommendedObjectDiameterMm)
+                : "n/a"}
+            </dd>
+          </dl>
+          {exportPreview.warnings.map((warning) => (
+            <div key={warning} className={styles.warning}>
+              {warning}
+            </div>
+          ))}
         </section>
 
         <section className={styles.card}>

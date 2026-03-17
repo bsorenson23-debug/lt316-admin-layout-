@@ -18,6 +18,7 @@ const OVERLAY_ITEMS: Array<{ key: CalibrationOverlayKey; label: string }> = [
   { key: "showRotaryCenterline", label: "Show rotary centerline" },
   { key: "showTopAnchorLine", label: "Show top anchor line" },
   { key: "showLensFieldOutline", label: "Show lens field outline" },
+  { key: "showExportPreview", label: "Show export preview" },
 ];
 
 export function CalibrationOverlayToggles({ value, onToggle }: Props) {

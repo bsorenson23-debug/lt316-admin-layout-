@@ -8,6 +8,7 @@ export type RotaryCalibrationOverlay = {
   showRotaryCenterline: boolean;
   showTopAnchorLine: boolean;
   showLensFieldOutline: boolean;
+  showExportPreview: boolean;
 };
 
 export type CalibrationOverlayToggles = RotaryCalibrationOverlay;
@@ -42,6 +43,7 @@ export const DEFAULT_CALIBRATION_OVERLAY_TOGGLES: CalibrationOverlayToggles = {
   showRotaryCenterline: true,
   showTopAnchorLine: true,
   showLensFieldOutline: false,
+  showExportPreview: true,
 };
 
 function clamp(value: number, min: number, max: number): number {

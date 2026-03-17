@@ -189,3 +189,47 @@
   border-radius: 999px;
   padding: 1px 6px;
 }
+
+.exportBox,
+.exportBoxWarning {
+  position: absolute;
+  transform-origin: top left;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.exportBox {
+  border: 1px solid rgba(155, 216, 255, 0.9);
+  background: rgba(72, 148, 195, 0.12);
+}
+
+.exportBoxWarning {
+  border: 1px solid rgba(239, 153, 97, 0.95);
+  background: rgba(190, 95, 41, 0.14);
+}
+
+.exportOriginMarker {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid #c7ebff;
+  background: rgba(75, 146, 188, 0.95);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 6;
+}
+
+.exportOriginLabel {
+  position: absolute;
+  pointer-events: none;
+  font-size: 10px;
+  color: #dbf3ff;
+  background: rgba(16, 41, 57, 0.9);
+  border: 1px solid #3d6780;
+  border-radius: 999px;
+  padding: 2px 7px;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  z-index: 6;
+}
