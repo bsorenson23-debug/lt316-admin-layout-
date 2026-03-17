@@ -86,6 +86,26 @@ test("overlay toggles restore cleanly after reload", () => {
   assert.equal(restored.overlayStateByMode.rotary.showCenterline, false);
 });
 
+test("rotary anchor selection and manual override restore after reload", () => {
+  const storage = createMemoryStorage();
+  const base = buildDefaultCalibrationWorkspaceState();
+  saveCalibrationWorkspaceState(
+    {
+      ...base,
+      rotaryAnchorSelection: {
+        primaryHole: { row: 1, col: 3, xMm: 87.5, yMm: 25 },
+      },
+      manualRotaryOverrideEnabled: true,
+    },
+    storage
+  );
+
+  const restored = loadCalibrationWorkspaceState(storage);
+  assert.equal(restored.manualRotaryOverrideEnabled, true);
+  assert.equal(restored.rotaryAnchorSelection?.primaryHole?.row, 1);
+  assert.equal(restored.rotaryAnchorSelection?.primaryHole?.col, 3);
+});
+
 test("export preview toggle and anchor mode restore after reload", () => {
   const storage = createMemoryStorage();
   const base = buildDefaultCalibrationWorkspaceState();

@@ -80,6 +80,22 @@
   gap: 7px;
 }
 
+.subSection {
+  border: 1px solid #2c2c2c;
+  border-radius: 7px;
+  background: #1b1b1b;
+  padding: 7px;
+  display: grid;
+  gap: 6px;
+}
+
+.subSectionTitle {
+  font-size: 10px;
+  color: #7a878e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .stackActions {
   display: grid;
   gap: 6px;
@@ -106,6 +122,16 @@
   color: #d4d4d4;
 }
 
+.quietBtn {
+  border: 1px solid #2f2f2f;
+  background: #202020;
+  color: #b7b7b7;
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+
 .dangerBtn {
   border: 1px solid #643c3c;
   background: #3a2323;
@@ -122,6 +148,18 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+.checkboxField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #858585;
+}
+
+.checkboxField input {
+  margin: 0;
 }
 
 .field span {

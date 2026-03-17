@@ -19,6 +19,8 @@ test("preset draft loads D80C defaults correctly", () => {
   assert.equal(draft.mountPatternXmm, "75");
   assert.equal(draft.mountPatternYmm, "100");
   assert.equal(draft.axisHeightMm, "129");
+  assert.equal(draft.referenceToAxisOffsetXmm, "37.5");
+  assert.equal(draft.referenceToAxisOffsetYmm, "50");
   assert.equal(draft.chuckOrRoller, "chuck");
 });
 
@@ -96,6 +98,8 @@ test("valid rotary draft maps to typed preset payload", () => {
     mountPatternXmm: "80",
     mountPatternYmm: "105",
     axisHeightMm: "131",
+    referenceToAxisOffsetXmm: "12.5",
+    referenceToAxisOffsetYmm: "-8",
     rotaryTopYmm: "24",
     notes: "Measured on machine",
   };
@@ -108,5 +112,6 @@ test("valid rotary draft maps to typed preset payload", () => {
   assert.equal(result.value.axisHeightMm, 131);
   assert.equal(result.value.rotaryCenterXmm, 150);
   assert.equal(result.value.rotaryTopYmm, 24);
+  assert.equal(result.value.referenceToAxisOffsetXmm, 12.5);
+  assert.equal(result.value.referenceToAxisOffsetYmm, -8);
 });
-

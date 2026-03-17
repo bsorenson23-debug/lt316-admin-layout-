@@ -8,8 +8,21 @@ export type RotaryMountBoltSize = "M6" | "unknown";
 export type RotaryMountReferenceMode =
   | "axis-center"
   | "front-left-bolt"
+  | "front-right-bolt"
   | "front-edge-center"
   | "custom";
+
+export interface RotaryMountHoleOffset {
+  id: string;
+  xMm: number;
+  yMm: number;
+}
+
+export interface RotaryAnchorReferencePoint {
+  xMm: number;
+  yMm: number;
+  label?: string;
+}
 
 export interface RotaryPlacementPreset {
   id: string;
@@ -27,6 +40,13 @@ export interface RotaryPlacementPreset {
   defaultRotationDeg?: number;
   chuckOrRoller: RotaryDriveType;
   mountReferenceMode?: RotaryMountReferenceMode;
+  referenceToAxisOffsetXmm?: number;
+  referenceToAxisOffsetYmm?: number;
+  baseVisualWidthMm?: number;
+  baseVisualDepthMm?: number;
+  mountHoleOffsetsMm?: RotaryMountHoleOffset[];
+  anchorReferencePointMm?: RotaryAnchorReferencePoint;
+  baseVisualPlaceholder?: boolean;
   notes?: string;
 }
 

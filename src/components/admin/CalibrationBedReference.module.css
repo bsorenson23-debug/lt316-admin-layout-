@@ -54,8 +54,15 @@
   pointer-events: none;
 }
 
+.holesLayerInteractive {
+  pointer-events: auto;
+}
+
 .hole {
   position: absolute;
+  appearance: none;
+  padding: 0;
+  margin: 0;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   border: 1px solid rgba(105, 133, 148, 0.9);
@@ -64,6 +71,27 @@
     rgba(96, 124, 140, 0.5) 0%,
     rgba(41, 58, 70, 0.92) 78%
   );
+  pointer-events: none;
+}
+
+.holeInteractive {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.holeInteractive:focus-visible {
+  outline: 1px solid rgba(140, 208, 248, 0.95);
+  outline-offset: 1px;
+}
+
+.holePrimary {
+  border-color: rgba(128, 238, 255, 0.98);
+  box-shadow: 0 0 0 1px rgba(128, 238, 255, 0.4);
+}
+
+.holeSecondary {
+  border-color: rgba(255, 210, 136, 0.97);
+  box-shadow: 0 0 0 1px rgba(255, 210, 136, 0.35);
 }
 
 .line {
@@ -149,6 +177,97 @@
   transform: translate(-50%, -50%);
   white-space: nowrap;
   z-index: 4;
+}
+
+.rotaryBase,
+.rotaryBasePlaceholder {
+  position: absolute;
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.rotaryBase {
+  border: 1px solid rgba(130, 218, 228, 0.8);
+  background: rgba(63, 128, 136, 0.14);
+}
+
+.rotaryBasePlaceholder {
+  border: 1px dashed rgba(178, 198, 207, 0.74);
+  background: rgba(110, 126, 134, 0.1);
+}
+
+.rotaryBaseHole {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid rgba(230, 244, 251, 0.92);
+  background: rgba(35, 65, 74, 0.92);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.rotaryBaseAnchor {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  transform: translate(-50%, -50%);
+  border-radius: 2px;
+  border: 1px solid rgba(255, 217, 145, 0.96);
+  background: rgba(145, 98, 34, 0.9);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.rotaryBaseAxisMarker {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid rgba(117, 232, 244, 0.98);
+  background: rgba(40, 106, 113, 0.9);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.rotaryBaseAxisMarker::before,
+.rotaryBaseAxisMarker::after {
+  content: "";
+  position: absolute;
+  background: rgba(199, 244, 249, 0.96);
+}
+
+.rotaryBaseAxisMarker::before {
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.rotaryBaseAxisMarker::after {
+  top: 50%;
+  left: -3px;
+  right: -3px;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.rotaryBaseLabel {
+  position: absolute;
+  pointer-events: none;
+  font-size: 10px;
+  color: #ddf5f8;
+  background: rgba(16, 40, 45, 0.9);
+  border: 1px solid #49737b;
+  border-radius: 999px;
+  padding: 2px 7px;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  z-index: 6;
 }
 
 .centerTarget {

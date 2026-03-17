@@ -11,6 +11,7 @@ interface Props {
   onToggle: (key: CalibrationOverlayKey, enabled: boolean) => void;
   visibleKeys?: CalibrationOverlayKey[];
   title?: string;
+  labelOverrides?: Partial<Record<CalibrationOverlayKey, string>>;
 }
 
 const OVERLAY_ITEMS: Array<{ key: CalibrationOverlayKey; label: string }> = [
@@ -29,6 +30,7 @@ export function CalibrationOverlayToggles({
   onToggle,
   visibleKeys,
   title = "Overlay Toggles",
+  labelOverrides,
 }: Props) {
   const visibleSet = visibleKeys ? new Set(visibleKeys) : null;
   const items = visibleSet
@@ -46,7 +48,7 @@ export function CalibrationOverlayToggles({
               checked={value[item.key]}
               onChange={(event) => onToggle(item.key, event.target.checked)}
             />
-            <span>{item.label}</span>
+            <span>{labelOverrides?.[item.key] ?? item.label}</span>
           </label>
         ))}
       </div>

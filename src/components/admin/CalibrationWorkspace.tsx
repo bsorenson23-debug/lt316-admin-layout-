@@ -23,6 +23,19 @@ import {
 } from "@/utils/calibrationModes";
 import { getBedCenterXmm, resolveRotaryCenterXmm } from "@/utils/rotaryCenter";
 import {
+  buildRotaryFootprintFromAnchor,
+  formatAnchorReadout,
+  isManualRotaryOverrideActive,
+  resolveRotaryAxisFromAnchor,
+  selectRotaryAnchorHole,
+  toBedHoleReference,
+  type RotaryHoleAnchorSelection,
+} from "@/utils/rotaryAnchoring";
+import {
+  getRotaryBaseVisualForPreset,
+  placeRotaryBaseFromAnchor,
+} from "@/utils/rotaryBaseVisual";
+import {
   deleteRotaryPreset,
   getRotaryPresets,
   isSeededRotaryPresetId,
@@ -51,6 +64,10 @@ import {
 import { CalibrationBedReference } from "./CalibrationBedReference";
 import { CalibrationModeSwitcher } from "./CalibrationModeSwitcher";
 import { CalibrationOverlayToggles } from "./CalibrationOverlayToggles";
+import {
+  RotaryMeasurementGuide,
+  type RotaryMeasurementFocus,
+} from "./RotaryMeasurementGuide";
 import styles from "./CalibrationWorkspace.module.css";
 
 const DEFAULT_TEMPLATE_WIDTH_MM = 276.15;
@@ -74,9 +91,19 @@ const ROTARY_MOUNT_BOLT_OPTIONS: RotaryMountBoltSize[] = ["M6", "unknown"];
 const ROTARY_MOUNT_REFERENCE_OPTIONS: RotaryMountReferenceMode[] = [
   "axis-center",
   "front-left-bolt",
+  "front-right-bolt",
   "front-edge-center",
   "custom",
 ];
+
+const ROTARY_OVERLAY_LABELS: Partial<Record<CalibrationOverlayKey, string>> = {
+  showHoleGrid: "Show hole grid",
+  showCenterline: "Show bed centerline",
+  showOrigin: "Show origin",
+  showRotaryCenterline: "Show rotary axis",
+  showTopAnchorLine: "Show top line",
+  showMountFootprint: "Show mount footprint",
+};
 
 type LensProfileId = (typeof LENS_PROFILES)[number]["id"];
 
@@ -97,6 +124,12 @@ function isFinitePositive(value: number | null): value is number {
 
 function formatMaybeMm(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? formatMm(value) : "n/a";
+}
+
+function formatAnchorCoordinate(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value.toFixed(2)} mm`
+    : "n/a";
 }
 
 function getShapeLabel(value: "straight" | "tapered" | "unknown"): string {
@@ -151,6 +184,12 @@ export function CalibrationWorkspace() {
   const [bottomDiameterMmDraft, setBottomDiameterMmDraft] = React.useState("");
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
+  const [activeMeasurementFocus, setActiveMeasurementFocus] =
+    React.useState<RotaryMeasurementFocus | null>(null);
+  const [rotaryAnchorSelection, setRotaryAnchorSelection] =
+    React.useState<RotaryHoleAnchorSelection>({});
+  const [manualRotaryOverrideEnabled, setManualRotaryOverrideEnabled] =
+    React.useState(false);
 
   React.useEffect(() => {
     const loadedPresets = getRotaryPresets();
@@ -174,6 +213,8 @@ export function CalibrationWorkspace() {
     setAnchorMode(persisted.anchorMode);
     setSelectedPresetId(restoredSelectedPresetId);
     setCustomDraft(restoredCustomDraft);
+    setRotaryAnchorSelection(persisted.rotaryAnchorSelection ?? {});
+    setManualRotaryOverrideEnabled(Boolean(persisted.manualRotaryOverrideEnabled));
     setDraft(
       persisted.currentRotaryDraft ??
         (selectedPreset
@@ -192,6 +233,8 @@ export function CalibrationWorkspace() {
       anchorMode,
       customRotaryDraft: customDraft,
       currentRotaryDraft: draft,
+      rotaryAnchorSelection,
+      manualRotaryOverrideEnabled,
     });
   }, [
     activeMode,
@@ -199,7 +242,9 @@ export function CalibrationWorkspace() {
     customDraft,
     draft,
     isLoading,
+    manualRotaryOverrideEnabled,
     overlayStateByMode,
+    rotaryAnchorSelection,
     selectedPresetId,
   ]);
 
@@ -207,6 +252,12 @@ export function CalibrationWorkspace() {
     if (selectedPresetId !== null) return;
     setCustomDraft(draft);
   }, [selectedPresetId, draft]);
+
+  React.useEffect(() => {
+    if (activeMode !== "rotary") {
+      setActiveMeasurementFocus(null);
+    }
+  }, [activeMode]);
 
   const selectedPreset = React.useMemo(
     () => presets.find((preset) => preset.id === selectedPresetId) ?? null,
@@ -217,8 +268,29 @@ export function CalibrationWorkspace() {
 
   const manualRotaryCenterXmm = parseNumberInput(draft.rotaryCenterXmm);
   const manualRotaryTopYmm = parseNumberInput(draft.rotaryTopYmm);
-  const resolvedTopAnchorYmm =
-    manualRotaryTopYmm ?? selectedPreset?.rotaryTopYmm ?? 0;
+  const referenceToAxisOffsetXmm = parseNumberInput(draft.referenceToAxisOffsetXmm);
+  const referenceToAxisOffsetYmm = parseNumberInput(draft.referenceToAxisOffsetYmm);
+  const resolvedAxisFromAnchor = resolveRotaryAxisFromAnchor({
+    selection: rotaryAnchorSelection,
+    referenceToAxisOffsetXmm,
+    referenceToAxisOffsetYmm,
+  });
+  const isManualCenterActive = isManualRotaryOverrideActive({
+    manualOverrideEnabled: manualRotaryOverrideEnabled,
+    manualRotaryCenterXmm,
+  });
+  const fallbackRotaryCenterXmm = resolveRotaryCenterXmm({
+    selectedPresetRotaryCenterXmm: selectedPreset?.rotaryCenterXmm,
+    manualRotaryCenterXmm: isManualCenterActive ? manualRotaryCenterXmm : undefined,
+    bedWidthMm: CALIBRATION_BED_WIDTH_MM,
+    preferManualOverride: true,
+  });
+  const rotaryCenterXmm =
+    !isManualCenterActive && resolvedAxisFromAnchor.isResolved
+      ? resolvedAxisFromAnchor.rotaryAxisXmm ?? fallbackRotaryCenterXmm
+      : fallbackRotaryCenterXmm;
+  const resolvedTopAnchorYmm = manualRotaryTopYmm ?? selectedPreset?.rotaryTopYmm ?? 0;
+  const rotaryAxisYmm = resolvedAxisFromAnchor.rotaryAxisYmm;
   const templateWidthValue = parseNumberInput(templateWidthMm);
   const templateHeightValue = parseNumberInput(templateHeightMm);
   const printableOffsetMm = parseNumberInput(printableOffsetMmDraft);
@@ -236,19 +308,12 @@ export function CalibrationWorkspace() {
     ? `${getShapeLabel(shapeType)} tumbler`
     : "No applied tumbler data";
 
-  const rotaryCenterXmm = resolveRotaryCenterXmm({
-    selectedPresetRotaryCenterXmm: selectedPreset?.rotaryCenterXmm,
-    manualRotaryCenterXmm,
-    bedWidthMm: CALIBRATION_BED_WIDTH_MM,
-    preferManualOverride: true,
-  });
-
   const exportPreview = buildExportPlacementPreview({
     workspaceMode: "tumbler-wrap",
     bedWidthMm: CALIBRATION_BED_WIDTH_MM,
     bedHeightMm: DEFAULT_BED_CONFIG.flatHeight,
     rotaryPreset: selectedPreset,
-    manualRotaryCenterXmm,
+    manualRotaryCenterXmm: rotaryCenterXmm,
     manualRotaryTopYmm,
     anchorMode,
     printableOffsetMm,
@@ -267,8 +332,39 @@ export function CalibrationWorkspace() {
     toggles: modeOverlay,
   });
 
-  const mountFootprintMm =
+  const mountFootprintDimensions =
     activeMode === "rotary" ? resolveMountFootprintFromDraft(draft) : null;
+  const mountFootprintBoxMm =
+    activeMode === "rotary"
+      ? buildRotaryFootprintFromAnchor({
+          selection: rotaryAnchorSelection,
+          mountReferenceMode: draft.mountReferenceMode,
+          mountPatternXmm: mountFootprintDimensions?.widthMm,
+          mountPatternYmm: mountFootprintDimensions?.heightMm,
+          resolvedAxisXmm: rotaryCenterXmm,
+          resolvedAxisYmm: rotaryAxisYmm,
+        })
+      : null;
+  const rotaryBaseVisual =
+    activeMode === "rotary"
+      ? getRotaryBaseVisualForPreset({
+          preset: selectedPreset,
+          mountPatternXmm: mountFootprintDimensions?.widthMm,
+          mountPatternYmm: mountFootprintDimensions?.heightMm,
+          mountReferenceMode: draft.mountReferenceMode,
+        })
+      : null;
+  const placedRotaryBaseVisual =
+    activeMode === "rotary" && rotaryBaseVisual
+      ? placeRotaryBaseFromAnchor({
+          baseVisual: rotaryBaseVisual,
+          selection: rotaryAnchorSelection,
+          rotaryAxisXmm: rotaryCenterXmm,
+          rotaryAxisYmm: rotaryAxisYmm,
+          referenceToAxisOffsetXmm,
+          referenceToAxisOffsetYmm,
+        })
+      : null;
   const hasRotaryTopAnchor =
     (typeof manualRotaryTopYmm === "number" && Number.isFinite(manualRotaryTopYmm)) ||
     (typeof selectedPreset?.rotaryTopYmm === "number" &&
@@ -280,7 +376,10 @@ export function CalibrationWorkspace() {
           ...activeCanvasOverlaysBase,
           showTopAnchorLine: activeCanvasOverlaysBase.showTopAnchorLine && hasRotaryTopAnchor,
           showMountFootprint:
-            activeCanvasOverlaysBase.showMountFootprint && mountFootprintMm !== null,
+            activeCanvasOverlaysBase.showMountFootprint &&
+            (placedRotaryBaseVisual !== null ||
+              mountFootprintBoxMm !== null ||
+              mountFootprintDimensions !== null),
         }
       : activeCanvasOverlaysBase;
 
@@ -288,7 +387,7 @@ export function CalibrationWorkspace() {
     preset: selectedPreset,
     draft,
     resolvedRotaryCenterXmm: rotaryCenterXmm,
-    resolvedRotaryTopYmm: manualRotaryTopYmm,
+    resolvedRotaryTopYmm: manualRotaryTopYmm ?? selectedPreset?.rotaryTopYmm ?? null,
   });
   const selectedPresetIsSeeded = selectedPreset
     ? isSeededRotaryPresetId(selectedPreset.id)
@@ -302,13 +401,46 @@ export function CalibrationWorkspace() {
     ? buildRotaryDraftFromPreset(selectedPreset)
     : customDraft;
   const hasUnsavedChanges = JSON.stringify(draft) !== JSON.stringify(baselineDraft);
+  const anchorPrimaryLabel = formatAnchorReadout(rotaryAnchorSelection.primaryHole);
+  const anchorSecondaryLabel = formatAnchorReadout(rotaryAnchorSelection.secondaryHole);
+  const anchorCoordinateLabel = rotaryAnchorSelection.primaryHole
+    ? `${rotaryAnchorSelection.primaryHole.xMm.toFixed(1)}, ${rotaryAnchorSelection.primaryHole.yMm.toFixed(1)} mm`
+    : "n/a";
+  const placementSourceLabel = isManualCenterActive
+    ? "Manual override"
+    : resolvedAxisFromAnchor.isResolved
+      ? "Calculated from bed hole anchor"
+      : selectedPreset
+        ? "Preset/default center"
+        : "Bed-center fallback";
+  const hasManualAnchorConflict =
+    isManualCenterActive &&
+    resolvedAxisFromAnchor.isResolved &&
+    typeof manualRotaryCenterXmm === "number" &&
+    typeof resolvedAxisFromAnchor.rotaryAxisXmm === "number" &&
+    Math.abs(manualRotaryCenterXmm - resolvedAxisFromAnchor.rotaryAxisXmm) > 0.01;
 
   const rotaryWarnings = [
-    selectedPresetId === null ? "Using bed center as default rotary axis." : null,
+    !rotaryAnchorSelection.primaryHole
+      ? "No bed hole anchor selected. Click a bed hole to anchor rotary placement."
+      : null,
+    resolvedAxisFromAnchor.isResolved ? null : resolvedAxisFromAnchor.missing[0] ?? null,
+    !isManualCenterActive && !resolvedAxisFromAnchor.isResolved && selectedPresetId === null
+      ? "Using bed center as default rotary axis."
+      : null,
+    hasManualAnchorConflict
+      ? "Manual override differs from calculated anchor axis."
+      : null,
     !hasRotaryTopAnchor
       ? "Top anchor Y is unset. Measure on machine for production placement."
       : null,
-    draft.family === "rotoboss-talon" && mountFootprintMm === null
+    draft.mountReferenceMode === "custom"
+      ? "Mount reference mode is custom. Verify offsets on machine."
+      : null,
+    placedRotaryBaseVisual?.isPlaceholder
+      ? "Using simplified base visual. Confirm measured mount geometry on machine."
+      : null,
+    draft.family === "rotoboss-talon" && mountFootprintDimensions === null
       ? "RotoBoss Talon mount footprint is not verified. Measure on machine."
       : null,
   ].filter((warning): warning is string => Boolean(warning));
@@ -324,6 +456,49 @@ export function CalibrationWorkspace() {
       }));
     },
     [activeMode]
+  );
+
+  const handleMeasurementFieldFocus = React.useCallback(
+    (field: RotaryMeasurementFocus) => {
+      setActiveMeasurementFocus(field);
+    },
+    []
+  );
+
+  const handleMeasurementFieldBlur = React.useCallback(() => {
+    setActiveMeasurementFocus(null);
+  }, []);
+
+  const handleAnchorHoleSelect = React.useCallback(
+    (args: {
+      rowIndex: number;
+      columnIndex: number;
+      xMm: number;
+      yMm: number;
+      asSecondary: boolean;
+    }) => {
+      const holeRef = toBedHoleReference({
+        rowIndex: args.rowIndex,
+        columnIndex: args.columnIndex,
+        xMm: args.xMm,
+        yMm: args.yMm,
+      });
+      setRotaryAnchorSelection((current) =>
+        selectRotaryAnchorHole({
+          current,
+          hole: holeRef,
+          asSecondary: args.asSecondary,
+        })
+      );
+      setManualRotaryOverrideEnabled(false);
+      setErrorMessage(null);
+      setStatusMessage(
+        args.asSecondary
+          ? `Secondary anchor set: R${holeRef.row + 1} C${holeRef.col + 1}`
+          : `Anchor set: R${holeRef.row + 1} C${holeRef.col + 1}`
+      );
+    },
+    []
   );
 
   const handleSavePreset = React.useCallback(() => {
@@ -405,6 +580,7 @@ export function CalibrationWorkspace() {
       setCustomDraft(empty);
       setStatusMessage("Custom draft reset.");
     }
+    setManualRotaryOverrideEnabled(false);
     setErrorMessage(null);
   }, [bedCenterXmm, selectedPreset]);
 
@@ -417,6 +593,8 @@ export function CalibrationWorkspace() {
     setSelectedPresetId(null);
     setDraft(empty);
     setCustomDraft(empty);
+    setRotaryAnchorSelection(defaults.rotaryAnchorSelection ?? {});
+    setManualRotaryOverrideEnabled(Boolean(defaults.manualRotaryOverrideEnabled));
     setStatusMessage("Workspace preferences reset to defaults.");
     setErrorMessage(null);
   }, [bedCenterXmm]);
@@ -426,86 +604,91 @@ export function CalibrationWorkspace() {
       return (
         <>
           <section className={styles.card}>
-            <div className={styles.sectionLabel}>Preset Selector</div>
-            <label className={styles.field}>
-              <span>Rotary Preset</span>
-              <select
-                className={styles.selectInput}
-                value={selectedPresetChoice}
-                onChange={(event) => {
-                  const nextId = event.target.value;
-                  if (nextId === CUSTOM_ROTARY_PRESET_ID) {
-                    setSelectedPresetId(null);
-                    setDraft(customDraft);
-                    setStatusMessage("Using bed center as default rotary axis.");
-                    setErrorMessage(null);
-                    return;
-                  }
-
-                  const preset = presets.find((entry) => entry.id === nextId);
-                  if (!preset) return;
-                  if (selectedPresetId === null) {
-                    setCustomDraft(draft);
-                  }
-                  setSelectedPresetId(nextId);
-                  setDraft(buildRotaryDraftFromPreset(preset));
-                  setStatusMessage(`Loaded preset: ${preset.name}`);
-                  setErrorMessage(null);
-                }}
-              >
-                <option value={CUSTOM_ROTARY_PRESET_ID}>Custom</option>
-                {presets.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {isLoading ? <div className={styles.info}>Loading rotary presets...</div> : null}
-            <div className={styles.inlineActions}>
-              <button
-                type="button"
-                className={styles.secondaryBtn}
-                onClick={() => {
-                  const empty = buildEmptyRotaryDraft(bedCenterXmm);
-                  setSelectedPresetId(null);
-                  setCustomDraft(empty);
-                  setDraft(empty);
-                  setStatusMessage("Editing custom rotary values.");
-                  setErrorMessage(null);
-                }}
-              >
-                New Custom
-              </button>
-              {selectedPresetId && selectedPreset && !isSeededRotaryPresetId(selectedPreset.id) ? (
-                <button
-                  type="button"
-                  className={styles.dangerBtn}
-                  onClick={() => {
-                    const next = deleteRotaryPreset(selectedPresetId);
-                    setPresets(next);
-                    if (next.length > 0) {
+            <div className={styles.sectionLabel}>Rotary Setup</div>
+            <div className={styles.subSection}>
+              <label className={styles.field}>
+                <span>Rotary Preset</span>
+                <select
+                  className={styles.selectInput}
+                  value={selectedPresetChoice}
+                  onChange={(event) => {
+                    const nextId = event.target.value;
+                    if (nextId === CUSTOM_ROTARY_PRESET_ID) {
                       setSelectedPresetId(null);
                       setDraft(customDraft);
-                      setStatusMessage("Preset deleted. Using custom fallback.");
-                    } else {
-                      setSelectedPresetId(null);
-                      setDraft(customDraft);
-                      setStatusMessage("Preset deleted. Using custom fallback.");
+                      setManualRotaryOverrideEnabled(false);
+                      setStatusMessage("Using bed center as default rotary axis.");
+                      setErrorMessage(null);
+                      return;
                     }
+
+                    const preset = presets.find((entry) => entry.id === nextId);
+                    if (!preset) return;
+                    if (selectedPresetId === null) {
+                      setCustomDraft(draft);
+                    }
+                    setSelectedPresetId(nextId);
+                    setDraft(buildRotaryDraftFromPreset(preset));
+                    setManualRotaryOverrideEnabled(false);
+                    setStatusMessage(`Loaded preset: ${preset.name}`);
                     setErrorMessage(null);
                   }}
                 >
-                  Delete
+                  <option value={CUSTOM_ROTARY_PRESET_ID}>Custom</option>
+                  {presets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {isLoading ? <div className={styles.info}>Loading rotary presets...</div> : null}
+              <div className={styles.inlineActions}>
+                <button
+                  type="button"
+                  className={styles.quietBtn}
+                  onClick={() => {
+                    const empty = buildEmptyRotaryDraft(bedCenterXmm);
+                    setSelectedPresetId(null);
+                    setCustomDraft(empty);
+                    setDraft(empty);
+                    setManualRotaryOverrideEnabled(false);
+                    setStatusMessage("Editing custom rotary values.");
+                    setErrorMessage(null);
+                  }}
+                >
+                  New Custom
                 </button>
-              ) : null}
+                {selectedPresetId && selectedPreset && !isSeededRotaryPresetId(selectedPreset.id) ? (
+                  <button
+                    type="button"
+                    className={styles.dangerBtn}
+                    onClick={() => {
+                      const next = deleteRotaryPreset(selectedPresetId);
+                      setPresets(next);
+                      if (next.length > 0) {
+                        setSelectedPresetId(null);
+                        setDraft(customDraft);
+                        setManualRotaryOverrideEnabled(false);
+                        setStatusMessage("Preset deleted. Using custom fallback.");
+                      } else {
+                        setSelectedPresetId(null);
+                        setDraft(customDraft);
+                        setManualRotaryOverrideEnabled(false);
+                        setStatusMessage("Preset deleted. Using custom fallback.");
+                      }
+                      setErrorMessage(null);
+                    }}
+                  >
+                    Delete
+                  </button>
+                ) : null}
+              </div>
             </div>
-          </section>
-          <section className={styles.card}>
-            <div className={styles.sectionLabel}>Rotary Controls</div>
-            <div className={styles.fieldGrid}>
+
+            <div className={styles.subSection}>
               <label className={styles.field}>
-                <span>Preset Name</span>
+                <span>Setup Name</span>
                 <input
                   type="text"
                   className={styles.textInput}
@@ -516,7 +699,7 @@ export function CalibrationWorkspace() {
                 />
               </label>
               <label className={styles.field}>
-                <span>Family</span>
+                <span>Rotary Model</span>
                 <select
                   className={styles.selectInput}
                   value={draft.family}
@@ -534,20 +717,120 @@ export function CalibrationWorkspace() {
                   ))}
                 </select>
               </label>
+            </div>
+          </section>
+
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Rotary Position &amp; Mounting</div>
+
+            <div className={styles.subSection}>
+              <div className={styles.subSectionTitle}>Bed Hole Anchor</div>
+              <div className={styles.info}>
+                Click a bed hole to set the primary anchor. Shift+click to set secondary.
+              </div>
+              <dl className={styles.valueGrid}>
+                <dt>Selected Anchor Hole</dt>
+                <dd>{anchorPrimaryLabel}</dd>
+                <dt>Secondary Hole</dt>
+                <dd>{anchorSecondaryLabel}</dd>
+                <dt>Calculated Rotary Center (X)</dt>
+                <dd>{formatAnchorCoordinate(rotaryCenterXmm)}</dd>
+                <dt>Calculated Rotary Position (Y)</dt>
+                <dd>{formatAnchorCoordinate(rotaryAxisYmm)}</dd>
+              </dl>
               <label className={styles.field}>
-                <span>Rotary Center X (mm)</span>
+                <span>Reference to Axis Offset (X)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={draft.referenceToAxisOffsetXmm}
+                  step={0.1}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      referenceToAxisOffsetXmm: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Reference to Axis Offset (Y)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={draft.referenceToAxisOffsetYmm}
+                  step={0.1}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      referenceToAxisOffsetYmm: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <div className={styles.inlineActions}>
+                <button
+                  type="button"
+                  className={styles.secondaryBtn}
+                  onClick={() => {
+                    setRotaryAnchorSelection({});
+                    setStatusMessage("Bed hole anchor cleared.");
+                    setErrorMessage(null);
+                  }}
+                >
+                  Clear Anchor
+                </button>
+              </div>
+            </div>
+
+            <div className={styles.subSection}>
+              <div className={styles.subSectionTitle}>Rotary Position</div>
+              <label className={styles.checkboxField}>
+                <input
+                  type="checkbox"
+                  checked={manualRotaryOverrideEnabled}
+                  onChange={(event) =>
+                    setManualRotaryOverrideEnabled(event.target.checked)
+                  }
+                />
+                <span>Manual Override</span>
+              </label>
+              <label className={styles.field}>
+                <span>Rotary Center Position (X)</span>
                 <input
                   type="number"
                   className={styles.numInput}
                   value={draft.rotaryCenterXmm}
                   step={0.1}
+                  disabled={!manualRotaryOverrideEnabled}
+                  onFocus={() =>
+                    handleMeasurementFieldFocus("Rotary Center Position (X)")
+                  }
+                  onBlur={handleMeasurementFieldBlur}
+                  onChange={(event) => {
+                    setDraft((current) => ({ ...current, rotaryCenterXmm: event.target.value }));
+                    setManualRotaryOverrideEnabled(true);
+                  }}
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Top of Tumbler Position (Y)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={draft.rotaryTopYmm}
+                  step={0.1}
+                  onFocus={() =>
+                    handleMeasurementFieldFocus("Top of Tumbler Position (Y)")
+                  }
+                  onBlur={handleMeasurementFieldBlur}
                   onChange={(event) =>
-                    setDraft((current) => ({ ...current, rotaryCenterXmm: event.target.value }))
+                    setDraft((current) => ({ ...current, rotaryTopYmm: event.target.value }))
                   }
                 />
               </label>
               <label className={styles.field}>
-                <span>Rotary Type</span>
+                <span>Rotary Style</span>
                 <select
                   className={styles.selectInput}
                   value={draft.chuckOrRoller}
@@ -562,47 +845,47 @@ export function CalibrationWorkspace() {
                   <option value="roller">Roller</option>
                 </select>
               </label>
+              <div className={styles.helperText}>
+                Bed-hole anchoring is preferred. Manual center is an advanced fallback.
+              </div>
+            </div>
+
+            <div className={styles.subSection}>
+              <div className={styles.subSectionTitle}>Mounting Details</div>
               <label className={styles.field}>
-                <span>Top Anchor Y (mm)</span>
-                <input
-                  type="number"
-                  className={styles.numInput}
-                  value={draft.rotaryTopYmm}
-                  step={0.1}
-                  placeholder="Measure on machine"
-                  onChange={(event) =>
-                    setDraft((current) => ({ ...current, rotaryTopYmm: event.target.value }))
-                  }
-                />
-              </label>
-              <label className={styles.field}>
-                <span>Mount Pattern X (mm)</span>
+                <span>Mount Hole Spacing (X)</span>
                 <input
                   type="number"
                   className={styles.numInput}
                   value={draft.mountPatternXmm}
                   step={0.1}
-                  placeholder="Measure on machine"
+                  onFocus={() =>
+                    handleMeasurementFieldFocus("Mount Hole Spacing (X)")
+                  }
+                  onBlur={handleMeasurementFieldBlur}
                   onChange={(event) =>
                     setDraft((current) => ({ ...current, mountPatternXmm: event.target.value }))
                   }
                 />
               </label>
               <label className={styles.field}>
-                <span>Mount Pattern Y (mm)</span>
+                <span>Mount Hole Spacing (Y)</span>
                 <input
                   type="number"
                   className={styles.numInput}
                   value={draft.mountPatternYmm}
                   step={0.1}
-                  placeholder="Measure on machine"
+                  onFocus={() =>
+                    handleMeasurementFieldFocus("Mount Hole Spacing (Y)")
+                  }
+                  onBlur={handleMeasurementFieldBlur}
                   onChange={(event) =>
                     setDraft((current) => ({ ...current, mountPatternYmm: event.target.value }))
                   }
                 />
               </label>
               <label className={styles.field}>
-                <span>Bolt Size</span>
+                <span>Mount Bolt Size</span>
                 <select
                   className={styles.selectInput}
                   value={draft.mountBoltSize}
@@ -621,23 +904,30 @@ export function CalibrationWorkspace() {
                 </select>
               </label>
               <label className={styles.field}>
-                <span>Axis Height (mm)</span>
+                <span>Rotary Axis Height</span>
                 <input
                   type="number"
                   className={styles.numInput}
                   value={draft.axisHeightMm}
                   step={0.1}
-                  placeholder="Measure on machine"
+                  onFocus={() =>
+                    handleMeasurementFieldFocus("Rotary Axis Height")
+                  }
+                  onBlur={handleMeasurementFieldBlur}
                   onChange={(event) =>
                     setDraft((current) => ({ ...current, axisHeightMm: event.target.value }))
                   }
                 />
               </label>
               <label className={styles.field}>
-                <span>Mount Reference</span>
+                <span>Mount Reference Point</span>
                 <select
                   className={styles.selectInput}
                   value={draft.mountReferenceMode}
+                  onFocus={() =>
+                    handleMeasurementFieldFocus("Mount Reference Point")
+                  }
+                  onBlur={handleMeasurementFieldBlur}
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,
@@ -653,7 +943,7 @@ export function CalibrationWorkspace() {
                 </select>
               </label>
               <label className={styles.field}>
-                <span>Bed Origin</span>
+                <span>Machine Origin</span>
                 <select
                   className={styles.selectInput}
                   value={draft.bedOrigin}
@@ -670,8 +960,8 @@ export function CalibrationWorkspace() {
                   <option value="bottom-right">Bottom-right</option>
                 </select>
               </label>
-              <label className={`${styles.field} ${styles.fullWidth}`}>
-                <span>Notes</span>
+              <label className={styles.field}>
+                <span>Setup Notes</span>
                 <input
                   type="text"
                   className={styles.textInput}
@@ -682,13 +972,21 @@ export function CalibrationWorkspace() {
                   }
                 />
               </label>
+              <div className={styles.helperText}>Measure on machine if unknown.</div>
             </div>
+
             <CalibrationOverlayToggles
               value={modeOverlay}
               onToggle={handleToggleOverlay}
               visibleKeys={visibleOverlayKeys}
-              title="Rotary Overlays"
+              title="Bed View Options"
+              labelOverrides={ROTARY_OVERLAY_LABELS}
             />
+          </section>
+
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Measurement Guide</div>
+            <RotaryMeasurementGuide activeMeasurement={activeMeasurementFocus} />
           </section>
         </>
       );
@@ -873,16 +1171,44 @@ export function CalibrationWorkspace() {
               <dd>{readout.family}</dd>
               <dt>Mount Pattern</dt>
               <dd>{readout.mountPattern}</dd>
+              <dt>Base Visual</dt>
+              <dd>
+                {rotaryBaseVisual
+                  ? `${rotaryBaseVisual.widthMm.toFixed(1)} x ${rotaryBaseVisual.depthMm.toFixed(1)} mm${
+                      rotaryBaseVisual.isPlaceholder ? " (placeholder)" : ""
+                    }`
+                  : "Unavailable"}
+              </dd>
               <dt>Bolt Size</dt>
               <dd>{readout.boltSize}</dd>
               <dt>Axis Height</dt>
               <dd>{readout.axisHeight}</dd>
-              <dt>Axis Center X</dt>
+              <dt>Selected Anchor</dt>
+              <dd>{anchorPrimaryLabel}</dd>
+              <dt>Anchor Coordinates</dt>
+              <dd>{anchorCoordinateLabel}</dd>
+              <dt>Secondary Anchor</dt>
+              <dd>{anchorSecondaryLabel}</dd>
+              <dt>Reference Offset X</dt>
+              <dd>{readout.referenceToAxisOffsetX}</dd>
+              <dt>Reference Offset Y</dt>
+              <dd>{readout.referenceToAxisOffsetY}</dd>
+              <dt>Anchor Reference</dt>
+              <dd>
+                {placedRotaryBaseVisual
+                  ? `${placedRotaryBaseVisual.anchorPoint.xMm.toFixed(1)}, ${placedRotaryBaseVisual.anchorPoint.yMm.toFixed(1)} mm`
+                  : "n/a"}
+              </dd>
+              <dt>Calculated Axis X</dt>
               <dd>{readout.axisCenterX}</dd>
+              <dt>Calculated Axis Y</dt>
+              <dd>{formatAnchorCoordinate(rotaryAxisYmm)}</dd>
               <dt>Top Anchor Y</dt>
               <dd>{readout.topAnchorY}</dd>
               <dt>Rotary Type</dt>
               <dd>{readout.rotaryType}</dd>
+              <dt>Placement Source</dt>
+              <dd>{placementSourceLabel}</dd>
               <dt>Notes</dt>
               <dd>{readout.notes}</dd>
             </dl>
@@ -1013,13 +1339,18 @@ export function CalibrationWorkspace() {
           <CalibrationBedReference
             bedWidthMm={DEFAULT_BED_CONFIG.flatWidth}
             bedHeightMm={DEFAULT_BED_CONFIG.flatHeight}
-            rotaryCenterXmm={rotaryCenterXmm}
+            rotaryCenterXmm={placedRotaryBaseVisual?.axisCenter.xMm ?? rotaryCenterXmm}
             topAnchorYmm={resolvedTopAnchorYmm}
-            mountFootprintMm={mountFootprintMm}
+            mountFootprintMm={mountFootprintDimensions}
+            mountFootprintBoxMm={mountFootprintBoxMm}
             lensInsetMm={lensProfile.fieldInsetMm}
             bedOrigin={draft.bedOrigin}
             overlays={activeCanvasOverlays}
             exportPlacementPreview={exportPreview}
+            holeSelectionEnabled={activeMode === "rotary"}
+            selectedAnchorHoles={rotaryAnchorSelection}
+            rotaryBaseVisual={placedRotaryBaseVisual}
+            onBedHoleSelect={activeMode === "rotary" ? handleAnchorHoleSelect : undefined}
           />
         </div>
 

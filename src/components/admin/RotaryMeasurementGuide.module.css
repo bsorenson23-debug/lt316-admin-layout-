@@ -1,0 +1,115 @@
+.wrapper {
+  display: grid;
+  gap: 8px;
+}
+
+.viewBlock {
+  border: 1px solid #2d2d2d;
+  border-radius: 7px;
+  background: #1b1b1b;
+  padding: 6px;
+  display: grid;
+  gap: 6px;
+}
+
+.viewTitle {
+  font-size: 10px;
+  color: #7f8d95;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.diagram {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #171717;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+}
+
+.bed {
+  fill: rgba(25, 40, 50, 0.45);
+  stroke: rgba(86, 116, 133, 0.8);
+  stroke-width: 1.2;
+}
+
+.footprint {
+  fill: rgba(73, 104, 120, 0.14);
+  stroke: rgba(128, 166, 184, 0.8);
+  stroke-width: 1;
+}
+
+.bedDeck {
+  stroke: rgba(125, 143, 154, 0.9);
+  stroke-width: 1.2;
+}
+
+.rotaryBody {
+  fill: rgba(73, 104, 120, 0.16);
+  stroke: rgba(138, 170, 186, 0.85);
+  stroke-width: 1;
+}
+
+.tumbler {
+  fill: rgba(85, 122, 141, 0.14);
+  stroke: rgba(157, 188, 204, 0.84);
+  stroke-width: 1;
+}
+
+.topLine {
+  stroke: rgba(252, 191, 125, 0.95);
+  stroke-dasharray: 3 3;
+  stroke-width: 1.1;
+}
+
+.axis {
+  stroke: rgba(117, 221, 237, 0.92);
+  stroke-dasharray: 3 3;
+  stroke-width: 1.1;
+}
+
+.axisDot {
+  fill: rgba(117, 221, 237, 0.9);
+}
+
+.hole {
+  fill: rgba(87, 115, 132, 0.55);
+  stroke: rgba(156, 187, 205, 0.88);
+  stroke-width: 0.8;
+}
+
+.measureLine {
+  stroke: rgba(174, 193, 205, 0.9);
+  stroke-width: 1;
+}
+
+.measureActive {
+  stroke: rgba(124, 232, 255, 0.98);
+  stroke-width: 1.6;
+}
+
+.label {
+  fill: #a6bac6;
+  font-size: 7px;
+}
+
+.labelActive {
+  fill: #d8f5ff;
+  font-weight: 600;
+}
+
+.arrowHead {
+  fill: currentColor;
+  color: rgba(174, 193, 205, 0.9);
+}
+
+.referenceDot {
+  fill: rgba(237, 177, 109, 0.76);
+  stroke: rgba(245, 210, 164, 0.95);
+  stroke-width: 1;
+}
+
+.referenceActive {
+  fill: rgba(255, 214, 147, 0.98);
+}

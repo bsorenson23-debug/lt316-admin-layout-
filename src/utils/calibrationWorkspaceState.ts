@@ -8,6 +8,7 @@ import {
   getDefaultOverlayTogglesForMode,
 } from "./calibrationModes.ts";
 import type { RotaryModeDraft } from "./rotaryMode.ts";
+import type { BedHoleReference, RotaryHoleAnchorSelection } from "./rotaryAnchoring.ts";
 
 const CALIBRATION_WORKSPACE_STATE_KEY = "lt316.admin.calibration.workspace";
 
@@ -25,6 +26,8 @@ export interface PersistedCalibrationWorkspaceState {
   anchorMode: TopAnchorMode;
   customRotaryDraft?: RotaryModeDraft;
   currentRotaryDraft?: RotaryModeDraft;
+  rotaryAnchorSelection?: RotaryHoleAnchorSelection;
+  manualRotaryOverrideEnabled?: boolean;
 }
 
 function getBrowserStorage(): StorageLike | null {
@@ -65,6 +68,18 @@ function normalizeRotaryDraft(value: unknown): RotaryModeDraft | undefined {
   ) {
     return undefined;
   }
+  if (
+    value.referenceToAxisOffsetXmm !== undefined &&
+    typeof value.referenceToAxisOffsetXmm !== "string"
+  ) {
+    return undefined;
+  }
+  if (
+    value.referenceToAxisOffsetYmm !== undefined &&
+    typeof value.referenceToAxisOffsetYmm !== "string"
+  ) {
+    return undefined;
+  }
 
   if (value.chuckOrRoller !== "chuck" && value.chuckOrRoller !== "roller") {
     return undefined;
@@ -75,6 +90,7 @@ function normalizeRotaryDraft(value: unknown): RotaryModeDraft | undefined {
   if (
     value.mountReferenceMode !== "axis-center" &&
     value.mountReferenceMode !== "front-left-bolt" &&
+    value.mountReferenceMode !== "front-right-bolt" &&
     value.mountReferenceMode !== "front-edge-center" &&
     value.mountReferenceMode !== "custom"
   ) {
@@ -106,10 +122,47 @@ function normalizeRotaryDraft(value: unknown): RotaryModeDraft | undefined {
     axisHeightMm: value.axisHeightMm,
     rotaryCenterXmm: value.rotaryCenterXmm,
     rotaryTopYmm: value.rotaryTopYmm,
+    referenceToAxisOffsetXmm:
+      value.referenceToAxisOffsetXmm === undefined ? "" : value.referenceToAxisOffsetXmm,
+    referenceToAxisOffsetYmm:
+      value.referenceToAxisOffsetYmm === undefined ? "" : value.referenceToAxisOffsetYmm,
     chuckOrRoller: value.chuckOrRoller,
     mountReferenceMode: value.mountReferenceMode,
     bedOrigin: value.bedOrigin,
     notes: value.notes,
+  };
+}
+
+function normalizeBedHoleReference(value: unknown): BedHoleReference | undefined {
+  if (!isPlainObject(value)) return undefined;
+  if (
+    typeof value.row !== "number" ||
+    !Number.isFinite(value.row) ||
+    typeof value.col !== "number" ||
+    !Number.isFinite(value.col) ||
+    typeof value.xMm !== "number" ||
+    !Number.isFinite(value.xMm) ||
+    typeof value.yMm !== "number" ||
+    !Number.isFinite(value.yMm)
+  ) {
+    return undefined;
+  }
+  return {
+    row: value.row,
+    col: value.col,
+    xMm: value.xMm,
+    yMm: value.yMm,
+  };
+}
+
+function normalizeRotaryAnchorSelection(value: unknown): RotaryHoleAnchorSelection | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const primaryHole = normalizeBedHoleReference(value.primaryHole);
+  const secondaryHole = normalizeBedHoleReference(value.secondaryHole);
+  if (!primaryHole && !secondaryHole) return undefined;
+  return {
+    primaryHole,
+    secondaryHole,
   };
 }
 
@@ -185,6 +238,8 @@ export function buildDefaultCalibrationWorkspaceState(): PersistedCalibrationWor
     anchorMode: "physical-top",
     customRotaryDraft: undefined,
     currentRotaryDraft: undefined,
+    rotaryAnchorSelection: undefined,
+    manualRotaryOverrideEnabled: false,
   };
 }
 
@@ -209,6 +264,11 @@ function normalizeWorkspaceState(
     anchorMode: normalizeAnchorMode(value.anchorMode),
     customRotaryDraft: normalizeRotaryDraft(value.customRotaryDraft),
     currentRotaryDraft: normalizeRotaryDraft(value.currentRotaryDraft),
+    rotaryAnchorSelection: normalizeRotaryAnchorSelection(value.rotaryAnchorSelection),
+    manualRotaryOverrideEnabled:
+      typeof value.manualRotaryOverrideEnabled === "boolean"
+        ? value.manualRotaryOverrideEnabled
+        : false,
   };
 }
 

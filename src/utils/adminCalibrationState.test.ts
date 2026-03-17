@@ -67,11 +67,23 @@ test("D80C and D100C mount + axis metadata is seeded", () => {
   assert.equal(d80c?.mountPatternXmm, 75);
   assert.equal(d80c?.mountPatternYmm, 100);
   assert.equal(d80c?.axisHeightMm, 129);
+  assert.equal(d80c?.mountReferenceMode, "front-left-bolt");
+  assert.equal(d80c?.referenceToAxisOffsetXmm, 37.5);
+  assert.equal(d80c?.referenceToAxisOffsetYmm, 50);
+  assert.equal(d80c?.baseVisualWidthMm, 128);
+  assert.equal(d80c?.baseVisualDepthMm, 164);
+  assert.equal(d80c?.mountHoleOffsetsMm?.length, 4);
 
   assert.ok(d100c);
   assert.equal(d100c?.mountPatternXmm, 75);
   assert.equal(d100c?.mountPatternYmm, 100);
   assert.equal(d100c?.axisHeightMm, 129);
+  assert.equal(d100c?.mountReferenceMode, "front-left-bolt");
+  assert.equal(d100c?.referenceToAxisOffsetXmm, 37.5);
+  assert.equal(d100c?.referenceToAxisOffsetYmm, 50);
+  assert.equal(d100c?.baseVisualWidthMm, 140);
+  assert.equal(d100c?.baseVisualDepthMm, 176);
+  assert.equal(d100c?.mountHoleOffsetsMm?.length, 4);
 });
 
 test("Talon preset keeps unverified mount pattern and axis height unset", () => {
@@ -82,6 +94,7 @@ test("Talon preset keeps unverified mount pattern and axis height unset", () => 
   assert.equal(talon?.mountPatternXmm, undefined);
   assert.equal(talon?.mountPatternYmm, undefined);
   assert.equal(talon?.axisHeightMm, undefined);
+  assert.equal(talon?.baseVisualPlaceholder, true);
 });
 
 test("all default presets use bed-center axis center", () => {

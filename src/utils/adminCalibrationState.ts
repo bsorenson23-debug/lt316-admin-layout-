@@ -1,7 +1,9 @@
 import { getDefaultRotaryPresetSeeds } from "../data/rotaryPlacementPresets.ts";
 import { DEFAULT_BED_CONFIG } from "../types/admin.ts";
 import type {
+  RotaryAnchorReferencePoint,
   BedOrigin,
+  RotaryMountHoleOffset,
   RotaryPlacementPreset,
   RotaryPresetFamily,
   RotaryMountBoltSize,
@@ -47,6 +49,50 @@ function asOptionalMm(value: unknown): number | undefined {
   return value;
 }
 
+function asOptionalSignedMm(value: unknown): number | undefined {
+  if (!isFiniteNumber(value)) return undefined;
+  return value;
+}
+
+function normalizeMountHoleOffsets(
+  value: unknown
+): RotaryMountHoleOffset[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized = value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const hole = entry as Partial<RotaryMountHoleOffset>;
+      if (
+        typeof hole.id !== "string" ||
+        !isFiniteNumber(hole.xMm) ||
+        !isFiniteNumber(hole.yMm)
+      ) {
+        return null;
+      }
+      return {
+        id: hole.id,
+        xMm: hole.xMm,
+        yMm: hole.yMm,
+      };
+    })
+    .filter((entry): entry is RotaryMountHoleOffset => entry !== null);
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeAnchorReferencePoint(
+  value: unknown
+): RotaryAnchorReferencePoint | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const point = value as Partial<RotaryAnchorReferencePoint>;
+  if (!isFiniteNumber(point.xMm) || !isFiniteNumber(point.yMm)) return undefined;
+  return {
+    xMm: point.xMm,
+    yMm: point.yMm,
+    label: typeof point.label === "string" ? point.label : undefined,
+  };
+}
+
 function normalizeBedOrigin(value: unknown): BedOrigin {
   if (
     value === "top-left" ||
@@ -87,6 +133,7 @@ function normalizeMountReferenceMode(
   if (
     value === "axis-center" ||
     value === "front-left-bolt" ||
+    value === "front-right-bolt" ||
     value === "front-edge-center" ||
     value === "custom"
   ) {
@@ -128,6 +175,18 @@ function normalizePreset(
       value.mountReferenceMode,
       family
     ),
+    referenceToAxisOffsetXmm: asOptionalSignedMm(value.referenceToAxisOffsetXmm),
+    referenceToAxisOffsetYmm: asOptionalSignedMm(value.referenceToAxisOffsetYmm),
+    baseVisualWidthMm: asOptionalMm(value.baseVisualWidthMm),
+    baseVisualDepthMm: asOptionalMm(value.baseVisualDepthMm),
+    mountHoleOffsetsMm: normalizeMountHoleOffsets(value.mountHoleOffsetsMm),
+    anchorReferencePointMm: normalizeAnchorReferencePoint(
+      value.anchorReferencePointMm
+    ),
+    baseVisualPlaceholder:
+      typeof value.baseVisualPlaceholder === "boolean"
+        ? value.baseVisualPlaceholder
+        : undefined,
     notes: typeof value.notes === "string" && value.notes.trim() ? value.notes : undefined,
   };
 }

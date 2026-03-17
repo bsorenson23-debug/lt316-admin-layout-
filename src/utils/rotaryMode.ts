@@ -18,6 +18,8 @@ export interface RotaryModeDraft {
   axisHeightMm: string;
   rotaryCenterXmm: string;
   rotaryTopYmm: string;
+  referenceToAxisOffsetXmm: string;
+  referenceToAxisOffsetYmm: string;
   chuckOrRoller: RotaryDriveType;
   mountReferenceMode: RotaryMountReferenceMode;
   bedOrigin: BedOrigin;
@@ -63,6 +65,8 @@ export function buildRotaryDraftFromPreset(preset: RotaryPlacementPreset): Rotar
     axisHeightMm: toDraftNumber(preset.axisHeightMm),
     rotaryCenterXmm: toDraftNumber(preset.rotaryCenterXmm),
     rotaryTopYmm: toDraftNumber(preset.rotaryTopYmm),
+    referenceToAxisOffsetXmm: toDraftNumber(preset.referenceToAxisOffsetXmm),
+    referenceToAxisOffsetYmm: toDraftNumber(preset.referenceToAxisOffsetYmm),
     chuckOrRoller: preset.chuckOrRoller,
     mountReferenceMode: preset.mountReferenceMode ?? "axis-center",
     bedOrigin: preset.bedOrigin,
@@ -80,6 +84,8 @@ export function buildEmptyRotaryDraft(bedCenterXmm: number): RotaryModeDraft {
     axisHeightMm: "",
     rotaryCenterXmm: String(bedCenterXmm),
     rotaryTopYmm: "",
+    referenceToAxisOffsetXmm: "",
+    referenceToAxisOffsetYmm: "",
     chuckOrRoller: "chuck",
     mountReferenceMode: "axis-center",
     bedOrigin: "top-left",
@@ -131,6 +137,28 @@ export function validateRotaryPresetDraft(
     return { ok: false, error: "Axis Height must be a valid non-negative mm value." };
   }
 
+  const referenceToAxisOffsetXmm = parseNullableNumber(draft.referenceToAxisOffsetXmm);
+  if (
+    draft.referenceToAxisOffsetXmm.trim() &&
+    referenceToAxisOffsetXmm === null
+  ) {
+    return {
+      ok: false,
+      error: "Reference to Axis Offset X must be a valid mm value.",
+    };
+  }
+
+  const referenceToAxisOffsetYmm = parseNullableNumber(draft.referenceToAxisOffsetYmm);
+  if (
+    draft.referenceToAxisOffsetYmm.trim() &&
+    referenceToAxisOffsetYmm === null
+  ) {
+    return {
+      ok: false,
+      error: "Reference to Axis Offset Y must be a valid mm value.",
+    };
+  }
+
   return {
     ok: true,
     value: {
@@ -146,6 +174,8 @@ export function validateRotaryPresetDraft(
       rotaryTopYmm: rotaryTopYmm ?? undefined,
       chuckOrRoller: draft.chuckOrRoller,
       mountReferenceMode: draft.mountReferenceMode,
+      referenceToAxisOffsetXmm: referenceToAxisOffsetXmm ?? undefined,
+      referenceToAxisOffsetYmm: referenceToAxisOffsetYmm ?? undefined,
       notes: draft.notes.trim() || undefined,
     },
   };
@@ -164,6 +194,8 @@ export function formatRotaryPresetReadout(args: {
   axisHeight: string;
   axisCenterX: string;
   topAnchorY: string;
+  referenceToAxisOffsetX: string;
+  referenceToAxisOffsetY: string;
   rotaryType: RotaryDriveType;
   notes: string;
 } {
@@ -178,8 +210,13 @@ export function formatRotaryPresetReadout(args: {
     axisHeight: formatRotaryValue(parseNullableNumber(args.draft.axisHeightMm)),
     axisCenterX: formatRotaryValue(args.resolvedRotaryCenterXmm),
     topAnchorY: formatRotaryValue(args.resolvedRotaryTopYmm),
+    referenceToAxisOffsetX: formatRotaryValue(
+      parseNullableNumber(args.draft.referenceToAxisOffsetXmm)
+    ),
+    referenceToAxisOffsetY: formatRotaryValue(
+      parseNullableNumber(args.draft.referenceToAxisOffsetYmm)
+    ),
     rotaryType: args.draft.chuckOrRoller,
     notes: args.draft.notes.trim() || "None",
   };
 }
-
