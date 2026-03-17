@@ -8,6 +8,7 @@ import {
   getLightBurnExportOrigin,
   getRecommendedRotaryDiameter,
 } from "./tumblerExportPlacement.ts";
+import { resolveRotaryCenterXmm } from "./rotaryCenter.ts";
 
 function isFiniteNumber(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -47,6 +48,8 @@ export function buildExportPlacementPreview(args: {
   bedWidthMm: number;
   bedHeightMm: number;
   rotaryPreset: RotaryPlacementPreset | null;
+  manualRotaryCenterXmm?: number | null;
+  manualRotaryTopYmm?: number | null;
   anchorMode: TopAnchorMode;
   printableOffsetMm?: number | null;
   templateWidthMm?: number | null;
@@ -63,6 +66,7 @@ export function buildExportPlacementPreview(args: {
 
   if (!args.rotaryPreset) {
     warnings.push("No rotary preset selected.");
+    warnings.push("Using bed center as default rotary axis.");
   }
 
   if (!isFiniteNumber(args.templateWidthMm) || args.templateWidthMm <= 0) {
@@ -82,9 +86,19 @@ export function buildExportPlacementPreview(args: {
     warnings.push("Anchor data incomplete for printable-top mode.");
   }
 
+  const resolvedRotaryCenterXmm = resolveRotaryCenterXmm({
+    selectedPresetRotaryCenterXmm: args.rotaryPreset?.rotaryCenterXmm,
+    manualRotaryCenterXmm: args.manualRotaryCenterXmm,
+    bedWidthMm: args.bedWidthMm,
+    preferManualOverride: true,
+  });
+
   const origin = getLightBurnExportOrigin({
     templateWidthMm: args.templateWidthMm,
     preset: args.rotaryPreset,
+    bedWidthMm: args.bedWidthMm,
+    manualRotaryCenterXmm: resolvedRotaryCenterXmm,
+    manualRotaryTopYmm: args.manualRotaryTopYmm,
     anchorMode: args.anchorMode,
     placementProfile,
   });

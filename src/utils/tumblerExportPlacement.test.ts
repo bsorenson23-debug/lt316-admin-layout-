@@ -181,13 +181,17 @@ test("recommended circumference uses template width when available", () => {
   assert.equal(circumference, 276.15);
 });
 
-test("lightburn origin helper returns null when preset is missing", () => {
+test("lightburn origin helper uses bed-center fallback when preset is missing", () => {
   const origin = getLightBurnExportOrigin({
     templateWidthMm: 276.15,
     preset: null,
+    manualRotaryTopYmm: 22,
+    bedWidthMm: 300,
     anchorMode: "physical-top",
   });
-  assert.equal(origin, null);
+  assert.ok(origin);
+  assert.equal(origin?.xMm, 11.925);
+  assert.equal(origin?.yMm, 22);
 });
 
 test("incomplete setup adds warnings but keeps artwork export valid", () => {

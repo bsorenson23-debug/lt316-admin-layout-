@@ -97,6 +97,25 @@ test("warning appears when rotary preset is missing", () => {
   assert.match(preview.warnings.join(" | "), /No rotary preset selected/i);
 });
 
+test("export preview uses bed center default when preset is missing", () => {
+  const preview = buildExportPlacementPreview({
+    workspaceMode: "tumbler-wrap",
+    bedWidthMm: 300,
+    bedHeightMm: 300,
+    rotaryPreset: null,
+    manualRotaryTopYmm: 22,
+    anchorMode: "physical-top",
+    templateWidthMm: 250,
+    templateHeightMm: 120,
+    shapeType: "straight",
+    outsideDiameterMm: 87.9,
+  });
+
+  // bed center X=150, origin X=150-(250/2)=25
+  assert.equal(preview.exportOriginXmm, 25);
+  assert.equal(preview.exportOriginYmm, 22);
+});
+
 test("warning appears when template dimensions are missing", () => {
   const preview = buildExportPlacementPreview({
     workspaceMode: "tumbler-wrap",

@@ -104,6 +104,11 @@
   color: #858585;
 }
 
+.helperText {
+  font-size: 10px;
+  color: #7f8f97;
+}
+
 .fullWidth {
   grid-column: 1 / -1;
 }

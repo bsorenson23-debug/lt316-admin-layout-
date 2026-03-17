@@ -22,6 +22,19 @@ test("overlay metrics map rotary values to bed percentages", () => {
   assert.equal(metrics.bedCenterYPercent, 50);
 });
 
+test("rotary centerline aligns with bed center when rotary center defaults to bed center axis", () => {
+  const metrics = buildCalibrationBedOverlayMetrics({
+    bedWidthMm: 300,
+    bedHeightMm: 300,
+    rotaryCenterXmm: 150,
+    topAnchorYmm: 24,
+    lensInsetMm: 12,
+    bedOrigin: "top-left",
+  });
+
+  assert.equal(metrics.rotaryCenterXPercent, 50);
+});
+
 test("overlay metrics resolve origin marker from selected bed origin", () => {
   const topRight = buildCalibrationBedOverlayMetrics({
     bedWidthMm: 300,

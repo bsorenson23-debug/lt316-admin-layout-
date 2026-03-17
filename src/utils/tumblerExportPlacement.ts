@@ -9,6 +9,7 @@ import type {
   TopAnchorMode,
   TumblerPlacementProfile,
 } from "../types/export";
+import { resolveRotaryCenterXmm } from "./rotaryCenter.ts";
 
 function isFiniteNumber(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -97,18 +98,29 @@ export function getRotaryExportOrigin(args: {
 export function getLightBurnExportOrigin(args: {
   templateWidthMm: number | null | undefined;
   preset: Pick<RotaryPlacementPreset, "rotaryCenterXmm" | "rotaryTopYmm"> | null;
+  bedWidthMm?: number | null | undefined;
+  manualRotaryCenterXmm?: number | null | undefined;
+  manualRotaryTopYmm?: number | null | undefined;
   anchorMode: TopAnchorMode;
   placementProfile?: Pick<TumblerPlacementProfile, "topToSafeZoneStartMm"> | null;
 }): RotaryExportOrigin | null {
   if (!isFiniteNumber(args.templateWidthMm) || args.templateWidthMm <= 0) {
     return null;
   }
-  if (!args.preset) return null;
+
+  const resolvedRotaryCenterXmm = resolveRotaryCenterXmm({
+    selectedPresetRotaryCenterXmm: args.preset?.rotaryCenterXmm,
+    manualRotaryCenterXmm: args.manualRotaryCenterXmm,
+    bedWidthMm: args.bedWidthMm,
+  });
+  const resolvedRotaryTopYmm =
+    args.preset?.rotaryTopYmm ??
+    (isFiniteNumber(args.manualRotaryTopYmm) ? args.manualRotaryTopYmm : 0);
 
   return getRotaryExportOrigin({
     templateWidthMm: args.templateWidthMm,
-    rotaryCenterXmm: args.preset.rotaryCenterXmm,
-    rotaryTopYmm: args.preset.rotaryTopYmm,
+    rotaryCenterXmm: resolvedRotaryCenterXmm,
+    rotaryTopYmm: resolvedRotaryTopYmm,
     anchorMode: args.anchorMode,
     placementProfile: args.placementProfile,
   });
@@ -311,6 +323,7 @@ export function buildLt316Sidecar(args: {
   const exportOrigin = getLightBurnExportOrigin({
     templateWidthMm: args.templateWidthMm,
     preset: args.rotary.preset,
+    bedWidthMm: args.bedConfig.flatWidth,
     anchorMode: args.rotary.anchorMode,
     placementProfile: args.rotary.placementProfile,
   });

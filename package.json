@@ -12,6 +12,7 @@
     "test:tumbler-identification": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/server/tumbler/identifyTumblerBrand.test.ts",
     "test:tumbler-export-placement": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/tumblerExportPlacement.test.ts",
     "test:calibration-export-preview": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/calibrationExportPreview.test.ts",
+    "test:rotary-center": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/rotaryCenter.test.ts",
     "test:admin-calibration": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/adminCalibrationState.test.ts",
     "test:calibration-bed-reference": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/calibrationBedReference.test.ts",
     "test:staggered-bed-pattern": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/staggeredBedPattern.test.ts"

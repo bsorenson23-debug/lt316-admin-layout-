@@ -13,7 +13,7 @@ import {
 import { getRotaryPresets } from "@/utils/adminCalibrationState";
 import {
   buildLightBurnExportArtifacts,
-  getRotaryExportOrigin,
+  getLightBurnExportOrigin,
 } from "@/utils/tumblerExportPlacement";
 import styles from "./TumblerExportPanel.module.css";
 
@@ -97,14 +97,14 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
   );
 
   const previewOrigin =
-    isTumblerMode && selectedPreset
-      ? getRotaryExportOrigin({
+    isTumblerMode
+      ? getLightBurnExportOrigin({
           templateWidthMm: bedConfig.width,
-          rotaryCenterXmm: selectedPreset.rotaryCenterXmm,
-          rotaryTopYmm: selectedPreset.rotaryTopYmm,
+          preset: selectedPreset,
+          bedWidthMm: bedConfig.flatWidth,
           anchorMode,
           placementProfile,
-        })
+        }) ?? { xMm: 0, yMm: 0 }
       : { xMm: 0, yMm: 0 };
 
   const exportArtifacts = buildLightBurnExportArtifacts({

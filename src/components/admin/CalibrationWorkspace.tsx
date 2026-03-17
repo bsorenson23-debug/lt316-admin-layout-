@@ -13,6 +13,7 @@ import {
   type CalibrationOverlayKey,
 } from "@/utils/calibrationBedReference";
 import { buildExportPlacementPreview } from "@/utils/calibrationExportPreview";
+import { getBedCenterXmm, resolveRotaryCenterXmm } from "@/utils/rotaryCenter";
 import {
   deleteRotaryPreset,
   getRotaryPresets,
@@ -27,6 +28,7 @@ import styles from "./CalibrationWorkspace.module.css";
 
 const DEFAULT_TEMPLATE_WIDTH_MM = 276.15;
 const OVERLAY_STORAGE_KEY = "lt316.admin.calibration.overlays";
+const CALIBRATION_BED_WIDTH_MM = DEFAULT_BED_CONFIG.flatWidth;
 
 const LENS_PROFILES = [
   { id: "standard-100", label: "Standard 100 mm", fieldInsetMm: 8 },
@@ -65,10 +67,10 @@ function buildDraftFromPreset(preset: RotaryPlacementPreset): RotaryDraft {
   };
 }
 
-function buildEmptyDraft(): RotaryDraft {
+function buildEmptyDraft(bedCenterXmm: number): RotaryDraft {
   return {
     name: "",
-    rotaryCenterXmm: "160",
+    rotaryCenterXmm: String(bedCenterXmm),
     rotaryTopYmm: "24",
     chuckOrRoller: "roller",
     bedOrigin: "top-left",
@@ -112,12 +114,15 @@ function validateDraft(
 }
 
 export function CalibrationWorkspace() {
+  const bedCenterXmm = getBedCenterXmm(CALIBRATION_BED_WIDTH_MM);
   const [isLoading, setIsLoading] = React.useState(true);
   const [presets, setPresets] = React.useState<RotaryPlacementPreset[]>([]);
   const [selectedPresetId, setSelectedPresetId] = React.useState<string | null>(
     null
   );
-  const [draft, setDraft] = React.useState<RotaryDraft>(buildEmptyDraft);
+  const [draft, setDraft] = React.useState<RotaryDraft>(() =>
+    buildEmptyDraft(bedCenterXmm)
+  );
   const [overlayToggles, setOverlayToggles] = React.useState(
     DEFAULT_CALIBRATION_OVERLAY_TOGGLES
   );
@@ -145,9 +150,11 @@ export function CalibrationWorkspace() {
     if (loaded.length > 0) {
       setSelectedPresetId(loaded[0].id);
       setDraft(buildDraftFromPreset(loaded[0]));
+    } else {
+      setDraft(buildEmptyDraft(bedCenterXmm));
     }
     setIsLoading(false);
-  }, []);
+  }, [bedCenterXmm]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -194,10 +201,10 @@ export function CalibrationWorkspace() {
 
   const handleStartNewPreset = React.useCallback(() => {
     setSelectedPresetId(null);
-    setDraft(buildEmptyDraft());
+    setDraft(buildEmptyDraft(bedCenterXmm));
     setErrorMessage(null);
     setStatusMessage("Creating a new rotary preset.");
-  }, []);
+  }, [bedCenterXmm]);
 
   const handleSavePreset = React.useCallback(() => {
     const parsed = validateDraft(draft);
@@ -240,7 +247,7 @@ export function CalibrationWorkspace() {
         setDraft(buildDraftFromPreset(next[0]));
       } else {
         setSelectedPresetId(null);
-        setDraft(buildEmptyDraft());
+        setDraft(buildEmptyDraft(bedCenterXmm));
       }
       setErrorMessage(null);
       setStatusMessage("Preset deleted.");
@@ -248,18 +255,18 @@ export function CalibrationWorkspace() {
       setErrorMessage("Could not delete preset. Try again.");
       setStatusMessage(null);
     }
-  }, [selectedPresetId]);
+  }, [selectedPresetId, bedCenterXmm]);
 
   const handleResetInputs = React.useCallback(() => {
     if (selectedPreset) {
       setDraft(buildDraftFromPreset(selectedPreset));
       setStatusMessage("Inputs reset to selected preset.");
     } else {
-      setDraft(buildEmptyDraft());
+      setDraft(buildEmptyDraft(bedCenterXmm));
       setStatusMessage("Inputs reset to defaults.");
     }
     setErrorMessage(null);
-  }, [selectedPreset]);
+  }, [selectedPreset, bedCenterXmm]);
 
   const handleToggleOverlay = React.useCallback(
     (key: CalibrationOverlayKey, enabled: boolean) => {
@@ -268,7 +275,7 @@ export function CalibrationWorkspace() {
     []
   );
 
-  const rotaryCenterXmm = parseNumberInput(draft.rotaryCenterXmm) ?? 0;
+  const manualRotaryCenterXmm = parseNumberInput(draft.rotaryCenterXmm);
   const rotaryTopYmm = parseNumberInput(draft.rotaryTopYmm) ?? 0;
   const templateWidthValue = parseNumberInput(templateWidthMm);
   const templateHeightValue = parseNumberInput(templateHeightMm);
@@ -277,23 +284,20 @@ export function CalibrationWorkspace() {
   const topDiameterMm = parseNumberInput(topDiameterMmDraft);
   const bottomDiameterMm = parseNumberInput(bottomDiameterMmDraft);
 
-  const activePresetForPreview: RotaryPlacementPreset | null = selectedPresetId
-    ? {
-        id: selectedPresetId,
-        name: draft.name.trim() || selectedPreset?.name || "Selected preset",
-        bedOrigin: draft.bedOrigin,
-        rotaryCenterXmm: rotaryCenterXmm,
-        rotaryTopYmm: rotaryTopYmm,
-        chuckOrRoller: draft.chuckOrRoller,
-        notes: draft.notes.trim() || undefined,
-      }
-    : null;
+  const rotaryCenterXmm = resolveRotaryCenterXmm({
+    selectedPresetRotaryCenterXmm: selectedPreset?.rotaryCenterXmm,
+    manualRotaryCenterXmm,
+    bedWidthMm: CALIBRATION_BED_WIDTH_MM,
+    preferManualOverride: true,
+  });
 
   const exportPreview = buildExportPlacementPreview({
     workspaceMode: "tumbler-wrap",
-    bedWidthMm: DEFAULT_BED_CONFIG.flatWidth,
+    bedWidthMm: CALIBRATION_BED_WIDTH_MM,
     bedHeightMm: DEFAULT_BED_CONFIG.flatHeight,
-    rotaryPreset: activePresetForPreview,
+    rotaryPreset: selectedPreset,
+    manualRotaryCenterXmm,
+    manualRotaryTopYmm: rotaryTopYmm,
     anchorMode,
     printableOffsetMm,
     templateWidthMm: templateWidthValue,
@@ -364,6 +368,9 @@ export function CalibrationWorkspace() {
                   }))
                 }
               />
+              <small className={styles.helperText}>
+                Defaults to bed center axis.
+              </small>
             </label>
             <label className={styles.field}>
               <span>Top Anchor Y (mm)</span>
@@ -520,7 +527,9 @@ export function CalibrationWorkspace() {
               <dd>{lensProfile.label}</dd>
             </dl>
           ) : (
-            <div className={styles.info}>No rotary preset selected.</div>
+            <div className={styles.info}>
+              No rotary preset selected. Using bed center as default rotary axis.
+            </div>
           )}
         </section>
 

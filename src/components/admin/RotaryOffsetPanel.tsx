@@ -3,6 +3,7 @@
 import React from "react";
 import type { BedOrigin, RotaryPlacementPreset } from "@/types/export";
 import { buildRotaryPlacementPreview } from "@/utils/rotaryCalibration";
+import { getBedCenterXmm } from "@/utils/rotaryCenter";
 import {
   deleteRotaryPreset,
   getRotaryPresets,
@@ -15,6 +16,7 @@ import { RotaryPresetDraft, RotaryPresetForm } from "./RotaryPresetForm";
 import styles from "./RotaryOffsetPanel.module.css";
 
 const DEFAULT_TEMPLATE_WIDTH_MM = 276.15;
+const DEFAULT_BED_WIDTH_MM = 300;
 
 function parseNumberInput(value: string): number | null {
   const parsed = Number(value);
@@ -33,9 +35,10 @@ function buildDraftFromPreset(preset: RotaryPlacementPreset): RotaryPresetDraft 
 }
 
 function buildEmptyDraft(): RotaryPresetDraft {
+  const bedCenterXmm = getBedCenterXmm(DEFAULT_BED_WIDTH_MM);
   return {
     name: "",
-    rotaryCenterXmm: "160",
+    rotaryCenterXmm: String(bedCenterXmm),
     rotaryTopYmm: "24",
     chuckOrRoller: "roller",
     bedOrigin: "top-left",
