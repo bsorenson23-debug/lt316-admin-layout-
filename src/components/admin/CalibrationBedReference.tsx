@@ -7,6 +7,11 @@ import {
   isCalibrationOverlayVisible,
   type CalibrationOverlayToggles,
 } from "@/utils/calibrationBedReference";
+import {
+  DEFAULT_STAGGERED_BED_PATTERN,
+  generateStaggeredBedHoles,
+  mapBedMmToCanvasPercent,
+} from "@/utils/staggeredBedPattern";
 import styles from "./CalibrationBedReference.module.css";
 
 interface Props {
@@ -20,8 +25,8 @@ interface Props {
 }
 
 function clampLabelOffset(percent: number): string {
-  if (percent <= 2) return "2%";
-  if (percent >= 98) return "98%";
+  if (percent <= 3) return "3%";
+  if (percent >= 97) return "97%";
   return `${percent}%`;
 }
 
@@ -47,12 +52,26 @@ export function CalibrationBedReference({
     [bedWidthMm, bedHeightMm, rotaryCenterXmm, topAnchorYmm, lensInsetMm, bedOrigin]
   );
 
+  const holes = React.useMemo(
+    () =>
+      generateStaggeredBedHoles(
+        { widthMm: bedWidthMm, heightMm: bedHeightMm },
+        DEFAULT_STAGGERED_BED_PATTERN
+      ),
+    [bedWidthMm, bedHeightMm]
+  );
+
+  const holeDiameterXPercent =
+    (DEFAULT_STAGGERED_BED_PATTERN.holeDiameterMm / Math.max(1, bedWidthMm)) * 100;
+  const holeDiameterYPercent =
+    (DEFAULT_STAGGERED_BED_PATTERN.holeDiameterMm / Math.max(1, bedHeightMm)) * 100;
+
   return (
     <section className={styles.panel}>
       <div className={styles.panelHeader}>
-        <span className={styles.title}>Laser Bed Reference</span>
+        <span className={styles.title}>Laser Bed Calibration Canvas</span>
         <span className={styles.meta}>
-          {bedWidthMm.toFixed(0)} x {bedHeightMm.toFixed(0)} mm
+          6 mm | 25 x 25 mm | staggered 12.5 mm
         </span>
       </div>
 
@@ -60,9 +79,33 @@ export function CalibrationBedReference({
         <div
           className={styles.bed}
           style={{ aspectRatio: `${bedWidthMm} / ${bedHeightMm}` }}
-          aria-label="Calibration laser bed reference"
+          aria-label="Staggered laser bed calibration canvas"
         >
-          {isCalibrationOverlayVisible(overlays, "bedCenterline") ? (
+          {isCalibrationOverlayVisible(overlays, "showHoleGrid") ? (
+            <div className={styles.holesLayer}>
+              {holes.map((hole) => {
+                const mapped = mapBedMmToCanvasPercent(hole.xMm, hole.yMm, {
+                  widthMm: bedWidthMm,
+                  heightMm: bedHeightMm,
+                });
+
+                return (
+                  <span
+                    key={`${hole.rowIndex}-${hole.columnIndex}`}
+                    className={styles.hole}
+                    style={{
+                      left: `${mapped.xPercent}%`,
+                      top: `${mapped.yPercent}%`,
+                      width: `${holeDiameterXPercent}%`,
+                      height: `${holeDiameterYPercent}%`,
+                    }}
+                  />
+                );
+              })}
+            </div>
+          ) : null}
+
+          {isCalibrationOverlayVisible(overlays, "showCenterline") ? (
             <>
               <div
                 className={`${styles.line} ${styles.centerVertical}`}
@@ -72,10 +115,17 @@ export function CalibrationBedReference({
                 className={`${styles.line} ${styles.centerHorizontal}`}
                 style={{ top: `${metrics.bedCenterYPercent}%` }}
               />
+              <div
+                className={styles.centerTarget}
+                style={{
+                  left: `${metrics.bedCenterXPercent}%`,
+                  top: `${metrics.bedCenterYPercent}%`,
+                }}
+              />
             </>
           ) : null}
 
-          {isCalibrationOverlayVisible(overlays, "rotaryCenterline") ? (
+          {isCalibrationOverlayVisible(overlays, "showRotaryCenterline") ? (
             <>
               <div
                 className={`${styles.line} ${styles.rotaryLine}`}
@@ -85,12 +135,12 @@ export function CalibrationBedReference({
                 className={styles.rotaryLabel}
                 style={{ left: clampLabelOffset(metrics.rotaryCenterXPercent) }}
               >
-                Rotary X
+                Rotary X {rotaryCenterXmm.toFixed(1)}
               </span>
             </>
           ) : null}
 
-          {isCalibrationOverlayVisible(overlays, "tumblerTopAnchorLine") ? (
+          {isCalibrationOverlayVisible(overlays, "showTopAnchorLine") ? (
             <>
               <div
                 className={`${styles.line} ${styles.topAnchorLine}`}
@@ -100,12 +150,12 @@ export function CalibrationBedReference({
                 className={styles.topAnchorLabel}
                 style={{ top: clampLabelOffset(metrics.topAnchorYPercent) }}
               >
-                Top Anchor
+                Top Y {topAnchorYmm.toFixed(1)}
               </span>
             </>
           ) : null}
 
-          {isCalibrationOverlayVisible(overlays, "lensFieldOutline") ? (
+          {isCalibrationOverlayVisible(overlays, "showLensFieldOutline") ? (
             <div
               className={styles.lensField}
               style={{
@@ -117,15 +167,7 @@ export function CalibrationBedReference({
             />
           ) : null}
 
-          <div
-            className={styles.centerTarget}
-            style={{
-              left: `${metrics.bedCenterXPercent}%`,
-              top: `${metrics.bedCenterYPercent}%`,
-            }}
-          />
-
-          {isCalibrationOverlayVisible(overlays, "originMarker") ? (
+          {isCalibrationOverlayVisible(overlays, "showOrigin") ? (
             <div
               className={styles.originMarker}
               style={{

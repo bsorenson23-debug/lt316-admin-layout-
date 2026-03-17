@@ -17,6 +17,7 @@ import {
   saveRotaryPreset,
   updateRotaryPreset,
 } from "@/utils/adminCalibrationState";
+import { DEFAULT_STAGGERED_BED_PATTERN } from "@/utils/staggeredBedPattern";
 import { CalibrationBedReference } from "./CalibrationBedReference";
 import { CalibrationOverlayToggles } from "./CalibrationOverlayToggles";
 import { RotaryPlacementPreview } from "./RotaryPlacementPreview";
@@ -24,6 +25,7 @@ import { RotaryPresetList } from "./RotaryPresetList";
 import styles from "./CalibrationWorkspace.module.css";
 
 const DEFAULT_TEMPLATE_WIDTH_MM = 276.15;
+const OVERLAY_STORAGE_KEY = "lt316.admin.calibration.overlays";
 
 const LENS_PROFILES = [
   { id: "standard-100", label: "Standard 100 mm", fieldInsetMm: 8 },
@@ -138,6 +140,30 @@ export function CalibrationWorkspace() {
     setIsLoading(false);
   }, []);
 
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const raw = window.localStorage.getItem(OVERLAY_STORAGE_KEY);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return;
+      setOverlayToggles((current) => ({
+        ...current,
+        ...parsed,
+      }));
+    } catch {
+      // ignore invalid persisted overlay state
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      OVERLAY_STORAGE_KEY,
+      JSON.stringify(overlayToggles)
+    );
+  }, [overlayToggles]);
+
   const selectedPreset = React.useMemo(
     () => presets.find((preset) => preset.id === selectedPresetId) ?? null,
     [presets, selectedPresetId]
@@ -249,6 +275,7 @@ export function CalibrationWorkspace() {
 
   const rotaryCenterXmm = parseNumberInput(draft.rotaryCenterXmm) ?? 0;
   const rotaryTopYmm = parseNumberInput(draft.rotaryTopYmm) ?? 0;
+  const hasSelectedPreset = selectedPreset !== null;
 
   return (
     <section className={styles.workspace}>
@@ -397,6 +424,16 @@ export function CalibrationWorkspace() {
             </label>
           </div>
           <CalibrationOverlayToggles value={overlayToggles} onToggle={handleToggleOverlay} />
+          <div className={styles.summaryCard}>
+            <div className={styles.sectionLabel}>Bed Settings Summary</div>
+            <div className={styles.info}>
+              Pattern: 6 mm holes | 25 x 25 mm pitch | staggered rows
+            </div>
+            <div className={styles.info}>Odd rows offset by 12.5 mm in X.</div>
+            <div className={styles.info}>
+              Bed: {DEFAULT_BED_CONFIG.flatWidth} x {DEFAULT_BED_CONFIG.flatHeight} mm
+            </div>
+          </div>
         </section>
       </aside>
 
@@ -405,7 +442,7 @@ export function CalibrationWorkspace() {
           bedWidthMm={DEFAULT_BED_CONFIG.flatWidth}
           bedHeightMm={DEFAULT_BED_CONFIG.flatHeight}
           rotaryCenterXmm={rotaryCenterXmm}
-          topAnchorYmm={preview.effectiveTopAnchorYmm}
+          topAnchorYmm={rotaryTopYmm}
           lensInsetMm={lensProfile.fieldInsetMm}
           bedOrigin={draft.bedOrigin}
           overlays={overlayToggles}
@@ -414,21 +451,39 @@ export function CalibrationWorkspace() {
 
       <aside className={styles.rightPanel}>
         <section className={styles.card}>
-          <div className={styles.sectionLabel}>Current Values</div>
+          <div className={styles.sectionLabel}>Coordinate Readout</div>
           <dl className={styles.valueGrid}>
-            <dt>Preset</dt>
-            <dd>{draft.name.trim() || "Unsaved"}</dd>
-            <dt>Drive</dt>
-            <dd>{draft.chuckOrRoller}</dd>
-            <dt>Origin</dt>
-            <dd>{draft.bedOrigin}</dd>
+            <dt>Hole Pattern</dt>
+            <dd>6 mm / 25 x 25 / staggered</dd>
+            <dt>Row Offset</dt>
+            <dd>{DEFAULT_STAGGERED_BED_PATTERN.alternateRowOffsetXmm} mm</dd>
             <dt>Rotary Center X</dt>
             <dd>{formatMm(rotaryCenterXmm)}</dd>
-            <dt>Top Anchor Y</dt>
+            <dt>Rotary Top Y</dt>
             <dd>{formatMm(rotaryTopYmm)}</dd>
-            <dt>Lens Profile</dt>
-            <dd>{lensProfile.label}</dd>
+            <dt>Export Origin X</dt>
+            <dd>{formatMm(preview.exportOriginXmm)}</dd>
+            <dt>Export Origin Y</dt>
+            <dd>{formatMm(preview.exportOriginYmm)}</dd>
           </dl>
+        </section>
+
+        <section className={styles.card}>
+          <div className={styles.sectionLabel}>Current Values</div>
+          {hasSelectedPreset ? (
+            <dl className={styles.valueGrid}>
+              <dt>Preset</dt>
+              <dd>{draft.name.trim() || "Unsaved"}</dd>
+              <dt>Drive</dt>
+              <dd>{draft.chuckOrRoller}</dd>
+              <dt>Origin</dt>
+              <dd>{draft.bedOrigin}</dd>
+              <dt>Lens Profile</dt>
+              <dd>{lensProfile.label}</dd>
+            </dl>
+          ) : (
+            <div className={styles.info}>No rotary preset selected.</div>
+          )}
         </section>
 
         <section className={styles.card}>

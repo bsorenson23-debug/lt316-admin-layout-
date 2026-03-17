@@ -68,15 +68,15 @@ test("overlay toggles are evaluated per-key", () => {
   assert.equal(
     isCalibrationOverlayVisible(
       DEFAULT_CALIBRATION_OVERLAY_TOGGLES,
-      "rotaryCenterline"
+      "showRotaryCenterline"
     ),
     true
   );
 
   assert.equal(
     isCalibrationOverlayVisible(
-      { ...DEFAULT_CALIBRATION_OVERLAY_TOGGLES, lensFieldOutline: false },
-      "lensFieldOutline"
+      { ...DEFAULT_CALIBRATION_OVERLAY_TOGGLES, showLensFieldOutline: false },
+      "showLensFieldOutline"
     ),
     false
   );

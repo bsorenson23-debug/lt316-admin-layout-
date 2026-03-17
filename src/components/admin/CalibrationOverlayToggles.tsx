@@ -12,11 +12,12 @@ interface Props {
 }
 
 const OVERLAY_ITEMS: Array<{ key: CalibrationOverlayKey; label: string }> = [
-  { key: "bedCenterline", label: "Bed Centerline" },
-  { key: "originMarker", label: "Origin Marker" },
-  { key: "rotaryCenterline", label: "Rotary Centerline" },
-  { key: "tumblerTopAnchorLine", label: "Tumbler Top Anchor" },
-  { key: "lensFieldOutline", label: "Lens Field Outline" },
+  { key: "showHoleGrid", label: "Show hole grid" },
+  { key: "showCenterline", label: "Show centerline" },
+  { key: "showOrigin", label: "Show origin" },
+  { key: "showRotaryCenterline", label: "Show rotary centerline" },
+  { key: "showTopAnchorLine", label: "Show top anchor line" },
+  { key: "showLensFieldOutline", label: "Show lens field outline" },
 ];
 
 export function CalibrationOverlayToggles({ value, onToggle }: Props) {
