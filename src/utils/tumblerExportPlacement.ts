@@ -190,15 +190,19 @@ export function buildLightBurnExportPayload(args: {
     );
   }
 
-  const exportOrigin = shouldApplyRotary
-    ? getRotaryExportOrigin({
+  if (shouldApplyRotary && !isFiniteNumber(args.rotary.preset?.rotaryTopYmm)) {
+    warnings.push("Rotary Top Y is not calibrated. Using 0 mm anchor until measured.");
+  }
+
+  const resolvedExportOrigin = shouldApplyRotary
+    ? getLightBurnExportOrigin({
         templateWidthMm: args.templateWidthMm,
-        rotaryCenterXmm: args.rotary.preset!.rotaryCenterXmm,
-        rotaryTopYmm: args.rotary.preset!.rotaryTopYmm,
+        preset: args.rotary.preset,
         anchorMode: args.rotary.anchorMode,
         placementProfile: args.rotary.placementProfile,
       })
-    : { xMm: 0, yMm: 0 };
+    : null;
+  const exportOrigin = resolvedExportOrigin ?? { xMm: 0, yMm: 0 };
 
   const items = shouldApplyRotary
     ? applyRotaryPlacementToItems({
@@ -298,6 +302,8 @@ export function buildLt316Sidecar(args: {
   }
   if (!args.rotary.preset) {
     warnings.push("No rotary preset selected.");
+  } else if (!isFiniteNumber(args.rotary.preset.rotaryTopYmm)) {
+    warnings.push("Rotary Top Y not calibrated; sidecar uses 0 mm anchor fallback.");
   }
 
   const recommendedObjectDiameterMm = getRecommendedRotaryDiameter({
@@ -360,7 +366,10 @@ export function buildLt316Sidecar(args: {
       rotaryCenterXmm: args.rotary.preset
         ? toRounded2(args.rotary.preset.rotaryCenterXmm)
         : undefined,
-      rotaryTopYmm: args.rotary.preset ? toRounded2(args.rotary.preset.rotaryTopYmm) : undefined,
+      rotaryTopYmm:
+        args.rotary.preset && isFiniteNumber(args.rotary.preset.rotaryTopYmm)
+          ? toRounded2(args.rotary.preset.rotaryTopYmm)
+          : undefined,
       anchorMode: args.rotary.anchorMode,
     },
     lightburn: {

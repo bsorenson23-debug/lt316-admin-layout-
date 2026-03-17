@@ -86,6 +86,13 @@ export function buildExportPlacementPreview(args: {
     warnings.push("Anchor data incomplete for printable-top mode.");
   }
 
+  if (
+    !isFiniteNumber(args.rotaryPreset?.rotaryTopYmm) &&
+    !isFiniteNumber(args.manualRotaryTopYmm)
+  ) {
+    warnings.push("Top anchor Y is not calibrated. Using 0 mm until measured.");
+  }
+
   const resolvedRotaryCenterXmm = resolveRotaryCenterXmm({
     selectedPresetRotaryCenterXmm: args.rotaryPreset?.rotaryCenterXmm,
     manualRotaryCenterXmm: args.manualRotaryCenterXmm,

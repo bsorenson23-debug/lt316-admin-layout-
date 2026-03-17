@@ -5,7 +5,10 @@ import { DEFAULT_BED_CONFIG } from "@/types/admin";
 import type {
   BedOrigin,
   RotaryDriveType,
+  RotaryMountBoltSize,
+  RotaryMountReferenceMode,
   RotaryPlacementPreset,
+  RotaryPresetFamily,
   TopAnchorMode,
 } from "@/types/export";
 import {
@@ -17,6 +20,7 @@ import { getBedCenterXmm, resolveRotaryCenterXmm } from "@/utils/rotaryCenter";
 import {
   deleteRotaryPreset,
   getRotaryPresets,
+  resolvePresetMountDetails,
   saveRotaryPreset,
   updateRotaryPreset,
 } from "@/utils/adminCalibrationState";
@@ -29,6 +33,19 @@ import styles from "./CalibrationWorkspace.module.css";
 const DEFAULT_TEMPLATE_WIDTH_MM = 276.15;
 const OVERLAY_STORAGE_KEY = "lt316.admin.calibration.overlays";
 const CALIBRATION_BED_WIDTH_MM = DEFAULT_BED_CONFIG.flatWidth;
+const ROTARY_FAMILY_OPTIONS: RotaryPresetFamily[] = [
+  "d80c",
+  "d100c",
+  "rotoboss-talon",
+  "custom",
+];
+const ROTARY_MOUNT_REFERENCE_OPTIONS: RotaryMountReferenceMode[] = [
+  "axis-center",
+  "front-left-bolt",
+  "front-edge-center",
+  "custom",
+];
+const ROTARY_MOUNT_BOLT_OPTIONS: RotaryMountBoltSize[] = ["M6", "unknown"];
 
 const LENS_PROFILES = [
   { id: "standard-100", label: "Standard 100 mm", fieldInsetMm: 8 },
@@ -40,15 +57,23 @@ type LensProfileId = (typeof LENS_PROFILES)[number]["id"];
 
 interface RotaryDraft {
   name: string;
+  family: RotaryPresetFamily;
+  mountPatternXmm: string;
+  mountPatternYmm: string;
+  mountBoltSize: RotaryMountBoltSize;
+  axisHeightMm: string;
   rotaryCenterXmm: string;
   rotaryTopYmm: string;
   chuckOrRoller: RotaryDriveType;
+  mountReferenceMode: RotaryMountReferenceMode;
   bedOrigin: BedOrigin;
   notes: string;
 }
 
 function parseNumberInput(value: string): number | null {
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -56,12 +81,36 @@ function formatMm(value: number): string {
   return `${value.toFixed(2)} mm`;
 }
 
+function formatOptionalMm(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "Measure on machine";
+  }
+  return formatMm(value);
+}
+
 function buildDraftFromPreset(preset: RotaryPlacementPreset): RotaryDraft {
+  const mountDetails = resolvePresetMountDetails(preset);
   return {
     name: preset.name,
+    family: mountDetails.family,
+    mountPatternXmm:
+      typeof mountDetails.mountPatternXmm === "number"
+        ? String(mountDetails.mountPatternXmm)
+        : "",
+    mountPatternYmm:
+      typeof mountDetails.mountPatternYmm === "number"
+        ? String(mountDetails.mountPatternYmm)
+        : "",
+    mountBoltSize: mountDetails.mountBoltSize ?? "unknown",
+    axisHeightMm:
+      typeof mountDetails.axisHeightMm === "number"
+        ? String(mountDetails.axisHeightMm)
+        : "",
     rotaryCenterXmm: String(preset.rotaryCenterXmm),
-    rotaryTopYmm: String(preset.rotaryTopYmm),
+    rotaryTopYmm:
+      typeof preset.rotaryTopYmm === "number" ? String(preset.rotaryTopYmm) : "",
     chuckOrRoller: preset.chuckOrRoller,
+    mountReferenceMode: mountDetails.mountReferenceMode,
     bedOrigin: preset.bedOrigin,
     notes: preset.notes ?? "",
   };
@@ -70,9 +119,15 @@ function buildDraftFromPreset(preset: RotaryPlacementPreset): RotaryDraft {
 function buildEmptyDraft(bedCenterXmm: number): RotaryDraft {
   return {
     name: "",
+    family: "custom",
+    mountPatternXmm: "",
+    mountPatternYmm: "",
+    mountBoltSize: "unknown",
+    axisHeightMm: "",
     rotaryCenterXmm: String(bedCenterXmm),
-    rotaryTopYmm: "24",
+    rotaryTopYmm: "",
     chuckOrRoller: "roller",
+    mountReferenceMode: "custom",
     bedOrigin: "top-left",
     notes: "",
   };
@@ -95,18 +150,45 @@ function validateDraft(
   if (rotaryCenterXmm === null || rotaryCenterXmm < 0) {
     return { ok: false, error: "Rotary Center X must be a valid non-negative mm value." };
   }
-  const rotaryTopYmm = parseNumberInput(draft.rotaryTopYmm);
-  if (rotaryTopYmm === null || rotaryTopYmm < 0) {
+  const rotaryTopYmm = draft.rotaryTopYmm.trim()
+    ? parseNumberInput(draft.rotaryTopYmm)
+    : null;
+  if (rotaryTopYmm !== null && rotaryTopYmm < 0) {
     return { ok: false, error: "Rotary Top Y must be a valid non-negative mm value." };
+  }
+  const mountPatternXmm = draft.mountPatternXmm.trim()
+    ? parseNumberInput(draft.mountPatternXmm)
+    : null;
+  if (draft.mountPatternXmm.trim() && (mountPatternXmm === null || mountPatternXmm < 0)) {
+    return { ok: false, error: "Mount Pattern X must be a valid non-negative mm value." };
+  }
+  const mountPatternYmm = draft.mountPatternYmm.trim()
+    ? parseNumberInput(draft.mountPatternYmm)
+    : null;
+  if (draft.mountPatternYmm.trim() && (mountPatternYmm === null || mountPatternYmm < 0)) {
+    return { ok: false, error: "Mount Pattern Y must be a valid non-negative mm value." };
+  }
+  const axisHeightMm = draft.axisHeightMm.trim()
+    ? parseNumberInput(draft.axisHeightMm)
+    : null;
+  if (draft.axisHeightMm.trim() && (axisHeightMm === null || axisHeightMm < 0)) {
+    return { ok: false, error: "Axis Height must be a valid non-negative mm value." };
   }
 
   return {
     ok: true,
     value: {
       name,
+      family: draft.family,
+      mountPatternXmm: mountPatternXmm ?? undefined,
+      mountPatternYmm: mountPatternYmm ?? undefined,
+      mountBoltSize: draft.mountBoltSize,
+      axisHeightMm: axisHeightMm ?? undefined,
+      axisCenterXmm: rotaryCenterXmm,
       rotaryCenterXmm,
-      rotaryTopYmm,
+      rotaryTopYmm: rotaryTopYmm ?? undefined,
       chuckOrRoller: draft.chuckOrRoller,
+      mountReferenceMode: draft.mountReferenceMode,
       bedOrigin: draft.bedOrigin,
       notes: draft.notes.trim() || undefined,
     },
@@ -276,7 +358,8 @@ export function CalibrationWorkspace() {
   );
 
   const manualRotaryCenterXmm = parseNumberInput(draft.rotaryCenterXmm);
-  const rotaryTopYmm = parseNumberInput(draft.rotaryTopYmm) ?? 0;
+  const manualRotaryTopYmm = parseNumberInput(draft.rotaryTopYmm);
+  const rotaryTopYmm = manualRotaryTopYmm ?? 0;
   const templateWidthValue = parseNumberInput(templateWidthMm);
   const templateHeightValue = parseNumberInput(templateHeightMm);
   const printableOffsetMm = parseNumberInput(printableOffsetMmDraft);
@@ -297,7 +380,7 @@ export function CalibrationWorkspace() {
     bedHeightMm: DEFAULT_BED_CONFIG.flatHeight,
     rotaryPreset: selectedPreset,
     manualRotaryCenterXmm,
-    manualRotaryTopYmm: rotaryTopYmm,
+    manualRotaryTopYmm,
     anchorMode,
     printableOffsetMm,
     templateWidthMm: templateWidthValue,
@@ -355,6 +438,92 @@ export function CalibrationWorkspace() {
               />
             </label>
             <label className={styles.field}>
+              <span>Family</span>
+              <select
+                className={styles.selectInput}
+                value={draft.family}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    family: event.target.value as RotaryPresetFamily,
+                  }))
+                }
+              >
+                {ROTARY_FAMILY_OPTIONS.map((family) => (
+                  <option key={family} value={family}>
+                    {family}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span>Mount Pattern X (mm)</span>
+              <input
+                type="number"
+                value={draft.mountPatternXmm}
+                className={styles.numInput}
+                step={0.1}
+                placeholder="Measure on machine"
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    mountPatternXmm: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className={styles.field}>
+              <span>Mount Pattern Y (mm)</span>
+              <input
+                type="number"
+                value={draft.mountPatternYmm}
+                className={styles.numInput}
+                step={0.1}
+                placeholder="Measure on machine"
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    mountPatternYmm: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className={styles.field}>
+              <span>Bolt Size</span>
+              <select
+                className={styles.selectInput}
+                value={draft.mountBoltSize}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    mountBoltSize: event.target.value as RotaryMountBoltSize,
+                  }))
+                }
+              >
+                {ROTARY_MOUNT_BOLT_OPTIONS.map((boltSize) => (
+                  <option key={boltSize} value={boltSize}>
+                    {boltSize}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span>Axis Height (mm)</span>
+              <input
+                type="number"
+                value={draft.axisHeightMm}
+                className={styles.numInput}
+                step={0.1}
+                placeholder="Measure on machine"
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    axisHeightMm: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className={styles.field}>
               <span>Rotary Center X (mm)</span>
               <input
                 type="number"
@@ -379,6 +548,7 @@ export function CalibrationWorkspace() {
                 value={draft.rotaryTopYmm}
                 className={styles.numInput}
                 step={0.1}
+                placeholder="Measure on machine"
                 onChange={(event) =>
                   setDraft((current) => ({
                     ...current,
@@ -403,6 +573,25 @@ export function CalibrationWorkspace() {
                 <option value="top-right">Top-right</option>
                 <option value="bottom-left">Bottom-left</option>
                 <option value="bottom-right">Bottom-right</option>
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span>Mount Reference</span>
+              <select
+                className={styles.selectInput}
+                value={draft.mountReferenceMode}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    mountReferenceMode: event.target.value as RotaryMountReferenceMode,
+                  }))
+                }
+              >
+                {ROTARY_MOUNT_REFERENCE_OPTIONS.map((referenceMode) => (
+                  <option key={referenceMode} value={referenceMode}>
+                    {referenceMode}
+                  </option>
+                ))}
               </select>
             </label>
             <label className={styles.field}>
@@ -497,7 +686,7 @@ export function CalibrationWorkspace() {
             <dt>Rotary Center X</dt>
             <dd>{formatMm(rotaryCenterXmm)}</dd>
             <dt>Rotary Top Y</dt>
-            <dd>{formatMm(rotaryTopYmm)}</dd>
+            <dd>{formatOptionalMm(manualRotaryTopYmm)}</dd>
             <dt>Export Origin X</dt>
             <dd>
               {exportPreview.exportOriginXmm !== undefined
@@ -519,6 +708,30 @@ export function CalibrationWorkspace() {
             <dl className={styles.valueGrid}>
               <dt>Preset</dt>
               <dd>{draft.name.trim() || "Unsaved"}</dd>
+              <dt>Family</dt>
+              <dd>{draft.family}</dd>
+              <dt>Mount Pattern</dt>
+              <dd>
+                {draft.mountPatternXmm.trim() && draft.mountPatternYmm.trim()
+                  ? `${draft.mountPatternXmm} x ${draft.mountPatternYmm} mm`
+                  : "Measure on machine"}
+              </dd>
+              <dt>Bolt Size</dt>
+              <dd>{draft.mountBoltSize}</dd>
+              <dt>Axis Height</dt>
+              <dd>
+                {draft.axisHeightMm.trim()
+                  ? `${draft.axisHeightMm} mm`
+                  : "Measure on machine"}
+              </dd>
+              <dt>Top Anchor Y</dt>
+              <dd>
+                {draft.rotaryTopYmm.trim()
+                  ? `${draft.rotaryTopYmm} mm`
+                  : "Measure on machine"}
+              </dd>
+              <dt>Mount Ref.</dt>
+              <dd>{draft.mountReferenceMode}</dd>
               <dt>Drive</dt>
               <dd>{draft.chuckOrRoller}</dd>
               <dt>Origin</dt>

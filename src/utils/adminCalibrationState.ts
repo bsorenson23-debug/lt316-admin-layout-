@@ -1,8 +1,17 @@
-import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "../data/rotaryPlacementPresets.ts";
-import type { RotaryPlacementPreset } from "../types/export.ts";
+import { getDefaultRotaryPresetSeeds } from "../data/rotaryPlacementPresets.ts";
+import { DEFAULT_BED_CONFIG } from "../types/admin.ts";
+import type {
+  BedOrigin,
+  RotaryPlacementPreset,
+  RotaryPresetFamily,
+  RotaryMountBoltSize,
+  RotaryMountReferenceMode,
+} from "../types/export.ts";
+import { getBedCenterXmm } from "./rotaryCenter.ts";
 
 const CALIBRATION_VISIBILITY_KEY = "lt316.admin.calibration.visible";
 const ROTARY_PRESETS_KEY = "lt316.admin.calibration.rotaryPresets";
+const DEFAULT_BED_CENTER_X_MM = getBedCenterXmm(DEFAULT_BED_CONFIG.flatWidth);
 
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
@@ -12,25 +21,103 @@ function getBrowserStorage(): StorageLike | null {
 }
 
 function cloneDefaultPresets(): RotaryPlacementPreset[] {
-  return DEFAULT_ROTARY_PLACEMENT_PRESETS.map((preset) => ({ ...preset }));
+  return getDefaultRotaryPresetSeeds(DEFAULT_BED_CONFIG.flatWidth).map((preset) => ({
+    ...preset,
+  }));
 }
 
-function isValidPreset(input: unknown): input is RotaryPlacementPreset {
-  if (!input || typeof input !== "object") return false;
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function asOptionalMm(value: unknown): number | undefined {
+  if (!isFiniteNumber(value) || value < 0) return undefined;
+  return value;
+}
+
+function normalizeBedOrigin(value: unknown): BedOrigin {
+  if (
+    value === "top-left" ||
+    value === "top-right" ||
+    value === "bottom-left" ||
+    value === "bottom-right"
+  ) {
+    return value;
+  }
+  return "top-left";
+}
+
+function normalizeFamily(value: unknown, presetId: string): RotaryPresetFamily {
+  if (
+    value === "rotoboss-talon" ||
+    value === "d80c" ||
+    value === "d100c" ||
+    value === "custom"
+  ) {
+    return value;
+  }
+
+  if (presetId === "d80c-chuck") return "d80c";
+  if (presetId === "d100c-chuck") return "d100c";
+  if (presetId === "rotoboss-talon") return "rotoboss-talon";
+  return "custom";
+}
+
+function normalizeMountBoltSize(value: unknown): RotaryMountBoltSize | undefined {
+  if (value === "M6" || value === "unknown") return value;
+  return undefined;
+}
+
+function normalizeMountReferenceMode(
+  value: unknown,
+  family: RotaryPresetFamily
+): RotaryMountReferenceMode {
+  if (
+    value === "axis-center" ||
+    value === "front-left-bolt" ||
+    value === "front-edge-center" ||
+    value === "custom"
+  ) {
+    return value;
+  }
+  return family === "custom" ? "custom" : "axis-center";
+}
+
+function normalizePreset(
+  input: unknown,
+  bedCenterXmm: number = DEFAULT_BED_CENTER_X_MM
+): RotaryPlacementPreset | null {
+  if (!input || typeof input !== "object") return null;
   const value = input as Partial<RotaryPlacementPreset>;
-  return (
-    typeof value.id === "string" &&
-    typeof value.name === "string" &&
-    typeof value.rotaryCenterXmm === "number" &&
-    Number.isFinite(value.rotaryCenterXmm) &&
-    typeof value.rotaryTopYmm === "number" &&
-    Number.isFinite(value.rotaryTopYmm) &&
-    (value.chuckOrRoller === "chuck" || value.chuckOrRoller === "roller") &&
-    (value.bedOrigin === "top-left" ||
-      value.bedOrigin === "top-right" ||
-      value.bedOrigin === "bottom-left" ||
-      value.bedOrigin === "bottom-right")
-  );
+  if (typeof value.id !== "string" || typeof value.name !== "string") return null;
+
+  const centerXmm =
+    asOptionalMm(value.rotaryCenterXmm) ??
+    asOptionalMm(value.axisCenterXmm) ??
+    bedCenterXmm;
+
+  const family = normalizeFamily(value.family, value.id);
+
+  return {
+    ...value,
+    id: value.id,
+    name: value.name,
+    family,
+    mountPatternXmm: asOptionalMm(value.mountPatternXmm),
+    mountPatternYmm: asOptionalMm(value.mountPatternYmm),
+    mountBoltSize: normalizeMountBoltSize(value.mountBoltSize),
+    axisHeightMm: asOptionalMm(value.axisHeightMm),
+    bedOrigin: normalizeBedOrigin(value.bedOrigin),
+    rotaryCenterXmm: centerXmm,
+    axisCenterXmm: centerXmm,
+    rotaryTopYmm: asOptionalMm(value.rotaryTopYmm),
+    chuckOrRoller: value.chuckOrRoller === "roller" ? "roller" : "chuck",
+    mountReferenceMode: normalizeMountReferenceMode(
+      value.mountReferenceMode,
+      family
+    ),
+    notes: typeof value.notes === "string" && value.notes.trim() ? value.notes : undefined,
+  };
 }
 
 function parsePresets(raw: string | null): RotaryPlacementPreset[] | null {
@@ -38,8 +125,11 @@ function parsePresets(raw: string | null): RotaryPlacementPreset[] | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return null;
-    const valid = parsed.filter(isValidPreset);
-    return valid.length === parsed.length ? valid : null;
+    if (parsed.length === 0) return [];
+    const normalized = parsed
+      .map((preset) => normalizePreset(preset))
+      .filter((preset): preset is RotaryPlacementPreset => preset !== null);
+    return normalized.length === parsed.length ? normalized : null;
   } catch {
     return null;
   }
@@ -49,7 +139,7 @@ function persistPresets(
   presets: RotaryPlacementPreset[],
   storage: StorageLike | null
 ): RotaryPlacementPreset[] {
-  const next = presets.map((preset) => ({ ...preset }));
+  const next = presets.map((preset) => normalizePreset(preset) ?? { ...preset });
   if (storage) {
     storage.setItem(ROTARY_PRESETS_KEY, JSON.stringify(next));
   }
@@ -93,10 +183,11 @@ export function saveRotaryPreset(
   storage: StorageLike | null = getBrowserStorage()
 ): RotaryPlacementPreset[] {
   const current = getRotaryPresets(storage);
-  const created: RotaryPlacementPreset = {
+  const created = normalizePreset({
     ...preset,
     id: createPresetId(),
-  };
+  });
+  if (!created) return current;
   return persistPresets([...current, created], storage);
 }
 
@@ -106,10 +197,45 @@ export function updateRotaryPreset(
   storage: StorageLike | null = getBrowserStorage()
 ): RotaryPlacementPreset[] {
   const current = getRotaryPresets(storage);
-  const next = current.map((preset) =>
-    preset.id === presetId ? { ...preset, ...patch } : preset
-  );
+  const next = current.map((preset) => {
+    if (preset.id !== presetId) return preset;
+    return normalizePreset({ ...preset, ...patch }) ?? preset;
+  });
   return persistPresets(next, storage);
+}
+
+export function resolvePresetMountDetails(
+  preset: RotaryPlacementPreset
+): {
+  family: RotaryPresetFamily;
+  mountPatternXmm?: number;
+  mountPatternYmm?: number;
+  mountBoltSize?: RotaryMountBoltSize;
+  axisHeightMm?: number;
+  mountReferenceMode: RotaryMountReferenceMode;
+} {
+  const normalized = normalizePreset(preset) ?? preset;
+  return {
+    family: normalized.family ?? "custom",
+    mountPatternXmm: normalized.mountPatternXmm,
+    mountPatternYmm: normalized.mountPatternYmm,
+    mountBoltSize: normalized.mountBoltSize,
+    axisHeightMm: normalized.axisHeightMm,
+    mountReferenceMode: normalized.mountReferenceMode ?? "custom",
+  };
+}
+
+export function withResolvedPresetCenter(
+  preset: RotaryPlacementPreset,
+  bedCenterXmm: number = DEFAULT_BED_CENTER_X_MM
+): RotaryPlacementPreset {
+  return (
+    normalizePreset(preset, bedCenterXmm) ?? {
+      ...preset,
+      rotaryCenterXmm: bedCenterXmm,
+      axisCenterXmm: bedCenterXmm,
+    }
+  );
 }
 
 export function deleteRotaryPreset(

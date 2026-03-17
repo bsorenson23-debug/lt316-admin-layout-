@@ -26,6 +26,10 @@ export function RotaryPresetList({
     <div className={styles.list}>
       {presets.map((preset) => {
         const selected = preset.id === selectedPresetId;
+        const topAnchorLabel =
+          typeof preset.rotaryTopYmm === "number"
+            ? preset.rotaryTopYmm.toFixed(1)
+            : "Measure";
         return (
           <button
             key={preset.id}
@@ -36,7 +40,7 @@ export function RotaryPresetList({
             <span className={styles.itemTitle}>{preset.name}</span>
             <span className={styles.itemMeta}>
               {preset.chuckOrRoller} | X {preset.rotaryCenterXmm.toFixed(1)} | Y{" "}
-              {preset.rotaryTopYmm.toFixed(1)}
+              {topAnchorLabel}
             </span>
           </button>
         );

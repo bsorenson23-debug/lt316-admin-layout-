@@ -19,7 +19,9 @@ const DEFAULT_TEMPLATE_WIDTH_MM = 276.15;
 const DEFAULT_BED_WIDTH_MM = 300;
 
 function parseNumberInput(value: string): number | null {
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -27,7 +29,8 @@ function buildDraftFromPreset(preset: RotaryPlacementPreset): RotaryPresetDraft 
   return {
     name: preset.name,
     rotaryCenterXmm: String(preset.rotaryCenterXmm),
-    rotaryTopYmm: String(preset.rotaryTopYmm),
+    rotaryTopYmm:
+      typeof preset.rotaryTopYmm === "number" ? String(preset.rotaryTopYmm) : "",
     chuckOrRoller: preset.chuckOrRoller,
     bedOrigin: preset.bedOrigin,
     notes: preset.notes ?? "",
@@ -39,7 +42,7 @@ function buildEmptyDraft(): RotaryPresetDraft {
   return {
     name: "",
     rotaryCenterXmm: String(bedCenterXmm),
-    rotaryTopYmm: "24",
+    rotaryTopYmm: "",
     chuckOrRoller: "roller",
     bedOrigin: "top-left",
     notes: "",
@@ -59,8 +62,10 @@ function validateDraft(
     return { ok: false, error: "Rotary Center X must be a valid non-negative number." };
   }
 
-  const rotaryTopYmm = parseNumberInput(draft.rotaryTopYmm);
-  if (rotaryTopYmm === null || rotaryTopYmm < 0) {
+  const rotaryTopYmm = draft.rotaryTopYmm.trim()
+    ? parseNumberInput(draft.rotaryTopYmm)
+    : null;
+  if (rotaryTopYmm !== null && rotaryTopYmm < 0) {
     return { ok: false, error: "Top Anchor Y must be a valid non-negative number." };
   }
 
@@ -69,7 +74,7 @@ function validateDraft(
     value: {
       name,
       rotaryCenterXmm,
-      rotaryTopYmm,
+      rotaryTopYmm: rotaryTopYmm ?? undefined,
       chuckOrRoller: draft.chuckOrRoller,
       bedOrigin: draft.bedOrigin as BedOrigin,
       notes: draft.notes.trim() || undefined,

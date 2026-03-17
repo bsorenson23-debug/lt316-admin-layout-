@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "../data/rotaryPlacementPresets.ts";
+import { DEFAULT_BED_CONFIG } from "../types/admin.ts";
+import { getBedCenterXmm } from "./rotaryCenter.ts";
 import {
   deleteRotaryPreset,
   getCalibrationToolsVisible,
@@ -45,6 +47,48 @@ test("rotary presets default to bundled presets when storage is empty", () => {
   assert.equal(presets[0].id, DEFAULT_ROTARY_PLACEMENT_PRESETS[0].id);
 });
 
+test("default preset seeds include D80C, D100C, and RotoBoss Talon", () => {
+  const ids = DEFAULT_ROTARY_PLACEMENT_PRESETS.map((preset) => preset.id);
+  assert.deepEqual(ids, ["d80c-chuck", "d100c-chuck", "rotoboss-talon"]);
+});
+
+test("D80C and D100C mount + axis metadata is seeded", () => {
+  const d80c = DEFAULT_ROTARY_PLACEMENT_PRESETS.find(
+    (preset) => preset.id === "d80c-chuck"
+  );
+  const d100c = DEFAULT_ROTARY_PLACEMENT_PRESETS.find(
+    (preset) => preset.id === "d100c-chuck"
+  );
+
+  assert.ok(d80c);
+  assert.equal(d80c?.mountPatternXmm, 75);
+  assert.equal(d80c?.mountPatternYmm, 100);
+  assert.equal(d80c?.axisHeightMm, 129);
+
+  assert.ok(d100c);
+  assert.equal(d100c?.mountPatternXmm, 75);
+  assert.equal(d100c?.mountPatternYmm, 100);
+  assert.equal(d100c?.axisHeightMm, 129);
+});
+
+test("Talon preset keeps unverified mount pattern and axis height unset", () => {
+  const talon = DEFAULT_ROTARY_PLACEMENT_PRESETS.find(
+    (preset) => preset.id === "rotoboss-talon"
+  );
+  assert.ok(talon);
+  assert.equal(talon?.mountPatternXmm, undefined);
+  assert.equal(talon?.mountPatternYmm, undefined);
+  assert.equal(talon?.axisHeightMm, undefined);
+});
+
+test("all default presets use bed-center axis center", () => {
+  const bedCenterXmm = getBedCenterXmm(DEFAULT_BED_CONFIG.flatWidth);
+  for (const preset of DEFAULT_ROTARY_PLACEMENT_PRESETS) {
+    assert.equal(preset.rotaryCenterXmm, bedCenterXmm);
+    assert.equal(preset.axisCenterXmm, bedCenterXmm);
+  }
+});
+
 test("rotary preset create, update, and delete flow works", () => {
   const storage = createMemoryStorage();
   const createdList = saveRotaryPreset(
@@ -84,6 +128,27 @@ test("invalid stored preset payload falls back to defaults", () => {
   });
   const presets = getRotaryPresets(storage);
   assert.equal(presets.length, DEFAULT_ROTARY_PLACEMENT_PRESETS.length);
+});
+
+test("preset payload with incomplete optional fields still loads", () => {
+  const storage = createMemoryStorage({
+    "lt316.admin.calibration.rotaryPresets": JSON.stringify([
+      {
+        id: "rotoboss-talon",
+        name: "RotoBoss Talon / Talon Pro",
+        bedOrigin: "top-left",
+        rotaryCenterXmm: 150,
+        chuckOrRoller: "chuck",
+      },
+    ]),
+  });
+
+  const presets = getRotaryPresets(storage);
+  assert.equal(presets.length, 1);
+  assert.equal(presets[0].id, "rotoboss-talon");
+  assert.equal(presets[0].rotaryTopYmm, undefined);
+  assert.equal(presets[0].mountPatternXmm, undefined);
+  assert.equal(presets[0].axisHeightMm, undefined);
 });
 
 test("explicitly saved empty preset list is respected for empty-state UI", () => {

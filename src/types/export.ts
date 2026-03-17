@@ -3,15 +3,30 @@ import type { WorkspaceMode } from "./admin";
 export type BedOrigin = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 export type RotaryDriveType = "chuck" | "roller";
 export type TopAnchorMode = "physical-top" | "printable-top";
+export type RotaryPresetFamily = "rotoboss-talon" | "d80c" | "d100c" | "custom";
+export type RotaryMountBoltSize = "M6" | "unknown";
+export type RotaryMountReferenceMode =
+  | "axis-center"
+  | "front-left-bolt"
+  | "front-edge-center"
+  | "custom";
 
 export interface RotaryPlacementPreset {
   id: string;
   name: string;
+  family?: RotaryPresetFamily;
+  mountPatternXmm?: number;
+  mountPatternYmm?: number;
+  mountBoltSize?: RotaryMountBoltSize;
+  axisHeightMm?: number;
+  /** Alias for rotary center used by machine-mechanical reference workflows */
+  axisCenterXmm?: number;
   bedOrigin: BedOrigin;
   rotaryCenterXmm: number;
-  rotaryTopYmm: number;
+  rotaryTopYmm?: number;
   defaultRotationDeg?: number;
   chuckOrRoller: RotaryDriveType;
+  mountReferenceMode?: RotaryMountReferenceMode;
   notes?: string;
 }
 
