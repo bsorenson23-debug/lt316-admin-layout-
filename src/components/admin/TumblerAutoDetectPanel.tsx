@@ -3,6 +3,10 @@
 import React from "react";
 import { BedConfig } from "@/types/admin";
 import {
+  getTumblerProfileById,
+  KNOWN_TUMBLER_PROFILES,
+} from "@/data/tumblerProfiles";
+import {
   TumblerAutoSizeResponse,
   TumblerAutoSizeState,
   TumblerShapeType,
@@ -27,6 +31,26 @@ const INITIAL_STATE: TumblerAutoSizeState = {
   draft: null,
   error: null,
 };
+
+type BrandOverrideMode =
+  | "auto"
+  | "YETI"
+  | "Stanley"
+  | "RTIC"
+  | "Ozark Trail"
+  | "unknown";
+
+const BRAND_OVERRIDE_OPTIONS: Array<{
+  value: BrandOverrideMode;
+  label: string;
+}> = [
+  { value: "auto", label: "Auto Detect" },
+  { value: "YETI", label: "YETI" },
+  { value: "Stanley", label: "Stanley" },
+  { value: "RTIC", label: "RTIC" },
+  { value: "Ozark Trail", label: "Ozark Trail" },
+  { value: "unknown", label: "Generic / Unknown" },
+];
 
 type ValidationErrors = Partial<
   Record<
@@ -108,6 +132,56 @@ function getErrorMessage(payload: unknown): string {
   return "Auto-detect failed. Please retry.";
 }
 
+function normalizeBrandForMatch(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function findDefaultProfileForBrand(brand: string): string | undefined {
+  const normalizedBrand = normalizeBrandForMatch(brand);
+  if (!normalizedBrand || normalizedBrand === "unknown") {
+    return undefined;
+  }
+  return KNOWN_TUMBLER_PROFILES.find(
+    (profile) => normalizeBrandForMatch(profile.brand) === normalizedBrand
+  )?.id;
+}
+
+function applyBrandOverrideSelection(
+  draft: TumblerSpecDraft,
+  mode: BrandOverrideMode,
+  detectedDraft: TumblerSpecDraft | null
+): TumblerSpecDraft {
+  if (mode === "auto") {
+    if (!detectedDraft) {
+      return withRecalculatedTemplate({
+        ...draft,
+        manualBrandOverride: false,
+        manualProfileOverrideId: undefined,
+      });
+    }
+    return withRecalculatedTemplate({
+      ...draft,
+      brand: detectedDraft.brand,
+      model: detectedDraft.model,
+      manualBrandOverride: false,
+      manualProfileOverrideId: undefined,
+    });
+  }
+
+  const defaultProfileId = findDefaultProfileForBrand(mode);
+  const profile = defaultProfileId
+    ? getTumblerProfileById(defaultProfileId)
+    : null;
+
+  return withRecalculatedTemplate({
+    ...draft,
+    brand: mode,
+    model: profile?.model ?? "unknown",
+    manualBrandOverride: true,
+    manualProfileOverrideId: defaultProfileId,
+  });
+}
+
 export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
   const [selectedImage, setSelectedImage] = React.useState<File | null>(null);
   const [state, setState] = React.useState<TumblerAutoSizeState>(INITIAL_STATE);
@@ -138,15 +212,43 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
         }
 
         const result = payload as TumblerAutoSizeResponse;
-        const draft = toTumblerSpecDraft(result.suggestion, result.calculation);
+        const detectedDraft = toTumblerSpecDraft(result.suggestion, result.calculation);
 
-        setState({
-          status:
-            result.confidenceLevel === "low" ? "low-confidence" : "success",
-          fileName: file.name,
-          result,
-          draft,
-          error: null,
+        setState((prev) => {
+          let nextDraft = detectedDraft;
+          if (prev.draft?.manualBrandOverride) {
+            nextDraft = withRecalculatedTemplate({
+              ...nextDraft,
+              brand: prev.draft.brand,
+              model: prev.draft.model,
+              manualBrandOverride: true,
+            });
+          }
+
+          if (
+            typeof prev.draft?.manualProfileOverrideId === "string" &&
+            prev.draft.manualProfileOverrideId.trim().length > 0
+          ) {
+            nextDraft = withRecalculatedTemplate({
+              ...nextDraft,
+              manualProfileOverrideId: prev.draft.manualProfileOverrideId,
+            });
+          }
+
+          const isUnknownBrand =
+            (nextDraft.brand ?? "unknown").trim().toLowerCase() === "unknown";
+
+          return {
+            status: isUnknownBrand
+              ? "unknown"
+              : result.confidenceLevel === "low"
+                ? "low-confidence"
+                : "success",
+            fileName: file.name,
+            result,
+            draft: nextDraft,
+            error: null,
+          };
         });
       } catch (error) {
         setState({
@@ -167,6 +269,40 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
 
   const validationErrors = state.draft ? validateDraft(state.draft) : {};
   const hasValidationErrors = Object.keys(validationErrors).length > 0;
+  const brandResolution = state.result?.analysis.brandResolution;
+  const alternateCandidates =
+    brandResolution?.topCandidates ?? state.draft?.alternateCandidates ?? [];
+  const candidateScoreByBrand = new Map(
+    (brandResolution?.candidateScores ?? []).map((entry) => [
+      entry.brand.toLowerCase(),
+      entry.totalScore,
+    ])
+  );
+  const detectedBrandConfidence =
+    brandResolution?.confidence ??
+    state.draft?.brandConfidence ??
+    state.draft?.confidence ??
+    0;
+  const isBrandUnknown = (state.draft?.brand ?? "unknown").toLowerCase() === "unknown";
+  const detectedDraft =
+    state.result?.suggestion && state.result?.calculation
+      ? toTumblerSpecDraft(state.result.suggestion, state.result.calculation)
+      : null;
+  const selectedBrandOverride: BrandOverrideMode = (() => {
+    if (!state.draft?.manualBrandOverride) return "auto";
+    const brand = state.draft.brand?.trim() ?? "";
+    const matched = BRAND_OVERRIDE_OPTIONS.find(
+      (option) => option.value !== "auto" && option.value === brand
+    );
+    return matched?.value ?? "unknown";
+  })();
+  const availableProfiles = KNOWN_TUMBLER_PROFILES.filter((profile) => {
+    if (selectedBrandOverride === "auto") return true;
+    if (selectedBrandOverride === "unknown") {
+      return normalizeBrandForMatch(profile.brand) === "generic";
+    }
+    return normalizeBrandForMatch(profile.brand) === normalizeBrandForMatch(selectedBrandOverride);
+  });
 
   const updateDraft = (patch: Partial<TumblerSpecDraft>) => {
     setState((prev) => {
@@ -238,7 +374,7 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
               <span>Confidence</span>
               <span
                 className={
-                  state.status === "low-confidence"
+                  state.status === "low-confidence" || state.status === "unknown"
                     ? styles.lowConfidence
                     : styles.highConfidence
                 }
@@ -246,6 +382,54 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
                 {(state.draft.confidence * 100).toFixed(0)}%
               </span>
             </div>
+            <div className={styles.readRow}>
+              <span>Brand Confidence</span>
+              <span className={isBrandUnknown ? styles.lowConfidence : styles.highConfidence}>
+                {(detectedBrandConfidence * 100).toFixed(0)}%
+              </span>
+            </div>
+            {state.draft.familyHint && (
+              <div className={styles.readRow}>
+                <span>Family Hint</span>
+                <span>{state.draft.familyHint}</span>
+              </div>
+            )}
+
+            {(isBrandUnknown ||
+              state.status === "low-confidence" ||
+              state.status === "unknown") && (
+              <div className={styles.warning}>
+                Brand not confidently confirmed. You can continue as Generic or choose a
+                brand manually.
+              </div>
+            )}
+
+            {alternateCandidates.length > 0 && (
+              <>
+                <div className={styles.sectionLabel}>Alternate Candidates</div>
+                <ul className={styles.candidates}>
+                  {alternateCandidates.map((candidate) => {
+                    const key = `${candidate.id}-${candidate.brand}-${candidate.model ?? "unknown"}`;
+                    const score = candidateScoreByBrand.get(candidate.brand.toLowerCase());
+                    return (
+                      <li key={key} className={styles.candidateItem}>
+                        <span>
+                          {candidate.brand}
+                          {candidate.model && candidate.model !== "unknown"
+                            ? ` - ${candidate.model}`
+                            : ""}
+                        </span>
+                        {typeof score === "number" && (
+                          <span className={styles.candidateScore}>
+                            {(score * 100).toFixed(0)}%
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
 
             <div className={styles.sectionLabel}>Raw Spec Dimensions (mm)</div>
             <div className={styles.readRow}>
@@ -279,28 +463,61 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
               <span>{roundDisplayMm(state.draft.templateHeightMm)}</span>
             </div>
 
-            <div className={styles.sectionLabel}>Manual Edits</div>
+            <div className={styles.sectionLabel}>Manual Override</div>
             <div className={styles.field}>
               <span className={styles.inlineLabel}>Brand</span>
-              <input
-                type="text"
-                className={styles.textInput}
-                value={state.draft.brand ?? ""}
-                onChange={(e) =>
-                  updateDraft({ brand: e.target.value.trim() || null })
-                }
-              />
+              <select
+                className={styles.select}
+                value={selectedBrandOverride}
+                onChange={(e) => {
+                  const mode = e.target.value as BrandOverrideMode;
+                  setState((prev) => {
+                    if (!prev.draft) return prev;
+                    return {
+                      ...prev,
+                      draft: applyBrandOverrideSelection(
+                        prev.draft,
+                        mode,
+                        detectedDraft
+                      ),
+                    };
+                  });
+                }}
+              >
+                {BRAND_OVERRIDE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className={styles.field}>
-              <span className={styles.inlineLabel}>Model</span>
-              <input
-                type="text"
-                className={styles.textInput}
-                value={state.draft.model ?? ""}
-                onChange={(e) =>
-                  updateDraft({ model: e.target.value.trim() || null })
-                }
-              />
+              <span className={styles.inlineLabel}>Profile</span>
+              <select
+                className={styles.select}
+                value={state.draft.manualProfileOverrideId ?? ""}
+                onChange={(e) => {
+                  const profileId = e.target.value || undefined;
+                  const profile = profileId ? getTumblerProfileById(profileId) : null;
+                  updateDraft({
+                    manualProfileOverrideId: profileId,
+                    ...(profile
+                      ? {
+                          brand: profile.brand,
+                          model: profile.model,
+                          manualBrandOverride: true,
+                        }
+                      : {}),
+                  });
+                }}
+              >
+                <option value="">Auto / None</option>
+                {availableProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.label}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className={styles.grid}>
               <LabeledNumber
@@ -462,3 +679,4 @@ function LabeledNumber({
     </label>
   );
 }
+

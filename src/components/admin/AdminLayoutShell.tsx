@@ -27,10 +27,15 @@ import {
   getPlacedArtworkBounds,
 } from "@/utils/alignment";
 import { applyTumblerSuggestion } from "@/utils/tumblerAutoSize";
+import {
+  computeCenteredItemYBetweenGuides,
+  getActiveTumblerGuideBand,
+} from "@/utils/tumblerGuides";
 import { SvgAssetLibraryPanel } from "./SvgAssetLibraryPanel";
 import { LaserBedWorkspace } from "./LaserBedWorkspace";
 import { BedSettingsPanel } from "./BedSettingsPanel";
 import { TumblerAutoDetectPanel } from "./TumblerAutoDetectPanel";
+import { TumblerExportPanel } from "./TumblerExportPanel";
 import { SelectedItemInspector } from "./SelectedItemInspector";
 import styles from "./AdminLayoutShell.module.css";
 
@@ -359,6 +364,27 @@ export function AdminLayoutShell() {
     setInspectorNote("Applied auto-detected tumbler template");
   }, []);
 
+  const handleCenterSelectedBetweenGuides = useCallback((id: string) => {
+    const guideBand = getActiveTumblerGuideBand(bedConfig);
+    if (!guideBand) return;
+
+    setPlacedItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const nextY = computeCenteredItemYBetweenGuides({
+          itemHeightMm: item.height,
+          workspaceHeightMm: bedConfig.height,
+          band: guideBand,
+        });
+        return {
+          ...item,
+          y: Number(nextY.toFixed(3)),
+        };
+      })
+    );
+    setInspectorNote("Centered artwork between groove guides");
+  }, [bedConfig]);
+
   // -------------------------------------------------------------------------
   // Derived state
   // -------------------------------------------------------------------------
@@ -411,12 +437,17 @@ export function AdminLayoutShell() {
           bedConfig={bedConfig}
           onApplyDraft={handleApplyTumblerDraft}
         />
+        <TumblerExportPanel
+          bedConfig={bedConfig}
+          placedItems={placedItems}
+        />
         <SelectedItemInspector
           selectedItem={selectedItem}
           bedConfig={bedConfig}
           statusNote={inspectorNote}
           onUpdateItem={handleUpdateItem}
           onAlignItem={handleAlignItem}
+          onCenterBetweenGuides={handleCenterSelectedBetweenGuides}
           onResetItem={handleResetItem}
           onNormalizeItem={handleNormalizeItem}
           onDeleteItem={handleDeleteItem}

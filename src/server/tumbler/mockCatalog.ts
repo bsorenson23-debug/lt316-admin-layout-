@@ -1,4 +1,4 @@
-import { TumblerSpecCandidate } from "@/types/tumblerAutoSize";
+import type { TumblerSpecCandidate } from "../../types/tumblerAutoSize.ts";
 
 interface MockTumblerEntry {
   id: string;
@@ -101,6 +101,39 @@ const MOCK_ENTRIES: MockTumblerEntry[] = [
         outsideDiameter: "3.4 in",
         snippet: "Height 6.8 in and diameter 3.4 in.",
         confidence: 0.54,
+      },
+    ],
+  },
+  {
+    id: "rtic-road-trip-30",
+    tokens: ["rtic", "road", "trip", "30"],
+    candidates: [
+      {
+        title: "RTIC Road Trip Tumbler 30 oz",
+        url: "https://rticoutdoors.com/Road-Trip-Tumbler",
+        kind: "official",
+        brand: "RTIC",
+        model: "Road Trip Tumbler",
+        capacityOz: 30,
+        hasHandle: false,
+        shapeType: "straight",
+        overallHeight: "8.0 in",
+        outsideDiameter: "3.8 in",
+        snippet: "Dimensions: 8 in tall and 3.8 in diameter.",
+        confidence: 0.9,
+      },
+      {
+        title: "RTIC Road Trip Tumbler 30oz Specs",
+        url: "https://www.rei.com/product/rtic-road-trip-30oz",
+        kind: "retailer",
+        brand: "RTIC",
+        model: "Road Trip Tumbler",
+        capacityOz: 30,
+        hasHandle: false,
+        overallHeight: "203 mm",
+        outsideDiameter: "96 mm",
+        snippet: "Height 203 mm, diameter 96 mm.",
+        confidence: 0.75,
       },
     ],
   },

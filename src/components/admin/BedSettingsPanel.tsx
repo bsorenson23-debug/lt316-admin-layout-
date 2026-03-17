@@ -22,6 +22,10 @@ import {
   computeTumblerWrapWidthMm,
   normalizeBedConfig,
 } from "@/types/admin";
+import {
+  getTumblerProfileById,
+  KNOWN_TUMBLER_PROFILES,
+} from "@/data/tumblerProfiles";
 import styles from "./BedSettingsPanel.module.css";
 
 interface Props {
@@ -69,6 +73,9 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
 
   const wrapWidthMm = bedConfig.tumblerTemplateWidthMm ?? computeTumblerWrapWidthMm(bedConfig.tumblerDiameterMm);
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
+  const activeProfile = bedConfig.tumblerProfileId
+    ? getTumblerProfileById(bedConfig.tumblerProfileId)
+    : null;
 
   return (
     <div className={styles.panel}>
@@ -93,6 +100,29 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
 
         {isTumblerMode ? (
           <>
+            <FieldRow label="Profile">
+              <select
+                className={styles.select}
+                value={bedConfig.tumblerProfileId ?? ""}
+                onChange={(e) => {
+                  const profileId = e.target.value || undefined;
+                  const profile = profileId ? getTumblerProfileById(profileId) : null;
+                  set({
+                    tumblerProfileId: profileId,
+                    tumblerGuideBand: profile?.guideBand,
+                  });
+                }}
+                aria-label="Tumbler profile"
+              >
+                <option value="">Custom / None</option>
+                {KNOWN_TUMBLER_PROFILES.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.label}
+                  </option>
+                ))}
+              </select>
+            </FieldRow>
+
             <FieldRow label="Diameter (mm)">
               <DraftNumberInput
                 className={styles.numInput}
@@ -122,6 +152,21 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
             <FieldRow label="Template W (mm)">
               <span className={styles.readonlyValue}>{wrapWidthMm.toFixed(2)}</span>
             </FieldRow>
+
+            {activeProfile?.guideBand && (
+              <>
+                <FieldRow label="Guide Upper">
+                  <span className={styles.readonlyValue}>
+                    {activeProfile.guideBand.upperGrooveYmm.toFixed(1)} mm
+                  </span>
+                </FieldRow>
+                <FieldRow label="Guide Lower">
+                  <span className={styles.readonlyValue}>
+                    {activeProfile.guideBand.lowerGrooveYmm.toFixed(1)} mm
+                  </span>
+                </FieldRow>
+              </>
+            )}
           </>
         ) : (
           <>

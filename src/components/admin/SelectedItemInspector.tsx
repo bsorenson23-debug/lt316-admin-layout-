@@ -20,6 +20,7 @@ import {
   PlacedItem,
   PlacedItemPatch,
 } from "@/types/admin";
+import { getActiveTumblerGuideBand } from "@/utils/tumblerGuides";
 import styles from "./SelectedItemInspector.module.css";
 
 interface Props {
@@ -28,6 +29,7 @@ interface Props {
   statusNote: string | null;
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
   onAlignItem: (id: string, mode: ItemAlignmentMode) => void;
+  onCenterBetweenGuides: (id: string) => void;
   onResetItem: (id: string) => void;
   onNormalizeItem: (id: string) => void;
   onDeleteItem: (id: string) => void;
@@ -39,6 +41,7 @@ export function SelectedItemInspector({
   statusNote,
   onUpdateItem,
   onAlignItem,
+  onCenterBetweenGuides,
   onResetItem,
   onNormalizeItem,
   onDeleteItem,
@@ -75,8 +78,10 @@ export function SelectedItemInspector({
 
   const handleReset = () => onResetItem(selectedItem.id);
   const handleAlign = (mode: ItemAlignmentMode) => onAlignItem(selectedItem.id, mode);
+  const handleCenterBetweenGuides = () => onCenterBetweenGuides(selectedItem.id);
   const handleNormalize = () => onNormalizeItem(selectedItem.id);
   const positionLimit = Math.max(bedConfig.width, bedConfig.height) * 2;
+  const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
 
   const displayName = selectedItem.name.replace(/\.svg$/i, "");
 
@@ -169,6 +174,11 @@ export function SelectedItemInspector({
           <button className={styles.actionBtn} onClick={() => handleAlign("fit-bed")}>
             Fit to Bed
           </button>
+          {activeGuideBand && (
+            <button className={styles.actionBtn} onClick={handleCenterBetweenGuides}>
+              Center between guides
+            </button>
+          )}
         </div>
 
         <div className={styles.sectionLabel}>SVG Bounds</div>

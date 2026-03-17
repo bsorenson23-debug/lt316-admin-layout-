@@ -12,6 +12,13 @@
 
 export type WorkspaceMode = "flat-bed" | "tumbler-wrap";
 
+export interface TumblerGuideBand {
+  id: string;
+  label: string;
+  upperGrooveYmm: number;
+  lowerGrooveYmm: number;
+}
+
 export interface BedConfig {
   /** Active workspace mode */
   workspaceMode: WorkspaceMode;
@@ -34,6 +41,8 @@ export interface BedConfig {
   tumblerHasHandle?: boolean;
   tumblerBrand?: string;
   tumblerModel?: string;
+  tumblerProfileId?: string;
+  tumblerGuideBand?: TumblerGuideBand;
   /** Derived template dimensions from raw tumbler spec */
   tumblerTemplateWidthMm?: number;
   tumblerTemplateHeightMm?: number;

@@ -18,6 +18,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { BedConfig, PlacedItem, PlacedItemPatch, SvgAsset } from "@/types/admin";
 import { calcBedScale, mmToPx, pxToMm } from "@/utils/geometry";
+import { getActiveTumblerGuideBand } from "@/utils/tumblerGuides";
 import { svgToDataUrl } from "@/utils/svg";
 import { BedNudgeControl, BED_NUDGE_PANEL_SIZE_PX } from "./BedNudgeControl";
 import styles from "./LaserBedWorkspace.module.css";
@@ -118,6 +119,7 @@ export function LaserBedWorkspace({
     bedConfig.workspaceMode === "tumbler-wrap"
       ? "Tumbler Wrap Workspace"
       : "Laser Bed Workspace";
+  const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
 
   // -------------------------------------------------------------------------
   // Drag state
@@ -313,6 +315,14 @@ export function LaserBedWorkspace({
             <BedGuideCrosshair bedConfig={bedConfig} scale={scale} />
           )}
 
+          {activeGuideBand && (
+            <TumblerGuideBandsOverlay
+              bedWidthMm={bedConfig.width}
+              band={activeGuideBand}
+              scale={scale}
+            />
+          )}
+
           {/* Click target for placement (behind items) */}
           <rect
             x={0}
@@ -487,6 +497,77 @@ function CoordLabels({
     );
   }
   return <>{labels}</>;
+}
+
+function TumblerGuideBandsOverlay({
+  bedWidthMm,
+  band,
+  scale,
+}: {
+  bedWidthMm: number;
+  band: {
+    upperGrooveYmm: number;
+    lowerGrooveYmm: number;
+  };
+  scale: number;
+}) {
+  const widthPx = mmToPx(bedWidthMm, scale);
+  const upperY = mmToPx(band.upperGrooveYmm, scale);
+  const lowerY = mmToPx(band.lowerGrooveYmm, scale);
+  const bandHeight = Math.max(0, lowerY - upperY);
+
+  return (
+    <g pointerEvents="none">
+      <rect
+        x={0}
+        y={upperY}
+        width={widthPx}
+        height={bandHeight}
+        fill="#4e6f82"
+        opacity={0.08}
+      />
+      <line
+        x1={0}
+        y1={upperY}
+        x2={widthPx}
+        y2={upperY}
+        stroke="#4e6f82"
+        strokeWidth={1.2}
+        strokeDasharray="2 6"
+        strokeLinecap="round"
+        opacity={0.9}
+      />
+      <line
+        x1={0}
+        y1={lowerY}
+        x2={widthPx}
+        y2={lowerY}
+        stroke="#4e6f82"
+        strokeWidth={1.2}
+        strokeDasharray="2 6"
+        strokeLinecap="round"
+        opacity={0.9}
+      />
+      <text
+        x={6}
+        y={upperY - 4}
+        fill="#315264"
+        fontSize={9}
+        fontFamily="monospace"
+      >
+        Upper groove
+      </text>
+      <text
+        x={6}
+        y={lowerY - 4}
+        fill="#315264"
+        fontSize={9}
+        fontFamily="monospace"
+      >
+        Lower groove
+      </text>
+    </g>
+  );
 }
 
 // ---------------------------------------------------------------------------

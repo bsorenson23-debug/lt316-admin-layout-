@@ -195,3 +195,34 @@ test("tapered apply keeps workspace diameter bound to outside diameter from look
   // Tapered template width remains based on average top/bottom diameter.
   assert.equal(Number(applied.width.toFixed(2)), Number((Math.PI * 88).toFixed(2)));
 });
+
+test("raw dimensions and derived template dimensions remain distinct", () => {
+  const draft = toTumblerSpecDraft({
+    productType: "tumbler",
+    brand: "RTIC",
+    model: "Road Trip",
+    capacityOz: 30,
+    hasHandle: false,
+    shapeType: "tapered",
+    overallHeightMm: 203,
+    outsideDiameterMm: 96,
+    topDiameterMm: 100,
+    bottomDiameterMm: 84,
+    usableHeightMm: 160,
+    confidence: 0.72,
+    sources: [],
+    notes: [],
+  });
+
+  const applied = applyTumblerSuggestion(DEFAULT_BED_CONFIG, draft);
+  const expectedDerivedWidth = Math.PI * ((100 + 84) / 2);
+
+  assert.equal(applied.tumblerOutsideDiameterMm, 96);
+  assert.equal(applied.tumblerTopDiameterMm, 100);
+  assert.equal(applied.tumblerBottomDiameterMm, 84);
+  assert.equal(Number(applied.width.toFixed(2)), Number(expectedDerivedWidth.toFixed(2)));
+  assert.notEqual(
+    Number(applied.width.toFixed(2)),
+    Number((Math.PI * 96).toFixed(2))
+  );
+});

@@ -4,8 +4,7 @@ import {
   getTumblerConfidenceLevel,
   normalizeTumblerSpecs,
 } from "@/utils/tumblerAutoSize";
-import { analyzeTumblerImage } from "./analyzeTumblerImage";
-import { searchTumblerSpecs } from "./searchTumblerSpecs";
+import { identifyTumblerBrand } from "./identifyTumblerBrand";
 
 interface RunInput {
   fileName: string;
@@ -16,17 +15,16 @@ interface RunInput {
 export async function runTumblerAutoSize(
   input: RunInput
 ): Promise<TumblerAutoSizeResponse> {
-  const analysis = await analyzeTumblerImage(input);
-  const candidates = await searchTumblerSpecs({
-    searchQuery: analysis.searchQuery,
-    analysis,
-  });
-  const suggestion = normalizeTumblerSpecs(analysis, candidates);
+  const identified = await identifyTumblerBrand(input);
+  const suggestion = normalizeTumblerSpecs(
+    identified.analysis,
+    identified.selectedSpecs
+  );
   const calculation = calculateTumblerTemplate(suggestion);
   const confidenceLevel = getTumblerConfidenceLevel(suggestion.confidence);
 
   return {
-    analysis,
+    analysis: identified.analysis,
     suggestion,
     calculation,
     confidenceLevel,

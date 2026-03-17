@@ -1,8 +1,8 @@
-import {
+import type {
   TumblerImageAnalysisResult,
   TumblerSpecCandidate,
-} from "@/types/tumblerAutoSize";
-import { lookupMockTumblerSpecs } from "./mockCatalog";
+} from "../../types/tumblerAutoSize.ts";
+import { lookupMockTumblerSpecs } from "./mockCatalog.ts";
 
 interface TumblerSpecLookupProvider {
   lookup(args: {
@@ -21,10 +21,16 @@ class MockTumblerSpecLookupProvider implements TumblerSpecLookupProvider {
 }
 
 class RemoteTumblerSpecLookupProvider implements TumblerSpecLookupProvider {
+  private readonly endpoint: string;
+  private readonly apiKey: string | null;
+
   constructor(
-    private readonly endpoint: string,
-    private readonly apiKey: string | null
-  ) {}
+    endpoint: string,
+    apiKey: string | null
+  ) {
+    this.endpoint = endpoint;
+    this.apiKey = apiKey;
+  }
 
   async lookup(args: {
     searchQuery: string;

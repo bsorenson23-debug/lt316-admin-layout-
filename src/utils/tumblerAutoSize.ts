@@ -1,5 +1,9 @@
 import { normalizeBedConfig } from "../types/admin.ts";
 import type { BedConfig } from "../types/admin.ts";
+import {
+  findTumblerProfileIdForBrandModel,
+  getTumblerProfileById,
+} from "../data/tumblerProfiles.ts";
 import type {
   TumblerConfidenceLevel,
   TumblerImageAnalysisResult,
@@ -118,16 +122,34 @@ function uniqueSources(candidates: TumblerSpecCandidate[]): TumblerSpecSuggestio
   return result;
 }
 
+function normalizeResolvedText(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^(unknown|n\/a|none|generic)$/i.test(trimmed)) return "unknown";
+  return trimmed;
+}
+
 function pickText(
   analysis: TumblerImageAnalysisResult,
   candidates: TumblerSpecCandidate[],
   field: "brand" | "model"
 ): string | null {
+  const resolvedFromBrandGate = normalizeResolvedText(
+    field === "brand"
+      ? analysis.brandResolution?.brand
+      : analysis.brandResolution?.model
+  );
+  if (resolvedFromBrandGate) return resolvedFromBrandGate;
+
+  const fromAnalysis = normalizeResolvedText(analysis[field]);
+  if (fromAnalysis) return fromAnalysis;
+
   for (const candidate of candidates) {
-    const value = candidate[field];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    const value = normalizeResolvedText(candidate[field] ?? null);
+    if (value) return value;
   }
-  return analysis[field];
+  return "unknown";
 }
 
 function pickCapacity(
@@ -222,6 +244,8 @@ function inferShapeType(
 
 function calculateNormalizedConfidence(args: {
   analysisConfidence: number;
+  brandConfidence: number;
+  unresolvedBrand: boolean;
   candidates: TumblerSpecCandidate[];
   overallHeightMm: number | null;
   outsideDiameterMm: number | null;
@@ -241,7 +265,11 @@ function calculateNormalizedConfidence(args: {
   const completeness = dimensionCount / 5;
 
   const confidence =
-    clamp(args.analysisConfidence, 0, 1) * 0.5 + sourceScore * 0.3 + completeness * 0.2;
+    clamp(args.analysisConfidence, 0, 1) * 0.35 +
+    clamp(args.brandConfidence, 0, 1) * 0.3 +
+    sourceScore * 0.2 +
+    completeness * 0.15 -
+    (args.unresolvedBrand ? 0.08 : 0);
   return clamp(confidence, 0.2, 0.97);
 }
 
@@ -340,6 +368,8 @@ export function normalizeTumblerSpecs(
 
   const confidence = calculateNormalizedConfidence({
     analysisConfidence: analysis.confidence,
+    brandConfidence: analysis.brandResolution?.confidence ?? analysis.confidence,
+    unresolvedBrand: analysis.brandResolution?.isUnknown ?? false,
     candidates: filtered,
     overallHeightMm,
     outsideDiameterMm,
@@ -348,10 +378,17 @@ export function normalizeTumblerSpecs(
     usableHeightMm,
   });
 
+  const brand = pickText(analysis, filtered, "brand");
+  const model = pickText(analysis, filtered, "model");
+  const unresolvedBrand = brand === "unknown" || model === "unknown";
+  if (unresolvedBrand) {
+    notes.push("Brand not confidently confirmed; dimensions may be based on best match.");
+  }
+
   return {
-    productType: "tumbler",
-    brand: pickText(analysis, filtered, "brand"),
-    model: pickText(analysis, filtered, "model"),
+    productType: analysis.productType,
+    brand,
+    model,
     capacityOz: pickCapacity(analysis, filtered),
     hasHandle: pickBoolean(analysis, filtered, "hasHandle"),
     shapeType,
@@ -361,6 +398,11 @@ export function normalizeTumblerSpecs(
     bottomDiameterMm,
     usableHeightMm,
     confidence,
+    brandConfidence: analysis.brandResolution?.confidence ?? confidence,
+    familyHint: analysis.brandResolution?.familyHint ?? null,
+    alternateCandidates: analysis.brandResolution?.topCandidates ?? [],
+    manualBrandOverride: false,
+    manualProfileOverrideId: undefined,
     sources: uniqueSources(filtered),
     notes: [...analysis.notes, ...notes],
   };
@@ -473,6 +515,14 @@ function isDevEnvironment(): boolean {
   return process.env.NODE_ENV !== "production";
 }
 
+function normalizeBrandFieldForStorage(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (/^(unknown|n\/a|none|generic)$/i.test(trimmed)) return undefined;
+  return trimmed;
+}
+
 export function applyTumblerSuggestion(
   config: BedConfig,
   draft: TumblerSpecDraft
@@ -482,6 +532,35 @@ export function applyTumblerSuggestion(
 
   const diameterForSettings =
     normalizedDraft.outsideDiameterMm ?? calculation.diameterUsedMm;
+
+  const storedBrand = normalizeBrandFieldForStorage(normalizedDraft.brand);
+  const storedModel = normalizeBrandFieldForStorage(normalizedDraft.model);
+  const brandConfidence =
+    normalizedDraft.brandConfidence ?? normalizedDraft.confidence;
+  const isBrandValidated = Boolean(storedBrand) && brandConfidence >= 0.72;
+  const manualBrandOverride = normalizedDraft.manualBrandOverride === true;
+
+  const profileOverrideId = normalizedDraft.manualProfileOverrideId;
+  const hasProfileOverride =
+    typeof profileOverrideId === "string" && profileOverrideId.trim().length > 0;
+  const overriddenProfile =
+    hasProfileOverride ? getTumblerProfileById(profileOverrideId) : null;
+
+  const autoProfileId =
+    !hasProfileOverride && (manualBrandOverride || isBrandValidated)
+      ? findTumblerProfileIdForBrandModel({
+          brand: storedBrand,
+          model: storedModel ?? null,
+        })
+      : null;
+  const autoProfile = autoProfileId ? getTumblerProfileById(autoProfileId) : null;
+
+  const nextProfileId = hasProfileOverride
+    ? overriddenProfile?.id
+    : autoProfile?.id;
+  const nextGuideBand = hasProfileOverride
+    ? overriddenProfile?.guideBand
+    : autoProfile?.guideBand;
 
   const nextConfig = normalizeBedConfig({
     ...config,
@@ -498,8 +577,10 @@ export function applyTumblerSuggestion(
     tumblerTemplateHeightMm: calculation.templateHeightMm,
     tumblerCapacityOz: normalizedDraft.capacityOz ?? undefined,
     tumblerHasHandle: normalizedDraft.hasHandle ?? undefined,
-    tumblerBrand: normalizedDraft.brand ?? undefined,
-    tumblerModel: normalizedDraft.model ?? undefined,
+    tumblerBrand: storedBrand,
+    tumblerModel: storedModel,
+    tumblerProfileId: nextProfileId,
+    tumblerGuideBand: nextGuideBand,
   });
 
   if (isDevEnvironment()) {
@@ -526,6 +607,7 @@ export function applyTumblerDraftToBedConfig(
 }
 
 export function roundDisplayMm(value: number | null | undefined): string {
-  if (!isFinitePositive(value ?? null)) return "—";
+  if (!isFinitePositive(value ?? null)) return "--";
   return (value ?? 0).toFixed(2);
 }
+

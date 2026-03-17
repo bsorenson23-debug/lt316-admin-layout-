@@ -1,4 +1,6 @@
 export type TumblerShapeType = "straight" | "tapered" | "unknown";
+export type TumblerProductType = "tumbler" | "insulated tumbler";
+export type TumblerLidStyle = "straw" | "slider" | "open" | "unknown";
 
 export type TumblerSourceKind =
   | "internal"
@@ -14,8 +16,79 @@ export interface TumblerSourceLink {
   kind: TumblerSourceKind;
 }
 
+export interface TumblerImageFeatures {
+  rawText: string;
+  tokens: string[];
+  visibleLogoText: string[];
+  hasHandle: boolean | null;
+  hasStraw: boolean | null;
+  lidStyle: TumblerLidStyle;
+  shapeType: TumblerShapeType;
+  hasGrooveBands: boolean | null;
+  silhouetteRatio: number | null;
+  baseTopDiameterRatio: number | null;
+}
+
+export interface TumblerLogoDetectionResult {
+  matchedBrand: string | null;
+  detectedText: string[];
+  confidence: number;
+  method: "filename-hint" | "ocr" | "unknown";
+}
+
+export interface TumblerBrandCandidate {
+  id: string;
+  brand: string;
+  model: string | null;
+  familyHint?: string | null;
+  searchQuery: string;
+  preliminaryScore: number;
+  reasons: string[];
+}
+
+export interface CandidateScore {
+  brand: string;
+  visionScore: number;
+  ocrScore: number;
+  shapeScore: number;
+  logoTextScore: number;
+  silhouetteScore: number;
+  handleScore: number;
+  lidScore: number;
+  grooveScore: number;
+  searchConsistencyScore: number;
+  sourceScore: number;
+  conflictPenalty: number;
+  totalScore: number;
+}
+
+export interface TumblerBrandResolution {
+  brand: string;
+  model: string;
+  familyHint: string | null;
+  confidence: number;
+  threshold: number;
+  margin: number;
+  leadOverSecond: number;
+  isUnknown: boolean;
+  notes: string[];
+  topCandidates: TumblerBrandCandidate[];
+  candidateScores: CandidateScore[];
+}
+
+export interface TumblerIdentificationResult {
+  productType: TumblerProductType;
+  brand: string;
+  model: string;
+  familyHint: string | null;
+  confidence: number;
+  searchQuery: string;
+  topCandidates: TumblerBrandCandidate[];
+  notes: string[];
+}
+
 export interface TumblerImageAnalysisResult {
-  productType: "tumbler";
+  productType: TumblerProductType;
   brand: string | null;
   model: string | null;
   capacityOz: number | null;
@@ -24,6 +97,10 @@ export interface TumblerImageAnalysisResult {
   confidence: number;
   searchQuery: string;
   notes: string[];
+  imageFeatures?: TumblerImageFeatures;
+  logoDetection?: TumblerLogoDetectionResult;
+  brandResolution?: TumblerBrandResolution;
+  identification?: TumblerIdentificationResult;
 }
 
 export interface TumblerSpecCandidate {
@@ -46,7 +123,7 @@ export interface TumblerSpecCandidate {
 }
 
 export interface TumblerSpecSuggestion {
-  productType: "tumbler";
+  productType: TumblerProductType;
   brand: string | null;
   model: string | null;
   capacityOz: number | null;
@@ -58,6 +135,11 @@ export interface TumblerSpecSuggestion {
   bottomDiameterMm: number | null;
   usableHeightMm: number | null;
   confidence: number;
+  brandConfidence?: number;
+  familyHint?: string | null;
+  alternateCandidates?: TumblerBrandCandidate[];
+  manualBrandOverride?: boolean;
+  manualProfileOverrideId?: string | null;
   sources: TumblerSourceLink[];
   notes: string[];
 }
@@ -86,6 +168,7 @@ export type TumblerAutoSizeStatus =
   | "idle"
   | "loading"
   | "success"
+  | "unknown"
   | "low-confidence"
   | "error";
 
