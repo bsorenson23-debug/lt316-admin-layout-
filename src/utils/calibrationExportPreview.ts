@@ -6,6 +6,7 @@ import type {
 } from "../types/export";
 import {
   getLightBurnExportOrigin,
+  getRecommendedCircumference,
   getRecommendedRotaryDiameter,
 } from "./tumblerExportPlacement.ts";
 import { resolveRotaryCenterXmm } from "./rotaryCenter.ts";
@@ -20,12 +21,44 @@ export type ExportPlacementPreview = {
   templateWidthMm?: number;
   templateHeightMm?: number;
   anchorMode: TopAnchorMode;
+  resolvedRotaryCenterXmm?: number;
+  resolvedTopAnchorYmm?: number;
   recommendedObjectDiameterMm?: number;
+  recommendedCircumferenceMm?: number;
+  setupSummary: string | null;
   warnings: string[];
+  notes: string[];
   isValid: boolean;
   isWithinBed: boolean;
   presetName?: string;
 };
+
+function formatPreviewValueMm(value?: number): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value.toFixed(2)} mm`
+    : "n/a";
+}
+
+export function formatLightBurnSetupSummary(
+  preview: Pick<
+    ExportPlacementPreview,
+    | "presetName"
+    | "recommendedObjectDiameterMm"
+    | "recommendedCircumferenceMm"
+    | "exportOriginXmm"
+    | "exportOriginYmm"
+    | "anchorMode"
+  >
+): string {
+  return [
+    `Rotary preset: ${preview.presetName ?? "none"}`,
+    `Object diameter: ${formatPreviewValueMm(preview.recommendedObjectDiameterMm)}`,
+    `Wrap width: ${formatPreviewValueMm(preview.recommendedCircumferenceMm)}`,
+    `Origin X: ${formatPreviewValueMm(preview.exportOriginXmm)}`,
+    `Origin Y: ${formatPreviewValueMm(preview.exportOriginYmm)}`,
+    `Anchor mode: ${preview.anchorMode}`,
+  ].join(" | ");
+}
 
 export function isPreviewPlacementWithinBed(args: {
   bedWidthMm: number;
@@ -60,8 +93,20 @@ export function buildExportPlacementPreview(args: {
   bottomDiameterMm?: number | null;
 }): ExportPlacementPreview {
   const warnings: string[] = [];
+  const notes: string[] = [];
   if (args.workspaceMode !== "tumbler-wrap") {
     warnings.push("Export placement preview is available only in tumbler mode.");
+  }
+
+  const hasAnyAppliedTemplateData = [
+    args.templateWidthMm,
+    args.templateHeightMm,
+    args.outsideDiameterMm,
+    args.topDiameterMm,
+    args.bottomDiameterMm,
+  ].some((value) => isFiniteNumber(value) && value > 0);
+  if (!hasAnyAppliedTemplateData) {
+    warnings.push("No applied tumbler/template data.");
   }
 
   if (!args.rotaryPreset) {
@@ -99,13 +144,25 @@ export function buildExportPlacementPreview(args: {
     bedWidthMm: args.bedWidthMm,
     preferManualOverride: true,
   });
+  const resolvedTopAnchorYmm =
+    (isFiniteNumber(args.manualRotaryTopYmm) ? args.manualRotaryTopYmm : undefined) ??
+    args.rotaryPreset?.rotaryTopYmm ??
+    0;
+
+  const previewPreset = args.rotaryPreset
+    ? {
+        ...args.rotaryPreset,
+        rotaryCenterXmm: resolvedRotaryCenterXmm,
+        rotaryTopYmm: resolvedTopAnchorYmm,
+      }
+    : null;
 
   const origin = getLightBurnExportOrigin({
     templateWidthMm: args.templateWidthMm,
-    preset: args.rotaryPreset,
+    preset: previewPreset,
     bedWidthMm: args.bedWidthMm,
     manualRotaryCenterXmm: resolvedRotaryCenterXmm,
-    manualRotaryTopYmm: args.manualRotaryTopYmm,
+    manualRotaryTopYmm: resolvedTopAnchorYmm,
     anchorMode: args.anchorMode,
     placementProfile,
   });
@@ -116,6 +173,21 @@ export function buildExportPlacementPreview(args: {
     topDiameterMm: args.topDiameterMm,
     bottomDiameterMm: args.bottomDiameterMm,
   });
+  if (!isFiniteNumber(recommendedObjectDiameterMm)) {
+    warnings.push("Missing outside/top/bottom diameter for recommendation.");
+  }
+
+  const recommendedCircumferenceMm = getRecommendedCircumference({
+    templateWidthMm: args.templateWidthMm,
+    recommendedDiameterMm: recommendedObjectDiameterMm,
+  });
+  if (!isFiniteNumber(recommendedCircumferenceMm)) {
+    warnings.push("Recommended wrap width is unavailable.");
+  }
+
+  if (args.shapeType === "tapered") {
+    notes.push("For tapered objects, use the largest diameter in LightBurn.");
+  }
 
   let isWithinBed = false;
   if (
@@ -136,6 +208,15 @@ export function buildExportPlacementPreview(args: {
     }
   }
 
+  const setupSummary = formatLightBurnSetupSummary({
+    presetName: args.rotaryPreset?.name,
+    recommendedObjectDiameterMm,
+    recommendedCircumferenceMm,
+    exportOriginXmm: origin?.xMm,
+    exportOriginYmm: origin?.yMm,
+    anchorMode: args.anchorMode,
+  });
+
   return {
     exportOriginXmm: origin?.xMm,
     exportOriginYmm: origin?.yMm,
@@ -146,8 +227,13 @@ export function buildExportPlacementPreview(args: {
       ? args.templateHeightMm
       : undefined,
     anchorMode: args.anchorMode,
+    resolvedRotaryCenterXmm,
+    resolvedTopAnchorYmm,
     recommendedObjectDiameterMm: recommendedObjectDiameterMm,
+    recommendedCircumferenceMm,
+    setupSummary,
     warnings,
+    notes,
     isValid: warnings.length === 0,
     isWithinBed,
     presetName: args.rotaryPreset?.name,

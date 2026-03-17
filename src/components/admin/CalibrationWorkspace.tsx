@@ -97,6 +97,20 @@ function formatMm(value: number): string {
   return `${value.toFixed(2)} mm`;
 }
 
+function isFinitePositive(value: number | null): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function formatMaybeMm(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? formatMm(value) : "n/a";
+}
+
+function getShapeLabel(value: "straight" | "tapered" | "unknown"): string {
+  if (value === "straight") return "Straight";
+  if (value === "tapered") return "Tapered";
+  return "Unknown";
+}
+
 function resolveLensProfile(id: LensProfileId) {
   return LENS_PROFILES.find((profile) => profile.id === id) ?? LENS_PROFILES[0];
 }
@@ -194,13 +208,24 @@ export function CalibrationWorkspace() {
 
   const manualRotaryCenterXmm = parseNumberInput(draft.rotaryCenterXmm);
   const manualRotaryTopYmm = parseNumberInput(draft.rotaryTopYmm);
-  const rotaryTopYmm = manualRotaryTopYmm ?? 0;
+  const resolvedTopAnchorYmm =
+    manualRotaryTopYmm ?? selectedPreset?.rotaryTopYmm ?? 0;
   const templateWidthValue = parseNumberInput(templateWidthMm);
   const templateHeightValue = parseNumberInput(templateHeightMm);
   const printableOffsetMm = parseNumberInput(printableOffsetMmDraft);
   const outsideDiameterMm = parseNumberInput(outsideDiameterMmDraft);
   const topDiameterMm = parseNumberInput(topDiameterMmDraft);
   const bottomDiameterMm = parseNumberInput(bottomDiameterMmDraft);
+  const hasAppliedTemplateData = [
+    templateWidthValue,
+    templateHeightValue,
+    outsideDiameterMm,
+    topDiameterMm,
+    bottomDiameterMm,
+  ].some((value) => isFinitePositive(value));
+  const appliedProductLabel = hasAppliedTemplateData
+    ? `${getShapeLabel(shapeType)} tumbler`
+    : "No applied tumbler data";
 
   const rotaryCenterXmm = resolveRotaryCenterXmm({
     selectedPresetRotaryCenterXmm: selectedPreset?.rotaryCenterXmm,
@@ -596,7 +621,52 @@ export function CalibrationWorkspace() {
       return (
         <>
           <section className={styles.card}>
-            <div className={styles.sectionLabel}>Export Controls</div>
+            <div className={styles.sectionLabel}>Export Context</div>
+            <dl className={styles.valueGrid}>
+              <dt>Rotary Preset</dt>
+              <dd>{selectedPreset?.name ?? "None selected"}</dd>
+              <dt>Applied Product</dt>
+              <dd>{appliedProductLabel}</dd>
+              <dt>Anchor Mode</dt>
+              <dd>{anchorMode}</dd>
+            </dl>
+            {!selectedPreset ? (
+              <div className={styles.warning}>Using bed-center rotary axis fallback.</div>
+            ) : null}
+            <label className={styles.field}>
+              <span>Anchor Mode</span>
+              <select
+                className={styles.selectInput}
+                value={anchorMode}
+                onChange={(event) => setAnchorMode(event.target.value as TopAnchorMode)}
+              >
+                <option value="physical-top">Physical Top</option>
+                <option value="printable-top">Printable Top</option>
+              </select>
+            </label>
+            {anchorMode === "printable-top" ? (
+              <label className={styles.field}>
+                <span>Top Safe Offset (mm)</span>
+                <input
+                  type="number"
+                  className={styles.numInput}
+                  value={printableOffsetMmDraft}
+                  step={0.1}
+                  placeholder="Optional printable-top offset"
+                  onChange={(event) => setPrintableOffsetMmDraft(event.target.value)}
+                />
+              </label>
+            ) : null}
+            <CalibrationOverlayToggles
+              value={modeOverlay}
+              onToggle={handleToggleOverlay}
+              visibleKeys={visibleOverlayKeys}
+              title="Export Overlays"
+            />
+          </section>
+
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Applied Template Snapshot</div>
             <div className={styles.fieldGrid}>
               <label className={styles.field}>
                 <span>Template Width (mm)</span>
@@ -618,29 +688,6 @@ export function CalibrationWorkspace() {
                   onChange={(event) => setTemplateHeightMm(event.target.value)}
                 />
               </label>
-              <label className={styles.field}>
-                <span>Anchor Mode</span>
-                <select
-                  className={styles.selectInput}
-                  value={anchorMode}
-                  onChange={(event) => setAnchorMode(event.target.value as TopAnchorMode)}
-                >
-                  <option value="physical-top">Physical Top</option>
-                  <option value="printable-top">Printable Top</option>
-                </select>
-              </label>
-              {anchorMode === "printable-top" ? (
-                <label className={styles.field}>
-                  <span>Printable Offset (mm)</span>
-                  <input
-                    type="number"
-                    className={styles.numInput}
-                    value={printableOffsetMmDraft}
-                    step={0.1}
-                    onChange={(event) => setPrintableOffsetMmDraft(event.target.value)}
-                  />
-                </label>
-              ) : null}
               <label className={styles.field}>
                 <span>Shape Type</span>
                 <select
@@ -690,12 +737,9 @@ export function CalibrationWorkspace() {
                 </>
               ) : null}
             </div>
-            <CalibrationOverlayToggles
-              value={modeOverlay}
-              onToggle={handleToggleOverlay}
-              visibleKeys={visibleOverlayKeys}
-              title="Export Overlays"
-            />
+            <div className={styles.info}>
+              Export mode is preview-only; update these values only to validate placement.
+            </div>
           </section>
         </>
       );
@@ -793,34 +837,45 @@ export function CalibrationWorkspace() {
 
     if (activeMode === "export") {
       return (
-        <section className={styles.card}>
-          <div className={styles.sectionLabel}>Export Readout</div>
-          <dl className={styles.valueGrid}>
-            <dt>Origin X</dt>
-            <dd>
-              {exportPreview.exportOriginXmm !== undefined
-                ? formatMm(exportPreview.exportOriginXmm)
-                : "n/a"}
-            </dd>
-            <dt>Origin Y</dt>
-            <dd>
-              {exportPreview.exportOriginYmm !== undefined
-                ? formatMm(exportPreview.exportOriginYmm)
-                : "n/a"}
-            </dd>
-            <dt>Template W</dt>
-            <dd>{templateWidthValue ? formatMm(templateWidthValue) : "n/a"}</dd>
-            <dt>Template H</dt>
-            <dd>{templateHeightValue ? formatMm(templateHeightValue) : "n/a"}</dd>
-            <dt>Recommended Diameter</dt>
-            <dd>{formatRotaryValue(exportPreview.recommendedObjectDiameterMm)}</dd>
-          </dl>
+        <>
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Export Placement Preview</div>
+            <dl className={styles.valueGrid}>
+              <dt>Rotary Preset</dt>
+              <dd>{exportPreview.presetName ?? "None selected"}</dd>
+              <dt>Anchor Mode</dt>
+              <dd>{exportPreview.anchorMode}</dd>
+              <dt>Origin X</dt>
+              <dd>{formatMaybeMm(exportPreview.exportOriginXmm)}</dd>
+              <dt>Origin Y</dt>
+              <dd>{formatMaybeMm(exportPreview.exportOriginYmm)}</dd>
+              <dt>Template W</dt>
+              <dd>{formatMaybeMm(exportPreview.templateWidthMm)}</dd>
+              <dt>Template H</dt>
+              <dd>{formatMaybeMm(exportPreview.templateHeightMm)}</dd>
+              <dt>Object Diameter</dt>
+              <dd>{formatRotaryValue(exportPreview.recommendedObjectDiameterMm)}</dd>
+              <dt>Wrap Width</dt>
+              <dd>{formatRotaryValue(exportPreview.recommendedCircumferenceMm)}</dd>
+            </dl>
+          </section>
+
+          <section className={styles.summaryCard}>
+            <div className={styles.sectionLabel}>LightBurn Setup Note</div>
+            <div className={styles.info}>{exportPreview.setupSummary ?? "Setup summary unavailable."}</div>
+            {exportPreview.notes.map((note) => (
+              <div key={note} className={styles.info}>
+                {note}
+              </div>
+            ))}
+          </section>
+
           {exportPreview.warnings.map((warning) => (
             <div key={warning} className={styles.warning}>
               {warning}
             </div>
           ))}
-        </section>
+        </>
       );
     }
 
@@ -868,7 +923,7 @@ export function CalibrationWorkspace() {
             bedWidthMm={DEFAULT_BED_CONFIG.flatWidth}
             bedHeightMm={DEFAULT_BED_CONFIG.flatHeight}
             rotaryCenterXmm={rotaryCenterXmm}
-            topAnchorYmm={exportPreview.exportOriginYmm ?? rotaryTopYmm}
+            topAnchorYmm={resolvedTopAnchorYmm}
             mountFootprintMm={mountFootprintMm}
             lensInsetMm={lensProfile.fieldInsetMm}
             bedOrigin={draft.bedOrigin}

@@ -3,6 +3,7 @@ import test from "node:test";
 import type { RotaryPlacementPreset } from "../types/export.ts";
 import {
   buildExportPlacementPreview,
+  formatLightBurnSetupSummary,
   isPreviewPlacementWithinBed,
 } from "./calibrationExportPreview.ts";
 
@@ -81,6 +82,41 @@ test("preview box dimensions match template width and height", () => {
   assert.equal(preview.templateHeightMm, 160);
 });
 
+test("straight tumbler uses outsideDiameterMm for recommended object diameter", () => {
+  const preview = buildExportPlacementPreview({
+    workspaceMode: "tumbler-wrap",
+    bedWidthMm: 300,
+    bedHeightMm: 300,
+    rotaryPreset: PRESET,
+    anchorMode: "physical-top",
+    templateWidthMm: 276.15,
+    templateHeightMm: 160,
+    shapeType: "straight",
+    outsideDiameterMm: 87.9,
+  });
+
+  assert.equal(preview.recommendedObjectDiameterMm, 87.9);
+  assert.equal(preview.recommendedCircumferenceMm, 276.15);
+});
+
+test("tapered tumbler uses largest diameter for recommendation", () => {
+  const preview = buildExportPlacementPreview({
+    workspaceMode: "tumbler-wrap",
+    bedWidthMm: 300,
+    bedHeightMm: 300,
+    rotaryPreset: PRESET,
+    anchorMode: "physical-top",
+    templateWidthMm: 255,
+    templateHeightMm: 150,
+    shapeType: "tapered",
+    topDiameterMm: 97,
+    bottomDiameterMm: 84,
+  });
+
+  assert.equal(preview.recommendedObjectDiameterMm, 97);
+  assert.match(preview.notes.join(" | "), /largest diameter/i);
+});
+
 test("warning appears when rotary preset is missing", () => {
   const preview = buildExportPlacementPreview({
     workspaceMode: "tumbler-wrap",
@@ -95,6 +131,25 @@ test("warning appears when rotary preset is missing", () => {
   });
 
   assert.match(preview.warnings.join(" | "), /No rotary preset selected/i);
+});
+
+test("warning appears when rotaryTopYmm is missing", () => {
+  const preview = buildExportPlacementPreview({
+    workspaceMode: "tumbler-wrap",
+    bedWidthMm: 300,
+    bedHeightMm: 300,
+    rotaryPreset: {
+      ...PRESET,
+      rotaryTopYmm: undefined,
+    },
+    anchorMode: "physical-top",
+    templateWidthMm: 250,
+    templateHeightMm: 120,
+    shapeType: "straight",
+    outsideDiameterMm: 87.9,
+  });
+
+  assert.match(preview.warnings.join(" | "), /Top anchor Y is not calibrated/i);
 });
 
 test("export preview uses bed center default when preset is missing", () => {
@@ -172,4 +227,24 @@ test("preview builder is non-destructive to source state inputs", () => {
   });
 
   assert.deepEqual(template, before);
+});
+
+test("setup summary aligns to preview values", () => {
+  const preview = buildExportPlacementPreview({
+    workspaceMode: "tumbler-wrap",
+    bedWidthMm: 300,
+    bedHeightMm: 300,
+    rotaryPreset: PRESET,
+    anchorMode: "physical-top",
+    templateWidthMm: 276.15,
+    templateHeightMm: 160,
+    shapeType: "straight",
+    outsideDiameterMm: 87.9,
+  });
+
+  const summary = formatLightBurnSetupSummary(preview);
+  assert.match(summary, /Rotary preset: Roller A/i);
+  assert.match(summary, /Object diameter: 87.90 mm/i);
+  assert.match(summary, /Wrap width: 276.15 mm/i);
+  assert.match(summary, /Anchor mode: physical-top/i);
 });
