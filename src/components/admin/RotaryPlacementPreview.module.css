@@ -1,0 +1,15 @@
+.grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: #c8c8c8;
+  background: #212121;
+  border: 1px solid #2f2f2f;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.grid span:nth-child(odd) {
+  color: #8f8f8f;
+}

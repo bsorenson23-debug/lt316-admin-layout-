@@ -1,0 +1,33 @@
+.section {
+  border: 1px solid #2f2f2f;
+  border-radius: 8px;
+  background: #1a1a1a;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 10px;
+  color: #6f6f6f;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.grid {
+  display: grid;
+  gap: 4px;
+}
+
+.row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #d2d2d2;
+}
+
+.row input {
+  accent-color: #5d8596;
+}

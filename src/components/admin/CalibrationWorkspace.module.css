@@ -1,0 +1,176 @@
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(230px, 280px);
+  gap: 10px;
+  min-height: 560px;
+}
+
+.leftPanel,
+.rightPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.centerPanel {
+  min-width: 0;
+}
+
+.card {
+  border: 1px solid #2d2d2d;
+  border-radius: 8px;
+  background: #191919;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sectionLabel {
+  font-size: 10px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.info {
+  font-size: 10px;
+  color: #8a8a8a;
+  line-height: 1.35;
+}
+
+.inlineActions {
+  display: flex;
+  gap: 7px;
+}
+
+.stackActions {
+  display: grid;
+  gap: 6px;
+}
+
+.primaryBtn,
+.secondaryBtn,
+.dangerBtn {
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+
+.primaryBtn {
+  border: 1px solid #486172;
+  background: #2a3d48;
+  color: #d4e7ef;
+}
+
+.secondaryBtn {
+  border: 1px solid #3a3a3a;
+  background: #242424;
+  color: #d4d4d4;
+}
+
+.dangerBtn {
+  border: 1px solid #643c3c;
+  background: #3a2323;
+  color: #f0cdcd;
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.field span {
+  font-size: 10px;
+  color: #858585;
+}
+
+.fullWidth {
+  grid-column: 1 / -1;
+}
+
+.textInput,
+.numInput,
+.selectInput {
+  width: 100%;
+  background: #232323;
+  border: 1px solid #333;
+  border-radius: 5px;
+  color: #dedede;
+  font-size: 11px;
+  padding: 5px 6px;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+}
+
+.chip,
+.chipActive {
+  border: 1px solid #343434;
+  border-radius: 999px;
+  background: #212121;
+  color: #bbb;
+  font-size: 11px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.chipActive {
+  border-color: #4b6d7d;
+  color: #d4e8f1;
+  background: #263842;
+}
+
+.valueGrid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  font-size: 11px;
+}
+
+.valueGrid dt {
+  margin: 0;
+  color: #8a8a8a;
+}
+
+.valueGrid dd {
+  margin: 0;
+  color: #d9d9d9;
+}
+
+.status,
+.error {
+  border-radius: 6px;
+  padding: 6px 7px;
+  font-size: 10px;
+}
+
+.status {
+  border: 1px solid #3f5d4c;
+  background: #223128;
+  color: #d0ecd8;
+}
+
+.error {
+  border: 1px solid #6c3d3d;
+  background: #382323;
+  color: #f4cccc;
+}
+
+@media (max-width: 1300px) {
+  .workspace {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+}

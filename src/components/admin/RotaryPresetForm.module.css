@@ -1,0 +1,137 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.label {
+  font-size: 10px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.newBtn {
+  border: 1px solid #3f5f6f;
+  border-radius: 999px;
+  background: #23353e;
+  color: #cbe2ec;
+  font-size: 10px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.field span {
+  font-size: 10px;
+  color: #858585;
+}
+
+.fullWidth {
+  grid-column: 1 / -1;
+}
+
+.textInput,
+.numInput,
+.selectInput {
+  width: 100%;
+  background: #232323;
+  border: 1px solid #333;
+  border-radius: 5px;
+  color: #dedede;
+  font-size: 11px;
+  padding: 5px 6px;
+}
+
+.driveRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.driveRow span {
+  font-size: 10px;
+  color: #858585;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+}
+
+.chip,
+.chipActive {
+  border: 1px solid #343434;
+  border-radius: 999px;
+  background: #212121;
+  color: #bbb;
+  font-size: 11px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.chipActive {
+  border-color: #4b6d7d;
+  color: #d4e8f1;
+  background: #263842;
+}
+
+.error,
+.status {
+  border-radius: 6px;
+  padding: 6px 7px;
+  font-size: 10px;
+}
+
+.error {
+  border: 1px solid #6d3c3c;
+  color: #ffc9c9;
+  background: #362323;
+}
+
+.status {
+  border: 1px solid #3a5c4a;
+  color: #c8e8d5;
+  background: #223128;
+}
+
+.actions {
+  display: flex;
+  gap: 7px;
+}
+
+.saveBtn,
+.deleteBtn {
+  border: 1px solid #3b5462;
+  border-radius: 6px;
+  background: #253741;
+  color: #d2e6ef;
+  font-size: 11px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.deleteBtn {
+  border-color: #613f3f;
+  background: #3b2525;
+  color: #f3d0d0;
+}

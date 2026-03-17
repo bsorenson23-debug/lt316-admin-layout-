@@ -1,0 +1,87 @@
+.page {
+  min-height: 100vh;
+  background: #141414;
+  color: #e1e1e1;
+  padding: 14px 16px 18px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #292929;
+}
+
+.headerText h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.headerText p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: #969696;
+}
+
+.backLink {
+  color: #9dc3d2;
+  border: 1px solid #305264;
+  border-radius: 7px;
+  padding: 6px 9px;
+  text-decoration: none;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.backLink:hover {
+  border-color: #4f7a8e;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.futureGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.placeholder {
+  border: 1px solid #2d2d2d;
+  background: #191919;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.placeholderTitle {
+  font-size: 12px;
+  color: #d8d8d8;
+  font-weight: 600;
+}
+
+.placeholderText {
+  font-size: 11px;
+  color: #8f8f8f;
+  line-height: 1.4;
+}
+
+.placeholderBadge {
+  margin-top: 2px;
+  width: fit-content;
+  font-size: 10px;
+  border: 1px solid #3d3d3d;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #aaa;
+}

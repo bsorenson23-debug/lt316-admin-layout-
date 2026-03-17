@@ -10,7 +10,9 @@
     "test:tumbler-auto-size": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/tumblerAutoSize.test.ts",
     "test:tumbler-guides": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/tumblerGuides.test.ts",
     "test:tumbler-identification": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/server/tumbler/identifyTumblerBrand.test.ts",
-    "test:tumbler-export-placement": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/tumblerExportPlacement.test.ts"
+    "test:tumbler-export-placement": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/tumblerExportPlacement.test.ts",
+    "test:admin-calibration": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/adminCalibrationState.test.ts",
+    "test:calibration-bed-reference": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/calibrationBedReference.test.ts"
   },
   "dependencies": {
     "next": "16.1.6",
