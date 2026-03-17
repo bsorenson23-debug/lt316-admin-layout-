@@ -12,6 +12,9 @@ import { getBedCenterXmm } from "./rotaryCenter.ts";
 const CALIBRATION_VISIBILITY_KEY = "lt316.admin.calibration.visible";
 const ROTARY_PRESETS_KEY = "lt316.admin.calibration.rotaryPresets";
 const DEFAULT_BED_CENTER_X_MM = getBedCenterXmm(DEFAULT_BED_CONFIG.flatWidth);
+const SEEDED_ROTARY_PRESET_IDS = new Set(
+  getDefaultRotaryPresetSeeds(DEFAULT_BED_CONFIG.flatWidth).map((preset) => preset.id)
+);
 
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
@@ -24,6 +27,15 @@ function cloneDefaultPresets(): RotaryPlacementPreset[] {
   return getDefaultRotaryPresetSeeds(DEFAULT_BED_CONFIG.flatWidth).map((preset) => ({
     ...preset,
   }));
+}
+
+function getSeedPresetById(
+  presetId: string,
+  bedWidthMm: number = DEFAULT_BED_CONFIG.flatWidth
+): RotaryPlacementPreset | null {
+  return (
+    getDefaultRotaryPresetSeeds(bedWidthMm).find((preset) => preset.id === presetId) ?? null
+  );
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -191,6 +203,18 @@ export function saveRotaryPreset(
   return persistPresets([...current, created], storage);
 }
 
+export function saveRotaryPresetAsCustom(
+  preset: Omit<RotaryPlacementPreset, "id">,
+  storage: StorageLike | null = getBrowserStorage()
+): RotaryPlacementPreset[] {
+  const normalized: Omit<RotaryPlacementPreset, "id"> = {
+    ...preset,
+    family: "custom",
+    name: preset.name.trim() || "Custom Rotary Preset",
+  };
+  return saveRotaryPreset(normalized, storage);
+}
+
 export function updateRotaryPreset(
   presetId: string,
   patch: Partial<Omit<RotaryPlacementPreset, "id">>,
@@ -244,5 +268,29 @@ export function deleteRotaryPreset(
 ): RotaryPlacementPreset[] {
   const current = getRotaryPresets(storage);
   const next = current.filter((preset) => preset.id !== presetId);
+  return persistPresets(next, storage);
+}
+
+export function isSeededRotaryPresetId(presetId: string): boolean {
+  return SEEDED_ROTARY_PRESET_IDS.has(presetId);
+}
+
+export function resetRotaryPresetToDefault(
+  presetId: string,
+  storage: StorageLike | null = getBrowserStorage()
+): RotaryPlacementPreset[] {
+  const seedPreset = getSeedPresetById(presetId);
+  if (!seedPreset) {
+    return getRotaryPresets(storage);
+  }
+
+  const current = getRotaryPresets(storage);
+  const index = current.findIndex((preset) => preset.id === presetId);
+  if (index === -1) {
+    return persistPresets([...current, seedPreset], storage);
+  }
+
+  const next = [...current];
+  next[index] = seedPreset;
   return persistPresets(next, storage);
 }

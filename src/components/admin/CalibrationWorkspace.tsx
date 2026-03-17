@@ -11,26 +11,33 @@ import type {
   RotaryPresetFamily,
   TopAnchorMode,
 } from "@/types/export";
-import type {
-  CalibrationOverlayKey,
-  CalibrationOverlayToggles as CalibrationOverlayToggleState,
-} from "@/utils/calibrationBedReference";
+import type { CalibrationOverlayKey } from "@/utils/calibrationBedReference";
 import { buildExportPlacementPreview } from "@/utils/calibrationExportPreview";
 import {
   CALIBRATION_MODE_DEFINITIONS,
   DEFAULT_CALIBRATION_MODE,
   type CalibrationMode,
   buildOverlayStateForMode,
-  getDefaultOverlayTogglesForMode,
   getVisibleOverlayKeysForMode,
+  resolveCalibrationMode,
 } from "@/utils/calibrationModes";
 import { getBedCenterXmm, resolveRotaryCenterXmm } from "@/utils/rotaryCenter";
 import {
   deleteRotaryPreset,
   getRotaryPresets,
+  isSeededRotaryPresetId,
+  resetRotaryPresetToDefault,
   saveRotaryPreset,
+  saveRotaryPresetAsCustom,
   updateRotaryPreset,
 } from "@/utils/adminCalibrationState";
+import {
+  buildDefaultCalibrationOverlayStateByMode,
+  loadCalibrationWorkspaceState,
+  resetCalibrationWorkspaceState,
+  saveCalibrationWorkspaceState,
+  type CalibrationOverlayStateByMode,
+} from "@/utils/calibrationWorkspaceState";
 import {
   CUSTOM_ROTARY_PRESET_ID,
   type RotaryModeDraft,
@@ -47,7 +54,6 @@ import { CalibrationOverlayToggles } from "./CalibrationOverlayToggles";
 import styles from "./CalibrationWorkspace.module.css";
 
 const DEFAULT_TEMPLATE_WIDTH_MM = 276.15;
-const OVERLAY_STORAGE_KEY = "lt316.admin.calibration.overlays";
 const CALIBRATION_BED_WIDTH_MM = DEFAULT_BED_CONFIG.flatWidth;
 
 const LENS_PROFILES = [
@@ -73,18 +79,6 @@ const ROTARY_MOUNT_REFERENCE_OPTIONS: RotaryMountReferenceMode[] = [
 ];
 
 type LensProfileId = (typeof LENS_PROFILES)[number]["id"];
-type OverlayStateByMode = Record<CalibrationMode, CalibrationOverlayToggleState>;
-
-function buildDefaultOverlayStateByMode(): OverlayStateByMode {
-  return {
-    rotary: getDefaultOverlayTogglesForMode("rotary"),
-    export: getDefaultOverlayTogglesForMode("export"),
-    lens: getDefaultOverlayTogglesForMode("lens"),
-    geometry: getDefaultOverlayTogglesForMode("geometry"),
-    "red-light": getDefaultOverlayTogglesForMode("red-light"),
-    distortion: getDefaultOverlayTogglesForMode("distortion"),
-  };
-}
 
 function parseNumberInput(value: string): number | null {
   const trimmed = value.trim();
@@ -130,8 +124,9 @@ export function CalibrationWorkspace() {
 
   const [activeMode, setActiveMode] =
     React.useState<CalibrationMode>(DEFAULT_CALIBRATION_MODE);
-  const [overlayStateByMode, setOverlayStateByMode] = React.useState<OverlayStateByMode>(
-    buildDefaultOverlayStateByMode
+  const [overlayStateByMode, setOverlayStateByMode] =
+    React.useState<CalibrationOverlayStateByMode>(
+      buildDefaultCalibrationOverlayStateByMode
   );
 
   const [isLoading, setIsLoading] = React.useState(true);
@@ -158,41 +153,55 @@ export function CalibrationWorkspace() {
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    const loaded = getRotaryPresets();
-    setPresets(loaded);
-    if (loaded.length > 0) {
-      setSelectedPresetId(null);
-      setDraft(buildEmptyRotaryDraft(bedCenterXmm));
-      setCustomDraft(buildEmptyRotaryDraft(bedCenterXmm));
-    } else {
-      setDraft(buildEmptyRotaryDraft(bedCenterXmm));
-      setCustomDraft(buildEmptyRotaryDraft(bedCenterXmm));
-    }
+    const loadedPresets = getRotaryPresets();
+    const persisted = loadCalibrationWorkspaceState();
+    const emptyDraft = buildEmptyRotaryDraft(bedCenterXmm);
+    const restoredCustomDraft = persisted.customRotaryDraft ?? emptyDraft;
+    const restoredSelectedPresetId =
+      persisted.selectedRotaryPresetId &&
+      loadedPresets.some((preset) => preset.id === persisted.selectedRotaryPresetId)
+        ? persisted.selectedRotaryPresetId
+        : null;
+
+    const selectedPreset =
+      restoredSelectedPresetId
+        ? loadedPresets.find((preset) => preset.id === restoredSelectedPresetId) ?? null
+        : null;
+
+    setPresets(loadedPresets);
+    setActiveMode(resolveCalibrationMode(persisted.activeCalibrationMode));
+    setOverlayStateByMode(persisted.overlayStateByMode);
+    setAnchorMode(persisted.anchorMode);
+    setSelectedPresetId(restoredSelectedPresetId);
+    setCustomDraft(restoredCustomDraft);
+    setDraft(
+      persisted.currentRotaryDraft ??
+        (selectedPreset
+          ? buildRotaryDraftFromPreset(selectedPreset)
+          : restoredCustomDraft)
+    );
     setIsLoading(false);
   }, [bedCenterXmm]);
 
   React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    const raw = window.localStorage.getItem(OVERLAY_STORAGE_KEY);
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw) as Partial<
-        Record<CalibrationMode, CalibrationOverlayToggleState>
-      >;
-      if (!parsed || typeof parsed !== "object") return;
-      setOverlayStateByMode((current) => ({
-        ...current,
-        ...parsed,
-      }));
-    } catch {
-      // ignore invalid persisted overlay state
-    }
-  }, []);
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(OVERLAY_STORAGE_KEY, JSON.stringify(overlayStateByMode));
-  }, [overlayStateByMode]);
+    if (isLoading) return;
+    saveCalibrationWorkspaceState({
+      activeCalibrationMode: activeMode,
+      selectedRotaryPresetId: selectedPresetId,
+      overlayStateByMode,
+      anchorMode,
+      customRotaryDraft: customDraft,
+      currentRotaryDraft: draft,
+    });
+  }, [
+    activeMode,
+    anchorMode,
+    customDraft,
+    draft,
+    isLoading,
+    overlayStateByMode,
+    selectedPresetId,
+  ]);
 
   React.useEffect(() => {
     if (selectedPresetId !== null) return;
@@ -281,6 +290,18 @@ export function CalibrationWorkspace() {
     resolvedRotaryCenterXmm: rotaryCenterXmm,
     resolvedRotaryTopYmm: manualRotaryTopYmm,
   });
+  const selectedPresetIsSeeded = selectedPreset
+    ? isSeededRotaryPresetId(selectedPreset.id)
+    : false;
+  const presetSourceLabel = selectedPreset
+    ? selectedPresetIsSeeded
+      ? "Using default preset"
+      : "Using custom preset"
+    : "Using custom draft";
+  const baselineDraft = selectedPreset
+    ? buildRotaryDraftFromPreset(selectedPreset)
+    : customDraft;
+  const hasUnsavedChanges = JSON.stringify(draft) !== JSON.stringify(baselineDraft);
 
   const rotaryWarnings = [
     selectedPresetId === null ? "Using bed center as default rotary axis." : null,
@@ -315,7 +336,7 @@ export function CalibrationWorkspace() {
     try {
       if (selectedPresetId) {
         setPresets(updateRotaryPreset(selectedPresetId, parsed.value));
-        setStatusMessage("Preset updated.");
+        setStatusMessage("Preset saved.");
       } else {
         const next = saveRotaryPreset(parsed.value);
         const created = next[next.length - 1] ?? null;
@@ -333,16 +354,72 @@ export function CalibrationWorkspace() {
     }
   }, [draft, selectedPresetId]);
 
+  const handleSaveAsCustomPreset = React.useCallback(() => {
+    const parsed = validateRotaryPresetDraft(draft);
+    if (!parsed.ok) {
+      setErrorMessage(parsed.error);
+      setStatusMessage(null);
+      return;
+    }
+
+    const customName =
+      selectedPreset && parsed.value.name === selectedPreset.name
+        ? `${parsed.value.name} Custom`
+        : parsed.value.name;
+
+    try {
+      const next = saveRotaryPresetAsCustom({
+        ...parsed.value,
+        name: customName,
+      });
+      const created = next[next.length - 1] ?? null;
+      setPresets(next);
+      if (created) {
+        setSelectedPresetId(created.id);
+        setDraft(buildRotaryDraftFromPreset(created));
+      }
+      setErrorMessage(null);
+      setStatusMessage("Saved as custom preset.");
+    } catch {
+      setErrorMessage("Could not save custom preset. Try again.");
+      setStatusMessage(null);
+    }
+  }, [draft, selectedPreset]);
+
   const handleResetInputs = React.useCallback(() => {
     if (selectedPreset) {
-      setDraft(buildRotaryDraftFromPreset(selectedPreset));
-      setStatusMessage("Inputs reset to selected preset.");
+      if (isSeededRotaryPresetId(selectedPreset.id)) {
+        const next = resetRotaryPresetToDefault(selectedPreset.id);
+        const restored =
+          next.find((preset) => preset.id === selectedPreset.id) ?? selectedPreset;
+        setPresets(next);
+        setDraft(buildRotaryDraftFromPreset(restored));
+        setStatusMessage("Seeded preset restored to factory defaults.");
+      } else {
+        setDraft(buildRotaryDraftFromPreset(selectedPreset));
+        setStatusMessage("Custom preset reset to saved values.");
+      }
     } else {
-      setDraft(buildEmptyRotaryDraft(bedCenterXmm));
-      setStatusMessage("Inputs reset to defaults.");
+      const empty = buildEmptyRotaryDraft(bedCenterXmm);
+      setDraft(empty);
+      setCustomDraft(empty);
+      setStatusMessage("Custom draft reset.");
     }
     setErrorMessage(null);
-  }, [selectedPreset, bedCenterXmm]);
+  }, [bedCenterXmm, selectedPreset]);
+
+  const handleResetWorkspace = React.useCallback(() => {
+    const defaults = resetCalibrationWorkspaceState();
+    const empty = buildEmptyRotaryDraft(bedCenterXmm);
+    setActiveMode(defaults.activeCalibrationMode);
+    setOverlayStateByMode(defaults.overlayStateByMode);
+    setAnchorMode(defaults.anchorMode);
+    setSelectedPresetId(null);
+    setDraft(empty);
+    setCustomDraft(empty);
+    setStatusMessage("Workspace preferences reset to defaults.");
+    setErrorMessage(null);
+  }, [bedCenterXmm]);
 
   const renderLeftPanel = () => {
     if (activeMode === "rotary") {
@@ -400,7 +477,7 @@ export function CalibrationWorkspace() {
               >
                 New Custom
               </button>
-              {selectedPresetId ? (
+              {selectedPresetId && selectedPreset && !isSeededRotaryPresetId(selectedPreset.id) ? (
                 <button
                   type="button"
                   className={styles.dangerBtn}
@@ -809,6 +886,8 @@ export function CalibrationWorkspace() {
               <dt>Notes</dt>
               <dd>{readout.notes}</dd>
             </dl>
+            <div className={styles.info}>{presetSourceLabel}</div>
+            <div className={styles.info}>{hasUnsavedChanges ? "Unsaved changes" : "Saved"}</div>
             {rotaryWarnings.map((warning) => (
               <div key={warning} className={styles.warning}>
                 {warning}
@@ -820,6 +899,13 @@ export function CalibrationWorkspace() {
             <div className={styles.stackActions}>
               <button type="button" className={styles.primaryBtn} onClick={handleSavePreset}>
                 Save Preset
+              </button>
+              <button
+                type="button"
+                className={styles.secondaryBtn}
+                onClick={handleSaveAsCustomPreset}
+              >
+                Save as Custom
               </button>
               <button type="button" className={styles.secondaryBtn} onClick={handleResetInputs}>
                 Reset Inputs
@@ -908,11 +994,16 @@ export function CalibrationWorkspace() {
           <div className={styles.sectionLabel}>Calibration Workspace</div>
           <div className={styles.info}>One shared bed canvas with mode-based overlays.</div>
         </div>
-        <CalibrationModeSwitcher
-          activeMode={activeMode}
-          modes={CALIBRATION_MODE_DEFINITIONS}
-          onChange={setActiveMode}
-        />
+        <div className={styles.modeHeaderActions}>
+          <button type="button" className={styles.secondaryBtn} onClick={handleResetWorkspace}>
+            Reset Workspace
+          </button>
+          <CalibrationModeSwitcher
+            activeMode={activeMode}
+            modes={CALIBRATION_MODE_DEFINITIONS}
+            onChange={setActiveMode}
+          />
+        </div>
       </header>
 
       <div className={styles.workspace}>

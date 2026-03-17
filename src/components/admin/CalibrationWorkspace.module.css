@@ -17,6 +17,12 @@
   gap: 2px;
 }
 
+.modeHeaderActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(240px, 300px);
@@ -220,6 +226,11 @@
   .modeHeader {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .modeHeaderActions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .workspace {

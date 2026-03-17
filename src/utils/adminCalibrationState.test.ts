@@ -7,7 +7,10 @@ import {
   deleteRotaryPreset,
   getCalibrationToolsVisible,
   getRotaryPresets,
+  isSeededRotaryPresetId,
+  resetRotaryPresetToDefault,
   saveRotaryPreset,
+  saveRotaryPresetAsCustom,
   setCalibrationToolsVisible,
   updateRotaryPreset,
 } from "./adminCalibrationState.ts";
@@ -145,6 +148,60 @@ test("editing a seeded preset persists updated rotary values", () => {
   );
   assert.ok(reloaded);
   assert.equal(reloaded?.rotaryCenterXmm, 161.5);
+});
+
+test("save as custom preserves seeded preset and creates editable custom copy", () => {
+  const storage = createMemoryStorage();
+  const seedBefore = getRotaryPresets(storage).find((preset) => preset.id === "d80c-chuck");
+  assert.ok(seedBefore);
+
+  const next = saveRotaryPresetAsCustom(
+    {
+      name: "D80C Custom",
+      family: "d80c",
+      bedOrigin: "top-left",
+      rotaryCenterXmm: 172.4,
+      rotaryTopYmm: 31.6,
+      chuckOrRoller: "chuck",
+      notes: "Custom copy for machine A",
+    },
+    storage
+  );
+
+  const custom = next.find((preset) => preset.name === "D80C Custom");
+  const seedAfter = next.find((preset) => preset.id === "d80c-chuck");
+  assert.ok(custom);
+  assert.equal(custom?.family, "custom");
+  assert.equal(custom?.rotaryCenterXmm, 172.4);
+  assert.ok(seedAfter);
+  assert.equal(seedAfter?.rotaryCenterXmm, seedBefore?.rotaryCenterXmm);
+});
+
+test("reset seeded preset restores default seeded values", () => {
+  const storage = createMemoryStorage();
+  updateRotaryPreset(
+    "d100c-chuck",
+    {
+      rotaryCenterXmm: 166.2,
+      rotaryTopYmm: 28.7,
+      notes: "Modified in calibration",
+    },
+    storage
+  );
+
+  const reset = resetRotaryPresetToDefault("d100c-chuck", storage);
+  const d100c = reset.find((preset) => preset.id === "d100c-chuck");
+  assert.ok(d100c);
+  assert.equal(d100c?.rotaryCenterXmm, getBedCenterXmm(DEFAULT_BED_CONFIG.flatWidth));
+  assert.equal(d100c?.rotaryTopYmm, undefined);
+  assert.match(d100c?.notes ?? "", /Top anchor should be calibrated on machine/i);
+});
+
+test("seeded id detection returns true only for bundled preset ids", () => {
+  assert.equal(isSeededRotaryPresetId("d80c-chuck"), true);
+  assert.equal(isSeededRotaryPresetId("d100c-chuck"), true);
+  assert.equal(isSeededRotaryPresetId("rotoboss-talon"), true);
+  assert.equal(isSeededRotaryPresetId("custom-preset-1"), false);
 });
 
 test("invalid stored preset payload falls back to defaults", () => {
