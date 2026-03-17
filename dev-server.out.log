@@ -47,3 +47,15 @@ Creating turbopack project {
  GET /admin 200 in 77ms (compile: 3ms, render: 75ms)
  GET /admin 200 in 68ms (compile: 40ms, render: 28ms)
  GET /admin 200 in 74ms (compile: 1515µs, render: 73ms)
+ GET /admin 200 in 22ms (compile: 2ms, render: 20ms)
+ GET /admin 200 in 24ms (compile: 1794µs, render: 23ms)
+ GET /admin/calibration 200 in 251ms (compile: 235ms, render: 17ms)
+✓ Compiled in 13ms
+ GET /admin/calibration 200 in 49ms (compile: 20ms, render: 30ms)
+✓ Compiled in 4ms
+✓ Compiled in 14ms
+ GET /admin/calibration 200 in 46ms (compile: 19ms, render: 27ms)
+✓ Compiled in 4ms
+✓ Compiled in 3ms
+✓ Compiled in 13ms
+✓ Compiled in 4ms

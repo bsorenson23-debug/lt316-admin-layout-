@@ -26,6 +26,13 @@ function toRounded2(value: number): number {
   return Number(value.toFixed(2));
 }
 
+function inferShapeType(
+  value: BedConfig["tumblerShapeType"] | null | undefined
+): "straight" | "tapered" | "unknown" {
+  if (value === "straight" || value === "tapered") return value;
+  return "unknown";
+}
+
 function getPrintableTopOffsetMm(args: {
   anchorMode: TopAnchorMode;
   placementProfile?: Pick<TumblerPlacementProfile, "topToSafeZoneStartMm"> | null;
@@ -34,6 +41,39 @@ function getPrintableTopOffsetMm(args: {
   const topOffset = args.placementProfile?.topToSafeZoneStartMm;
   if (!isFiniteNumber(topOffset)) return 0;
   return clampNonNegative(topOffset);
+}
+
+function inferOutsideDiameterMm(config: BedConfig): number | undefined {
+  if (isFiniteNumber(config.tumblerOutsideDiameterMm)) return config.tumblerOutsideDiameterMm;
+  if (isFiniteNumber(config.tumblerDiameterMm)) return config.tumblerDiameterMm;
+  return undefined;
+}
+
+function inferTopDiameterMm(config: BedConfig, outsideDiameterMm?: number): number | undefined {
+  if (isFiniteNumber(config.tumblerTopDiameterMm)) return config.tumblerTopDiameterMm;
+  return outsideDiameterMm;
+}
+
+function inferBottomDiameterMm(
+  config: BedConfig,
+  outsideDiameterMm?: number
+): number | undefined {
+  if (isFiniteNumber(config.tumblerBottomDiameterMm)) return config.tumblerBottomDiameterMm;
+  return outsideDiameterMm;
+}
+
+function inferOverallHeightMm(config: BedConfig): number | undefined {
+  if (isFiniteNumber(config.tumblerOverallHeightMm)) return config.tumblerOverallHeightMm;
+  if (isFiniteNumber(config.tumblerPrintableHeightMm)) return config.tumblerPrintableHeightMm;
+  if (isFiniteNumber(config.height)) return config.height;
+  return undefined;
+}
+
+function inferUsableHeightMm(config: BedConfig): number | undefined {
+  if (isFiniteNumber(config.tumblerUsableHeightMm)) return config.tumblerUsableHeightMm;
+  if (isFiniteNumber(config.tumblerPrintableHeightMm)) return config.tumblerPrintableHeightMm;
+  if (isFiniteNumber(config.height)) return config.height;
+  return undefined;
 }
 
 export function getRotaryExportOrigin(args: {
@@ -47,10 +87,31 @@ export function getRotaryExportOrigin(args: {
     anchorMode: args.anchorMode,
     placementProfile: args.placementProfile,
   });
+
   return {
     xMm: toRounded(args.rotaryCenterXmm - args.templateWidthMm / 2),
     yMm: toRounded(args.rotaryTopYmm + printableTopOffset),
   };
+}
+
+export function getLightBurnExportOrigin(args: {
+  templateWidthMm: number | null | undefined;
+  preset: Pick<RotaryPlacementPreset, "rotaryCenterXmm" | "rotaryTopYmm"> | null;
+  anchorMode: TopAnchorMode;
+  placementProfile?: Pick<TumblerPlacementProfile, "topToSafeZoneStartMm"> | null;
+}): RotaryExportOrigin | null {
+  if (!isFiniteNumber(args.templateWidthMm) || args.templateWidthMm <= 0) {
+    return null;
+  }
+  if (!args.preset) return null;
+
+  return getRotaryExportOrigin({
+    templateWidthMm: args.templateWidthMm,
+    rotaryCenterXmm: args.preset.rotaryCenterXmm,
+    rotaryTopYmm: args.preset.rotaryTopYmm,
+    anchorMode: args.anchorMode,
+    placementProfile: args.placementProfile,
+  });
 }
 
 export function applyRotaryPlacementToItems(args: {
@@ -158,119 +219,186 @@ export function buildLightBurnExportPayload(args: {
   };
 }
 
-function inferShapeType(
-  value: BedConfig["tumblerShapeType"] | null | undefined
-): "straight" | "tapered" | "unknown" {
-  if (value === "straight" || value === "tapered") return value;
-  return "unknown";
-}
-
-function inferOutsideDiameterMm(config: BedConfig): number {
-  if (isFiniteNumber(config.tumblerOutsideDiameterMm)) return config.tumblerOutsideDiameterMm;
-  if (isFiniteNumber(config.tumblerDiameterMm)) return config.tumblerDiameterMm;
-  if (isFiniteNumber(config.width) && config.width > 0) return config.width / Math.PI;
-  return 80;
-}
-
-function inferTopDiameterMm(config: BedConfig, outsideDiameterMm: number): number {
-  if (isFiniteNumber(config.tumblerTopDiameterMm)) return config.tumblerTopDiameterMm;
-  return outsideDiameterMm;
-}
-
-function inferBottomDiameterMm(config: BedConfig, outsideDiameterMm: number): number {
-  if (isFiniteNumber(config.tumblerBottomDiameterMm)) return config.tumblerBottomDiameterMm;
-  return outsideDiameterMm;
-}
-
 export function getRecommendedRotaryDiameter(args: {
   shapeType: "straight" | "tapered" | "unknown";
   outsideDiameterMm: number | null | undefined;
   topDiameterMm: number | null | undefined;
   bottomDiameterMm: number | null | undefined;
-}): number {
+}): number | undefined {
   const outside = isFiniteNumber(args.outsideDiameterMm)
     ? args.outsideDiameterMm
-    : null;
+    : undefined;
   const top = isFiniteNumber(args.topDiameterMm) ? args.topDiameterMm : outside;
-  const bottom = isFiniteNumber(args.bottomDiameterMm)
-    ? args.bottomDiameterMm
-    : outside;
+  const bottom = isFiniteNumber(args.bottomDiameterMm) ? args.bottomDiameterMm : outside;
 
   if (args.shapeType === "tapered") {
-    const largest = Math.max(top ?? outside ?? 0, bottom ?? outside ?? 0);
-    return largest > 0 ? toRounded2(largest) : 80;
+    const candidates = [top, bottom, outside].filter(isFiniteNumber);
+    if (candidates.length === 0) return undefined;
+    return toRounded2(Math.max(...candidates));
   }
-  const straight = outside ?? top ?? bottom ?? 80;
-  return toRounded2(straight);
+
+  const straight = outside ?? top ?? bottom;
+  return isFiniteNumber(straight) ? toRounded2(straight) : undefined;
+}
+
+export function getRecommendedCircumference(args: {
+  templateWidthMm: number | null | undefined;
+  recommendedDiameterMm: number | null | undefined;
+}): number | undefined {
+  if (isFiniteNumber(args.templateWidthMm) && args.templateWidthMm > 0) {
+    return toRounded2(args.templateWidthMm);
+  }
+  if (isFiniteNumber(args.recommendedDiameterMm) && args.recommendedDiameterMm > 0) {
+    return toRounded2(Math.PI * args.recommendedDiameterMm);
+  }
+  return undefined;
 }
 
 export function buildLt316Sidecar(args: {
   bedConfig: BedConfig;
-  artworkPayload: LightBurnExportPayload;
-}): Lt316LightBurnSetupSidecar {
+  workspaceMode: WorkspaceMode;
+  templateWidthMm: number;
+  templateHeightMm: number;
+  rotary: {
+    preset: RotaryPlacementPreset | null;
+    anchorMode: TopAnchorMode;
+    placementProfile?: TumblerPlacementProfile | null;
+  };
+}): { sidecar: Lt316LightBurnSetupSidecar | null; warnings: string[] } {
+  const warnings: string[] = [];
+  if (args.workspaceMode !== "tumbler-wrap") {
+    warnings.push("LightBurn setup bundle is available only in tumbler mode.");
+    return { sidecar: null, warnings };
+  }
+
   const shapeType = inferShapeType(args.bedConfig.tumblerShapeType);
   const outsideDiameterMm = inferOutsideDiameterMm(args.bedConfig);
   const topDiameterMm = inferTopDiameterMm(args.bedConfig, outsideDiameterMm);
   const bottomDiameterMm = inferBottomDiameterMm(args.bedConfig, outsideDiameterMm);
+  const overallHeightMm = inferOverallHeightMm(args.bedConfig);
+  const usableHeightMm = inferUsableHeightMm(args.bedConfig);
+
+  if (!isFiniteNumber(outsideDiameterMm) && shapeType !== "tapered") {
+    warnings.push("Missing tumbler diameter.");
+  }
+  if (!isFiniteNumber(args.templateWidthMm) || args.templateWidthMm <= 0) {
+    warnings.push("Missing template width.");
+  }
+  if (!args.rotary.preset) {
+    warnings.push("No rotary preset selected.");
+  }
+
   const recommendedObjectDiameterMm = getRecommendedRotaryDiameter({
     shapeType,
     outsideDiameterMm,
     topDiameterMm,
     bottomDiameterMm,
   });
-  const recommendedCircumferenceMm = toRounded2(
-    Math.PI * recommendedObjectDiameterMm
-  );
-  const note =
-    shapeType === "tapered"
-      ? "For tapered objects, use largest diameter."
-      : "For straight objects, use outside diameter.";
+  if (!isFiniteNumber(recommendedObjectDiameterMm)) {
+    warnings.push("Could not determine recommended object diameter.");
+  }
 
-  return {
+  const recommendedCircumferenceMm = getRecommendedCircumference({
+    templateWidthMm: args.templateWidthMm,
+    recommendedDiameterMm: recommendedObjectDiameterMm,
+  });
+  if (!isFiniteNumber(recommendedCircumferenceMm)) {
+    warnings.push("Missing template width; circumference fallback unavailable.");
+  } else if (!isFiniteNumber(args.templateWidthMm) || args.templateWidthMm <= 0) {
+    warnings.push("Using diameter-based circumference fallback.");
+  }
+
+  const exportOrigin = getLightBurnExportOrigin({
+    templateWidthMm: args.templateWidthMm,
+    preset: args.rotary.preset,
+    anchorMode: args.rotary.anchorMode,
+    placementProfile: args.rotary.placementProfile,
+  });
+  if (!exportOrigin) {
+    warnings.push("Missing rotary anchor values.");
+  }
+
+  const notes: string[] = [];
+  if (shapeType === "tapered") {
+    notes.push("For tapered objects, use the largest diameter in LightBurn.");
+  }
+  notes.push(...warnings);
+
+  const sidecar: Lt316LightBurnSetupSidecar = {
     product: {
+      profileId: args.bedConfig.tumblerProfileId ?? null,
       shapeType,
-      diameterMm: toRounded2(outsideDiameterMm),
-      topDiameterMm: toRounded2(topDiameterMm),
-      bottomDiameterMm: toRounded2(bottomDiameterMm),
-      overallHeightMm: toRounded2(
-        args.bedConfig.tumblerOverallHeightMm ?? args.bedConfig.height
-      ),
-      usableHeightMm: toRounded2(
-        args.bedConfig.tumblerUsableHeightMm ?? args.bedConfig.height
-      ),
+      outsideDiameterMm: isFiniteNumber(outsideDiameterMm)
+        ? toRounded2(outsideDiameterMm)
+        : undefined,
+      topDiameterMm: isFiniteNumber(topDiameterMm) ? toRounded2(topDiameterMm) : undefined,
+      bottomDiameterMm: isFiniteNumber(bottomDiameterMm)
+        ? toRounded2(bottomDiameterMm)
+        : undefined,
+      overallHeightMm: isFiniteNumber(overallHeightMm) ? toRounded2(overallHeightMm) : undefined,
+      usableHeightMm: isFiniteNumber(usableHeightMm) ? toRounded2(usableHeightMm) : undefined,
+      templateWidthMm: toRounded2(args.templateWidthMm),
+      templateHeightMm: toRounded2(args.templateHeightMm),
     },
     rotary: {
-      mode: args.artworkPayload.rotary.chuckOrRoller ?? "roller",
-      recommendedObjectDiameterMm,
-      recommendedCircumferenceMm,
-      topAnchorYmm: toRounded2(args.artworkPayload.rotary.exportOriginYmm),
-      exportOriginXmm: toRounded2(args.artworkPayload.rotary.exportOriginXmm),
-      exportOriginYmm: toRounded2(args.artworkPayload.rotary.exportOriginYmm),
-      note,
+      presetId: args.rotary.preset?.id ?? null,
+      presetName: args.rotary.preset?.name ?? null,
+      mode: args.rotary.preset?.chuckOrRoller ?? "unknown",
+      rotaryCenterXmm: args.rotary.preset
+        ? toRounded2(args.rotary.preset.rotaryCenterXmm)
+        : undefined,
+      rotaryTopYmm: args.rotary.preset ? toRounded2(args.rotary.preset.rotaryTopYmm) : undefined,
+      anchorMode: args.rotary.anchorMode,
     },
-    export: {
-      artworkWidthMm: toRounded2(args.artworkPayload.templateWidthMm),
-      artworkHeightMm: toRounded2(args.artworkPayload.templateHeightMm),
+    lightburn: {
+      recommendedObjectDiameterMm: recommendedObjectDiameterMm,
+      recommendedCircumferenceMm: recommendedCircumferenceMm,
+      exportOriginXmm: exportOrigin ? toRounded2(exportOrigin.xMm) : undefined,
+      exportOriginYmm: exportOrigin ? toRounded2(exportOrigin.yMm) : undefined,
+      notes,
+    },
+    meta: {
+      createdAt: new Date().toISOString(),
+      source: "lt316",
     },
   };
+
+  return { sidecar, warnings };
 }
 
 export function buildLightBurnSetupSummary(
-  sidecar: Lt316LightBurnSetupSidecar,
-  topAnchorMode: TopAnchorMode
+  sidecar: Lt316LightBurnSetupSidecar
 ): string {
+  const objectDiameter =
+    sidecar.lightburn.recommendedObjectDiameterMm !== undefined
+      ? `${sidecar.lightburn.recommendedObjectDiameterMm.toFixed(2)} mm`
+      : "n/a";
+  const circumference =
+    sidecar.lightburn.recommendedCircumferenceMm !== undefined
+      ? `${sidecar.lightburn.recommendedCircumferenceMm.toFixed(2)} mm`
+      : "n/a";
+  const originX =
+    sidecar.lightburn.exportOriginXmm !== undefined
+      ? `${sidecar.lightburn.exportOriginXmm.toFixed(2)} mm`
+      : "n/a";
+  const originY =
+    sidecar.lightburn.exportOriginYmm !== undefined
+      ? `${sidecar.lightburn.exportOriginYmm.toFixed(2)} mm`
+      : "n/a";
+
   return [
-    `Rotary type: ${sidecar.rotary.mode}`,
-    `Object diameter: ${sidecar.rotary.recommendedObjectDiameterMm.toFixed(2)} mm`,
-    `Wrap width: ${sidecar.rotary.recommendedCircumferenceMm.toFixed(2)} mm`,
-    `Origin X: ${sidecar.rotary.exportOriginXmm.toFixed(2)} mm`,
-    `Origin Y: ${sidecar.rotary.exportOriginYmm.toFixed(2)} mm`,
-    `Top anchor: ${topAnchorMode}`,
+    `Rotary preset: ${sidecar.rotary.presetName ?? "none"}`,
+    `Rotary mode: ${sidecar.rotary.mode}`,
+    `Object diameter: ${objectDiameter}`,
+    `Wrap width: ${circumference}`,
+    `Origin X: ${originX}`,
+    `Origin Y: ${originY}`,
+    `Anchor mode: ${sidecar.rotary.anchorMode}`,
   ].join(" | ");
 }
 
 export function buildLightBurnExportArtifacts(args: {
-  includeLightBurnRotarySetup: boolean;
+  includeLightBurnSetup: boolean;
   bedConfig: BedConfig;
   workspaceMode: WorkspaceMode;
   templateWidthMm: number;
@@ -294,22 +422,40 @@ export function buildLightBurnExportArtifacts(args: {
     rotary: args.rotary,
   });
 
-  if (!args.includeLightBurnRotarySetup) {
+  if (!args.includeLightBurnSetup) {
     return {
       artworkPayload,
       sidecar: null,
       setupSummary: null,
+      setupWarnings: [],
     };
   }
 
-  const sidecar = buildLt316Sidecar({
+  const { sidecar, warnings } = buildLt316Sidecar({
     bedConfig: args.bedConfig,
-    artworkPayload,
+    workspaceMode: args.workspaceMode,
+    templateWidthMm: args.templateWidthMm,
+    templateHeightMm: args.templateHeightMm,
+    rotary: {
+      preset: args.rotary.preset,
+      anchorMode: args.rotary.anchorMode,
+      placementProfile: args.rotary.placementProfile,
+    },
   });
+
+  if (!sidecar) {
+    return {
+      artworkPayload,
+      sidecar: null,
+      setupSummary: null,
+      setupWarnings: warnings,
+    };
+  }
 
   return {
     artworkPayload,
     sidecar,
-    setupSummary: buildLightBurnSetupSummary(sidecar, args.rotary.anchorMode),
+    setupSummary: buildLightBurnSetupSummary(sidecar),
+    setupWarnings: warnings,
   };
 }

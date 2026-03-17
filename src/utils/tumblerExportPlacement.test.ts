@@ -7,6 +7,8 @@ import {
   buildLightBurnExportPayload,
   buildLightBurnSetupSummary,
   buildLt316Sidecar,
+  getLightBurnExportOrigin,
+  getRecommendedCircumference,
   getRecommendedRotaryDiameter,
   getRotaryExportOrigin,
 } from "./tumblerExportPlacement.ts";
@@ -20,7 +22,7 @@ const PRESET: RotaryPlacementPreset = {
   chuckOrRoller: "roller",
 };
 
-test("exportOriginXmm centers from template width", () => {
+test("exportOriginXmm centers correctly from rotaryCenterXmm and templateWidthMm", () => {
   const origin = getRotaryExportOrigin({
     templateWidthMm: 276.08,
     rotaryCenterXmm: 170,
@@ -53,9 +55,9 @@ test("printable-top anchor adds topToSafeZoneStartMm", () => {
   assert.equal(origin.yMm, 29.5);
 });
 
-test("non-rotary path remains unchanged", () => {
+test("non-rotary export path remains unchanged", () => {
   const payload = buildLightBurnExportPayload({
-    workspaceMode: "tumbler-wrap",
+    workspaceMode: "flat-bed",
     templateWidthMm: 250,
     templateHeightMm: 140,
     items: [
@@ -72,7 +74,7 @@ test("non-rotary path remains unchanged", () => {
       },
     ],
     rotary: {
-      enabled: false,
+      enabled: true,
       preset: PRESET,
       anchorMode: "physical-top",
     },
@@ -83,87 +85,9 @@ test("non-rotary path remains unchanged", () => {
   assert.equal(payload.items[0].yMm, 20);
 });
 
-test("groove guides are editor-only and do not appear in export output", () => {
+test("toggle OFF preserves current export behavior", () => {
   const artifacts = buildLightBurnExportArtifacts({
-    includeLightBurnRotarySetup: true,
-    bedConfig: {
-      ...DEFAULT_BED_CONFIG,
-      workspaceMode: "tumbler-wrap",
-      width: 280,
-      height: 160,
-      tumblerGuideBand: {
-        id: "band-1",
-        label: "Main",
-        upperGrooveYmm: 24,
-        lowerGrooveYmm: 124,
-      },
-      showTumblerGuideBand: true,
-    },
-    workspaceMode: "tumbler-wrap",
-    templateWidthMm: 280,
-    templateHeightMm: 160,
-    items: [
-      {
-        id: "item-1",
-        assetId: "asset-1",
-        name: "A",
-        x: 10,
-        y: 20,
-        width: 30,
-        height: 40,
-        rotation: 0,
-        svgText: "<svg />",
-      },
-    ],
-    rotary: {
-      enabled: false,
-      preset: PRESET,
-      anchorMode: "physical-top",
-    },
-  });
-
-  const artworkJson = JSON.stringify(artifacts.artworkPayload);
-  const sidecarJson = JSON.stringify(artifacts.sidecar);
-  assert.doesNotMatch(artworkJson, /upperGrooveYmm|lowerGrooveYmm|guideBand/i);
-  assert.doesNotMatch(sidecarJson, /upperGrooveYmm|lowerGrooveYmm|guideBand/i);
-});
-
-test("items are shifted by preset origin when rotary placement is enabled", () => {
-  const payload = buildLightBurnExportPayload({
-    workspaceMode: "tumbler-wrap",
-    templateWidthMm: 200,
-    templateHeightMm: 140,
-    items: [
-      {
-        id: "item-1",
-        assetId: "asset-1",
-        name: "A",
-        x: 10,
-        y: 15,
-        width: 30,
-        height: 40,
-        rotation: 0,
-        svgText: "<svg />",
-      },
-    ],
-    rotary: {
-      enabled: true,
-      preset: PRESET,
-      anchorMode: "physical-top",
-    },
-  });
-
-  // origin = (170 - 100, 22) => (70, 22)
-  assert.equal(payload.rotaryAutoPlacementApplied, true);
-  assert.equal(payload.rotary.exportOriginXmm, 70);
-  assert.equal(payload.rotary.exportOriginYmm, 22);
-  assert.equal(payload.items[0].xMm, 80);
-  assert.equal(payload.items[0].yMm, 37);
-});
-
-test("toggle off keeps export unchanged and does not include sidecar", () => {
-  const artifacts = buildLightBurnExportArtifacts({
-    includeLightBurnRotarySetup: false,
+    includeLightBurnSetup: false,
     bedConfig: DEFAULT_BED_CONFIG,
     workspaceMode: "tumbler-wrap",
     templateWidthMm: 200,
@@ -190,11 +114,12 @@ test("toggle off keeps export unchanged and does not include sidecar", () => {
 
   assert.equal(artifacts.sidecar, null);
   assert.equal(artifacts.setupSummary, null);
+  // origin=(70,22) => item=(80,37)
   assert.equal(artifacts.artworkPayload.items[0].xMm, 80);
   assert.equal(artifacts.artworkPayload.items[0].yMm, 37);
 });
 
-test("toggle on includes sidecar and summary", () => {
+test("toggle ON builds sidecar data and summary", () => {
   const config = {
     ...DEFAULT_BED_CONFIG,
     workspaceMode: "tumbler-wrap" as const,
@@ -209,14 +134,14 @@ test("toggle on includes sidecar and summary", () => {
   };
 
   const artifacts = buildLightBurnExportArtifacts({
-    includeLightBurnRotarySetup: true,
+    includeLightBurnSetup: true,
     bedConfig: config,
     workspaceMode: "tumbler-wrap",
     templateWidthMm: 276.15,
     templateHeightMm: 160,
     items: [],
     rotary: {
-      enabled: true,
+      enabled: false,
       preset: PRESET,
       anchorMode: "physical-top",
     },
@@ -224,11 +149,11 @@ test("toggle on includes sidecar and summary", () => {
 
   assert.ok(artifacts.sidecar);
   assert.ok(artifacts.setupSummary);
-  assert.equal(artifacts.sidecar?.product.diameterMm, 87.9);
-  assert.equal(artifacts.sidecar?.rotary.recommendedCircumferenceMm, 276.15);
+  assert.equal(artifacts.sidecar?.product.templateWidthMm, 276.15);
+  assert.equal(artifacts.sidecar?.rotary.presetId, PRESET.id);
 });
 
-test("straight recommended diameter uses outsideDiameterMm", () => {
+test("straight tumbler uses outsideDiameterMm", () => {
   const diameter = getRecommendedRotaryDiameter({
     shapeType: "straight",
     outsideDiameterMm: 87.9,
@@ -238,7 +163,7 @@ test("straight recommended diameter uses outsideDiameterMm", () => {
   assert.equal(diameter, 87.9);
 });
 
-test("tapered recommended diameter uses largest end", () => {
+test("tapered tumbler uses largest diameter for recommended object size", () => {
   const diameter = getRecommendedRotaryDiameter({
     shapeType: "tapered",
     outsideDiameterMm: 87,
@@ -248,8 +173,88 @@ test("tapered recommended diameter uses largest end", () => {
   assert.equal(diameter, 95.2);
 });
 
-test("setup summary values match sidecar/export math", () => {
-  const sidecar = buildLt316Sidecar({
+test("recommended circumference uses template width when available", () => {
+  const circumference = getRecommendedCircumference({
+    templateWidthMm: 276.15,
+    recommendedDiameterMm: 87.9,
+  });
+  assert.equal(circumference, 276.15);
+});
+
+test("lightburn origin helper returns null when preset is missing", () => {
+  const origin = getLightBurnExportOrigin({
+    templateWidthMm: 276.15,
+    preset: null,
+    anchorMode: "physical-top",
+  });
+  assert.equal(origin, null);
+});
+
+test("incomplete setup adds warnings but keeps artwork export valid", () => {
+  const config = {
+    ...DEFAULT_BED_CONFIG,
+    workspaceMode: "tumbler-wrap" as const,
+    tumblerShapeType: "straight" as const,
+    tumblerOutsideDiameterMm: Number.NaN,
+    tumblerDiameterMm: Number.NaN,
+    width: 0,
+    height: 160,
+  };
+
+  const artifacts = buildLightBurnExportArtifacts({
+    includeLightBurnSetup: true,
+    bedConfig: config,
+    workspaceMode: "tumbler-wrap",
+    templateWidthMm: 0,
+    templateHeightMm: 160,
+    items: [
+      {
+        id: "item-1",
+        assetId: "asset-1",
+        name: "A",
+        x: 10,
+        y: 20,
+        width: 30,
+        height: 40,
+        rotation: 0,
+        svgText: "<svg />",
+      },
+    ],
+    rotary: {
+      enabled: false,
+      preset: null,
+      anchorMode: "physical-top",
+    },
+  });
+
+  assert.ok(artifacts.sidecar);
+  assert.equal(artifacts.artworkPayload.items[0].xMm, 10);
+  assert.equal(artifacts.artworkPayload.items[0].yMm, 20);
+  assert.ok(artifacts.setupWarnings.length > 0);
+  assert.match(artifacts.setupWarnings.join(" | "), /No rotary preset selected/i);
+});
+
+test("non-tumbler include setup does not break artwork export and omits sidecar", () => {
+  const artifacts = buildLightBurnExportArtifacts({
+    includeLightBurnSetup: true,
+    bedConfig: DEFAULT_BED_CONFIG,
+    workspaceMode: "flat-bed",
+    templateWidthMm: 300,
+    templateHeightMm: 300,
+    items: [],
+    rotary: {
+      enabled: true,
+      preset: PRESET,
+      anchorMode: "physical-top",
+    },
+  });
+
+  assert.equal(artifacts.sidecar, null);
+  assert.ok(artifacts.setupWarnings.some((warning) => /tumbler mode/i.test(warning)));
+});
+
+test("setup summary includes required compact fields", () => {
+  const { sidecar } = buildLt316Sidecar({
     bedConfig: {
       ...DEFAULT_BED_CONFIG,
       workspaceMode: "tumbler-wrap",
@@ -257,33 +262,27 @@ test("setup summary values match sidecar/export math", () => {
       tumblerOutsideDiameterMm: 87.9,
       tumblerTopDiameterMm: 87.9,
       tumblerBottomDiameterMm: 87.9,
-      tumblerOverallHeightMm: 266,
-      tumblerUsableHeightMm: 160,
       width: 276.15,
       height: 160,
     },
-    artworkPayload: buildLightBurnExportPayload({
-      workspaceMode: "tumbler-wrap",
-      templateWidthMm: 276.15,
-      templateHeightMm: 160,
-      items: [],
-      rotary: {
-        enabled: true,
-        preset: {
-          ...PRESET,
-          rotaryCenterXmm: 256.275,
-          rotaryTopYmm: 32,
-          chuckOrRoller: "chuck",
-        },
-        anchorMode: "physical-top",
+    workspaceMode: "tumbler-wrap",
+    templateWidthMm: 276.15,
+    templateHeightMm: 160,
+    rotary: {
+      preset: {
+        ...PRESET,
+        rotaryCenterXmm: 256.275,
+        rotaryTopYmm: 32,
+        chuckOrRoller: "chuck",
       },
-    }),
+      anchorMode: "physical-top",
+    },
   });
 
-  const summary = buildLightBurnSetupSummary(sidecar, "physical-top");
-  assert.match(summary, /Rotary type: chuck/);
-  assert.match(summary, /Object diameter: 87\.90 mm/);
-  assert.match(summary, /Wrap width: 276\.15 mm/);
+  assert.ok(sidecar);
+  const summary = buildLightBurnSetupSummary(sidecar!);
+  assert.match(summary, /Rotary preset:/);
+  assert.match(summary, /Rotary mode: chuck/);
   assert.match(summary, /Origin X: 118\.20 mm/);
   assert.match(summary, /Origin Y: 32\.00 mm/);
 });

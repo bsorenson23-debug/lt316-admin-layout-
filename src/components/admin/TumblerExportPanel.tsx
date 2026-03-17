@@ -3,13 +3,14 @@
 import React from "react";
 import type { BedConfig, PlacedItem } from "@/types/admin";
 import type {
+  RotaryPlacementPreset,
   TopAnchorMode,
   TumblerPlacementProfile,
 } from "@/types/export";
 import {
   DEFAULT_ROTARY_PLACEMENT_PRESETS,
-  getRotaryPlacementPresetById,
 } from "@/data/rotaryPlacementPresets";
+import { getRotaryPresets } from "@/utils/adminCalibrationState";
 import {
   buildLightBurnExportArtifacts,
   getRotaryExportOrigin,
@@ -71,16 +72,22 @@ function downloadJson(payload: unknown, filename: string): void {
 export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
   const [rotaryAutoPlacementEnabled, setRotaryAutoPlacementEnabled] =
     React.useState(false);
-  const [includeLightBurnRotarySetup, setIncludeLightBurnRotarySetup] =
-    React.useState(false);
+  const [includeLightBurnSetup, setIncludeLightBurnSetup] = React.useState(false);
+  const [availablePresets, setAvailablePresets] = React.useState<RotaryPlacementPreset[]>(
+    DEFAULT_ROTARY_PLACEMENT_PRESETS
+  );
   const [selectedPresetId, setSelectedPresetId] = React.useState("");
   const [anchorMode, setAnchorMode] =
     React.useState<TopAnchorMode>("physical-top");
   const [manualTopOffsetDraft, setManualTopOffsetDraft] = React.useState("");
 
+  React.useEffect(() => {
+    setAvailablePresets(getRotaryPresets());
+  }, []);
+
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
   const selectedPreset = selectedPresetId
-    ? getRotaryPlacementPresetById(selectedPresetId)
+    ? availablePresets.find((preset) => preset.id === selectedPresetId) ?? null
     : null;
   const manualTopOffsetMm = parseNullableNumber(manualTopOffsetDraft);
   const placementProfile = buildPlacementProfile(
@@ -101,7 +108,7 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
       : { xMm: 0, yMm: 0 };
 
   const exportArtifacts = buildLightBurnExportArtifacts({
-    includeLightBurnRotarySetup,
+    includeLightBurnSetup,
     bedConfig,
     workspaceMode: bedConfig.workspaceMode,
     templateWidthMm: bedConfig.width,
@@ -115,7 +122,11 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
     },
   });
 
-  const warningMessage = exportArtifacts.artworkPayload.warnings[0] ?? null;
+  const fromArtworkWarnings = exportArtifacts.artworkPayload.warnings;
+  const fromSetupWarnings = includeLightBurnSetup ? exportArtifacts.setupWarnings : [];
+  const allWarnings = Array.from(
+    new Set([...fromArtworkWarnings, ...fromSetupWarnings])
+  );
 
   return (
     <section className={styles.panel}>
@@ -140,13 +151,14 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
         </div>
 
         <div className={styles.row}>
-          <span className={styles.label}>Include LightBurn rotary setup</span>
+          <span className={styles.label}>Include LightBurn setup</span>
           <label className={styles.toggle}>
             <input
               type="checkbox"
-              checked={includeLightBurnRotarySetup}
+              checked={includeLightBurnSetup}
+              disabled={!isTumblerMode}
               onChange={(e) =>
-                setIncludeLightBurnRotarySetup(e.target.checked)
+                setIncludeLightBurnSetup(e.target.checked)
               }
             />
             <span className={styles.toggleTrack} />
@@ -162,7 +174,7 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
             disabled={!isTumblerMode}
           >
             <option value="">None</option>
-            {DEFAULT_ROTARY_PLACEMENT_PRESETS.map((preset) => (
+            {availablePresets.map((preset) => (
               <option key={preset.id} value={preset.id}>
                 {preset.name}
               </option>
@@ -207,31 +219,53 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
           <span>{toRounded(previewOrigin.yMm)} mm</span>
         </div>
 
-        {warningMessage && <div className={styles.warning}>{warningMessage}</div>}
+        {allWarnings.map((warning) => (
+          <div key={warning} className={styles.warning}>
+            {warning}
+          </div>
+        ))}
         {!isTumblerMode && (
           <div className={styles.hint}>
             Rotary auto placement applies only in tumbler mode. Flat-bed export remains unchanged.
           </div>
         )}
 
-        {includeLightBurnRotarySetup && exportArtifacts.sidecar && (
+        {includeLightBurnSetup && exportArtifacts.sidecar && (
           <div className={styles.previewGrid}>
-            <span>Rotary type</span>
+            <span>Rotary preset</span>
+            <span>{exportArtifacts.sidecar.rotary.presetName ?? "none"}</span>
+            <span>Rotary mode</span>
             <span>{exportArtifacts.sidecar.rotary.mode}</span>
             <span>Object diameter</span>
-            <span>{toRounded(exportArtifacts.sidecar.rotary.recommendedObjectDiameterMm)} mm</span>
+            <span>
+              {exportArtifacts.sidecar.lightburn.recommendedObjectDiameterMm !== undefined
+                ? `${toRounded(exportArtifacts.sidecar.lightburn.recommendedObjectDiameterMm)} mm`
+                : "n/a"}
+            </span>
             <span>Wrap width</span>
-            <span>{toRounded(exportArtifacts.sidecar.rotary.recommendedCircumferenceMm)} mm</span>
+            <span>
+              {exportArtifacts.sidecar.lightburn.recommendedCircumferenceMm !== undefined
+                ? `${toRounded(exportArtifacts.sidecar.lightburn.recommendedCircumferenceMm)} mm`
+                : "n/a"}
+            </span>
             <span>Export origin X</span>
-            <span>{toRounded(exportArtifacts.sidecar.rotary.exportOriginXmm)} mm</span>
+            <span>
+              {exportArtifacts.sidecar.lightburn.exportOriginXmm !== undefined
+                ? `${toRounded(exportArtifacts.sidecar.lightburn.exportOriginXmm)} mm`
+                : "n/a"}
+            </span>
             <span>Export origin Y</span>
-            <span>{toRounded(exportArtifacts.sidecar.rotary.exportOriginYmm)} mm</span>
+            <span>
+              {exportArtifacts.sidecar.lightburn.exportOriginYmm !== undefined
+                ? `${toRounded(exportArtifacts.sidecar.lightburn.exportOriginYmm)} mm`
+                : "n/a"}
+            </span>
             <span>Top anchor mode</span>
-            <span>{anchorMode}</span>
+            <span>{exportArtifacts.sidecar.rotary.anchorMode}</span>
           </div>
         )}
 
-        {includeLightBurnRotarySetup && exportArtifacts.setupSummary && (
+        {includeLightBurnSetup && exportArtifacts.setupSummary && (
           <div className={styles.summary}>{exportArtifacts.setupSummary}</div>
         )}
 
@@ -244,7 +278,7 @@ export function TumblerExportPanel({ bedConfig, placedItems }: Props) {
               `${jobName}.json`
             );
 
-            if (includeLightBurnRotarySetup && exportArtifacts.sidecar) {
+            if (includeLightBurnSetup && exportArtifacts.sidecar) {
               downloadJson(
                 exportArtifacts.sidecar,
                 `${jobName}.lt316.json`

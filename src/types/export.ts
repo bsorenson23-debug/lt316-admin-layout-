@@ -65,25 +65,34 @@ export interface LightBurnExportPayload {
 
 export interface Lt316LightBurnSetupSidecar {
   product: {
+    profileId?: string | null;
     shapeType: "straight" | "tapered" | "unknown";
-    diameterMm: number;
-    topDiameterMm: number;
-    bottomDiameterMm: number;
-    overallHeightMm: number;
-    usableHeightMm: number;
+    outsideDiameterMm?: number;
+    topDiameterMm?: number;
+    bottomDiameterMm?: number;
+    overallHeightMm?: number;
+    usableHeightMm?: number;
+    templateWidthMm: number;
+    templateHeightMm: number;
   };
   rotary: {
-    mode: RotaryDriveType;
-    recommendedObjectDiameterMm: number;
-    recommendedCircumferenceMm: number;
-    topAnchorYmm: number;
-    exportOriginXmm: number;
-    exportOriginYmm: number;
-    note: string;
+    presetId?: string | null;
+    presetName?: string | null;
+    mode: RotaryDriveType | "unknown";
+    rotaryCenterXmm?: number;
+    rotaryTopYmm?: number;
+    anchorMode: TopAnchorMode;
   };
-  export: {
-    artworkWidthMm: number;
-    artworkHeightMm: number;
+  lightburn: {
+    recommendedObjectDiameterMm?: number;
+    recommendedCircumferenceMm?: number;
+    exportOriginXmm?: number;
+    exportOriginYmm?: number;
+    notes: string[];
+  };
+  meta: {
+    createdAt: string;
+    source: "lt316";
   };
 }
 
@@ -91,4 +100,5 @@ export interface LightBurnExportArtifacts {
   artworkPayload: LightBurnExportPayload;
   sidecar: Lt316LightBurnSetupSidecar | null;
   setupSummary: string | null;
+  setupWarnings: string[];
 }
