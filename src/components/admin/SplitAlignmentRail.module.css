@@ -1,0 +1,14 @@
+.rail {
+  width: 48px;
+  min-width: 48px;
+  flex-shrink: 0;
+  background: #111;
+  border-left: 1px solid #1e1e1e;
+  border-right: 1px solid #1e1e1e;
+  display: flex;
+  align-items: flex-start;
+  overflow: hidden;
+  position: relative;
+  /* Let SVG overflow so labels near the edge stay readable */
+  overflow: visible;
+}

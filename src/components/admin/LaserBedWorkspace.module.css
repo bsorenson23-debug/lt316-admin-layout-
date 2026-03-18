@@ -14,6 +14,7 @@
   border-bottom: 1px solid #2a2a2a;
   flex-shrink: 0;
   flex-wrap: wrap;
+  overflow: visible;
 }
 
 .toolbarTitle {
@@ -29,6 +30,46 @@
   font-size: 11px;
   color: #555;
   font-family: monospace;
+}
+
+/* ---- View mode toggle (Wrap / Two-Sided) ---- */
+.viewToggle {
+  display: inline-flex;
+  border: 1px solid #2e2e2e;
+  border-radius: 5px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.viewToggleBtn {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 3px 10px;
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+
+.viewToggleBtn:not(:last-child) {
+  border-right: 1px solid #2e2e2e;
+}
+
+.viewToggleBtn:hover {
+  background: #1e1e1e;
+  color: #999;
+}
+
+.viewToggleBtnActive {
+  background: #1c2e24;
+  color: #7ecfa8;
+}
+
+.viewToggleBtnActive:hover {
+  background: #1c2e24;
+  color: #7ecfa8;
 }
 
 .activeTip {
@@ -56,4 +97,104 @@
   flex: 1;
   display: block;
   overflow: visible;
+}
+
+/* ---- Frame preview overlay ---- */
+.framePreviewLabel {
+  font-size: 9px;
+  font-family: monospace;
+  fill: #4ea8c8;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ---- Origin chip (toolbar) ---- */
+.originChip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid #5a3e28;
+  border-radius: 4px;
+  background: #1c1510;
+  cursor: default;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.originChipDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a54444;
+  flex-shrink: 0;
+}
+
+.originChipText {
+  font-size: 10px;
+  font-family: monospace;
+  color: #c49a6a;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* ---- Origin tooltip ---- */
+.originTooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  background: #1e1510;
+  border: 1px solid #5a3e28;
+  border-radius: 6px;
+  padding: 10px 12px;
+  width: 268px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.originTooltipTitle {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #e0c49a;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.originTooltipRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.originTooltipLabel {
+  font-size: 10px;
+  color: #777;
+  white-space: nowrap;
+  min-width: 96px;
+}
+
+.originTooltipValue {
+  font-size: 10px;
+  color: #d4a96a;
+  font-family: monospace;
+  background: #241a10;
+  border: 1px solid #4a3520;
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+
+.originTooltipHint {
+  font-size: 10px;
+  color: #999;
+  line-height: 1.5;
+  border-top: 1px solid #2e2218;
+  padding-top: 6px;
+  margin-top: 2px;
 }

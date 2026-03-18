@@ -75,6 +75,16 @@ export interface LightBurnExportItem {
   svgText: string;
 }
 
+export interface LightBurnExportCylinder {
+  /** Outside diameter to enter in LightBurn's rotary setup (mm) */
+  objectDiameterMm: number | null;
+  /** Circumference / split width = template width (mm) */
+  splitWidthMm: number;
+  /** Printable/usable height of the cylinder (mm) */
+  printableHeightMm: number;
+  shapeType: "straight" | "tapered" | "unknown";
+}
+
 export interface LightBurnExportPayload {
   kind: "lt316-lightburn-export";
   workspaceMode: WorkspaceMode;
@@ -82,6 +92,8 @@ export interface LightBurnExportPayload {
   templateHeightMm: number;
   generatedAt: string;
   rotaryAutoPlacementApplied: boolean;
+  /** Cylinder / tumbler dimensions for LightBurn rotary setup. Present in tumbler-wrap mode. */
+  cylinder: LightBurnExportCylinder | null;
   rotary: {
     enabled: boolean;
     presetId: string | null;

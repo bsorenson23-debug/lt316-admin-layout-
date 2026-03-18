@@ -45,6 +45,10 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
   const set = (patch: Partial<BedConfig>) =>
     onUpdateBedConfig(normalizeBedConfig({ ...bedConfig, ...patch }));
 
+  const [workspaceOpen, setWorkspaceOpen] = React.useState(true);
+  const [gridOpen, setGridOpen] = React.useState(false);
+  const [guidesOpen, setGuidesOpen] = React.useState(false);
+
   const handleNumber = (field: NumericConfigField, value: number) => {
     if (field === "tumblerDiameterMm") {
       const isTapered = bedConfig.tumblerShapeType === "tapered";
@@ -83,90 +87,85 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
       </div>
 
       <div className={styles.body}>
-        <FieldRow label="Workspace">
-          <select
-            className={styles.select}
-            value={bedConfig.workspaceMode}
-            onChange={(e) =>
-              set({ workspaceMode: e.target.value as BedConfig["workspaceMode"] })
-            }
-            aria-label="Workspace mode"
-          >
-            <option value="flat-bed">Flat Bed</option>
-            <option value="tumbler-wrap">Tumbler Wrap</option>
-          </select>
-        </FieldRow>
+        {/* ── Workspace ── */}
+        <CollapsibleSection
+          title="Workspace"
+          open={workspaceOpen}
+          onToggle={() => setWorkspaceOpen((o) => !o)}
+        >
+          <FieldRow label="Mode">
+            <select
+              className={styles.select}
+              value={bedConfig.workspaceMode}
+              onChange={(e) =>
+                set({ workspaceMode: e.target.value as BedConfig["workspaceMode"] })
+              }
+              aria-label="Workspace mode"
+            >
+              <option value="flat-bed">Flat Bed</option>
+              <option value="tumbler-wrap">Tumbler Wrap</option>
+            </select>
+          </FieldRow>
 
-        {isTumblerMode ? (
-          <>
-            <FieldRow label="Profile">
-              <select
-                className={styles.select}
-                value={bedConfig.tumblerProfileId ?? ""}
-                onChange={(e) => {
-                  const profileId = e.target.value || undefined;
-                  const profile = profileId ? getTumblerProfileById(profileId) : null;
-                  set({
-                    tumblerProfileId: profileId,
-                    tumblerGuideBand: profile?.guideBand,
-                    showTumblerGuideBand: profile?.guideBand
-                      ? true
-                      : bedConfig.showTumblerGuideBand,
-                  });
-                }}
-                aria-label="Tumbler profile"
-              >
-                <option value="">Custom / None</option>
-                {KNOWN_TUMBLER_PROFILES.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.label}
-                  </option>
-                ))}
-              </select>
-            </FieldRow>
+          {isTumblerMode ? (
+            <>
+              <FieldRow label="Profile">
+                <select
+                  className={styles.select}
+                  value={bedConfig.tumblerProfileId ?? ""}
+                  onChange={(e) => {
+                    const profileId = e.target.value || undefined;
+                    const profile = profileId ? getTumblerProfileById(profileId) : null;
+                    set({
+                      tumblerProfileId: profileId,
+                      tumblerGuideBand: profile?.guideBand,
+                      showTumblerGuideBand: profile?.guideBand
+                        ? true
+                        : bedConfig.showTumblerGuideBand,
+                    });
+                  }}
+                  aria-label="Tumbler profile"
+                >
+                  <option value="">Custom / None</option>
+                  {KNOWN_TUMBLER_PROFILES.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.label}
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
 
-            <FieldRow label="Diameter (mm)">
-              <DraftNumberInput
-                className={styles.numInput}
-                value={bedConfig.tumblerDiameterMm}
-                min={10}
-                max={300}
-                step={0.1}
-                onValueChange={(value) => handleNumber("tumblerDiameterMm", value)}
-                aria-label="Tumbler diameter in mm"
-              />
-            </FieldRow>
+              <FieldRow label="Diameter (mm)">
+                <DraftNumberInput
+                  className={styles.numInput}
+                  value={bedConfig.tumblerDiameterMm}
+                  min={10}
+                  max={300}
+                  step={0.1}
+                  onValueChange={(value) => handleNumber("tumblerDiameterMm", value)}
+                  aria-label="Tumbler diameter in mm"
+                />
+              </FieldRow>
 
-            <FieldRow label="Print Height (mm)">
-              <DraftNumberInput
-                className={styles.numInput}
-                value={bedConfig.tumblerPrintableHeightMm}
-                min={10}
-                max={500}
-                step={0.1}
-                onValueChange={(value) =>
-                  handleNumber("tumblerPrintableHeightMm", value)
-                }
-                aria-label="Tumbler printable height in mm"
-              />
-            </FieldRow>
+              <FieldRow label="Print Height (mm)">
+                <DraftNumberInput
+                  className={styles.numInput}
+                  value={bedConfig.tumblerPrintableHeightMm}
+                  min={10}
+                  max={500}
+                  step={0.1}
+                  onValueChange={(value) =>
+                    handleNumber("tumblerPrintableHeightMm", value)
+                  }
+                  aria-label="Tumbler printable height in mm"
+                />
+              </FieldRow>
 
-            <FieldRow label="Template W (mm)">
-              <span className={styles.readonlyValue}>{wrapWidthMm.toFixed(2)}</span>
-            </FieldRow>
+              <FieldRow label="Template W (mm)">
+                <span className={styles.readonlyValue}>{wrapWidthMm.toFixed(2)}</span>
+              </FieldRow>
 
-            {activeGuideBand && (
-              <>
-                <FieldRow label="Guide Upper">
-                  <span className={styles.readonlyValue}>
-                    {activeGuideBand.upperGrooveYmm.toFixed(1)} mm
-                  </span>
-                </FieldRow>
-                <FieldRow label="Guide Lower">
-                  <span className={styles.readonlyValue}>
-                    {activeGuideBand.lowerGrooveYmm.toFixed(1)} mm
-                  </span>
-                </FieldRow>
+              {activeGuideBand && (
                 <FieldRow label="Show Guides">
                   <label className={styles.toggle}>
                     <input
@@ -180,127 +179,147 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
                     <span className={styles.toggleTrack} />
                   </label>
                 </FieldRow>
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            <FieldRow label="Width (mm)">
-              <DraftNumberInput
-                className={styles.numInput}
-                value={bedConfig.flatWidth}
-                min={10}
-                max={2000}
-                step={10}
-                onValueChange={(value) => handleNumber("flatWidth", value)}
-                aria-label="Bed width in mm"
+              )}
+            </>
+          ) : (
+            <>
+              <FieldRow label="Width (mm)">
+                <DraftNumberInput
+                  className={styles.numInput}
+                  value={bedConfig.flatWidth}
+                  min={10}
+                  max={2000}
+                  step={10}
+                  onValueChange={(value) => handleNumber("flatWidth", value)}
+                  aria-label="Bed width in mm"
+                />
+              </FieldRow>
+
+              <FieldRow label="Height (mm)">
+                <DraftNumberInput
+                  className={styles.numInput}
+                  value={bedConfig.flatHeight}
+                  min={10}
+                  max={2000}
+                  step={10}
+                  onValueChange={(value) => handleNumber("flatHeight", value)}
+                  aria-label="Bed height in mm"
+                />
+              </FieldRow>
+            </>
+          )}
+        </CollapsibleSection>
+
+        {/* ── Grid & Snap ── */}
+        <CollapsibleSection
+          title="Grid & Snap"
+          open={gridOpen}
+          onToggle={() => setGridOpen((o) => !o)}
+        >
+          <FieldRow label="Grid (mm)">
+            <DraftNumberInput
+              className={styles.numInput}
+              value={bedConfig.gridSpacing}
+              min={1}
+              max={200}
+              step={1}
+              onValueChange={(value) => handleNumber("gridSpacing", value)}
+              aria-label="Grid spacing in mm"
+            />
+          </FieldRow>
+
+          <FieldRow label="Snap to Grid">
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={bedConfig.snapToGrid}
+                onChange={(e) => set({ snapToGrid: e.target.checked })}
+                aria-label="Snap dragged items to grid"
               />
-            </FieldRow>
+              <span className={styles.toggleTrack} />
+            </label>
+          </FieldRow>
+        </CollapsibleSection>
 
-            <FieldRow label="Height (mm)">
-              <DraftNumberInput
-                className={styles.numInput}
-                value={bedConfig.flatHeight}
-                min={10}
-                max={2000}
-                step={10}
-                onValueChange={(value) => handleNumber("flatHeight", value)}
-                aria-label="Bed height in mm"
+        {/* ── Visual Guides ── */}
+        <CollapsibleSection
+          title="Visual Guides"
+          open={guidesOpen}
+          onToggle={() => setGuidesOpen((o) => !o)}
+        >
+          <FieldRow label="Show Origin">
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={bedConfig.showOrigin}
+                onChange={(e) => set({ showOrigin: e.target.checked })}
+                aria-label="Show origin indicator"
               />
-            </FieldRow>
-          </>
-        )}
+              <span className={styles.toggleTrack} />
+            </label>
+          </FieldRow>
 
-        {/* Grid spacing */}
-        <FieldRow label="Grid (mm)">
-          <DraftNumberInput
-            className={styles.numInput}
-            value={bedConfig.gridSpacing}
-            min={1}
-            max={200}
-            step={1}
-            onValueChange={(value) => handleNumber("gridSpacing", value)}
-            aria-label="Grid spacing in mm"
-          />
-        </FieldRow>
+          <FieldRow label="Show Crosshair">
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={bedConfig.showCrosshair}
+                onChange={(e) => set({ showCrosshair: e.target.checked })}
+                aria-label="Show crosshair overlay"
+              />
+              <span className={styles.toggleTrack} />
+            </label>
+          </FieldRow>
 
-        {/* Snap to grid */}
-        <FieldRow label="Snap to Grid">
-          <label className={styles.toggle}>
-            <input
-              type="checkbox"
-              checked={bedConfig.snapToGrid}
-              onChange={(e) => set({ snapToGrid: e.target.checked })}
-              aria-label="Snap dragged items to grid"
-            />
-            <span className={styles.toggleTrack} />
-          </label>
-        </FieldRow>
-
-        {/* Show origin */}
-        <FieldRow label="Show Origin">
-          <label className={styles.toggle}>
-            <input
-              type="checkbox"
-              checked={bedConfig.showOrigin}
-              onChange={(e) => set({ showOrigin: e.target.checked })}
-              aria-label="Show origin indicator"
-            />
-            <span className={styles.toggleTrack} />
-          </label>
-        </FieldRow>
-
-        {/* Origin position */}
-        <FieldRow label="Origin">
-          <select
-            className={styles.select}
-            value={bedConfig.originPosition}
-            onChange={(e) =>
-              set({
-                originPosition: e.target.value as BedConfig["originPosition"],
-              })
-            }
-            aria-label="Origin position"
-          >
-            <option value="top-left">Top-left</option>
-            {/* TODO: bottom-left support requires flipping y in the workspace render */}
-            <option value="bottom-left" disabled>
-              Bottom-left (coming soon)
-            </option>
-          </select>
-        </FieldRow>
-
-        {/* Show crosshair */}
-        <FieldRow label="Show Crosshair">
-          <label className={styles.toggle}>
-            <input
-              type="checkbox"
-              checked={bedConfig.showCrosshair}
-              onChange={(e) => set({ showCrosshair: e.target.checked })}
-              aria-label="Show crosshair overlay"
-            />
-            <span className={styles.toggleTrack} />
-          </label>
-        </FieldRow>
-
-        {/* Crosshair mode */}
-        <FieldRow label="Crosshair Mode">
-          <select
-            className={styles.select}
-            value={bedConfig.crosshairMode}
-            onChange={(e) =>
-              set({
-                crosshairMode: e.target.value as BedConfig["crosshairMode"],
-              })
-            }
-            aria-label="Crosshair mode"
-          >
-            <option value="origin">Origin</option>
-            <option value="center">Center</option>
-            <option value="both">Both</option>
-          </select>
-        </FieldRow>
+          <FieldRow label="Crosshair Mode">
+            <select
+              className={styles.select}
+              value={bedConfig.crosshairMode}
+              onChange={(e) =>
+                set({
+                  crosshairMode: e.target.value as BedConfig["crosshairMode"],
+                })
+              }
+              aria-label="Crosshair mode"
+            >
+              <option value="origin">Origin</option>
+              <option value="center">Center</option>
+              <option value="both">Both</option>
+            </select>
+          </FieldRow>
+        </CollapsibleSection>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helper: collapsible section with header toggle
+// ---------------------------------------------------------------------------
+
+function CollapsibleSection({
+  title,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={styles.collapsibleSection}>
+      <button
+        className={styles.sectionToggle}
+        onClick={onToggle}
+        aria-expanded={open}
+        type="button"
+      >
+        <span className={styles.sectionToggleLabel}>{title}</span>
+        <span className={styles.sectionToggleChevron}>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && <div className={styles.sectionBody}>{children}</div>}
     </div>
   );
 }

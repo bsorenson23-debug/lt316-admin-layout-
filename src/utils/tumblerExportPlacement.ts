@@ -1,6 +1,7 @@
 import type { BedConfig, PlacedItem, WorkspaceMode } from "../types/admin";
 import type {
   LightBurnExportArtifacts,
+  LightBurnExportCylinder,
   LightBurnExportItem,
   LightBurnExportPayload,
   Lt316LightBurnSetupSidecar,
@@ -53,6 +54,37 @@ function inferOutsideDiameterMm(config: BedConfig): number | undefined {
 function inferTopDiameterMm(config: BedConfig, outsideDiameterMm?: number): number | undefined {
   if (isFiniteNumber(config.tumblerTopDiameterMm)) return config.tumblerTopDiameterMm;
   return outsideDiameterMm;
+}
+
+function buildCylinderBlock(
+  config: BedConfig,
+  templateWidthMm: number
+): LightBurnExportCylinder | null {
+  if (config.workspaceMode !== "tumbler-wrap") return null;
+
+  const shapeType = inferShapeType(config.tumblerShapeType);
+  const outsideDiameterMm = inferOutsideDiameterMm(config);
+  const topDiameterMm = inferTopDiameterMm(config, outsideDiameterMm);
+  const bottomDiameterMm = inferBottomDiameterMm(config, outsideDiameterMm);
+
+  const objectDiameterMm =
+    getRecommendedRotaryDiameter({
+      shapeType,
+      outsideDiameterMm,
+      topDiameterMm,
+      bottomDiameterMm,
+    }) ?? null;
+
+  const printableHeightMm = toRounded2(
+    inferUsableHeightMm(config) ?? inferOverallHeightMm(config) ?? config.height
+  );
+
+  return {
+    objectDiameterMm,
+    splitWidthMm: toRounded2(templateWidthMm),
+    printableHeightMm,
+    shapeType,
+  };
 }
 
 function inferBottomDiameterMm(
@@ -166,6 +198,7 @@ function toUnshiftedExportItems(
 }
 
 export function buildLightBurnExportPayload(args: {
+  bedConfig: BedConfig;
   workspaceMode: WorkspaceMode;
   templateWidthMm: number;
   templateHeightMm: number;
@@ -218,6 +251,7 @@ export function buildLightBurnExportPayload(args: {
     templateHeightMm: toRounded(args.templateHeightMm),
     generatedAt: new Date().toISOString(),
     rotaryAutoPlacementApplied: shouldApplyRotary,
+    cylinder: buildCylinderBlock(args.bedConfig, args.templateWidthMm),
     rotary: {
       enabled: args.rotary.enabled,
       presetId: args.rotary.preset?.id ?? null,
@@ -437,6 +471,7 @@ export function buildLightBurnExportArtifacts(args: {
   };
 }): LightBurnExportArtifacts {
   const artworkPayload = buildLightBurnExportPayload({
+    bedConfig: args.bedConfig,
     workspaceMode: args.workspaceMode,
     templateWidthMm: args.templateWidthMm,
     templateHeightMm: args.templateHeightMm,

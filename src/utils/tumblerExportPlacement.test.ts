@@ -57,6 +57,7 @@ test("printable-top anchor adds topToSafeZoneStartMm", () => {
 
 test("non-rotary export path remains unchanged", () => {
   const payload = buildLightBurnExportPayload({
+    bedConfig: DEFAULT_BED_CONFIG,
     workspaceMode: "flat-bed",
     templateWidthMm: 250,
     templateHeightMm: 140,

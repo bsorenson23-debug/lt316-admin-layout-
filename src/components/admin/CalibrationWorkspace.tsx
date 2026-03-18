@@ -66,11 +66,51 @@ import {
 import { CalibrationBedReference } from "./CalibrationBedReference";
 import { CalibrationModeSwitcher } from "./CalibrationModeSwitcher";
 import { CalibrationOverlayToggles } from "./CalibrationOverlayToggles";
+import { LensCalibrationPanel } from "./LensCalibrationPanel";
+import type { LensCalibrationState } from "./LensCalibrationPanel";
 import {
   RotaryMeasurementGuide,
   type RotaryMeasurementFocus,
 } from "./RotaryMeasurementGuide";
 import styles from "./CalibrationWorkspace.module.css";
+import type { CalibrationHole, LensCalibrationResult } from "@/utils/lensCalibration";
+import {
+  DEFAULT_STAGGERED_BED_PATTERN,
+  generateStaggeredBedHoles,
+} from "@/utils/staggeredBedPattern";
+
+const ROTARY_STEPS = [
+  { n: 1, label: "Select Preset" },
+  { n: 2, label: "Anchor to Bed" },
+  { n: 3, label: "Measure & Verify" },
+  { n: 4, label: "Export" },
+] as const;
+
+function RotaryStepGuide({ currentStep }: { currentStep: number }) {
+  return (
+    <div className={styles.stepGuide}>
+      {ROTARY_STEPS.map((step, idx) => (
+        <React.Fragment key={step.n}>
+          {idx > 0 && <span className={styles.stepConnector} />}
+          <div
+            className={
+              step.n < currentStep
+                ? styles.stepDone
+                : step.n === currentStep
+                  ? styles.stepActive
+                  : styles.stepPending
+            }
+          >
+            <span className={styles.stepNum}>
+              {step.n < currentStep ? "✓" : step.n}
+            </span>
+            <span className={styles.stepLabel}>{step.label}</span>
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
 
 const DEFAULT_TEMPLATE_WIDTH_MM = 276.15;
 const CALIBRATION_BED_WIDTH_MM = DEFAULT_BED_CONFIG.flatWidth;
@@ -179,6 +219,24 @@ export function CalibrationWorkspace() {
     buildEmptyRotaryDraft(bedCenterXmm)
   );
   const [lensProfileId, setLensProfileId] = React.useState<LensProfileId>(LENS_PROFILES[0].id);
+  const [lensSequenceHoles, setLensSequenceHoles] = React.useState<CalibrationHole[]>([]);
+  const [lensCalibration, setLensCalibration] = React.useState<LensCalibrationState>({
+    sequenceHoles: [],
+    result: null,
+    applied: false,
+  });
+
+  const handleLensSequenceChange = React.useCallback((holes: CalibrationHole[]) => {
+    setLensSequenceHoles(holes);
+    setLensCalibration((prev) => ({ ...prev, sequenceHoles: holes }));
+  }, []);
+
+  const handleLensResultApplied = React.useCallback(
+    (result: LensCalibrationResult | null) => {
+      setLensCalibration((prev) => ({ ...prev, result, applied: result !== null }));
+    },
+    []
+  );
 
   const [templateWidthMm, setTemplateWidthMm] = React.useState(String(DEFAULT_TEMPLATE_WIDTH_MM));
   const [templateHeightMm, setTemplateHeightMm] = React.useState("160");
@@ -277,6 +335,15 @@ export function CalibrationWorkspace() {
   const selectedPresetChoice = selectedPresetId ?? CUSTOM_ROTARY_PRESET_ID;
   const lensProfile = resolveLensProfile(lensProfileId);
 
+  const allBedHoles = React.useMemo(
+    () =>
+      generateStaggeredBedHoles(
+        { widthMm: DEFAULT_BED_CONFIG.flatWidth, heightMm: DEFAULT_BED_CONFIG.flatHeight },
+        DEFAULT_STAGGERED_BED_PATTERN
+      ),
+    []
+  );
+
   const manualRotaryCenterXmm = parseNumberInput(draft.rotaryCenterXmm);
   const manualRotaryTopYmm = parseNumberInput(draft.rotaryTopYmm);
   const referenceToAxisOffsetXmm = parseNumberInput(draft.referenceToAxisOffsetXmm);
@@ -371,7 +438,9 @@ export function CalibrationWorkspace() {
           baseVisual: rotaryBaseVisual,
           selection: rotaryAnchorSelection,
           rotaryAxisXmm: rotaryCenterXmm,
-          rotaryAxisYmm: rotaryAxisYmm,
+          // Default to Y=0 (top of bed) so the footprint is always visible,
+          // even before the user selects a bed hole or measures top-anchor Y.
+          rotaryAxisYmm: rotaryAxisYmm ?? 0,
           referenceToAxisOffsetXmm,
           referenceToAxisOffsetYmm,
         })
@@ -612,8 +681,17 @@ export function CalibrationWorkspace() {
 
   const renderLeftPanel = () => {
     if (activeMode === "rotary") {
+      const rotaryCurrentStep = !selectedPresetId
+        ? 1
+        : !rotaryAnchorSelection.primaryHole
+          ? 2
+          : rotaryWarnings.length > 0
+            ? 3
+            : 4;
+
       return (
         <>
+          <RotaryStepGuide currentStep={rotaryCurrentStep} />
           <section className={styles.card}>
             <div className={styles.sectionLabel}>Rotary Setup</div>
             <div className={styles.subSection}>
@@ -1135,9 +1213,9 @@ export function CalibrationWorkspace() {
       return (
         <>
           <section className={styles.card}>
-            <div className={styles.sectionLabel}>Lens Controls</div>
+            <div className={styles.sectionLabel}>Lens Profile</div>
             <label className={styles.field}>
-              <span>Lens Profile</span>
+              <span>Profile</span>
               <select
                 className={styles.selectInput}
                 value={lensProfileId}
@@ -1155,6 +1233,16 @@ export function CalibrationWorkspace() {
               onToggle={handleToggleOverlay}
               visibleKeys={visibleOverlayKeys}
               title="Lens Overlays"
+            />
+          </section>
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Lens Calibration</div>
+            <LensCalibrationPanel
+              allHoles={allBedHoles}
+              bedWidthMm={DEFAULT_BED_CONFIG.flatWidth}
+              bedHeightMm={DEFAULT_BED_CONFIG.flatHeight}
+              onSequenceChange={handleLensSequenceChange}
+              onResultApplied={handleLensResultApplied}
             />
           </section>
         </>
@@ -1371,6 +1459,7 @@ export function CalibrationWorkspace() {
             holeSelectionEnabled={activeMode === "rotary"}
             selectedAnchorHoles={rotaryAnchorSelection}
             rotaryBaseVisual={placedRotaryBaseVisual}
+            lensSequenceHoles={activeMode === "lens" ? lensSequenceHoles : undefined}
             onBedHoleSelect={activeMode === "rotary" ? handleAnchorHoleSelect : undefined}
           />
         </div>

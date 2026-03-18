@@ -1,0 +1,354 @@
+/* ---- Step indicator ---- */
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 2px;
+}
+
+.stepNode {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.stepBubble {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.stepText {
+  font-size: 8px;
+  letter-spacing: 0.03em;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  color: #555;
+}
+
+.stepConnectorLine {
+  flex-shrink: 0;
+  width: 12px;
+  height: 1px;
+  background: #2c2c2c;
+  margin-bottom: 13px;
+}
+
+/* step states */
+.pending .stepBubble { background: #222; border: 1px solid #333; color: #444; }
+.active  .stepBubble { background: #1e3f50; border: 1px solid #2e6a82; color: #7dcfea; }
+.done    .stepBubble { background: #1a3325; border: 1px solid #2f5e3e; color: #7ecfa8; }
+.active  .stepText   { color: #7dcfea; font-weight: 600; }
+.done    .stepText   { color: #4a8a68; }
+
+/* ---- Density picker ---- */
+.densityGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.densityOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid #2d2d2d;
+  border-radius: 6px;
+  background: #1c1c1c;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+}
+
+.densityOption:hover { background: #212121; }
+
+.densityOptionSelected {
+  border-color: #2e6a82;
+  background: #152530;
+}
+
+.densityOption input[type="radio"] { display: none; }
+
+.densityDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid #444;
+  flex-shrink: 0;
+}
+
+.densityOptionSelected .densityDot {
+  background: #4ea8c8;
+  border-color: #4ea8c8;
+}
+
+.densityLabel {
+  font-size: 11px;
+  color: #ccc;
+  flex: 1;
+}
+
+.densityMeta {
+  font-size: 10px;
+  color: #555;
+  font-family: monospace;
+}
+
+.densityOptionSelected .densityLabel { color: #9dd8ef; }
+.densityOptionSelected .densityMeta  { color: #4a8aaa; }
+
+/* ---- Sequence export ---- */
+.exportRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.exportBtn {
+  border: 1px solid #333;
+  background: #1e1e1e;
+  color: #9dd8ef;
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.exportBtn:hover { background: #252525; border-color: #4ea8c8; }
+.exportBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.exportMeta {
+  font-size: 10px;
+  color: #444;
+  font-family: monospace;
+}
+
+/* ---- Drop zone ---- */
+.dropZone {
+  border: 1.5px dashed #333;
+  border-radius: 7px;
+  background: #181818;
+  padding: 22px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropZone:hover,
+.dropZoneOver {
+  border-color: #4ea8c8;
+  background: #141e24;
+}
+
+.dropIcon {
+  font-size: 22px;
+  line-height: 1;
+  opacity: 0.5;
+}
+
+.dropLabel {
+  font-size: 11px;
+  color: #888;
+  text-align: center;
+}
+
+.dropHint {
+  font-size: 10px;
+  color: #555;
+}
+
+.fileLoaded {
+  border-color: #2f5e3e;
+  background: #131f18;
+}
+
+.fileName {
+  font-size: 11px;
+  color: #7ecfa8;
+  font-family: monospace;
+  text-align: center;
+  word-break: break-all;
+}
+
+/* ---- Progress bar ---- */
+.progressWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.progressLabel {
+  font-size: 10px;
+  color: #888;
+}
+
+.progressTrack {
+  height: 4px;
+  background: #252525;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: #4ea8c8;
+  border-radius: 2px;
+  transition: width 0.2s;
+}
+
+/* ---- Result card ---- */
+.resultCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.resultBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.qualityDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.qualityExcellent .qualityDot { background: #4d9e6d; }
+.qualityGood      .qualityDot { background: #6ab88a; }
+.qualityFair      .qualityDot { background: #c49a3a; }
+.qualityPoor      .qualityDot { background: #c45c5c; }
+
+.qualityExcellent { color: #8ecfa8; }
+.qualityGood      { color: #8ecfa8; }
+.qualityFair      { color: #e0c070; }
+.qualityPoor      { color: #f0a0a0; }
+
+.resultGrid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  font-size: 11px;
+}
+
+.resultGrid dt { color: #666; margin: 0; }
+.resultGrid dd { color: #ccc; margin: 0; font-family: monospace; text-align: right; }
+
+/* ---- Details disclosure ---- */
+.disclosure {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #555;
+}
+
+.disclosure:hover { color: #888; }
+
+/* ---- Hint text ---- */
+.hint {
+  font-size: 10px;
+  color: #666;
+  line-height: 1.4;
+}
+
+/* ---- Button row ---- */
+.btnRow {
+  display: flex;
+  gap: 7px;
+}
+
+.primaryBtn {
+  flex: 1;
+  border: 1px solid #2e6a82;
+  background: #1a3d4d;
+  color: #9dd8ef;
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.primaryBtn:hover { background: #214d60; }
+.primaryBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.secondaryBtn {
+  border: 1px solid #333;
+  background: #222;
+  color: #aaa;
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.secondaryBtn:hover { background: #2a2a2a; }
+
+.applyBtn {
+  flex: 1;
+  border: 1px solid #2f5e3e;
+  background: #1a3325;
+  color: #8ecfa8;
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.applyBtn:hover { background: #1f3d2e; }
+
+/* ---- Applied banner ---- */
+.appliedBanner {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border: 1px solid #2f5e3e;
+  border-radius: 6px;
+  background: #192820;
+  font-size: 11px;
+  color: #7ecfa8;
+}
+
+.appliedDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4d9e6d;
+  flex-shrink: 0;
+}
+
+.appliedRedo {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #4a7a5e;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.appliedRedo:hover { color: #7ecfa8; }

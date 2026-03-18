@@ -16,6 +16,7 @@ import {
 import type { RotaryHoleAnchorSelection } from "@/utils/rotaryAnchoring";
 import type { RotaryPlacedBaseVisual } from "@/utils/rotaryBaseVisual";
 import type { ExportPlacementPreview } from "@/utils/calibrationExportPreview";
+import type { CalibrationHole } from "@/utils/lensCalibration";
 import styles from "./CalibrationBedReference.module.css";
 
 interface Props {
@@ -40,6 +41,8 @@ interface Props {
   holeSelectionEnabled?: boolean;
   selectedAnchorHoles?: RotaryHoleAnchorSelection;
   rotaryBaseVisual?: RotaryPlacedBaseVisual | null;
+  /** Lens calibration: sequence holes to highlight with numbered badges */
+  lensSequenceHoles?: CalibrationHole[];
   onBedHoleSelect?: (args: {
     rowIndex: number;
     columnIndex: number;
@@ -69,6 +72,7 @@ export function CalibrationBedReference({
   holeSelectionEnabled = false,
   selectedAnchorHoles,
   rotaryBaseVisual,
+  lensSequenceHoles,
   onBedHoleSelect,
 }: Props) {
   const metrics = React.useMemo(
@@ -126,6 +130,16 @@ export function CalibrationBedReference({
               (mountFootprintMm.heightMm / Math.max(1, bedHeightMm)) * 100,
           }
         : null;
+
+  // Build a lookup key → sequence index for lens calibration highlighting
+  const lensHoleMap = React.useMemo(() => {
+    if (!lensSequenceHoles) return null;
+    const map = new Map<string, number>();
+    for (const h of lensSequenceHoles) {
+      map.set(`${h.rowIndex},${h.columnIndex}`, h.seqIndex);
+    }
+    return map;
+  }, [lensSequenceHoles]);
 
   const isPrimaryHole = React.useCallback(
     (hole: BedHole) =>
@@ -267,6 +281,47 @@ export function CalibrationBedReference({
               })}
             </div>
           ) : null}
+
+          {/* Lens calibration: numbered sequence badges */}
+          {lensHoleMap && lensHoleMap.size > 0 && (
+            <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+              {holes.map((hole) => {
+                const seqIdx = lensHoleMap.get(`${hole.rowIndex},${hole.columnIndex}`);
+                if (seqIdx === undefined) return null;
+                const mapped = mapBedMmToCanvasPercent(hole.xMm, hole.yMm, {
+                  widthMm: bedWidthMm,
+                  heightMm: bedHeightMm,
+                });
+                return (
+                  <div
+                    key={`lens-${hole.rowIndex}-${hole.columnIndex}`}
+                    style={{
+                      position: "absolute",
+                      left: `${mapped.xPercent}%`,
+                      top: `${mapped.yPercent}%`,
+                      transform: "translate(-50%, -50%)",
+                      width: 16,
+                      height: 16,
+                      borderRadius: "50%",
+                      background: "#1e3f50",
+                      border: "1.5px solid #4ea8c8",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 7,
+                      fontWeight: 700,
+                      color: "#9dd8ef",
+                      lineHeight: 1,
+                      fontFamily: "monospace",
+                    }}
+                    aria-label={`Lens calibration hole ${seqIdx + 1}`}
+                  >
+                    {seqIdx + 1}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {isCalibrationOverlayVisible(overlays, "showCenterline") ? (
             <>

@@ -1,3 +1,4 @@
+/* ── Panel shell ──────────────────────────────────────────────── */
 .panel {
   border-bottom: 1px solid #2a2a2a;
   background: #181818;
@@ -35,58 +36,101 @@
   gap: 8px;
 }
 
-.integrationSection {
-  border: 1px solid #2f2f2f;
-  border-radius: 5px;
-  background: #202020;
-  padding: 8px;
+/* ── Section card ─────────────────────────────────────────────── */
+.sectionCard {
+  border: 1px solid #272727;
+  border-radius: 6px;
+  background: #1e1e1e;
+  overflow: hidden;
+}
+
+.sectionCardTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #555;
+  padding: 6px 10px 5px;
+  border-bottom: 1px solid #252525;
+}
+
+.sectionCardBody {
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
+  gap: 7px;
+}
+
+/* ── Custom checkbox row ──────────────────────────────────────── */
+.checkRow {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  cursor: pointer;
+  user-select: none;
 }
 
-.sectionTitle {
-  font-size: 10px;
-  color: #8a8a8a;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid #3a3a3a;
+  border-radius: 3px;
+  background: #252525;
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  transition: background 100ms, border-color 100ms;
 }
 
-.row {
+.checkbox:checked {
+  background: #2a5040;
+  border-color: #3f7a5e;
+}
+
+.checkbox:checked::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 5px;
+  height: 9px;
+  border: 1.5px solid #8de0bc;
+  border-top: none;
+  border-left: none;
+  transform: rotate(43deg);
+}
+
+.checkLabel {
+  font-size: 11px;
+  color: #c0c0c0;
+}
+
+/* ── Sub-options (indented, shown when checkbox enabled) ──────── */
+.subOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-left: 22px;
+  padding-top: 2px;
+}
+
+/* ── Field row (label left, control right) ────────────────────── */
+.fieldRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.label {
-  font-size: 11px;
-  color: #b8b8b8;
-}
-
-.hint {
-  font-size: 10px;
-  color: #7f7f7f;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .fieldLabel {
   font-size: 11px;
-  color: #b8b8b8;
+  color: #909090;
+  white-space: nowrap;
 }
 
-.fieldHint {
-  font-size: 10px;
-  color: #7f7f7f;
-}
-
-.select,
-.numInput {
+.select {
   width: 140px;
   background: #242424;
   border: 1px solid #333;
@@ -97,6 +141,13 @@
 }
 
 .numInput {
+  width: 72px;
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 11px;
+  padding: 4px 6px;
   text-align: right;
   appearance: textfield;
   -moz-appearance: textfield;
@@ -107,110 +158,84 @@
   -webkit-appearance: none;
 }
 
-.pathInput {
-  width: 100%;
-  background: #242424;
-  border: 1px solid #333;
-  border-radius: 4px;
-  color: #e0e0e0;
+.numUnit {
   font-size: 11px;
-  padding: 4px 6px;
+  color: #666;
 }
 
-.statusChip {
-  align-self: flex-start;
-  border-radius: 999px;
-  border: 1px solid #3a3a3a;
-  padding: 2px 7px;
+/* ── Segmented radio pills (anchor mode) ──────────────────────── */
+.radioGroup {
+  display: flex;
+  gap: 4px;
+}
+
+.radioOption {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid #303030;
+  border-radius: 4px;
+  background: #242424;
+  cursor: pointer;
+  font-size: 11px;
+  color: #888;
+  transition: border-color 100ms, background 100ms, color 100ms;
+  user-select: none;
+}
+
+.radioOption input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 10px;
+  height: 10px;
+  border: 1px solid #4a4a4a;
+  border-radius: 50%;
+  background: #2a2a2a;
+  flex-shrink: 0;
+  position: relative;
+  transition: background 100ms, border-color 100ms;
+  cursor: pointer;
+}
+
+.radioOption input[type="radio"]:checked {
+  border-color: #4a9068;
+  background: #4a9068;
+  box-shadow: inset 0 0 0 2.5px #1e2e28;
+}
+
+.radioOption:has(input:checked) {
+  border-color: #2f5e45;
+  background: #1b2e24;
+  color: #8ddbb6;
+}
+
+/* ── Origin bar ───────────────────────────────────────────────── */
+.originBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1c1c1c;
+  border: 1px solid #272727;
+  border-radius: 4px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+
+.originLabel {
+  color: #555;
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
 
-.statusValid {
-  border-color: #3f6f5e;
-  color: #a9e0ca;
-  background: #1f352c;
-}
-
-.statusMissing {
-  border-color: #3c3c3c;
-  color: #a7a7a7;
-  background: #272727;
-}
-
-.statusWarning {
-  border-color: #66512f;
-  color: #ebcfaa;
-  background: #312718;
-}
-
-.statusError {
-  border-color: #6d3f3f;
-  color: #f0c9c9;
-  background: #352020;
-}
-
-.inlineActions {
-  display: flex;
-  gap: 6px;
-}
-
-.toggle {
-  position: relative;
-  width: 36px;
-  height: 20px;
-  display: inline-block;
-}
-
-.toggle input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.toggleTrack {
-  position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  background: #2f2f2f;
-  border: 1px solid #3a3a3a;
-}
-
-.toggleTrack::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #909090;
-  transition: transform 120ms ease;
-}
-
-.toggle input:checked + .toggleTrack {
-  background: #1e3f35;
-  border-color: #3f7a67;
-}
-
-.toggle input:checked + .toggleTrack::after {
-  background: #9ce1c7;
-  transform: translateX(16px);
-}
-
-.previewGrid {
-  border: 1px solid #2f2f2f;
-  border-radius: 4px;
-  background: #222;
-  padding: 6px 8px;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px 8px;
+.originValue {
+  color: #8a8a8a;
+  font-family: monospace;
   font-size: 11px;
-  color: #c2c2c2;
 }
 
+/* ── Warnings / hints ─────────────────────────────────────────── */
 .warning {
   border: 1px solid #5a4329;
   background: rgba(143, 102, 35, 0.2);
@@ -220,63 +245,200 @@
   font-size: 11px;
 }
 
-.pathValue {
-  max-width: 180px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.hint {
+  font-size: 10px;
+  color: #666;
 }
 
-.summary {
-  border: 1px solid #2f2f2f;
-  background: #202020;
-  border-radius: 4px;
-  padding: 6px 8px;
-  font-size: 11px;
-  color: #bcbcbc;
+/* ── Pre-flight checklist ─────────────────────────────────────── */
+.preflight {
+  border: 1px solid #262626;
+  border-radius: 6px;
+  background: #1a1a1a;
+  padding: 7px 10px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
-.primaryBtn,
-.secondaryBtn {
-  border-radius: 5px;
+.preflightTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #555;
+  margin-bottom: 3px;
+}
+
+.preflightItem {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 11px;
-  padding: 6px 8px;
-  cursor: pointer;
+}
+
+.preflightDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.preflightPass .preflightDot  { background: #3d8a5c; }
+.preflightFail .preflightDot  { background: #a84848; }
+.preflightWarn .preflightDot  { background: #a87c2a; }
+
+.preflightPass { color: #7ec99e; }
+.preflightFail { color: #d98a8a; }
+.preflightWarn { color: #d4aa5a; }
+
+/* ── Export button row ────────────────────────────────────────── */
+.exportBtnRow {
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
 }
 
 .primaryBtn {
-  background: #2f4f3b;
-  border: 1px solid #44745b;
-  color: #d6f0e3;
+  flex: 1;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: #2a4e3a;
+  border: 1px solid #3d7055;
+  color: #c8eedd;
+  letter-spacing: 0.02em;
+  transition: background 100ms;
 }
 
 .primaryBtn:hover {
-  background: #396449;
+  background: #325f47;
+}
+
+.primaryBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .secondaryBtn {
-  background: #242424;
-  border: 1px solid #333;
-  color: #bcbcbc;
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: #222;
+  border: 1px solid #303030;
+  color: #888;
+  transition: background 100ms;
 }
 
 .secondaryBtn:hover {
-  background: #2d2d2d;
+  background: #282828;
+  color: #aaa;
 }
 
-.jsonPreview {
-  width: 100%;
-  min-height: 120px;
-  background: #1f1f1f;
-  border: 1px solid #2f2f2f;
-  border-radius: 4px;
-  color: #b7d0dc;
+/* ── Post-export LightBurn card ───────────────────────────────── */
+.lbCard {
+  border: 1px solid #2a5238;
+  border-radius: 6px;
+  background: #162219;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lbCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lbCardTitle {
   font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #6ecfa0;
+}
+
+.lbCardDismiss {
+  background: none;
+  border: none;
+  color: #4d8a6a;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.lbCardDismiss:hover { color: #9eddc0; }
+
+.lbValues {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lbValueRow {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.lbValueLabel {
+  font-size: 10px;
+  color: #6a9a82;
+}
+
+.lbValueNum {
+  font-size: 11px;
+  font-family: monospace;
+  color: #c8eedd;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.lbCopyBtn {
+  background: #1a3224;
+  border: 1px solid #2a5238;
+  border-radius: 4px;
+  color: #6ecfa0;
+  font-size: 9px;
+  padding: 2px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+
+.lbCopyBtn:hover { background: #203d2c; }
+.lbCopied { color: #40d080; border-color: #308050; }
+
+.lbDivider {
+  height: 1px;
+  background: #1e3828;
+  margin: 1px 0;
+}
+
+.lbStepsList {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lbStepsList li {
+  font-size: 11px;
+  color: #8ec8a8;
   line-height: 1.4;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  padding: 8px;
-  resize: vertical;
+}
+
+.lbStepsList strong { color: #c8eedd; }
+
+.lbNote {
+  color: #5a8a70;
+  font-size: 10px;
 }

@@ -9,12 +9,13 @@ import {
 import {
   TumblerAutoSizeResponse,
   TumblerAutoSizeState,
+  TumblerConfidenceLevel,
   TumblerShapeType,
   TumblerSpecDraft,
 } from "@/types/tumblerAutoSize";
 import {
   calculateTumblerTemplate,
-  roundDisplayMm,
+  getTumblerConfidenceLevel,
   toTumblerSpecDraft,
 } from "@/utils/tumblerAutoSize";
 import styles from "./TumblerAutoDetectPanel.module.css";
@@ -132,6 +133,12 @@ function getErrorMessage(payload: unknown): string {
   return "Auto-detect failed. Please retry.";
 }
 
+const CONFIDENCE_BADGE_CLASS: Record<TumblerConfidenceLevel, string> = {
+  high: styles.confidenceHigh,
+  medium: styles.confidenceMedium,
+  low: styles.confidenceLow,
+};
+
 function normalizeBrandForMatch(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
@@ -185,6 +192,7 @@ function applyBrandOverrideSelection(
 export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
   const [selectedImage, setSelectedImage] = React.useState<File | null>(null);
   const [state, setState] = React.useState<TumblerAutoSizeState>(INITIAL_STATE);
+  const [overrideOpen, setOverrideOpen] = React.useState(false);
 
   const runAutoDetect = React.useCallback(
     async (file: File) => {
@@ -269,20 +277,6 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
 
   const validationErrors = state.draft ? validateDraft(state.draft) : {};
   const hasValidationErrors = Object.keys(validationErrors).length > 0;
-  const brandResolution = state.result?.analysis.brandResolution;
-  const alternateCandidates =
-    brandResolution?.topCandidates ?? state.draft?.alternateCandidates ?? [];
-  const candidateScoreByBrand = new Map(
-    (brandResolution?.candidateScores ?? []).map((entry) => [
-      entry.brand.toLowerCase(),
-      entry.totalScore,
-    ])
-  );
-  const detectedBrandConfidence =
-    brandResolution?.confidence ??
-    state.draft?.brandConfidence ??
-    state.draft?.confidence ??
-    0;
   const isBrandUnknown = (state.draft?.brand ?? "unknown").toLowerCase() === "unknown";
   const detectedDraft =
     state.result?.suggestion && state.result?.calculation
@@ -370,30 +364,12 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
               <span>Capacity</span>
               <span>{state.draft.capacityOz ? `${state.draft.capacityOz} oz` : "Unknown"}</span>
             </div>
-            <div className={styles.readRow}>
-              <span>Confidence</span>
-              <span
-                className={
-                  state.status === "low-confidence" || state.status === "unknown"
-                    ? styles.lowConfidence
-                    : styles.highConfidence
-                }
-              >
-                {(state.draft.confidence * 100).toFixed(0)}%
-              </span>
-            </div>
-            <div className={styles.readRow}>
-              <span>Brand Confidence</span>
-              <span className={isBrandUnknown ? styles.lowConfidence : styles.highConfidence}>
-                {(detectedBrandConfidence * 100).toFixed(0)}%
-              </span>
-            </div>
-            {state.draft.familyHint && (
-              <div className={styles.readRow}>
-                <span>Family Hint</span>
-                <span>{state.draft.familyHint}</span>
-              </div>
-            )}
+            <ConfidenceBadgeRow
+              label="Confidence"
+              value={state.draft.confidence}
+              forceLevel={isBrandUnknown ? "low" : undefined}
+              overrideLabel={isBrandUnknown ? "Low" : undefined}
+            />
 
             {(isBrandUnknown ||
               state.status === "low-confidence" ||
@@ -404,196 +380,103 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
               </div>
             )}
 
-            {alternateCandidates.length > 0 && (
+            <button
+              className={styles.overrideToggle}
+              onClick={() => setOverrideOpen((o) => !o)}
+              type="button"
+            >
+              <span>Override Values</span>
+              <span>{overrideOpen ? "▾" : "▸"}</span>
+            </button>
+
+            {overrideOpen && (
               <>
-                <div className={styles.sectionLabel}>Alternate Candidates</div>
-                <ul className={styles.candidates}>
-                  {alternateCandidates.map((candidate) => {
-                    const key = `${candidate.id}-${candidate.brand}-${candidate.model ?? "unknown"}`;
-                    const score = candidateScoreByBrand.get(candidate.brand.toLowerCase());
-                    return (
-                      <li key={key} className={styles.candidateItem}>
-                        <span>
-                          {candidate.brand}
-                          {candidate.model && candidate.model !== "unknown"
-                            ? ` - ${candidate.model}`
-                            : ""}
-                        </span>
-                        {typeof score === "number" && (
-                          <span className={styles.candidateScore}>
-                            {(score * 100).toFixed(0)}%
-                          </span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
+                <OverrideRow label="Brand">
+                  <select
+                    className={styles.select}
+                    value={selectedBrandOverride}
+                    onChange={(e) => {
+                      const mode = e.target.value as BrandOverrideMode;
+                      setState((prev) => {
+                        if (!prev.draft) return prev;
+                        return {
+                          ...prev,
+                          draft: applyBrandOverrideSelection(prev.draft, mode, detectedDraft),
+                        };
+                      });
+                    }}
+                  >
+                    {BRAND_OVERRIDE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </OverrideRow>
+
+                <OverrideRow label="Profile">
+                  <select
+                    className={styles.select}
+                    value={state.draft.manualProfileOverrideId ?? ""}
+                    onChange={(e) => {
+                      const profileId = e.target.value || undefined;
+                      const profile = profileId ? getTumblerProfileById(profileId) : null;
+                      updateDraft({
+                        manualProfileOverrideId: profileId,
+                        ...(profile
+                          ? { brand: profile.brand, model: profile.model, manualBrandOverride: true }
+                          : {}),
+                      });
+                    }}
+                  >
+                    <option value="">Auto / None</option>
+                    {availableProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.label}
+                      </option>
+                    ))}
+                  </select>
+                </OverrideRow>
+
+                <OverrideRow label="Shape">
+                  <select
+                    className={styles.select}
+                    value={state.draft.shapeType}
+                    onChange={(e) => updateDraft({ shapeType: e.target.value as TumblerShapeType })}
+                  >
+                    <option value="straight">Straight</option>
+                    <option value="tapered">Tapered</option>
+                    <option value="unknown">Unknown</option>
+                  </select>
+                </OverrideRow>
+
+                <LabeledNumberRow
+                  label="Outside Dia"
+                  value={state.draft.outsideDiameterMm}
+                  onChange={(v) => updateDraft({ outsideDiameterMm: v })}
+                />
+                <LabeledNumberRow
+                  label="Top Dia"
+                  value={state.draft.topDiameterMm}
+                  onChange={(v) => updateDraft({ topDiameterMm: v })}
+                />
+                <LabeledNumberRow
+                  label="Bottom Dia"
+                  value={state.draft.bottomDiameterMm}
+                  onChange={(v) => updateDraft({ bottomDiameterMm: v })}
+                />
+                <LabeledNumberRow
+                  label="Overall H"
+                  value={state.draft.overallHeightMm}
+                  onChange={(v) => updateDraft({ overallHeightMm: v })}
+                />
+                <LabeledNumberRow
+                  label="Usable H"
+                  value={state.draft.usableHeightMm}
+                  onChange={(v) => updateDraft({ usableHeightMm: v })}
+                />
               </>
             )}
-
-            <div className={styles.sectionLabel}>Raw Spec Dimensions (mm)</div>
-            <div className={styles.readRow}>
-              <span>Outside Dia</span>
-              <span>{roundDisplayMm(state.draft.outsideDiameterMm)}</span>
-            </div>
-            <div className={styles.readRow}>
-              <span>Top Dia</span>
-              <span>{roundDisplayMm(state.draft.topDiameterMm)}</span>
-            </div>
-            <div className={styles.readRow}>
-              <span>Bottom Dia</span>
-              <span>{roundDisplayMm(state.draft.bottomDiameterMm)}</span>
-            </div>
-            <div className={styles.readRow}>
-              <span>Overall H</span>
-              <span>{roundDisplayMm(state.draft.overallHeightMm)}</span>
-            </div>
-            <div className={styles.readRow}>
-              <span>Usable H</span>
-              <span>{roundDisplayMm(state.draft.usableHeightMm)}</span>
-            </div>
-
-            <div className={styles.sectionLabel}>Derived Template (mm)</div>
-            <div className={styles.readRow}>
-              <span>Template Width</span>
-              <span>{roundDisplayMm(state.draft.templateWidthMm)}</span>
-            </div>
-            <div className={styles.readRow}>
-              <span>Template Height</span>
-              <span>{roundDisplayMm(state.draft.templateHeightMm)}</span>
-            </div>
-
-            <div className={styles.sectionLabel}>Manual Override</div>
-            <div className={styles.field}>
-              <span className={styles.inlineLabel}>Brand</span>
-              <select
-                className={styles.select}
-                value={selectedBrandOverride}
-                onChange={(e) => {
-                  const mode = e.target.value as BrandOverrideMode;
-                  setState((prev) => {
-                    if (!prev.draft) return prev;
-                    return {
-                      ...prev,
-                      draft: applyBrandOverrideSelection(
-                        prev.draft,
-                        mode,
-                        detectedDraft
-                      ),
-                    };
-                  });
-                }}
-              >
-                {BRAND_OVERRIDE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className={styles.field}>
-              <span className={styles.inlineLabel}>Profile</span>
-              <select
-                className={styles.select}
-                value={state.draft.manualProfileOverrideId ?? ""}
-                onChange={(e) => {
-                  const profileId = e.target.value || undefined;
-                  const profile = profileId ? getTumblerProfileById(profileId) : null;
-                  updateDraft({
-                    manualProfileOverrideId: profileId,
-                    ...(profile
-                      ? {
-                          brand: profile.brand,
-                          model: profile.model,
-                          manualBrandOverride: true,
-                        }
-                      : {}),
-                  });
-                }}
-              >
-                <option value="">Auto / None</option>
-                {availableProfiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className={styles.grid}>
-              <LabeledNumber
-                label="Capacity (oz)"
-                value={state.draft.capacityOz}
-                onChange={(value) => updateDraft({ capacityOz: value })}
-              />
-              <label className={styles.field}>
-                <span className={styles.inlineLabel}>Has Handle</span>
-                <select
-                  className={styles.select}
-                  value={
-                    state.draft.hasHandle === null
-                      ? "unknown"
-                      : state.draft.hasHandle
-                        ? "yes"
-                        : "no"
-                  }
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    updateDraft({
-                      hasHandle:
-                        value === "unknown" ? null : value === "yes",
-                    });
-                  }}
-                >
-                  <option value="unknown">Unknown</option>
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                </select>
-              </label>
-            </div>
-            <div className={styles.grid}>
-              <LabeledNumber
-                label="Outside Dia"
-                value={state.draft.outsideDiameterMm}
-                onChange={(value) => updateDraft({ outsideDiameterMm: value })}
-              />
-              <LabeledNumber
-                label="Top Dia"
-                value={state.draft.topDiameterMm}
-                onChange={(value) => updateDraft({ topDiameterMm: value })}
-              />
-              <LabeledNumber
-                label="Bottom Dia"
-                value={state.draft.bottomDiameterMm}
-                onChange={(value) => updateDraft({ bottomDiameterMm: value })}
-              />
-              <LabeledNumber
-                label="Overall H"
-                value={state.draft.overallHeightMm}
-                onChange={(value) => updateDraft({ overallHeightMm: value })}
-              />
-              <LabeledNumber
-                label="Usable H"
-                value={state.draft.usableHeightMm}
-                onChange={(value) => updateDraft({ usableHeightMm: value })}
-              />
-            </div>
-
-            <div className={styles.shapeRow}>
-              <span className={styles.inlineLabel}>Shape</span>
-              <select
-                className={styles.select}
-                value={state.draft.shapeType}
-                onChange={(e) =>
-                  updateDraft({
-                    shapeType: e.target.value as TumblerShapeType,
-                  })
-                }
-              >
-                <option value="straight">Straight</option>
-                <option value="tapered">Tapered</option>
-                <option value="unknown">Unknown</option>
-              </select>
-            </div>
 
             {(validationErrors.outsideDiameterMm ||
               validationErrors.topDiameterMm ||
@@ -606,29 +489,6 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
                   validationErrors.bottomDiameterMm ??
                   validationErrors.overallHeightMm ??
                   validationErrors.usableHeightMm}
-              </div>
-            )}
-
-            <div className={styles.sectionLabel}>Source Links</div>
-            <ul className={styles.sources}>
-              {state.result.suggestion.sources.length === 0 && (
-                <li className={styles.sourceItemMuted}>No source links available.</li>
-              )}
-              {state.result.suggestion.sources.map((source) => (
-                <li key={source.url} className={styles.sourceItem}>
-                  <a href={source.url} target="_blank" rel="noreferrer">
-                    {source.title}
-                  </a>
-                  <span className={styles.sourceKind}>{source.kind}</span>
-                </li>
-              ))}
-            </ul>
-
-            {state.result.suggestion.notes.length > 0 && (
-              <div className={styles.notes}>
-                {state.result.suggestion.notes.map((note, idx) => (
-                  <div key={`${note}-${idx}`}>{note}</div>
-                ))}
               </div>
             )}
 
@@ -657,7 +517,33 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
   );
 }
 
-function LabeledNumber({
+function ConfidenceBadgeRow({
+  label,
+  value,
+  forceLevel,
+  overrideLabel,
+}: {
+  label: string;
+  value: number;
+  forceLevel?: TumblerConfidenceLevel;
+  overrideLabel?: string;
+}) {
+  const level = forceLevel ?? getTumblerConfidenceLevel(value);
+  const badgeLabel = overrideLabel ?? (level.charAt(0).toUpperCase() + level.slice(1));
+  return (
+    <div className={styles.readRow}>
+      <span>{label}</span>
+      <span className={styles.confidenceBadgeWrap}>
+        <span className={`${styles.confidenceBadge} ${CONFIDENCE_BADGE_CLASS[level]}`}>
+          {badgeLabel}
+        </span>
+        <span className={styles.confidencePct}>{(value * 100).toFixed(0)}%</span>
+      </span>
+    </div>
+  );
+}
+
+function LabeledNumberRow({
   label,
   value,
   onChange,
@@ -667,8 +553,8 @@ function LabeledNumber({
   onChange: (value: number | null) => void;
 }) {
   return (
-    <label className={styles.field}>
-      <span className={styles.inlineLabel}>{label}</span>
+    <div className={styles.overrideRow}>
+      <span className={styles.overrideLabel}>{label}</span>
       <input
         type="number"
         className={styles.numInput}
@@ -676,7 +562,22 @@ function LabeledNumber({
         step={0.1}
         onChange={(e) => onChange(toNullableNumber(e.target.value))}
       />
-    </label>
+    </div>
+  );
+}
+
+function OverrideRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={styles.overrideRow}>
+      <span className={styles.overrideLabel}>{label}</span>
+      {children}
+    </div>
   );
 }
 

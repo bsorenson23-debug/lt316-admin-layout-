@@ -40,3 +40,88 @@
   overflow-y: auto;
   gap: 0;
 }
+
+/* ── Tab bar ────────────────────────────────────────────────────── */
+.tabBar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 8px 0;
+  border-bottom: 1px solid #242424;
+  background: #161616;
+  flex-shrink: 0;
+}
+
+.tab,
+.tabActive {
+  padding: 4px 14px 5px;
+  border-radius: 5px 5px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: none;
+  transition: color 120ms, background 120ms;
+}
+
+.tab {
+  color: #555;
+  border-color: transparent;
+}
+
+.tab:hover {
+  color: #888;
+  background: #1e1e1e;
+}
+
+.tabActive {
+  color: #d0d0d0;
+  background: #1c1c1c;
+  border-color: #303030;
+  border-bottom-color: #1c1c1c;
+  position: relative;
+  bottom: -1px;
+}
+
+/* ── Split view ─────────────────────────────────────────────────── */
+.splitView {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.splitPane {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+  position: relative;
+}
+
+.splitPaneLabel {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #444;
+  background: #161616;
+  border-bottom: 1px solid #222;
+}
+
+.splitPaneActive .splitPaneLabel {
+  color: #7ecfa8;
+  border-bottom-color: #1f4030;
+}
+
+.splitDivider {
+  width: 1px;
+  background: #252525;
+  flex-shrink: 0;
+}

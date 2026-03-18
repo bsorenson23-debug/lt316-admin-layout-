@@ -55,12 +55,22 @@ function isDevEnvironment(): boolean {
   return process.env.NODE_ENV !== "production";
 }
 
+export interface FramePreviewProp {
+  originXmm: number;
+  originYmm: number;
+  widthMm: number;
+  heightMm: number;
+}
+
 interface Props {
   bedConfig: BedConfig;
   placedItems: PlacedItem[];
   selectedItemId: string | null;
   placementAsset: SvgAsset | null;
   isPlacementArmed: boolean;
+  framePreview?: FramePreviewProp | null;
+  tumblerViewMode?: "wrap" | "two-sided";
+  onTumblerViewModeChange?: (mode: "wrap" | "two-sided") => void;
   onPlaceAsset: (xMm: number, yMm: number) => void;
   onSelectItem: (id: string | null) => void;
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
@@ -74,6 +84,9 @@ export function LaserBedWorkspace({
   selectedItemId,
   placementAsset,
   isPlacementArmed,
+  framePreview,
+  tumblerViewMode,
+  onTumblerViewModeChange,
   onPlaceAsset,
   onSelectItem,
   onUpdateItem,
@@ -222,10 +235,23 @@ export function LaserBedWorkspace({
       {/* Toolbar row */}
       <div className={styles.toolbar}>
         <span className={styles.toolbarTitle}>{workspaceTitle}</span>
+        {bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange && (
+          <div className={styles.viewToggle}>
+            <button
+              className={`${styles.viewToggleBtn} ${tumblerViewMode === "wrap" ? styles.viewToggleBtnActive : ""}`}
+              onClick={() => onTumblerViewModeChange("wrap")}
+            >Wrap</button>
+            <button
+              className={`${styles.viewToggleBtn} ${tumblerViewMode === "two-sided" ? styles.viewToggleBtnActive : ""}`}
+              onClick={() => onTumblerViewModeChange("two-sided")}
+            >Two-Sided</button>
+          </div>
+        )}
         <span className={styles.bedInfo}>
           {formatMm(bedConfig.width)} x {formatMm(bedConfig.height)} mm
           &nbsp;|&nbsp; grid: {formatMm(bedConfig.gridSpacing)} mm
         </span>
+        <OriginChip originPosition={bedConfig.originPosition} />
         {isPlacementArmed && placementAsset ? (
           <span className={styles.activeTip}>
             Click bed once to place &quot;{placementAsset.name.replace(/\.svg$/i, "")}&quot;
@@ -460,6 +486,56 @@ export function LaserBedWorkspace({
             />
           )}
 
+          {/* Empty state — shown when no items are placed and placement is not armed */}
+          {placedItems.length === 0 && !isPlacementArmed && (
+            <g pointerEvents="none">
+              <text
+                x={bedPxW / 2}
+                y={bedPxH / 2 - 9}
+                fill="#888"
+                fontSize={12}
+                fontFamily="monospace"
+                textAnchor="middle"
+              >
+                Upload an SVG in the left panel,
+              </text>
+              <text
+                x={bedPxW / 2}
+                y={bedPxH / 2 + 9}
+                fill="#666"
+                fontSize={11}
+                fontFamily="monospace"
+                textAnchor="middle"
+              >
+                then click &quot;Place on Bed&quot; to position it here.
+              </text>
+            </g>
+          )}
+
+          {/* Frame preview — dashed rectangle showing where the job will engrave */}
+          {framePreview && (
+            <g pointerEvents="none">
+              <rect
+                x={mmToPx(framePreview.originXmm, scale)}
+                y={mmToPx(framePreview.originYmm, scale)}
+                width={mmToPx(framePreview.widthMm, scale)}
+                height={mmToPx(framePreview.heightMm, scale)}
+                fill="none"
+                stroke="#4ea8c8"
+                strokeWidth={1.5}
+                strokeDasharray="6 3"
+                opacity={0.75}
+              />
+              <text
+                x={mmToPx(framePreview.originXmm, scale) + 4}
+                y={mmToPx(framePreview.originYmm, scale) - 4}
+                className={styles.framePreviewLabel}
+              >
+                {`Frame ${framePreview.widthMm.toFixed(1)} × ${framePreview.heightMm.toFixed(1)} mm`}
+              </text>
+            </g>
+          )}
+
           {/* Coordinate labels along edges */}
           <CoordLabels
             bedConfig={bedConfig}
@@ -468,6 +544,49 @@ export function LaserBedWorkspace({
         </g>
 
       </svg>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar: origin position chip with LightBurn alignment tooltip
+// ---------------------------------------------------------------------------
+
+function OriginChip({
+  originPosition,
+}: {
+  originPosition: BedConfig["originPosition"];
+}) {
+  const [showTip, setShowTip] = useState(false);
+  const label = originPosition === "bottom-left" ? "Bottom-Left" : "Top-Left";
+
+  return (
+    <div
+      className={styles.originChip}
+      onMouseEnter={() => setShowTip(true)}
+      onMouseLeave={() => setShowTip(false)}
+    >
+      <span className={styles.originChipDot} />
+      <span className={styles.originChipText}>
+        Origin: {label} · Absolute
+      </span>
+      {showTip && (
+        <div className={styles.originTooltip}>
+          <span className={styles.originTooltipTitle}>Job Start Position</span>
+          <div className={styles.originTooltipRow}>
+            <span className={styles.originTooltipLabel}>LightBurn mode</span>
+            <span className={styles.originTooltipValue}>Absolute Coords</span>
+          </div>
+          <div className={styles.originTooltipRow}>
+            <span className={styles.originTooltipLabel}>Machine origin</span>
+            <span className={styles.originTooltipValue}>{label} corner</span>
+          </div>
+          <div className={styles.originTooltipHint}>
+            In LightBurn → Device Settings, set Origin to match. A mismatch is
+            the most common cause of artwork landing in the wrong position.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -747,8 +866,14 @@ function OriginMarker({
   const widgetY = origin.y + ORIGIN_WIDGET_OFFSET_PX * yAxisDirection;
   const originLabelY = widgetY + (yAxisDirection > 0 ? 11 : -6);
 
+  const badgeX = widgetX + ORIGIN_ARROW_PX + 4;
+  const badgeY = originLabelY - 9;
+  const badgeW = 34;
+  const badgeH = 13;
+
   return (
     <g pointerEvents="none">
+      <title>{`Machine origin (0, 0) — ${bedConfig.originPosition} corner. Use Absolute Coords in LightBurn.`}</title>
       {/* True machine-origin anchor point */}
       <circle
         cx={origin.x}
@@ -812,15 +937,27 @@ function OriginMarker({
       >
         Y
       </text>
+      {/* (0, 0) coordinate badge — replaces the vague "origin" text */}
+      <rect
+        x={badgeX}
+        y={badgeY}
+        width={badgeW}
+        height={badgeH}
+        rx={3}
+        fill="#141210"
+        stroke="#8b5f40"
+        strokeWidth={0.75}
+        opacity={0.9}
+      />
       <text
-        x={widgetX + ORIGIN_ARROW_PX + 4}
-        y={originLabelY}
-        fill="#6e5b4a"
+        x={badgeX + badgeW / 2}
+        y={badgeY + badgeH - 3}
+        fill="#c49a6a"
         fontSize={8}
-        fontWeight={500}
         fontFamily="monospace"
+        textAnchor="middle"
       >
-        origin
+        (0, 0)
       </text>
     </g>
   );
