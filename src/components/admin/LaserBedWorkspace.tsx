@@ -69,6 +69,8 @@ interface Props {
   tumblerViewMode?: "wrap" | "two-sided";
   onTumblerViewModeChange?: (mode: "wrap" | "two-sided") => void;
   onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
+  /** When true, hides the toolbar and mode overlay (used in split-screen panes). */
+  hideToolbar?: boolean;
   onPlaceAsset: (xMm: number, yMm: number) => void;
   onSelectItem: (id: string | null) => void;
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
@@ -86,6 +88,7 @@ export function LaserBedWorkspace({
   tumblerViewMode,
   onTumblerViewModeChange,
   onWorkspaceModeChange,
+  hideToolbar = false,
   onPlaceAsset,
   onSelectItem,
   onUpdateItem,
@@ -229,30 +232,32 @@ export function LaserBedWorkspace({
   return (
     <div className={styles.wrapper} ref={containerRef}>
       {/* Toolbar row */}
-      <div className={styles.toolbar}>
-        <span className={styles.bedInfo}>
-          {formatMm(bedConfig.width)} x {formatMm(bedConfig.height)} mm
-          &nbsp;|&nbsp; grid: {formatMm(bedConfig.gridSpacing)} mm
-        </span>
-        <OriginChip originPosition={bedConfig.originPosition} />
-        {isPlacementArmed && placementAsset ? (
-          <span className={styles.activeTip}>
-            Click bed once to place &quot;{placementAsset.name.replace(/\.svg$/i, "")}&quot;
+      {!hideToolbar && (
+        <div className={styles.toolbar}>
+          <span className={styles.bedInfo}>
+            {formatMm(bedConfig.width)} x {formatMm(bedConfig.height)} mm
+            &nbsp;|&nbsp; grid: {formatMm(bedConfig.gridSpacing)} mm
           </span>
-        ) : (
-          <span className={styles.activeTip} style={{ color: "#555" }}>
-            Select an asset, then click &quot;Place on Bed&quot;
-          </span>
-        )}
-        {placedItems.length > 0 && (
-          <button className={styles.clearBtn} onClick={onClearWorkspace}>
-            Clear Workspace
-          </button>
-        )}
-      </div>
+          <OriginChip originPosition={bedConfig.originPosition} />
+          {isPlacementArmed && placementAsset ? (
+            <span className={styles.activeTip}>
+              Click bed once to place &quot;{placementAsset.name.replace(/\.svg$/i, "")}&quot;
+            </span>
+          ) : (
+            <span className={styles.activeTip} style={{ color: "#555" }}>
+              Select an asset, then click &quot;Place on Bed&quot;
+            </span>
+          )}
+          {placedItems.length > 0 && (
+            <button className={styles.clearBtn} onClick={onClearWorkspace}>
+              Clear Workspace
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── Mode selector — large centered overlay ── */}
-      {(onWorkspaceModeChange || (bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange)) && (
+      {!hideToolbar && (onWorkspaceModeChange || (bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange)) && (
         <div className={styles.modeOverlay}>
           {onWorkspaceModeChange && (
             <>

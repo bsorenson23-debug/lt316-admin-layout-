@@ -369,7 +369,7 @@ export function AdminLayoutShell() {
           /* ── Two-sided split view ── */
           <div className={styles.splitView}>
             <div className={`${styles.splitPane} ${activeSide === "front" ? styles.splitPaneActive : ""}`}>
-              <div className={styles.splitPaneLabel}>Front  ·  {(bedConfig.width / 2).toFixed(1)} × {bedConfig.height.toFixed(1)} mm</div>
+              <div className={styles.splitPaneLabel}>Front</div>
               <LaserBedWorkspace
                 bedConfig={halfBedConfig}
                 placedItems={placedItems}
@@ -377,9 +377,7 @@ export function AdminLayoutShell() {
                 placementAsset={placementAsset}
                 isPlacementArmed={isPlacementArmed}
                 framePreview={null}
-                tumblerViewMode={tumblerViewMode}
-                onTumblerViewModeChange={setTumblerViewMode}
-                onWorkspaceModeChange={handleWorkspaceModeChange}
+                hideToolbar
                 onPlaceAsset={handlePlaceAsset}
                 onSelectItem={handleSelectItem}
                 onUpdateItem={handleUpdateItem}
@@ -394,7 +392,7 @@ export function AdminLayoutShell() {
               backItems={backPlacedItems}
             />
             <div className={`${styles.splitPane} ${activeSide === "back" ? styles.splitPaneActive : ""}`}>
-              <div className={styles.splitPaneLabel}>Back  ·  {(bedConfig.width / 2).toFixed(1)} × {bedConfig.height.toFixed(1)} mm</div>
+              <div className={styles.splitPaneLabel}>Back</div>
               <LaserBedWorkspace
                 bedConfig={halfBedConfig}
                 placedItems={backPlacedItems}
@@ -402,9 +400,7 @@ export function AdminLayoutShell() {
                 placementAsset={placementAsset}
                 isPlacementArmed={isPlacementArmed}
                 framePreview={null}
-                tumblerViewMode={tumblerViewMode}
-                onTumblerViewModeChange={setTumblerViewMode}
-                onWorkspaceModeChange={handleWorkspaceModeChange}
+                hideToolbar
                 onPlaceAsset={handleBackPlaceAsset}
                 onSelectItem={handleBackSelectItem}
                 onUpdateItem={handleBackUpdateItem}
