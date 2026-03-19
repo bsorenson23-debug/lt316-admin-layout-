@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useState } from "react";
+import Link from "next/link";
 import {
   BedConfig,
   DEFAULT_BED_CONFIG,
@@ -287,6 +288,9 @@ export function AdminLayoutShell() {
   // Derived list of asset names for order capture
   const assetNames = svgAssets.map((a) => a.name);
 
+  // Right panel tab
+  const [rightTab, setRightTab] = useState<"workflow" | "tools" | "setup">("workflow");
+
   const handleAddTextAsset = useCallback((svgContent: string, fileName: string) => {
     const id = `asset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     try {
@@ -365,44 +369,87 @@ export function AdminLayoutShell() {
 
       {/* RIGHT */}
       <aside className={styles.rightPanel}>
-        <OrdersPanel
-          bedConfig={bedConfig}
-          assetNames={assetNames}
-          onLoadOrder={handleLoadOrder}
-        />
-        <BatchQueuePanel onLoadOrder={handleLoadOrder} />
-        <BedSettingsPanel bedConfig={bedConfig} onUpdateBedConfig={setBedConfig} />
-        <MaterialProfilePanel onMaterialChange={setMaterialSettings} />
-        <TumblerExportPanel
-          bedConfig={bedConfig}
-          placedItems={placedItems}
-          onFramePreviewChange={setFramePreview}
-          materialSettings={materialSettings}
-        />
-        <SelectedItemInspector
-          selectedItem={selectedItem}
-          bedConfig={bedConfig}
-          statusNote={inspectorNote}
-          onUpdateItem={handleUpdateItem}
-          onAlignItem={handleAlignItem}
-          onCenterBetweenGuides={handleCenterSelectedBetweenGuides}
-          onResetItem={handleResetItem}
-          onNormalizeItem={handleNormalizeItem}
-          onDeleteItem={handleDeleteItem}
-        />
-        <ProofMockupPanel
-          bedConfig={bedConfig}
-          placedItems={placedItems}
-          mockupConfig={mockupConfig}
-        />
-        <SprCalibrationPanel bedConfig={bedConfig} />
-        <TextToolPanel onAddAsset={handleAddTextAsset} />
-        <TextPersonalizationPanel />
-        <CameraOverlayPanel onCaptureOverlay={handleCameraCapture} />
-        <TestGridPanel bedWidthMm={bedConfig.width} bedHeightMm={bedConfig.height} />
-        <MachineProfilePanel />
-        <ExportHistoryPanel bedConfig={bedConfig} placedItems={placedItems} />
-        <RotaryPresetSharePanel />
+        <div className={styles.tabBar}>
+          <button
+            className={rightTab === "workflow" ? styles.tabActive : styles.tab}
+            onClick={() => setRightTab("workflow")}
+            type="button"
+          >
+            Workflow
+          </button>
+          <button
+            className={rightTab === "tools" ? styles.tabActive : styles.tab}
+            onClick={() => setRightTab("tools")}
+            type="button"
+          >
+            Tools
+          </button>
+          <button
+            className={rightTab === "setup" ? styles.tabActive : styles.tab}
+            onClick={() => setRightTab("setup")}
+            type="button"
+          >
+            Setup
+          </button>
+          <Link href="/admin/calibration" className={styles.tabCalibrationLink}>
+            Calibration →
+          </Link>
+        </div>
+
+        <div className={styles.tabPane}>
+          {rightTab === "workflow" && (
+            <>
+              <OrdersPanel
+                bedConfig={bedConfig}
+                assetNames={assetNames}
+                onLoadOrder={handleLoadOrder}
+              />
+              <BatchQueuePanel onLoadOrder={handleLoadOrder} />
+              <BedSettingsPanel bedConfig={bedConfig} onUpdateBedConfig={setBedConfig} />
+              <MaterialProfilePanel onMaterialChange={setMaterialSettings} />
+              <TumblerExportPanel
+                bedConfig={bedConfig}
+                placedItems={placedItems}
+                onFramePreviewChange={setFramePreview}
+                materialSettings={materialSettings}
+              />
+              <SelectedItemInspector
+                selectedItem={selectedItem}
+                bedConfig={bedConfig}
+                statusNote={inspectorNote}
+                onUpdateItem={handleUpdateItem}
+                onAlignItem={handleAlignItem}
+                onCenterBetweenGuides={handleCenterSelectedBetweenGuides}
+                onResetItem={handleResetItem}
+                onNormalizeItem={handleNormalizeItem}
+                onDeleteItem={handleDeleteItem}
+              />
+              <ProofMockupPanel
+                bedConfig={bedConfig}
+                placedItems={placedItems}
+                mockupConfig={mockupConfig}
+              />
+              <ExportHistoryPanel bedConfig={bedConfig} placedItems={placedItems} />
+            </>
+          )}
+
+          {rightTab === "tools" && (
+            <>
+              <TextToolPanel onAddAsset={handleAddTextAsset} />
+              <TextPersonalizationPanel />
+              <CameraOverlayPanel onCaptureOverlay={handleCameraCapture} />
+              <TestGridPanel bedWidthMm={bedConfig.width} bedHeightMm={bedConfig.height} />
+            </>
+          )}
+
+          {rightTab === "setup" && (
+            <>
+              <MachineProfilePanel />
+              <SprCalibrationPanel bedConfig={bedConfig} />
+              <RotaryPresetSharePanel />
+            </>
+          )}
+        </div>
       </aside>
     </div>
   );

@@ -30,31 +30,31 @@
 }
 
 .rightPanel {
-  width: 260px;
-  min-width: 220px;
-  max-width: 320px;
+  width: 284px;
+  min-width: 240px;
+  max-width: 340px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   border-left: 1px solid #2a2a2a;
-  overflow-y: auto;
+  overflow: hidden;
   gap: 0;
 }
 
 /* ── Tab bar ────────────────────────────────────────────────────── */
 .tabBar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 2px;
-  padding: 5px 8px 0;
-  border-bottom: 1px solid #242424;
-  background: #161616;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid #2a2a2a;
+  background: #141414;
   flex-shrink: 0;
 }
 
 .tab,
 .tabActive {
-  padding: 4px 14px 5px;
+  padding: 5px 12px 6px;
   border-radius: 5px 5px 0 0;
   font-size: 11px;
   font-weight: 600;
@@ -64,26 +64,59 @@
   border-bottom: none;
   background: none;
   transition: color 120ms, background 120ms;
+  white-space: nowrap;
 }
 
 .tab {
-  color: #555;
+  color: #4a4a4a;
   border-color: transparent;
 }
 
 .tab:hover {
-  color: #888;
-  background: #1e1e1e;
+  color: #777;
+  background: #1a1a1a;
 }
 
 .tabActive {
-  color: #d0d0d0;
-  background: #1c1c1c;
-  border-color: #303030;
-  border-bottom-color: #1c1c1c;
+  color: #d8d8d8;
+  background: #1a1a1a;
+  border-color: #2a2a2a;
+  border-bottom-color: #1a1a1a;
   position: relative;
   bottom: -1px;
 }
+
+.tabCalibrationLink {
+  margin-left: auto;
+  align-self: center;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #3a6a8a;
+  text-decoration: none;
+  padding: 3px 6px 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: color 120ms, background 120ms;
+  position: relative;
+  bottom: -1px;
+}
+.tabCalibrationLink:hover {
+  color: #5da0c8;
+  background: rgba(30, 60, 80, 0.4);
+}
+
+/* ── Tab pane ───────────────────────────────────────────────────── */
+.tabPane {
+  flex: 1 1 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #1a1a1a;
+}
+.tabPane::-webkit-scrollbar { width: 4px; }
+.tabPane::-webkit-scrollbar-thumb { background: #2e2e2e; border-radius: 2px; }
 
 /* ── Split view ─────────────────────────────────────────────────── */
 .splitView {
