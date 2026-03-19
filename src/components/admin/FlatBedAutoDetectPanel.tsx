@@ -93,11 +93,49 @@ export function FlatBedAutoDetectPanel({ onApplyItem, onSetMockup, mockupActive 
   const [overrideOpen, setOverrideOpen] = React.useState(false);
   const [overrideDraft, setOverrideDraft] = React.useState<OverrideDraft | null>(null);
 
+  // URL input state
+  const [urlInput, setUrlInput] = React.useState("");
+  const [urlLoading, setUrlLoading] = React.useState(false);
+  const [urlError, setUrlError] = React.useState<string | null>(null);
+
   // Mockup calibration state
   const [mockupOpen, setMockupOpen] = React.useState(false);
   const [mockupTop, setMockupTop] = React.useState(12);
   const [mockupBottom, setMockupBottom] = React.useState(88);
   const [mockupOpacity, setMockupOpacity] = React.useState(35);
+
+  const loadImageFromUrl = React.useCallback(async () => {
+    const url = urlInput.trim();
+    if (!url) return;
+    setUrlLoading(true);
+    setUrlError(null);
+    onSetMockup?.(null);
+    setMockupOpen(false);
+    setState(INITIAL_STATE);
+    setOverrideDraft(null);
+    try {
+      const res = await fetch("/api/admin/flatbed/fetch-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = (await res.json()) as { dataUrl?: string; mimeType?: string; byteLength?: number; error?: string };
+      if (!res.ok || !data.dataUrl) throw new Error(data.error ?? "Failed to load image.");
+      setImageSrc(data.dataUrl);
+      const img = new window.Image();
+      img.onload = () => setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+      img.src = data.dataUrl;
+      // Create a synthetic File for auto-detect
+      const blob = await fetch(data.dataUrl).then(r => r.blob());
+      const name = url.split("/").pop()?.split("?")[0] ?? "image.jpg";
+      const file = new File([blob], name, { type: data.mimeType ?? "image/jpeg" });
+      setSelectedImage(file);
+    } catch (err) {
+      setUrlError(err instanceof Error ? err.message : "Failed to load image from URL.");
+    } finally {
+      setUrlLoading(false);
+    }
+  }, [urlInput, onSetMockup]);
 
   const runAutoDetect = React.useCallback(async (file: File) => {
     setState({ status: "loading", result: null, error: null });
@@ -130,6 +168,8 @@ export function FlatBedAutoDetectPanel({ onApplyItem, onSetMockup, mockupActive 
       });
 
       setState({ status: "success", result, error: null });
+      // Auto-open override when AI confidence is low so user can correct it
+      if (result.confidence === "low") setOverrideOpen(true);
     } catch (error) {
       setState({
         status: "error",
@@ -169,7 +209,7 @@ export function FlatBedAutoDetectPanel({ onApplyItem, onSetMockup, mockupActive 
       </div>
 
       <div className={styles.body}>
-        <div className={styles.sectionLabel}>Upload Image</div>
+        <div className={styles.sectionLabel}>Upload Image or Paste URL</div>
         <input
           type="file"
           accept="image/*"
@@ -201,6 +241,24 @@ export function FlatBedAutoDetectPanel({ onApplyItem, onSetMockup, mockupActive 
         <div className={styles.fileName}>
           {selectedImage?.name ?? "No image selected"}
         </div>
+
+        <div className={styles.urlRow}>
+          <input
+            type="url"
+            className={styles.urlInput}
+            placeholder="Or paste image URL…"
+            value={urlInput}
+            onChange={e => setUrlInput(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") void loadImageFromUrl(); }}
+          />
+          <button
+            className={styles.urlLoadBtn}
+            onClick={() => void loadImageFromUrl()}
+            disabled={!urlInput.trim() || urlLoading}
+            type="button"
+          >{urlLoading ? "…" : "Load"}</button>
+        </div>
+        {urlError && <div className={styles.error}>{urlError}</div>}
 
         <button
           className={`${styles.primaryBtn} ${state.status === "loading" ? styles.primaryBtnLoading : ""}`}

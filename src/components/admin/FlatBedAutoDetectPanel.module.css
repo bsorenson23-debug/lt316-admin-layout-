@@ -418,3 +418,38 @@
 .mockupApplyBtn:hover {
   background: #224530;
 }
+
+.urlRow {
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
+}
+
+.urlInput {
+  flex: 1;
+  background: #1e1e1e;
+  border: 1px solid #2e2e2e;
+  border-radius: 4px;
+  color: #d0d0d0;
+  font-size: 11px;
+  padding: 5px 7px;
+  outline: none;
+  min-width: 0;
+}
+.urlInput:focus { border-color: #4a6a8a; }
+.urlInput::placeholder { color: #444; }
+
+.urlLoadBtn {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #1e2e3e;
+  border: 1px solid #2e4e6e;
+  border-radius: 4px;
+  color: #7ab0d8;
+  cursor: pointer;
+  transition: background 100ms;
+}
+.urlLoadBtn:hover:not(:disabled) { background: #263848; }
+.urlLoadBtn:disabled { opacity: 0.4; cursor: not-allowed; }
