@@ -424,6 +424,7 @@ export function AdminLayoutShell() {
             framePreview={framePreview}
             tumblerViewMode={tumblerViewMode}
             onTumblerViewModeChange={setTumblerViewMode}
+            onWorkspaceModeChange={handleWorkspaceModeChange}
             onPlaceAsset={handlePlaceAsset}
             onSelectItem={handleSelectItem}
             onUpdateItem={handleUpdateItem}
