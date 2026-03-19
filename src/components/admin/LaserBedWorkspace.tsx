@@ -16,7 +16,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { BedConfig, PlacedItem, PlacedItemPatch, SvgAsset } from "@/types/admin";
+import { BedConfig, PlacedItem, PlacedItemPatch, SvgAsset, WorkspaceMode } from "@/types/admin";
 import { calcBedScale, clamp, mmToPx, pxToMm } from "@/utils/geometry";
 import {
   getActiveTumblerGuideBand,
@@ -68,6 +68,7 @@ interface Props {
   framePreview?: FramePreviewProp | null;
   tumblerViewMode?: "wrap" | "two-sided";
   onTumblerViewModeChange?: (mode: "wrap" | "two-sided") => void;
+  onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
   onPlaceAsset: (xMm: number, yMm: number) => void;
   onSelectItem: (id: string | null) => void;
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
@@ -84,6 +85,7 @@ export function LaserBedWorkspace({
   framePreview,
   tumblerViewMode,
   onTumblerViewModeChange,
+  onWorkspaceModeChange,
   onPlaceAsset,
   onSelectItem,
   onUpdateItem,
@@ -133,10 +135,7 @@ export function LaserBedWorkspace({
   );
   const selectedItem = placedItems.find((item) => item.id === selectedItemId) ?? null;
   const nudgeStepMm = bedConfig.snapToGrid ? bedConfig.gridSpacing : 1;
-  const workspaceTitle =
-    bedConfig.workspaceMode === "tumbler-wrap"
-      ? "Tumbler Wrap Workspace"
-      : "Laser Bed Workspace";
+
   const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
   const showGuideBands = shouldRenderTumblerGuideBand(bedConfig);
 
@@ -231,7 +230,20 @@ export function LaserBedWorkspace({
     <div className={styles.wrapper} ref={containerRef}>
       {/* Toolbar row */}
       <div className={styles.toolbar}>
-        <span className={styles.toolbarTitle}>{workspaceTitle}</span>
+        {/* Mode pills — Flat Bed / Tumbler */}
+        {onWorkspaceModeChange && (
+          <div className={styles.modePills}>
+            <button
+              className={`${styles.modePill} ${bedConfig.workspaceMode === "flat-bed" ? styles.modePillActive : ""}`}
+              onClick={() => onWorkspaceModeChange("flat-bed")}
+            >Flat Bed</button>
+            <button
+              className={`${styles.modePill} ${bedConfig.workspaceMode === "tumbler-wrap" ? styles.modePillActive : ""}`}
+              onClick={() => onWorkspaceModeChange("tumbler-wrap")}
+            >Tumbler</button>
+          </div>
+        )}
+        {/* Wrap / Two-Sided — tumbler only */}
         {bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange && (
           <div className={styles.viewToggle}>
             <button

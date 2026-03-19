@@ -8,6 +8,8 @@ import {
   PlacedItem,
   PlacedItemPatch,
   SvgAsset,
+  WorkspaceMode,
+  normalizeBedConfig,
 } from "@/types/admin";
 import { clamp } from "@/utils/geometry";
 import { parseSvgAsset, defaultPlacedSize, normalizeSvgToArtworkBounds } from "@/utils/svg";
@@ -335,6 +337,11 @@ export function AdminLayoutShell() {
     setInspectorNote("Applied auto-detected tumbler template");
   }, []);
 
+  const handleWorkspaceModeChange = useCallback((mode: WorkspaceMode) => {
+    setBedConfig((prev) => normalizeBedConfig({ ...prev, workspaceMode: mode }));
+    if (mode === "flat-bed") setTumblerViewMode("wrap");
+  }, []);
+
   // -------------------------------------------------------------------------
   // Render helpers
   // -------------------------------------------------------------------------
@@ -372,6 +379,7 @@ export function AdminLayoutShell() {
                 framePreview={null}
                 tumblerViewMode={tumblerViewMode}
                 onTumblerViewModeChange={setTumblerViewMode}
+                onWorkspaceModeChange={handleWorkspaceModeChange}
                 onPlaceAsset={handlePlaceAsset}
                 onSelectItem={handleSelectItem}
                 onUpdateItem={handleUpdateItem}
@@ -396,6 +404,7 @@ export function AdminLayoutShell() {
                 framePreview={null}
                 tumblerViewMode={tumblerViewMode}
                 onTumblerViewModeChange={setTumblerViewMode}
+                onWorkspaceModeChange={handleWorkspaceModeChange}
                 onPlaceAsset={handleBackPlaceAsset}
                 onSelectItem={handleBackSelectItem}
                 onUpdateItem={handleBackUpdateItem}

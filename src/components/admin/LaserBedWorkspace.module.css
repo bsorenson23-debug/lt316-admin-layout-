@@ -32,6 +32,46 @@
   font-family: monospace;
 }
 
+/* ---- Workspace mode pills (Flat Bed / Tumbler) ---- */
+.modePills {
+  display: inline-flex;
+  border: 1px solid #303030;
+  border-radius: 20px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.modePill {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 4px 13px;
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+
+.modePill:not(:last-child) {
+  border-right: 1px solid #303030;
+}
+
+.modePill:hover {
+  background: #1e1e1e;
+  color: #999;
+}
+
+.modePillActive {
+  background: #1a2535;
+  color: #6ab0e8;
+}
+
+.modePillActive:hover {
+  background: #1a2535;
+  color: #6ab0e8;
+}
+
 /* ---- View mode toggle (Wrap / Two-Sided) ---- */
 .viewToggle {
   display: inline-flex;

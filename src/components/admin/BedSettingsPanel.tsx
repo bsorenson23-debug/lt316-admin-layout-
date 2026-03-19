@@ -93,20 +93,6 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
           open={workspaceOpen}
           onToggle={() => setWorkspaceOpen((o) => !o)}
         >
-          <FieldRow label="Mode">
-            <select
-              className={styles.select}
-              value={bedConfig.workspaceMode}
-              onChange={(e) =>
-                set({ workspaceMode: e.target.value as BedConfig["workspaceMode"] })
-              }
-              aria-label="Workspace mode"
-            >
-              <option value="flat-bed">Flat Bed</option>
-              <option value="tumbler-wrap">Tumbler Wrap</option>
-            </select>
-          </FieldRow>
-
           {isTumblerMode ? (
             <>
               <FieldRow label="Profile">
