@@ -1,0 +1,252 @@
+/* ── Panel shell ──────────────────────────────────────────────── */
+.panel {
+  border-bottom: 1px solid #2a2a2a;
+  background: #181818;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid #242424;
+}
+
+.title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.stepBadge {
+  font-size: 10px;
+  color: #a8a8a8;
+  border: 1px solid #353535;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.body {
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Step hint ────────────────────────────────────────────────── */
+.stepHint {
+  font-size: 11px;
+  color: #888;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.stepHint strong { color: #c0c0c0; }
+
+/* ── Field rows ───────────────────────────────────────────────── */
+.fieldRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  color: #909090;
+  white-space: nowrap;
+}
+
+.select {
+  width: 155px;
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 11px;
+  padding: 4px 6px;
+}
+
+.inputGroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.numInput {
+  width: 80px;
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 11px;
+  padding: 4px 6px;
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.numInput::-webkit-outer-spin-button,
+.numInput::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+.unit {
+  font-size: 11px;
+  color: #666;
+}
+
+.readonlyVal {
+  font-size: 11px;
+  font-family: monospace;
+  color: #7a7a7a;
+}
+
+/* ── Info rows (read-only data) ───────────────────────────────── */
+.infoRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: #1c1c1c;
+  border: 1px solid #252525;
+  border-radius: 4px;
+}
+
+.infoLabel {
+  font-size: 10px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.infoValue {
+  font-size: 11px;
+  font-family: monospace;
+  color: #888;
+}
+
+/* ── Hint text ────────────────────────────────────────────────── */
+.hint {
+  font-size: 10px;
+  color: #555;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+/* ── Result cards ─────────────────────────────────────────────── */
+.resultCard {
+  background: #1c2420;
+  border: 1px solid #273528;
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.resultCardGreen {
+  border-color: #2a5238;
+  background: #162219;
+}
+
+.resultRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.resultLabel {
+  font-size: 10px;
+  color: #6a9a82;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.resultValue {
+  font-size: 14px;
+  font-weight: 700;
+  font-family: monospace;
+  color: #8ddbb6;
+}
+
+.resultValueLarge {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: monospace;
+  color: #a8eecb;
+}
+
+.resultHint {
+  font-size: 10px;
+  color: #5a8a70;
+  line-height: 1.4;
+}
+
+.resultHint strong { color: #8ddbb6; }
+
+/* ── Success card ─────────────────────────────────────────────── */
+.successCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: #162219;
+  border: 1px solid #2a5238;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.successIcon {
+  font-size: 14px;
+  color: #7ecfa8;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.successText {
+  font-size: 11px;
+  color: #7ecfa8;
+  line-height: 1.4;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.btnRow {
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
+}
+
+.primaryBtn {
+  flex: 1;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: #2a4e3a;
+  border: 1px solid #3d7055;
+  color: #c8eedd;
+  letter-spacing: 0.02em;
+  transition: background 100ms;
+}
+
+.primaryBtn:hover { background: #325f47; }
+
+.primaryBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ghostBtn {
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: none;
+  border: 1px solid #2e2e2e;
+  color: #666;
+  transition: color 100ms, border-color 100ms;
+}
+
+.ghostBtn:hover { color: #999; border-color: #444; }

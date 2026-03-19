@@ -48,6 +48,10 @@ export interface RotaryPlacementPreset {
   anchorReferencePointMm?: RotaryAnchorReferencePoint;
   baseVisualPlaceholder?: boolean;
   notes?: string;
+  /** Calibrated steps-per-rotation value to enter in LightBurn rotary setup */
+  stepsPerRotation?: number;
+  /** Correction factor computed from SPR calibration (actual / commanded) */
+  sprCorrectionFactor?: number;
 }
 
 export interface TumblerPlacementProfile {

@@ -1,0 +1,115 @@
+/* ── Panel shell ──────────────────────────────────────────────── */
+.panel {
+  border-bottom: 1px solid #2a2a2a;
+  background: #181818;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid #242424;
+}
+
+.title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.badge {
+  font-size: 10px;
+  color: #7ecfa8;
+  border: 1px solid #2a5238;
+  border-radius: 4px;
+  padding: 2px 6px;
+  text-transform: uppercase;
+}
+
+.body {
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.btnRow {
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
+}
+
+.primaryBtn {
+  flex: 1;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: #2a4e3a;
+  border: 1px solid #3d7055;
+  color: #c8eedd;
+  letter-spacing: 0.02em;
+  transition: background 100ms;
+}
+
+.primaryBtn:hover { background: #325f47; }
+
+.primaryBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.secondaryBtn {
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: #222;
+  border: 1px solid #303030;
+  color: #888;
+  white-space: nowrap;
+  transition: background 100ms;
+}
+
+.secondaryBtn:hover { background: #282828; color: #aaa; }
+
+/* ── Hints / errors ───────────────────────────────────────────── */
+.hint {
+  font-size: 10px;
+  color: #555;
+  font-style: italic;
+}
+
+.empty {
+  font-size: 10px;
+  color: #444;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.errorMsg {
+  font-size: 11px;
+  color: #d98a8a;
+  background: rgba(168, 72, 72, 0.12);
+  border: 1px solid #5a3030;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+/* ── Preview image ────────────────────────────────────────────── */
+.previewWrap {
+  border: 1px solid #272727;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #111;
+}
+
+.previewImg {
+  width: 100%;
+  display: block;
+}

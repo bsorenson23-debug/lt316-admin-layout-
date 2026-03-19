@@ -32,6 +32,8 @@ import { SelectedItemInspector } from "./SelectedItemInspector";
 import { OrdersPanel } from "./OrdersPanel";
 import { MaterialProfilePanel } from "./MaterialProfilePanel";
 import type { ActiveMaterialSettings } from "./MaterialProfilePanel";
+import { ProofMockupPanel } from "./ProofMockupPanel";
+import { SprCalibrationPanel } from "./SprCalibrationPanel";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -332,6 +334,12 @@ export function AdminLayoutShell() {
           onNormalizeItem={handleNormalizeItem}
           onDeleteItem={handleDeleteItem}
         />
+        <ProofMockupPanel
+          bedConfig={bedConfig}
+          placedItems={placedItems}
+          mockupConfig={mockupConfig}
+        />
+        <SprCalibrationPanel bedConfig={bedConfig} />
       </aside>
     </div>
   );
