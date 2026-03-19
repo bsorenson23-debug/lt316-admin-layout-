@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import styles from "./LaserTypePanel.module.css";
 import type { LaserProfile, LaserLens, LaserSourceType } from "@/types/laserProfile";
 import { LASER_SOURCE_LABELS, LASER_SOURCE_COLORS } from "@/types/laserProfile";
@@ -22,9 +22,16 @@ interface Props {
 }
 
 export function LaserTypePanel({ onSelectionChange, onItemSelect }: Props) {
-  const [profiles, setProfiles] = useState<LaserProfile[]>(() => getLaserProfiles());
-  const [activeLaserId, setActiveLaserIdState] = useState<string | null>(() => getActiveLaserId());
-  const [activeLensId, setActiveLensIdState] = useState<string | null>(() => getActiveLensId());
+  const [profiles, setProfiles] = useState<LaserProfile[]>([]);
+  const [activeLaserId, setActiveLaserIdState] = useState<string | null>(null);
+  const [activeLensId, setActiveLensIdState] = useState<string | null>(null);
+
+  // Load persisted state client-side only to avoid SSR hydration mismatch
+  useEffect(() => {
+    setProfiles(getLaserProfiles());
+    setActiveLaserIdState(getActiveLaserId());
+    setActiveLensIdState(getActiveLensId());
+  }, []);
 
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [editingLensId, setEditingLensId] = useState<string | null>(null);

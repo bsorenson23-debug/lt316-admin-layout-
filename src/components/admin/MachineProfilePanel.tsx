@@ -58,8 +58,14 @@ interface Props {
 
 export function MachineProfilePanel({ onMachineChange }: Props) {
   const [open, setOpen] = React.useState(true);
-  const [machines, setMachines] = React.useState<MachineProfile[]>(() => loadMachines());
-  const [activeId, setActiveId] = React.useState<string>(() => loadActiveId());
+  const [machines, setMachines] = React.useState<MachineProfile[]>([]);
+  const [activeId, setActiveId] = React.useState<string>("");
+
+  // Load persisted state client-side only to avoid SSR hydration mismatch
+  React.useEffect(() => {
+    setMachines(loadMachines());
+    setActiveId(loadActiveId());
+  }, []);
   const [creating, setCreating] = React.useState(false);
   const [draft, setDraft] = React.useState<MachineFormDraft>(EMPTY_DRAFT);
   const [editingId, setEditingId] = React.useState<string | null>(null);

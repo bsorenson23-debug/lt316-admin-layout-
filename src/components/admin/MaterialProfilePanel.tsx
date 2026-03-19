@@ -34,7 +34,13 @@ interface Props {
 export function MaterialProfilePanel({ onMaterialChange }: Props) {
   const [open, setOpen] = React.useState(true);
   const [laserFilter, setLaserFilter] = React.useState<LaserType | "">("");
-  const [selectedId, setSelectedId] = React.useState<string>(() => loadSavedProfileId());
+  const [selectedId, setSelectedId] = React.useState<string>("");
+
+  // Load from localStorage only on the client to avoid SSR/hydration mismatch
+  React.useEffect(() => {
+    const saved = loadSavedProfileId();
+    if (saved) setSelectedId(saved);
+  }, []);
 
   // Custom overrides (applied on top of preset)
   const [customPower, setCustomPower] = React.useState("");
