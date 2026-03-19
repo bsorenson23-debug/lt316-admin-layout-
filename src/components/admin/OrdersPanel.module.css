@@ -1,0 +1,344 @@
+.panel {
+  border-bottom: 1px solid #2a2a2a;
+  background: #1a1a1a;
+}
+
+/* ── Collapsible toggle header ── */
+.sectionToggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-bottom: 1px solid #222;
+  text-align: left;
+}
+
+.sectionToggle:hover { background: #1e1e1e; }
+
+.sectionToggleLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sectionToggleChevron {
+  font-size: 11px;
+  color: #555;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #f97316;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* ── Body ── */
+.body {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── New order button ── */
+.newOrderBtn {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px dashed #2e2e2e;
+  border-radius: 6px;
+  background: none;
+  color: #666;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  text-align: center;
+}
+.newOrderBtn:hover {
+  border-color: #f97316;
+  color: #f97316;
+}
+
+/* ── New order form ── */
+.newForm {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  background: #161616;
+}
+
+.textInput {
+  width: 100%;
+  background: #1e1e1e;
+  border: 1px solid #2e2e2e;
+  border-radius: 4px;
+  color: #ccc;
+  font-size: 11px;
+  padding: 5px 7px;
+  outline: none;
+  box-sizing: border-box;
+}
+.textInput:focus { border-color: #f97316; }
+.textInput::placeholder { color: #444; }
+
+.snapshotPreview {
+  font-size: 10px;
+  color: #555;
+  padding: 3px 6px;
+  background: #1a1a1a;
+  border-radius: 3px;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formActions {
+  display: flex;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.saveBtn {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  border-radius: 4px;
+  background: #f97316;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.saveBtn:hover:not(:disabled) { background: #ea6c0a; }
+.saveBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.cancelBtn {
+  padding: 5px 8px;
+  font-size: 11px;
+  background: none;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #666;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.cancelBtn:hover { color: #999; }
+
+/* ── Empty state ── */
+.empty {
+  font-size: 10px;
+  color: #444;
+  text-align: center;
+  padding: 8px 4px;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+/* ── Order card ── */
+.card {
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  background: #1e1e1e;
+  overflow: hidden;
+}
+
+.cardExpanded {
+  border-color: #3a3a3a;
+}
+
+.cardHeader {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+.cardHeader:hover { background: #242424; }
+
+.cardSummary {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.customerName {
+  font-size: 12px;
+  font-weight: 600;
+  color: #d0d0d0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.engravingText {
+  font-size: 10px;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+
+.cardMeta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.statusBadge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border: 1px solid;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.cardDate {
+  font-size: 9px;
+  color: #444;
+}
+
+/* ── Expanded card body ── */
+.cardBody {
+  padding: 8px;
+  border-top: 1px solid #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.detailRow {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.detailLabel {
+  font-size: 10px;
+  color: #555;
+  flex-shrink: 0;
+  min-width: 52px;
+}
+
+.detailValue {
+  font-size: 11px;
+  color: #999;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.statusSelect {
+  flex: 1;
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 4px;
+  color: #bbb;
+  font-size: 11px;
+  padding: 3px 6px;
+  outline: none;
+}
+.statusSelect:focus { border-color: #f97316; }
+
+/* ── Card actions ── */
+.cardActions {
+  display: flex;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.loadBtn {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #2a5a6b;
+  border-radius: 4px;
+  background: #123947;
+  color: #d9eff7;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.loadBtn:hover {
+  background: #16506a;
+  border-color: #36768b;
+}
+
+.deleteBtn {
+  padding: 5px 8px;
+  font-size: 11px;
+  background: none;
+  border: 1px solid #2e2e2e;
+  border-radius: 4px;
+  color: #555;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.deleteBtn:hover { color: #e05050; border-color: #5c2a2a; }
+
+.confirmYes {
+  padding: 5px 8px;
+  font-size: 11px;
+  border: 1px solid #5c2a2a;
+  border-radius: 4px;
+  background: rgba(160, 42, 42, 0.18);
+  color: #f1b6b6;
+  cursor: pointer;
+}
+.confirmYes:hover { background: rgba(160, 42, 42, 0.32); }
+
+.confirmNo {
+  padding: 5px 8px;
+  font-size: 11px;
+  background: none;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #666;
+  cursor: pointer;
+}
+.confirmNo:hover { color: #999; }

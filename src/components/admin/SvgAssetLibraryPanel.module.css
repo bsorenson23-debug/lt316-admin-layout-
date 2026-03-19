@@ -1,7 +1,8 @@
 .panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1 1 0;
+  min-height: 0;
   background: #1a1a1a;
   overflow: hidden;
 }
@@ -36,6 +37,27 @@
 .clearBtn:hover {
   background: rgba(224, 80, 80, 0.12);
 }
+
+.confirmYes {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid #5c2a2a;
+  background: rgba(160, 42, 42, 0.18);
+  color: #f1b6b6;
+  cursor: pointer;
+}
+.confirmYes:hover { background: rgba(160, 42, 42, 0.32); }
+.confirmNo {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid #333;
+  background: none;
+  color: #666;
+  cursor: pointer;
+}
+.confirmNo:hover { color: #999; }
 
 .fileInput {
   display: none;
@@ -122,15 +144,10 @@
   flex-direction: column;
   gap: 4px;
 }
-.assetList::-webkit-scrollbar {
-  width: 4px;
-}
-.assetList::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: 2px;
-}
+.assetList::-webkit-scrollbar { width: 4px; }
+.assetList::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
 
-/* ---- Empty state ---- */
+/* ── Empty state ── */
 .emptyState {
   display: flex;
   flex-direction: column;
@@ -155,13 +172,13 @@
   line-height: 1.5;
 }
 
-/* ---- Asset card ---- */
+/* ── Asset card ── */
 .assetCard {
   position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 8px;
+  padding: 8px;
   border-radius: 6px;
   border: 1px solid #2a2a2a;
   background: #222;
@@ -169,17 +186,9 @@
   transition: border-color 0.15s, background 0.15s;
   outline: none;
 }
-.assetCard:hover {
-  border-color: #3a3a3a;
-  background: #262626;
-}
-.assetCard.selected {
-  border-color: #f97316;
-  background: #1f1a14;
-}
-.assetCard:focus-visible {
-  box-shadow: 0 0 0 2px #f97316;
-}
+.assetCard:hover { border-color: #3a3a3a; background: #262626; }
+.assetCard.selected { border-color: #f97316; background: #1f1a14; }
+.assetCard:focus-visible { box-shadow: 0 0 0 2px #f97316; }
 
 .thumbnail {
   width: 36px;

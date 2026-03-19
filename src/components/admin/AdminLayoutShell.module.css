@@ -125,3 +125,64 @@
   background: #252525;
   flex-shrink: 0;
 }
+
+/* ── Split header (shared mode bar above both panes) ────────────── */
+.splitHeader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #161616;
+  border-bottom: 1px solid #242424;
+  flex-shrink: 0;
+}
+
+.splitModeBtn {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 4px 14px;
+  background: none;
+  border: 1px solid #2e2e2e;
+  border-radius: 999px;
+  color: #555;
+  cursor: pointer;
+  transition: border-color 140ms, color 140ms, background 140ms;
+  white-space: nowrap;
+}
+
+.splitModeBtn:hover {
+  border-color: #505050;
+  color: #909090;
+}
+
+.splitModeBtnActive {
+  border-color: #5a9fd4;
+  color: #7dbfef;
+  background: rgba(20, 34, 52, 0.88);
+}
+
+.splitModeBtnActive:hover {
+  border-color: #7dbfef;
+  color: #9ecff5;
+}
+
+.splitHeaderSep {
+  width: 1px;
+  height: 16px;
+  background: #2e2e2e;
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* ── Split pane label color variants ───────────────────────────── */
+.splitPaneFront {
+  color: #7ecfa8 !important;
+  border-bottom-color: #1f4030 !important;
+}
+
+.splitPaneBack {
+  color: #6ab0e8 !important;
+  border-bottom-color: #1a3050 !important;
+}

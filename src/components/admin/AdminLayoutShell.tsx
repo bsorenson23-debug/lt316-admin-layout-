@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
   BedConfig,
   DEFAULT_BED_CONFIG,
@@ -23,17 +23,16 @@ import { applyTumblerSuggestion } from "@/utils/tumblerAutoSize";
 import { centerArtworkBetweenGrooves, getActiveTumblerGuideBand } from "@/utils/tumblerGuides";
 import { SvgAssetLibraryPanel } from "./SvgAssetLibraryPanel";
 import { LaserBedWorkspace } from "./LaserBedWorkspace";
-import type { FramePreviewProp } from "./LaserBedWorkspace";
+import type { FramePreviewProp, BedMockupConfig } from "./LaserBedWorkspace";
 import { BedSettingsPanel } from "./BedSettingsPanel";
 import { TumblerAutoDetectPanel } from "./TumblerAutoDetectPanel";
+import { Model3DPanel } from "./Model3DPanel";
 import { TumblerExportPanel } from "./TumblerExportPanel";
 import { SelectedItemInspector } from "./SelectedItemInspector";
-import { SplitAlignmentRail } from "./SplitAlignmentRail";
+import { OrdersPanel } from "./OrdersPanel";
+import { MaterialProfilePanel } from "./MaterialProfilePanel";
+import type { ActiveMaterialSettings } from "./MaterialProfilePanel";
 import styles from "./AdminLayoutShell.module.css";
-
-type TumblerViewMode = "wrap" | "two-sided";
-type ActiveSide = "front" | "back";
-
 
 function isDevEnvironment() {
   return process.env.NODE_ENV !== "production";
@@ -43,10 +42,6 @@ export function AdminLayoutShell() {
   // -- Bed config -----------------------------------------------------------
   const [bedConfig, setBedConfig] = useState<BedConfig>(DEFAULT_BED_CONFIG);
 
-  // -- View mode (tumbler only) ---------------------------------------------
-  const [tumblerViewMode, setTumblerViewMode] = useState<TumblerViewMode>("wrap");
-  const [activeSide, setActiveSide] = useState<ActiveSide>("front");
-
   // -- Asset library --------------------------------------------------------
   const [svgAssets, setSvgAssets] = useState<SvgAsset[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
@@ -54,38 +49,24 @@ export function AdminLayoutShell() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [inspectorNote, setInspectorNote] = useState<string | null>(null);
 
-  // -- Placed items (front / single) ----------------------------------------
+  // -- Placed items ---------------------------------------------------------
   const [placedItems, setPlacedItems] = useState<PlacedItem[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-
-  // -- Placed items (back — two-sided only) ---------------------------------
-  const [backPlacedItems, setBackPlacedItems] = useState<PlacedItem[]>([]);
-  const [backSelectedItemId, setBackSelectedItemId] = useState<string | null>(null);
 
   // -- Frame preview --------------------------------------------------------
   const [framePreview, setFramePreview] = useState<FramePreviewProp | null>(null);
 
+  // -- Material profile -----------------------------------------------------
+  const [materialSettings, setMaterialSettings] = useState<ActiveMaterialSettings | null>(null);
+
+  // -- Tumbler mockup overlay -----------------------------------------------
+  const [mockupConfig, setMockupConfig] = useState<BedMockupConfig | null>(null);
+
   // -- Derived --------------------------------------------------------------
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
-  const isTwoSided = isTumblerMode && tumblerViewMode === "two-sided";
-
-  /** Half-circumference bed config used for each panel in two-sided mode. */
-  const halfBedConfig = useMemo<BedConfig>(() => ({
-    ...bedConfig,
-    width: bedConfig.width / 2,
-    tumblerTemplateWidthMm: bedConfig.width / 2,
-  }), [bedConfig]);
-
   const placementAsset = svgAssets.find((a) => a.id === placementAssetId) ?? null;
   const isPlacementArmed = placementAsset !== null;
-
-  // Active-side item list and selection
-  const activeItems      = activeSide === "front" ? placedItems     : backPlacedItems;
-  const activeSelectedId = activeSide === "front" ? selectedItemId  : backSelectedItemId;
-  const activeSelectedItem = activeItems.find((p) => p.id === activeSelectedId) ?? null;
-
-  // Export items = active side in two-sided, all items in wrap
-  const exportItems = isTwoSided ? activeItems : placedItems;
+  const selectedItem = placedItems.find((p) => p.id === selectedItemId) ?? null;
 
   // -------------------------------------------------------------------------
   // Asset library handlers
@@ -136,34 +117,28 @@ export function AdminLayoutShell() {
       if (placementAssetId === assetId) setPlacementAssetId(null);
       return next;
     });
-    const dropItems = (prev: PlacedItem[]) => prev.filter((p) => p.assetId !== assetId);
-    setPlacedItems(dropItems);
-    setBackPlacedItems(dropItems);
+    setPlacedItems((prev) => prev.filter((p) => p.assetId !== assetId));
     setSelectedItemId((id) => {
-      if (id && !placedItems.some((p) => p.id === id && p.assetId !== assetId)) { setInspectorNote(null); return null; }
+      if (id && placedItems.some((p) => p.id === id && p.assetId === assetId)) {
+        setInspectorNote(null); return null;
+      }
       return id;
     });
-    setBackSelectedItemId((id) => {
-      if (id && !backPlacedItems.some((p) => p.id === id && p.assetId !== assetId)) return null;
-      return id;
-    });
-  }, [selectedAssetId, placementAssetId, placedItems, backPlacedItems]);
+  }, [selectedAssetId, placementAssetId, placedItems]);
 
   const handleClearAssets = useCallback(() => {
     setSvgAssets([]); setSelectedAssetId(null); setPlacementAssetId(null);
-    setPlacedItems([]); setBackPlacedItems([]);
-    setSelectedItemId(null); setBackSelectedItemId(null);
+    setPlacedItems([]); setSelectedItemId(null);
     setUploadError(null); setInspectorNote(null);
   }, []);
 
   // -------------------------------------------------------------------------
-  // Item builders
+  // Item handlers
   // -------------------------------------------------------------------------
   const buildPlacedItem = useCallback((
     asset: SvgAsset, xMm: number, yMm: number,
-    cfg: BedConfig = bedConfig,
   ): PlacedItem => {
-    const maxAutoSize = Math.max(40, Math.min(100, Math.min(cfg.width, cfg.height) * 0.35));
+    const maxAutoSize = Math.max(40, Math.min(100, Math.min(bedConfig.width, bedConfig.height) * 0.35));
     const { width, height } = defaultPlacedSize(asset, maxAutoSize);
     const id = `item-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const defaults = { x: xMm, y: yMm, width, height, rotation: 0 };
@@ -176,21 +151,16 @@ export function AdminLayoutShell() {
     };
   }, [bedConfig]);
 
-  // -------------------------------------------------------------------------
-  // Front-side (or single-mode) item handlers
-  // -------------------------------------------------------------------------
   const handlePlaceAsset = useCallback((xMm: number, yMm: number) => {
     if (!placementAssetId) return;
     const asset = svgAssets.find((a) => a.id === placementAssetId);
     if (!asset) return;
-    const cfg = isTwoSided ? halfBedConfig : bedConfig;
-    const item = buildPlacedItem(asset, xMm, yMm, cfg);
+    const item = buildPlacedItem(asset, xMm, yMm);
     setPlacedItems((prev) => [...prev, item]);
     setSelectedItemId(item.id);
-    setActiveSide("front");
     setPlacementAssetId(null);
     setInspectorNote(null);
-  }, [placementAssetId, svgAssets, isTwoSided, halfBedConfig, bedConfig, buildPlacedItem]);
+  }, [placementAssetId, svgAssets, buildPlacedItem]);
 
   const handlePlaceSelectedAssetOnBed = useCallback(() => {
     if (selectedAssetId) setPlacementAssetId(selectedAssetId);
@@ -199,7 +169,6 @@ export function AdminLayoutShell() {
 
   const handleSelectItem = useCallback((id: string | null) => {
     setSelectedItemId(id);
-    setActiveSide("front");
     if (!id) setInspectorNote(null);
   }, []);
 
@@ -209,13 +178,15 @@ export function AdminLayoutShell() {
 
   const handleNudgeSelected = useCallback((dxMm: number, dyMm: number) => {
     if (!selectedItemId) return;
-    const w = isTwoSided ? halfBedConfig.width : bedConfig.width;
-    const h = isTwoSided ? halfBedConfig.height : bedConfig.height;
     setPlacedItems((prev) => prev.map((p) => {
       if (p.id !== selectedItemId) return p;
-      return { ...p, x: clamp(p.x + dxMm, 0, Math.max(0, w - p.width)), y: clamp(p.y + dyMm, 0, Math.max(0, h - p.height)) };
+      return {
+        ...p,
+        x: clamp(p.x + dxMm, 0, Math.max(0, bedConfig.width - p.width)),
+        y: clamp(p.y + dyMm, 0, Math.max(0, bedConfig.height - p.height)),
+      };
     }));
-  }, [selectedItemId, isTwoSided, halfBedConfig, bedConfig]);
+  }, [selectedItemId, bedConfig]);
 
   const handleClearWorkspace = useCallback(() => {
     setPlacedItems([]); setSelectedItemId(null);
@@ -223,82 +194,33 @@ export function AdminLayoutShell() {
   }, []);
 
   const handleDeleteItem = useCallback((id: string) => {
-    if (activeSide === "front") {
-      setPlacedItems((prev) => prev.filter((p) => p.id !== id));
-      if (selectedItemId === id) setSelectedItemId(null);
-    } else {
-      setBackPlacedItems((prev) => prev.filter((p) => p.id !== id));
-      if (backSelectedItemId === id) setBackSelectedItemId(null);
-    }
-  }, [activeSide, selectedItemId, backSelectedItemId]);
+    setPlacedItems((prev) => prev.filter((p) => p.id !== id));
+    if (selectedItemId === id) setSelectedItemId(null);
+  }, [selectedItemId]);
 
   // -------------------------------------------------------------------------
-  // Back-side item handlers
-  // -------------------------------------------------------------------------
-  const handleBackPlaceAsset = useCallback((xMm: number, yMm: number) => {
-    if (!placementAssetId) return;
-    const asset = svgAssets.find((a) => a.id === placementAssetId);
-    if (!asset) return;
-    const item = buildPlacedItem(asset, xMm, yMm, halfBedConfig);
-    setBackPlacedItems((prev) => [...prev, item]);
-    setBackSelectedItemId(item.id);
-    setActiveSide("back");
-    setPlacementAssetId(null);
-    setInspectorNote(null);
-  }, [placementAssetId, svgAssets, halfBedConfig, buildPlacedItem]);
-
-  const handleBackSelectItem = useCallback((id: string | null) => {
-    setBackSelectedItemId(id);
-    setActiveSide("back");
-    if (!id) setInspectorNote(null);
-  }, []);
-
-  const handleBackUpdateItem = useCallback((id: string, patch: PlacedItemPatch) => {
-    setBackPlacedItems((prev) => prev.map((p) => p.id === id ? { ...p, ...patch } : p));
-  }, []);
-
-  const handleBackNudge = useCallback((dxMm: number, dyMm: number) => {
-    if (!backSelectedItemId) return;
-    const { width: w, height: h } = halfBedConfig;
-    setBackPlacedItems((prev) => prev.map((p) => {
-      if (p.id !== backSelectedItemId) return p;
-      return { ...p, x: clamp(p.x + dxMm, 0, Math.max(0, w - p.width)), y: clamp(p.y + dyMm, 0, Math.max(0, h - p.height)) };
-    }));
-  }, [backSelectedItemId, halfBedConfig]);
-
-  const handleClearBackWorkspace = useCallback(() => {
-    setBackPlacedItems([]); setBackSelectedItemId(null);
-    setPlacementAssetId(null); setInspectorNote(null);
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // Shared inspector handlers (route to active side)
+  // Inspector handlers
   // -------------------------------------------------------------------------
   const handleResetItem = useCallback((id: string) => {
-    const reset = (prev: PlacedItem[]) => prev.map((p) =>
+    setPlacedItems((prev) => prev.map((p) =>
       p.id !== id ? p : { ...p, x: p.defaults.x, y: p.defaults.y, width: p.defaults.width, height: p.defaults.height, rotation: p.defaults.rotation }
-    );
-    if (activeSide === "front") setPlacedItems(reset);
-    else setBackPlacedItems(reset);
+    ));
     setInspectorNote("Reset to defaults");
-  }, [activeSide]);
+  }, []);
 
   const handleAlignItem = useCallback((id: string, mode: ItemAlignmentMode) => {
-    const cfg = isTwoSided ? halfBedConfig : bedConfig;
-    const patch = (prev: PlacedItem[]) => prev.map((p) =>
-      p.id !== id ? p : { ...p, ...computeAlignmentPatch(p, cfg, mode) }
-    );
-    if (activeSide === "front") setPlacedItems(patch);
-    else setBackPlacedItems(patch);
+    setPlacedItems((prev) => prev.map((p) =>
+      p.id !== id ? p : { ...p, ...computeAlignmentPatch(p, bedConfig, mode) }
+    ));
     if (mode === "center-bed")  setInspectorNote("Centered using artwork bounds");
     if (mode === "center-x")    setInspectorNote("Centered horizontally");
     if (mode === "center-y")    setInspectorNote("Centered vertically");
     if (mode === "fit-bed")     setInspectorNote("Fitted to bed");
-  }, [activeSide, isTwoSided, halfBedConfig, bedConfig]);
+  }, [bedConfig]);
 
   const handleNormalizeItem = useCallback((id: string) => {
     let did = false;
-    const norm = (prev: PlacedItem[]) => prev.map((p) => {
+    setPlacedItems((prev) => prev.map((p) => {
       if (p.id !== id) return p;
       try {
         const current = getPlacedArtworkBounds(p);
@@ -307,30 +229,21 @@ export function AdminLayoutShell() {
         did = true;
         return { ...p, svgText: n.svgText, documentBounds: n.documentBounds, artworkBounds: n.artworkBounds, ...next, defaults: { ...p.defaults, ...next } };
       } catch { return p; }
-    });
-    if (activeSide === "front") setPlacedItems(norm);
-    else setBackPlacedItems(norm);
+    }));
     setInspectorNote(did ? "Normalized SVG bounds" : "Could not normalize");
-  }, [activeSide]);
-
-  const handleActiveUpdateItem = useCallback((id: string, patch: PlacedItemPatch) => {
-    if (activeSide === "front") handleUpdateItem(id, patch);
-    else handleBackUpdateItem(id, patch);
-  }, [activeSide, handleUpdateItem, handleBackUpdateItem]);
+  }, []);
 
   const handleCenterSelectedBetweenGuides = useCallback((id: string) => {
     const guideBand = getActiveTumblerGuideBand(bedConfig);
     if (!guideBand) return;
-    const center = (prev: PlacedItem[]) => prev.map((p) => {
+    setPlacedItems((prev) => prev.map((p) => {
       if (p.id !== id) return p;
       const c = centerArtworkBetweenGrooves({ currentYmm: p.y, itemHeightMm: p.height, workspaceHeightMm: bedConfig.height, band: guideBand });
       if (isDevEnvironment()) console.info("[tumbler-guides] centered", { guideBand, nextY: c.yMm });
       return { ...p, y: Number(c.yMm.toFixed(3)) };
-    });
-    if (activeSide === "front") setPlacedItems(center);
-    else setBackPlacedItems(center);
+    }));
     setInspectorNote("Centered between groove guides");
-  }, [activeSide, bedConfig]);
+  }, [bedConfig]);
 
   const handleApplyTumblerDraft = useCallback((draft: TumblerSpecDraft) => {
     setBedConfig((prev) => applyTumblerSuggestion(prev, draft));
@@ -339,13 +252,14 @@ export function AdminLayoutShell() {
 
   const handleWorkspaceModeChange = useCallback((mode: WorkspaceMode) => {
     setBedConfig((prev) => normalizeBedConfig({ ...prev, workspaceMode: mode }));
-    if (mode === "flat-bed") setTumblerViewMode("wrap");
   }, []);
 
-  // -------------------------------------------------------------------------
-  // Render helpers
-  // -------------------------------------------------------------------------
-  const activeCfg = isTwoSided ? halfBedConfig : bedConfig;
+  const handleLoadOrder = useCallback((snapshot: BedConfig) => {
+    setBedConfig(snapshot);
+  }, []);
+
+  // Derived list of asset names for order capture
+  const assetNames = svgAssets.map((a) => a.name);
 
   return (
     <div className={styles.shell}>
@@ -360,96 +274,58 @@ export function AdminLayoutShell() {
           onPlaceSelectedAsset={handlePlaceSelectedAssetOnBed}
           onRemoveAsset={handleRemoveAsset}
           onClearAll={handleClearAssets}
-        />
+        >
+          <TumblerAutoDetectPanel
+            bedConfig={bedConfig}
+            onApplyDraft={handleApplyTumblerDraft}
+            onSetMockup={setMockupConfig}
+            mockupActive={mockupConfig !== null}
+          />
+        </SvgAssetLibraryPanel>
+        <Model3DPanel />
       </aside>
 
       {/* CENTER */}
       <main className={styles.centerPanel}>
-        {isTwoSided ? (
-          /* ── Two-sided split view ── */
-          <div className={styles.splitView}>
-            <div className={`${styles.splitPane} ${activeSide === "front" ? styles.splitPaneActive : ""}`}>
-              <div className={styles.splitPaneLabel}>Front</div>
-              <LaserBedWorkspace
-                bedConfig={halfBedConfig}
-                placedItems={placedItems}
-                selectedItemId={activeSide === "front" ? selectedItemId : null}
-                placementAsset={placementAsset}
-                isPlacementArmed={isPlacementArmed}
-                framePreview={null}
-                hideToolbar
-                tumblerViewMode={tumblerViewMode}
-                onTumblerViewModeChange={setTumblerViewMode}
-                onWorkspaceModeChange={handleWorkspaceModeChange}
-                onPlaceAsset={handlePlaceAsset}
-                onSelectItem={handleSelectItem}
-                onUpdateItem={handleUpdateItem}
-                onNudgeSelected={handleNudgeSelected}
-                onClearWorkspace={handleClearWorkspace}
-              />
-            </div>
-            <SplitAlignmentRail
-              bedHeightMm={halfBedConfig.height}
-              gridSpacingMm={halfBedConfig.gridSpacing}
-              frontItems={placedItems}
-              backItems={backPlacedItems}
-            />
-            <div className={`${styles.splitPane} ${activeSide === "back" ? styles.splitPaneActive : ""}`}>
-              <div className={styles.splitPaneLabel}>Back</div>
-              <LaserBedWorkspace
-                bedConfig={halfBedConfig}
-                placedItems={backPlacedItems}
-                selectedItemId={activeSide === "back" ? backSelectedItemId : null}
-                placementAsset={placementAsset}
-                isPlacementArmed={isPlacementArmed}
-                framePreview={null}
-                hideToolbar
-                tumblerViewMode={tumblerViewMode}
-                onTumblerViewModeChange={setTumblerViewMode}
-                onWorkspaceModeChange={handleWorkspaceModeChange}
-                onPlaceAsset={handleBackPlaceAsset}
-                onSelectItem={handleBackSelectItem}
-                onUpdateItem={handleBackUpdateItem}
-                onNudgeSelected={handleBackNudge}
-                onClearWorkspace={handleClearBackWorkspace}
-              />
-            </div>
-          </div>
-        ) : (
-          /* ── Single / wrap view ── */
-          <LaserBedWorkspace
-            bedConfig={bedConfig}
-            placedItems={placedItems}
-            selectedItemId={selectedItemId}
-            placementAsset={placementAsset}
-            isPlacementArmed={isPlacementArmed}
-            framePreview={framePreview}
-            tumblerViewMode={tumblerViewMode}
-            onTumblerViewModeChange={setTumblerViewMode}
-            onWorkspaceModeChange={handleWorkspaceModeChange}
-            onPlaceAsset={handlePlaceAsset}
-            onSelectItem={handleSelectItem}
-            onUpdateItem={handleUpdateItem}
-            onNudgeSelected={handleNudgeSelected}
-            onClearWorkspace={handleClearWorkspace}
-          />
-        )}
+        <LaserBedWorkspace
+          bedConfig={bedConfig}
+          placedItems={placedItems}
+          selectedItemId={selectedItemId}
+          placementAsset={placementAsset}
+          isPlacementArmed={isPlacementArmed}
+          framePreview={framePreview}
+          showTwoSidedCrosshairs={isTumblerMode}
+          mockupConfig={mockupConfig}
+          onWorkspaceModeChange={handleWorkspaceModeChange}
+          onPlaceAsset={handlePlaceAsset}
+          onSelectItem={handleSelectItem}
+          onUpdateItem={handleUpdateItem}
+          onNudgeSelected={handleNudgeSelected}
+          onDeleteItem={handleDeleteItem}
+          onClearWorkspace={handleClearWorkspace}
+        />
       </main>
 
       {/* RIGHT */}
       <aside className={styles.rightPanel}>
+        <OrdersPanel
+          bedConfig={bedConfig}
+          assetNames={assetNames}
+          onLoadOrder={handleLoadOrder}
+        />
         <BedSettingsPanel bedConfig={bedConfig} onUpdateBedConfig={setBedConfig} />
-        <TumblerAutoDetectPanel bedConfig={bedConfig} onApplyDraft={handleApplyTumblerDraft} />
+        <MaterialProfilePanel onMaterialChange={setMaterialSettings} />
         <TumblerExportPanel
-          bedConfig={activeCfg}
-          placedItems={exportItems}
-          onFramePreviewChange={isTwoSided ? undefined : setFramePreview}
+          bedConfig={bedConfig}
+          placedItems={placedItems}
+          onFramePreviewChange={setFramePreview}
+          materialSettings={materialSettings}
         />
         <SelectedItemInspector
-          selectedItem={activeSelectedItem}
-          bedConfig={activeCfg}
+          selectedItem={selectedItem}
+          bedConfig={bedConfig}
           statusNote={inspectorNote}
-          onUpdateItem={handleActiveUpdateItem}
+          onUpdateItem={handleUpdateItem}
           onAlignItem={handleAlignItem}
           onCenterBetweenGuides={handleCenterSelectedBetweenGuides}
           onResetItem={handleResetItem}

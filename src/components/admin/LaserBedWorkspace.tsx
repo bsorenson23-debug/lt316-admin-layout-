@@ -59,6 +59,15 @@ export interface FramePreviewProp {
   heightMm: number;
 }
 
+export interface BedMockupConfig {
+  src: string;
+  naturalWidth: number;
+  naturalHeight: number;
+  printTopPct: number;    // 0–1 fraction of image height where printable zone starts
+  printBottomPct: number; // 0–1 fraction of image height where printable zone ends
+  opacity: number;        // 0–1
+}
+
 interface Props {
   bedConfig: BedConfig;
   placedItems: PlacedItem[];
@@ -66,15 +75,15 @@ interface Props {
   placementAsset: SvgAsset | null;
   isPlacementArmed: boolean;
   framePreview?: FramePreviewProp | null;
-  tumblerViewMode?: "wrap" | "two-sided";
-  onTumblerViewModeChange?: (mode: "wrap" | "two-sided") => void;
   onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
-  /** When true, hides the toolbar and mode overlay (used in split-screen panes). */
-  hideToolbar?: boolean;
+  /** Show Front/Back crosshairs with snap-to-center (tumbler two-sided mode). */
+  showTwoSidedCrosshairs?: boolean;
+  mockupConfig?: BedMockupConfig | null;
   onPlaceAsset: (xMm: number, yMm: number) => void;
   onSelectItem: (id: string | null) => void;
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
   onNudgeSelected: (dxMm: number, dyMm: number) => void;
+  onDeleteItem?: (id: string) => void;
   onClearWorkspace: () => void;
 }
 
@@ -85,19 +94,20 @@ export function LaserBedWorkspace({
   placementAsset,
   isPlacementArmed,
   framePreview,
-  tumblerViewMode,
-  onTumblerViewModeChange,
   onWorkspaceModeChange,
-  hideToolbar = false,
+  showTwoSidedCrosshairs = false,
+  mockupConfig,
   onPlaceAsset,
   onSelectItem,
   onUpdateItem,
   onNudgeSelected,
+  onDeleteItem,
   onClearWorkspace,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1); // px per mm
   const [containerSize, setContainerSize] = useState({ w: 800, h: 600 });
+  const [clearConfirm, setClearConfirm] = useState(false);
 
   // -------------------------------------------------------------------------
   // Recalculate scale whenever container or bed dimensions change
@@ -156,6 +166,23 @@ export function LaserBedWorkspace({
     activeGuideBand?.lowerGrooveYmm,
     showGuideBands,
   ]);
+
+  // -------------------------------------------------------------------------
+  // Keyboard: Delete / Backspace removes selected item
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!selectedItemId || !onDeleteItem) return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        onDeleteItem(selectedItemId);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [selectedItemId, onDeleteItem]);
 
   // -------------------------------------------------------------------------
   // Drag state
@@ -217,72 +244,83 @@ export function LaserBedWorkspace({
   const handleBedClick = useCallback(
     (e: React.MouseEvent<SVGRectElement>) => {
       if (!isPlacementArmed || !placementAsset) {
-        // Deselect when clicking empty bed
         onSelectItem(null);
         return;
       }
       const rect = (e.target as SVGRectElement).getBoundingClientRect();
-      const xPx = e.clientX - rect.left;
-      const yPx = e.clientY - rect.top;
-      onPlaceAsset(pxToMm(xPx, scale), pxToMm(yPx, scale));
+      let xMm = pxToMm(e.clientX - rect.left, scale);
+      let yMm = pxToMm(e.clientY - rect.top, scale);
+
+      // Snap to Front/Back crosshair when within 15% of bed width
+      if (showTwoSidedCrosshairs) {
+        const snapRadiusMm = bedConfig.width * 0.15;
+        const crosshairs = [
+          { x: bedConfig.width * 0.25, y: bedConfig.height * 0.5 },
+          { x: bedConfig.width * 0.75, y: bedConfig.height * 0.5 },
+        ];
+        for (const ch of crosshairs) {
+          const dist = Math.hypot(xMm - ch.x, yMm - ch.y);
+          if (dist <= snapRadiusMm) {
+            xMm = ch.x;
+            yMm = ch.y;
+            break;
+          }
+        }
+      }
+
+      onPlaceAsset(xMm, yMm);
     },
-    [isPlacementArmed, placementAsset, scale, onPlaceAsset, onSelectItem]
+    [isPlacementArmed, placementAsset, scale, onPlaceAsset, onSelectItem, showTwoSidedCrosshairs, bedConfig]
   );
 
   return (
     <div className={styles.wrapper} ref={containerRef}>
       {/* Toolbar row */}
-      {!hideToolbar && (
-        <div className={styles.toolbar}>
-          <span className={styles.bedInfo}>
-            {formatMm(bedConfig.width)} x {formatMm(bedConfig.height)} mm
-            &nbsp;|&nbsp; grid: {formatMm(bedConfig.gridSpacing)} mm
+      <div className={styles.toolbar}>
+        <span className={styles.bedInfo}>
+          {formatMm(bedConfig.width)} x {formatMm(bedConfig.height)} mm
+          &nbsp;|&nbsp; grid: {formatMm(bedConfig.gridSpacing)} mm
+        </span>
+        <OriginChip originPosition={bedConfig.originPosition} />
+        {isPlacementArmed && placementAsset ? (
+          <span className={styles.activeTip}>
+            Click bed once to place &quot;{placementAsset.name.replace(/\.svg$/i, "")}&quot;
           </span>
-          <OriginChip originPosition={bedConfig.originPosition} />
-          {isPlacementArmed && placementAsset ? (
-            <span className={styles.activeTip}>
-              Click bed once to place &quot;{placementAsset.name.replace(/\.svg$/i, "")}&quot;
-            </span>
+        ) : (
+          <span className={styles.activeTip} style={{ color: "#555" }}>
+            Select an asset, then click &quot;Place on Bed&quot;
+          </span>
+        )}
+        {placedItems.length > 0 && (
+          clearConfirm ? (
+            <>
+              <span className={styles.confirmLabel}>Clear all items?</span>
+              <button className={styles.confirmYes} onClick={() => { onClearWorkspace(); setClearConfirm(false); }}>Yes</button>
+              <button className={styles.confirmNo} onClick={() => setClearConfirm(false)}>Cancel</button>
+            </>
           ) : (
-            <span className={styles.activeTip} style={{ color: "#555" }}>
-              Select an asset, then click &quot;Place on Bed&quot;
-            </span>
-          )}
-          {placedItems.length > 0 && (
-            <button className={styles.clearBtn} onClick={onClearWorkspace}>
+            <button className={styles.clearBtn} onClick={() => setClearConfirm(true)}>
               Clear Workspace
             </button>
-          )}
-        </div>
-      )}
+          )
+        )}
+      </div>
 
       {/* ── Mode selector — large centered overlay ── */}
-      {(onWorkspaceModeChange || (bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange)) && (
+      {onWorkspaceModeChange && (
         <div className={styles.modeOverlay}>
-          {onWorkspaceModeChange && (
-            <>
-              <button
-                className={`${styles.modeBtn} ${bedConfig.workspaceMode === "flat-bed" ? styles.modeBtnActive : ""}`}
-                onClick={() => onWorkspaceModeChange("flat-bed")}
-              >
-                Flat Bed
-              </button>
-              <button
-                className={`${styles.modeBtn} ${bedConfig.workspaceMode === "tumbler-wrap" ? styles.modeBtnActive : ""}`}
-                onClick={() => onWorkspaceModeChange("tumbler-wrap")}
-              >
-                Tumbler
-              </button>
-            </>
-          )}
-          {bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange && (
-            <button
-              className={`${styles.modeBtn} ${tumblerViewMode === "two-sided" ? styles.modeBtnActive : ""}`}
-              onClick={() => onTumblerViewModeChange(tumblerViewMode === "two-sided" ? "wrap" : "two-sided")}
-            >
-              Split Screen
-            </button>
-          )}
+          <button
+            className={`${styles.modeBtn} ${bedConfig.workspaceMode === "flat-bed" ? styles.modeBtnActive : ""}`}
+            onClick={() => onWorkspaceModeChange("flat-bed")}
+          >
+            Flat Bed
+          </button>
+          <button
+            className={`${styles.modeBtn} ${bedConfig.workspaceMode === "tumbler-wrap" ? styles.modeBtnActive : ""}`}
+            onClick={() => onWorkspaceModeChange("tumbler-wrap")}
+          >
+            Tumbler
+          </button>
         </div>
       )}
 
@@ -310,7 +348,7 @@ export function LaserBedWorkspace({
                 scale
               )}`}
               fill="none"
-              stroke="#2a2a2a"
+              stroke="#2e2e2e"
               strokeWidth="0.5"
             />
           </pattern>
@@ -330,9 +368,18 @@ export function LaserBedWorkspace({
             y={0}
             width={bedPxW}
             height={bedPxH}
-            fill="#f5f5f5"
+            fill="#1c1c1c"
             stroke="none"
           />
+
+          {/* Tumbler mockup overlay */}
+          {mockupConfig && (
+            <BedMockupOverlay
+              config={mockupConfig}
+              bedPxW={bedPxW}
+              bedPxH={bedPxH}
+            />
+          )}
 
           {/* Bed boundary */}
           <rect
@@ -341,8 +388,8 @@ export function LaserBedWorkspace({
             width={bedPxW}
             height={bedPxH}
             fill="none"
-            stroke="#1f2328"
-            strokeWidth="1.85"
+            stroke="#404040"
+            strokeWidth="1.5"
             rx={1}
           />
 
@@ -356,9 +403,9 @@ export function LaserBedWorkspace({
                 y1={0}
                 x2={mmToPx(x + bedConfig.width / 2, scale)}
                 y2={bedPxH}
-                stroke="#9a9a9a"
+                stroke="#2e2e2e"
                 strokeWidth={0.8}
-                opacity={0.62}
+                opacity={1}
               />
             );
           })}
@@ -371,9 +418,9 @@ export function LaserBedWorkspace({
                 y1={mmToPx(y + bedConfig.height / 2, scale)}
                 x2={bedPxW}
                 y2={mmToPx(y + bedConfig.height / 2, scale)}
-                stroke="#9a9a9a"
+                stroke="#2e2e2e"
                 strokeWidth={0.8}
-                opacity={0.62}
+                opacity={1}
               />
             );
           })}
@@ -510,7 +557,7 @@ export function LaserBedWorkspace({
               <text
                 x={bedPxW / 2}
                 y={bedPxH / 2 - 9}
-                fill="#888"
+                fill="#3a3a3a"
                 fontSize={12}
                 fontFamily="monospace"
                 textAnchor="middle"
@@ -520,7 +567,7 @@ export function LaserBedWorkspace({
               <text
                 x={bedPxW / 2}
                 y={bedPxH / 2 + 9}
-                fill="#666"
+                fill="#333"
                 fontSize={11}
                 fontFamily="monospace"
                 textAnchor="middle"
@@ -554,6 +601,14 @@ export function LaserBedWorkspace({
             </g>
           )}
 
+          {/* Front / Back crosshairs */}
+          {showTwoSidedCrosshairs && (
+            <TwoSidedCrosshairOverlay
+              bedConfig={bedConfig}
+              scale={scale}
+            />
+          )}
+
           {/* Coordinate labels along edges */}
           <CoordLabels
             bedConfig={bedConfig}
@@ -563,6 +618,42 @@ export function LaserBedWorkspace({
 
       </svg>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tumbler mockup background overlay
+// ---------------------------------------------------------------------------
+
+function BedMockupOverlay({
+  config,
+  bedPxW,
+  bedPxH,
+}: {
+  config: BedMockupConfig;
+  bedPxW: number;
+  bedPxH: number;
+}) {
+  const zoneH = config.printBottomPct - config.printTopPct;
+  if (zoneH <= 0) return null;
+
+  const scaledImgH = bedPxH / zoneH;
+  const aspect = config.naturalWidth / config.naturalHeight;
+  const scaledImgW = scaledImgH * aspect;
+  const imgX = bedPxW / 2 - scaledImgW / 2;
+  const imgY = -config.printTopPct * scaledImgH;
+
+  return (
+    <image
+      x={imgX}
+      y={imgY}
+      width={scaledImgW}
+      height={scaledImgH}
+      href={config.src}
+      opacity={config.opacity}
+      preserveAspectRatio="none"
+      pointerEvents="none"
+    />
   );
 }
 
@@ -610,6 +701,80 @@ function OriginChip({
 }
 
 // ---------------------------------------------------------------------------
+// Front / Back crosshair overlay (tumbler two-sided mode)
+// ---------------------------------------------------------------------------
+
+function TwoSidedCrosshairOverlay({
+  bedConfig,
+  scale,
+}: {
+  bedConfig: BedConfig;
+  scale: number;
+}) {
+  const bedPxW = mmToPx(bedConfig.width, scale);
+  const bedPxH = mmToPx(bedConfig.height, scale);
+
+  const crosshairs = [
+    { xMm: bedConfig.width * 0.25, label: "FRONT", color: "#7ecfa8" },
+    { xMm: bedConfig.width * 0.75, label: "BACK",  color: "#6ab0e8" },
+  ];
+
+  return (
+    <g pointerEvents="none">
+      {/* Center divider */}
+      <line
+        x1={bedPxW / 2} y1={0}
+        x2={bedPxW / 2} y2={bedPxH}
+        stroke="#2a2a2a"
+        strokeWidth={1}
+        strokeDasharray="4 4"
+      />
+
+      {crosshairs.map(({ xMm, label, color }) => {
+        const cx = mmToPx(xMm, scale);
+        const cy = bedPxH / 2;
+        const armH = bedPxH * 0.28;
+        const armW = bedPxW * 0.12;
+
+        return (
+          <g key={label}>
+            {/* Vertical arm */}
+            <line x1={cx} y1={cy - armH} x2={cx} y2={cy + armH}
+              stroke={color} strokeWidth={1} opacity={0.35} />
+            {/* Horizontal arm */}
+            <line x1={cx - armW} y1={cy} x2={cx + armW} y2={cy}
+              stroke={color} strokeWidth={1} opacity={0.35} />
+            {/* Center diamond */}
+            <path
+              d={`M ${cx} ${cy - 6} L ${cx + 6} ${cy} L ${cx} ${cy + 6} L ${cx - 6} ${cy} Z`}
+              fill="none"
+              stroke={color}
+              strokeWidth={1.5}
+              opacity={0.9}
+            />
+            <circle cx={cx} cy={cy} r={2} fill={color} opacity={0.9} />
+            {/* Label */}
+            <text
+              x={cx}
+              y={cy - armH - 8}
+              fill={color}
+              fontSize={10}
+              fontFamily="monospace"
+              fontWeight="700"
+              letterSpacing="0.08em"
+              textAnchor="middle"
+              opacity={0.85}
+            >
+              {label}
+            </text>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Coordinate labels along bed edges
 // ---------------------------------------------------------------------------
 
@@ -632,12 +797,12 @@ function CoordLabels({
         key={`x-${x}`}
         x={mmToPx(x + w / 2, scale)}
         y={mmToPx(h, scale) + BOTTOM_LABEL_OFFSET_PX}
-        fill="#222"
-        fontSize={10}
+        fill="#505050"
+        fontSize={9}
         fontFamily="monospace"
         textAnchor="middle"
       >
-        {x}
+        {formatMm(x)}
       </text>
     );
   }
@@ -646,14 +811,14 @@ function CoordLabels({
     labels.push(
       <text
         key={`y-${y}`}
-        x={-12}
+        x={-8}
         y={mmToPx(y + h / 2, scale) + 4}
-        fill="#222"
-        fontSize={10}
+        fill="#505050"
+        fontSize={9}
         fontFamily="monospace"
         textAnchor="end"
       >
-        {y}
+        {formatMm(y)}
       </text>
     );
   }
@@ -807,8 +972,8 @@ function BedGuideCrosshair({
             cx={centerX}
             cy={centerY}
             r={CENTER_TARGET_OUTER_PX}
-            fill="#f5f5f5"
-            fillOpacity={0.86}
+            fill="#1c1c1c"
+            fillOpacity={0.9}
             stroke="#0a5a72"
             strokeWidth={1.35}
           />
@@ -897,7 +1062,7 @@ function OriginMarker({
         cx={origin.x}
         cy={origin.y}
         r={2}
-        fill="#f5f5f5"
+        fill="#2a2a2a"
         stroke="#8b5f40"
         strokeWidth={1}
         opacity={0.92}

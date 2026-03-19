@@ -1,0 +1,227 @@
+.panel {
+  border-bottom: 1px solid #2a2a2a;
+  background: #1a1a1a;
+}
+
+.sectionToggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-bottom: 1px solid #222;
+  text-align: left;
+}
+.sectionToggle:hover { background: #1e1e1e; }
+
+.sectionToggleLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.sectionToggleChevron { font-size: 11px; color: #555; }
+
+.activeDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7ecfa8;
+  flex-shrink: 0;
+}
+
+/* ── Body ── */
+.body {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* ── Laser filter ── */
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filterLabel {
+  font-size: 10px;
+  color: #555;
+  flex-shrink: 0;
+  min-width: 32px;
+}
+
+.filterBtns {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+.filterBtn {
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid #2e2e2e;
+  border-radius: 3px;
+  background: none;
+  color: #555;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+.filterBtn:hover { border-color: #505050; color: #888; }
+.filterBtnActive {
+  border-color: #5a9fd4;
+  color: #7dbfef;
+  background: rgba(20, 34, 52, 0.5);
+}
+
+/* ── Select ── */
+.select {
+  width: 100%;
+  background: #1e1e1e;
+  border: 1px solid #2e2e2e;
+  border-radius: 4px;
+  color: #bbb;
+  font-size: 11px;
+  padding: 5px 6px;
+  outline: none;
+}
+.select:focus { border-color: #f97316; }
+
+/* ── Profile card ── */
+.profileCard {
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  background: #1e1e1e;
+  overflow: hidden;
+}
+
+.profileCardStats {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0;
+}
+
+.statCell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border-right: 1px solid #2a2a2a;
+  border-bottom: 1px solid #2a2a2a;
+}
+.statCell:nth-child(3n) { border-right: none; }
+.statCell:nth-last-child(-n+3) { border-bottom: none; }
+
+.statLabel {
+  font-size: 9px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.statValue {
+  font-size: 12px;
+  font-weight: 700;
+  color: #7ecfa8;
+}
+
+.profileNotes {
+  padding: 6px 8px;
+  font-size: 10px;
+  color: #666;
+  line-height: 1.45;
+  border-top: 1px solid #2a2a2a;
+  font-style: italic;
+}
+
+/* ── Custom overrides ── */
+.overrideSection {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.overrideLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #555;
+}
+
+.overrideGrid {
+  display: flex;
+  gap: 5px;
+}
+
+.overrideField {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.overrideFieldLabel {
+  font-size: 9px;
+  color: #555;
+  letter-spacing: 0.04em;
+}
+
+.overrideInput {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1e1e1e;
+  border: 1px solid #2e2e2e;
+  border-radius: 3px;
+  color: #bbb;
+  font-size: 11px;
+  padding: 4px 5px;
+  outline: none;
+}
+.overrideInput:focus { border-color: #f97316; }
+.overrideInput::placeholder { color: #3a3a3a; }
+
+/* ── Apply badge ── */
+.applyBadge {
+  font-size: 10px;
+  color: #7ecfa8;
+  text-align: center;
+  padding: 4px 6px;
+  border: 1px solid #1f4030;
+  border-radius: 4px;
+  background: rgba(30, 60, 44, 0.25);
+}
+
+/* ── Clear button ── */
+.clearBtn {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 11px;
+  background: none;
+  border: 1px solid #2e2e2e;
+  border-radius: 4px;
+  color: #555;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.clearBtn:hover { color: #e05050; border-color: #5c2a2a; }
+
+/* ── Empty state ── */
+.empty {
+  font-size: 10px;
+  color: #444;
+  line-height: 1.5;
+  font-style: italic;
+  text-align: center;
+  padding: 4px 2px;
+}

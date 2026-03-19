@@ -107,6 +107,12 @@
   color: #c0c0c0;
 }
 
+.checkHint {
+  font-size: 10px;
+  color: #555;
+  font-style: italic;
+}
+
 /* ── Sub-options (indented, shown when checkbox enabled) ──────── */
 .subOptions {
   display: flex;

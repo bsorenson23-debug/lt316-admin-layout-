@@ -69,24 +69,44 @@ function buildRotarySetup(payload: LightBurnExportPayload): string {
 // Cut settings
 // ---------------------------------------------------------------------------
 
-const ARTWORK_CUT_INDEX = 0; // C00 — artwork layer (user sets power in LightBurn)
+const ARTWORK_CUT_INDEX = 0; // C00 — artwork layer
 const BOUNDS_CUT_INDEX = 1;  // C01 — zero power bounding box, visual only
 const NOTES_CUT_INDEX = 30;  // T0  — tool layer, does not output
 
-function buildCutSettings(): string {
+export interface LbrnMaterialSettings {
+  label: string;
+  powerPct: number;
+  maxPowerPct: number;
+  /** mm/s */
+  speedMmS: number;
+  /** Lines per inch — converted to mm interval for LightBurn */
+  lpi: number;
+  passes: number;
+}
+
+function buildCutSettings(material?: LbrnMaterialSettings): string {
+  const power    = material ? material.powerPct    : 100;
+  const maxPower = material ? material.maxPowerPct : 100;
+  const speed    = material ? material.speedMmS    : 100;
+  const passes   = material ? material.passes      : 1;
+  // LightBurn stores scan interval in mm; interval = 25.4 / lpi
+  const interval = material ? +(25.4 / material.lpi).toFixed(4) : 0.0941; // 0.0941mm ≈ 270 LPI
+  const layerName = material ? `Artwork — ${material.label}` : "Artwork";
+
   return [
     // C00 — artwork layer
     `  <CutSetting type="Cut">`,
     `    <index Value="${ARTWORK_CUT_INDEX}" />`,
-    `    <name Value="Artwork" />`,
+    `    <name Value="${layerName}" />`,
     `    <priority Value="0" />`,
     `    <hide Value="0" />`,
-    `    <power Value="100" />`,
-    `    <maxPower Value="100" />`,
-    `    <speed Value="100" />`,
+    `    <power Value="${power}" />`,
+    `    <maxPower Value="${maxPower}" />`,
+    `    <speed Value="${speed}" />`,
     `    <layerMode Value="0" />`,
     `    <PPI Value="500" />`,
-    `    <passCnt Value="1" />`,
+    `    <interval Value="${interval}" />`,
+    `    <passCnt Value="${passes}" />`,
     `    <zOffset Value="0" />`,
     `    <tabCnt Value="0" />`,
     `    <color RGBA="0xff000000" />`,
@@ -153,7 +173,7 @@ function buildBoundsRect(payload: LightBurnExportPayload): string {
 // Notes text (T0 layer)
 // ---------------------------------------------------------------------------
 
-function buildNotesText(payload: LightBurnExportPayload): string {
+function buildNotesText(payload: LightBurnExportPayload, material?: LbrnMaterialSettings): string {
   const cylinder = payload.cylinder;
   const diam = cylinder?.objectDiameterMm;
   const circum = diam != null ? Math.PI * diam : null;
@@ -167,6 +187,7 @@ function buildNotesText(payload: LightBurnExportPayload): string {
     `Template: ${payload.templateWidthMm.toFixed(2)} x ${payload.templateHeightMm.toFixed(2)} mm`,
     `Export Origin: X ${ox.toFixed(2)} mm  Y ${oy.toFixed(2)} mm`,
     payload.rotary.presetName ? `Preset: ${payload.rotary.presetName}` : null,
+    material ? `Material: ${material.label} | ${material.powerPct}% pwr · ${material.speedMmS}mm/s · ${material.lpi}LPI · ${material.passes}p` : null,
     `Start From: Absolute Coords`,
   ].filter((s): s is string => s !== null);
 
@@ -194,12 +215,15 @@ function buildNotesText(payload: LightBurnExportPayload): string {
  * the rotary settings on RotarySetup, a bounding box on C01,
  * and setup notes on T0.  Open directly in LightBurn — no separate SVG import needed.
  */
-export function buildLightBurnLbrn(payload: LightBurnExportPayload): string {
+export function buildLightBurnLbrn(
+  payload: LightBurnExportPayload,
+  material?: LbrnMaterialSettings,
+): string {
   const generatedAt = new Date().toISOString();
   const rotarySetup = buildRotarySetup(payload);
-  const cutSettings = buildCutSettings();
+  const cutSettings = buildCutSettings(material);
   const boundsRect = buildBoundsRect(payload);
-  const notesText = buildNotesText(payload);
+  const notesText = buildNotesText(payload, material);
 
   // Extract artwork shapes from each placed item's SVG content
   const artworkShapes = payload.items.flatMap((item) =>

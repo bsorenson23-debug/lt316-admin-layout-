@@ -14,6 +14,8 @@ import {
   getLightBurnExportOrigin,
 } from "@/utils/tumblerExportPlacement";
 import { buildLightBurnLbrn, downloadLbrnFile } from "@/utils/lightBurnLbrnExport";
+import { isTaperWarpApplicable } from "@/utils/taperWarp";
+import type { LbrnMaterialSettings } from "@/utils/lightBurnLbrnExport";
 import styles from "./TumblerExportPanel.module.css";
 
 export interface FramePreview {
@@ -27,6 +29,7 @@ interface Props {
   bedConfig: BedConfig;
   placedItems: PlacedItem[];
   onFramePreviewChange?: (preview: FramePreview | null) => void;
+  materialSettings?: LbrnMaterialSettings | null;
 }
 
 function fmt(n: number) { return n.toFixed(2); }
@@ -70,17 +73,19 @@ function downloadJson(payload: unknown, filename: string): void {
 
 // ---------------------------------------------------------------------------
 
-export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChange }: Props) {
+export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChange, materialSettings }: Props) {
   const [rotaryEnabled,       setRotaryEnabled]       = React.useState(false);
   const [availablePresets,    setAvailablePresets]    = React.useState<RotaryPlacementPreset[]>(DEFAULT_ROTARY_PLACEMENT_PRESETS);
   const [selectedPresetId,    setSelectedPresetId]    = React.useState("");
   const [anchorMode,          setAnchorMode]          = React.useState<TopAnchorMode>("physical-top");
   const [topOffsetDraft,      setTopOffsetDraft]      = React.useState("");
   const [showNextSteps,       setShowNextSteps]       = React.useState(false);
+  const [taperWarpEnabled,    setTaperWarpEnabled]    = React.useState(true);
 
   React.useEffect(() => { setAvailablePresets(getRotaryPresets()); }, []);
 
-  const isTumblerMode  = bedConfig.workspaceMode === "tumbler-wrap";
+  const isTumblerMode      = bedConfig.workspaceMode === "tumbler-wrap";
+  const taperApplicable    = isTaperWarpApplicable(bedConfig);
   const selectedPreset = selectedPresetId
     ? availablePresets.find((p) => p.id === selectedPresetId) ?? null
     : null;
@@ -123,6 +128,7 @@ export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChang
     templateHeightMm: bedConfig.height,
     items: placedItems,
     rotary: { enabled: rotaryEnabled, preset: selectedPreset, anchorMode, placementProfile },
+    taperWarpEnabled: taperApplicable && taperWarpEnabled,
   });
 
   const warnings = exportArtifacts.artworkPayload.warnings;
@@ -238,13 +244,30 @@ export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChang
           hasTopAnchor={Boolean(selectedPreset?.rotaryTopYmm)}
         />
 
+        {/* ── Taper Warp toggle ── */}
+        {taperApplicable && (
+          <label className={styles.checkRow}>
+            <input
+              type="checkbox"
+              className={styles.checkbox}
+              checked={taperWarpEnabled}
+              onChange={(e) => setTaperWarpEnabled(e.target.checked)}
+            />
+            <span className={styles.checkLabel}>
+              Taper Warp Correction
+              <span className={styles.checkHint}> — scales artwork to match cup diameter at each Y position</span>
+            </span>
+          </label>
+        )}
+
         {/* ── Export actions ── */}
         <div className={styles.exportBtnRow}>
           <button
             className={styles.primaryBtn}
             onClick={() => {
               const name = `lt316-${Date.now()}`;
-              downloadLbrnFile(buildLightBurnLbrn(exportArtifacts.artworkPayload), `${name}.lbrn2`);
+              const mat = materialSettings ?? undefined;
+              downloadLbrnFile(buildLightBurnLbrn(exportArtifacts.artworkPayload, mat), `${name}.lbrn2`);
               setShowNextSteps(true);
             }}
           >
@@ -253,7 +276,7 @@ export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChang
           <button
             className={styles.secondaryBtn}
             title="Download raw JSON"
-            onClick={() => downloadJson(exportArtifacts.artworkPayload, `lt316-${Date.now()}.json`)}
+            onClick={() => downloadJson({ ...exportArtifacts.artworkPayload, materialSettings: materialSettings ?? null }, `lt316-${Date.now()}.json`)}
           >
             JSON
           </button>
@@ -264,6 +287,7 @@ export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChang
           <LightBurnValuesCard
             cylinder={exportArtifacts.artworkPayload.cylinder}
             exportOrigin={previewOrigin}
+            hasMaterialProfile={Boolean(materialSettings)}
             onDismiss={() => setShowNextSteps(false)}
           />
         )}
@@ -346,10 +370,11 @@ function CopyButton({ value }: { value: string }) {
 }
 
 function LightBurnValuesCard({
-  cylinder, exportOrigin, onDismiss,
+  cylinder, exportOrigin, hasMaterialProfile, onDismiss,
 }: {
   cylinder: LightBurnExportCylinder | null;
   exportOrigin: { xMm: number; yMm: number };
+  hasMaterialProfile: boolean;
   onDismiss: () => void;
 }) {
   const rows = [
@@ -382,7 +407,10 @@ function LightBurnValuesCard({
         <li><strong>File → Open</strong> the <strong>.lbrn2</strong> — artwork + rotary pre-configured</li>
         <li><strong>Device Settings</strong> → Origin: <strong>Top-Left</strong></li>
         <li>Set <strong>Start From → Absolute Coords</strong></li>
-        <li>Set power on <strong>C00</strong> for your material</li>
+        {hasMaterialProfile
+          ? <li>Power/speed pre-set on <strong>C00</strong> from material profile — verify before running</li>
+          : <li>Set power on <strong>C00</strong> for your material</li>
+        }
         <li><strong>Frame</strong> to verify, then run</li>
       </ol>
     </div>

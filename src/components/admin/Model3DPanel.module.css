@@ -1,0 +1,170 @@
+.panel {
+  flex-shrink: 0;
+  border-top: 1px solid #2a2a2a;
+  background: #191919;
+  max-height: 50%;
+  overflow-y: auto;
+}
+.panel::-webkit-scrollbar { width: 4px; }
+.panel::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid #242424;
+}
+
+.title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.clearBtn {
+  font-size: 11px;
+  color: #666;
+  background: none;
+  border: 1px solid #2e2e2e;
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.clearBtn:hover {
+  color: #e05050;
+  border-color: #5c2a2a;
+}
+
+.body {
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fileInput {
+  display: none;
+}
+
+/* ── Drop zone ── */
+.dropZone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 10px;
+  border: 1px dashed #2e2e2e;
+  border-radius: 8px;
+  background: #141414;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: center;
+}
+.dropZone:hover {
+  border-color: #4a4a4a;
+  background: #181818;
+}
+.dropZoneActive {
+  border-color: #5a9fd4;
+  background: rgba(20, 34, 52, 0.4);
+}
+.dropZoneLoaded {
+  border-style: solid;
+  border-color: #3a3a3a;
+  background: #1a1a1a;
+}
+
+.dropIcon {
+  font-size: 20px;
+  color: #3a3a3a;
+  line-height: 1;
+}
+.dropZoneLoaded .dropIcon { color: #6ab0e8; }
+
+.dropText {
+  font-size: 11px;
+  font-weight: 600;
+  color: #555;
+}
+.dropHint {
+  font-size: 10px;
+  color: #3a3a3a;
+  letter-spacing: 0.04em;
+}
+.dropName {
+  font-size: 11px;
+  font-weight: 600;
+  color: #aaa;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dropExt {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #6ab0e8;
+  padding: 1px 5px;
+  border: 1px solid #2a4a5a;
+  border-radius: 3px;
+  background: rgba(20, 40, 60, 0.5);
+}
+
+/* ── Error ── */
+.error {
+  border: 1px solid #5a2d2d;
+  background: rgba(160, 42, 42, 0.16);
+  color: #f1b6b6;
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+/* ── Toggle button ── */
+.toggleBtn {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  background: none;
+  color: #555;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.toggleBtn:hover {
+  border-color: #4a4a4a;
+  color: #888;
+}
+.toggleBtnActive {
+  border-color: #6ab0e8;
+  color: #6ab0e8;
+  background: rgba(20, 34, 52, 0.35);
+}
+.toggleBtnActive:hover {
+  background: rgba(20, 34, 52, 0.55);
+}
+
+/* ── Unsupported notice ── */
+.unsupported {
+  font-size: 10px;
+  color: #555;
+  text-align: center;
+  font-style: italic;
+}
+
+/* ── 3D viewer canvas ── */
+.viewerWrap {
+  width: 100%;
+  height: 280px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #2a2a2a;
+  background: #0e0e14;
+}

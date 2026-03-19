@@ -25,9 +25,28 @@ import {
 import {
   getTumblerProfileById,
   KNOWN_TUMBLER_PROFILES,
+  applyProfileToBedConfig,
 } from "@/data/tumblerProfiles";
 import { getActiveTumblerGuideBand } from "@/utils/tumblerGuides";
+import type {
+  LightBurnPathSettings,
+  LightBurnPathValidationResult,
+  LightBurnPathValidationStatus,
+} from "@/types/export";
 import styles from "./BedSettingsPanel.module.css";
+
+const LB_STORAGE_KEY = "lt316_lightburn_paths";
+
+function loadLbPaths(): LightBurnPathSettings {
+  try {
+    const raw = localStorage.getItem(LB_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as LightBurnPathSettings) : {};
+  } catch { return {}; }
+}
+
+function saveLbPaths(s: LightBurnPathSettings) {
+  try { localStorage.setItem(LB_STORAGE_KEY, JSON.stringify(s)); } catch { /* noop */ }
+}
 
 interface Props {
   bedConfig: BedConfig;
@@ -48,6 +67,31 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
   const [workspaceOpen, setWorkspaceOpen] = React.useState(true);
   const [gridOpen, setGridOpen] = React.useState(false);
   const [guidesOpen, setGuidesOpen] = React.useState(false);
+  const [lbOpen, setLbOpen] = React.useState(false);
+  const [lbPaths, setLbPaths] = React.useState<LightBurnPathSettings>(() => loadLbPaths());
+  const [lbValidation, setLbValidation] = React.useState<LightBurnPathValidationResult | null>(null);
+  const [lbValidating, setLbValidating] = React.useState(false);
+
+  const updateLbPath = (key: keyof LightBurnPathSettings, value: string) => {
+    const next = { ...lbPaths, [key]: value || undefined };
+    setLbPaths(next);
+    saveLbPaths(next);
+    setLbValidation(null);
+  };
+
+  const validateLbPaths = React.useCallback(async () => {
+    setLbValidating(true);
+    try {
+      const res = await fetch("/api/admin/lightburn/validate-paths", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: lbPaths }),
+      });
+      const data = await res.json() as LightBurnPathValidationResult;
+      setLbValidation(data);
+    } catch { /* network error — leave null */ }
+    finally { setLbValidating(false); }
+  }, [lbPaths]);
 
   const handleNumber = (field: NumericConfigField, value: number) => {
     if (field === "tumblerDiameterMm") {
@@ -79,6 +123,7 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
   const wrapWidthMm = bedConfig.tumblerTemplateWidthMm ?? computeTumblerWrapWidthMm(bedConfig.tumblerDiameterMm);
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
   const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
+  const activeProfile = bedConfig.tumblerProfileId ? getTumblerProfileById(bedConfig.tumblerProfileId) : null;
 
   return (
     <div className={styles.panel}>
@@ -102,13 +147,11 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
                   onChange={(e) => {
                     const profileId = e.target.value || undefined;
                     const profile = profileId ? getTumblerProfileById(profileId) : null;
-                    set({
-                      tumblerProfileId: profileId,
-                      tumblerGuideBand: profile?.guideBand,
-                      showTumblerGuideBand: profile?.guideBand
-                        ? true
-                        : bedConfig.showTumblerGuideBand,
-                    });
+                    if (profile) {
+                      onUpdateBedConfig(applyProfileToBedConfig(bedConfig, profile));
+                    } else {
+                      set({ tumblerProfileId: undefined });
+                    }
                   }}
                   aria-label="Tumbler profile"
                 >
@@ -120,6 +163,17 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
                   ))}
                 </select>
               </FieldRow>
+
+              {activeProfile && (
+                <FieldRow label="Rotary">
+                  <span className={activeProfile.chuckRecommended ? styles.rotaryChuck : styles.rotaryRoller}>
+                    {activeProfile.chuckRecommended ? "Chuck" : "Roller"}
+                  </span>
+                  {activeProfile.hasHandle && (
+                    <span className={styles.rotaryHandle} title="This model has a handle">⊕ handle</span>
+                  )}
+                </FieldRow>
+              )}
 
               <FieldRow label="Diameter (mm)">
                 <DraftNumberInput
@@ -225,6 +279,39 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
               <span className={styles.toggleTrack} />
             </label>
           </FieldRow>
+        </CollapsibleSection>
+
+        {/* ── LightBurn Paths ── */}
+        <CollapsibleSection
+          title="LightBurn Paths"
+          open={lbOpen}
+          onToggle={() => setLbOpen((o) => !o)}
+        >
+          <LbPathRow
+            label="Template (.lbrn2)"
+            value={lbPaths.templateProjectPath ?? ""}
+            validation={lbValidation?.templateProjectPath ?? null}
+            onChange={(v) => updateLbPath("templateProjectPath", v)}
+          />
+          <LbPathRow
+            label="Output Folder"
+            value={lbPaths.outputFolderPath ?? ""}
+            validation={lbValidation?.outputFolderPath ?? null}
+            onChange={(v) => updateLbPath("outputFolderPath", v)}
+          />
+          <LbPathRow
+            label="Device Bundle"
+            value={lbPaths.deviceBundlePath ?? ""}
+            validation={lbValidation?.deviceBundlePath ?? null}
+            onChange={(v) => updateLbPath("deviceBundlePath", v)}
+          />
+          <button
+            className={styles.lbValidateBtn}
+            onClick={() => void validateLbPaths()}
+            disabled={lbValidating}
+          >
+            {lbValidating ? "Checking…" : "Validate Paths"}
+          </button>
         </CollapsibleSection>
 
         {/* ── Visual Guides ── */}
@@ -411,5 +498,53 @@ function DraftNumberInput({
       }}
       aria-label={ariaLabel}
     />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LightBurn path row with inline validation badge
+// ---------------------------------------------------------------------------
+
+const STATUS_COLOR: Record<LightBurnPathValidationStatus, string> = {
+  valid: "#7ecfa8",
+  missing: "#888",
+  "invalid-extension": "#f6b36f",
+  "not-found": "#f6b36f",
+  "not-writable": "#f6b36f",
+  error: "#f1b6b6",
+};
+
+function LbPathRow({
+  label,
+  value,
+  validation,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  validation: { status: LightBurnPathValidationStatus; message: string } | null;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className={styles.lbPathRow}>
+      <span className={styles.fieldLabel}>{label}</span>
+      <input
+        type="text"
+        className={styles.lbPathInput}
+        value={value}
+        placeholder="Paste full path…"
+        onChange={(e) => onChange(e.target.value)}
+        spellCheck={false}
+      />
+      {validation && (
+        <span
+          className={styles.lbStatus}
+          style={{ color: STATUS_COLOR[validation.status] }}
+          title={validation.message}
+        >
+          {validation.status === "valid" ? "✓" : "✗"}
+        </span>
+      )}
+    </div>
   );
 }

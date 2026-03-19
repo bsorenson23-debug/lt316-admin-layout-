@@ -18,11 +18,14 @@ import {
   getTumblerConfidenceLevel,
   toTumblerSpecDraft,
 } from "@/utils/tumblerAutoSize";
+import type { BedMockupConfig } from "./LaserBedWorkspace";
 import styles from "./TumblerAutoDetectPanel.module.css";
 
 interface Props {
   bedConfig: BedConfig;
   onApplyDraft: (draft: TumblerSpecDraft) => void;
+  onSetMockup?: (config: BedMockupConfig | null) => void;
+  mockupActive?: boolean;
 }
 
 const INITIAL_STATE: TumblerAutoSizeState = {
@@ -189,10 +192,18 @@ function applyBrandOverrideSelection(
   });
 }
 
-export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
+export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft, onSetMockup, mockupActive }: Props) {
   const [selectedImage, setSelectedImage] = React.useState<File | null>(null);
+  const [imageSrc, setImageSrc] = React.useState<string | null>(null);
+  const [imageNaturalSize, setImageNaturalSize] = React.useState<{ w: number; h: number } | null>(null);
   const [state, setState] = React.useState<TumblerAutoSizeState>(INITIAL_STATE);
   const [overrideOpen, setOverrideOpen] = React.useState(false);
+
+  // Mockup calibration state
+  const [mockupOpen, setMockupOpen] = React.useState(false);
+  const [mockupTop, setMockupTop] = React.useState(12);
+  const [mockupBottom, setMockupBottom] = React.useState(88);
+  const [mockupOpacity, setMockupOpacity] = React.useState(35);
 
   const runAutoDetect = React.useCallback(
     async (file: File) => {
@@ -324,19 +335,36 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
           onChange={(e) => {
             const file = e.target.files?.[0] ?? null;
             setSelectedImage(file);
+            setImageSrc(null);
+            setImageNaturalSize(null);
+            if (file) {
+              const reader = new FileReader();
+              reader.onload = (ev) => {
+                const src = ev.target?.result as string;
+                if (!src) return;
+                setImageSrc(src);
+                const img = new window.Image();
+                img.onload = () => setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+                img.src = src;
+              };
+              reader.readAsDataURL(file);
+            }
+            // Clear any active mockup when a new image is loaded
+            onSetMockup?.(null);
+            setMockupOpen(false);
           }}
         />
         <div className={styles.fileName}>
           {selectedImage?.name ?? state.fileName ?? "No image selected"}
         </div>
         <button
-          className={styles.primaryBtn}
+          className={`${styles.primaryBtn} ${state.status === "loading" ? styles.primaryBtnLoading : ""}`}
           disabled={!selectedImage || state.status === "loading"}
           onClick={() => {
             if (selectedImage) void runAutoDetect(selectedImage);
           }}
         >
-          {state.status === "loading" ? "Detecting..." : "Run Auto-Detect"}
+          {state.status === "loading" ? "Detecting…" : "Run Auto-Detect"}
         </button>
 
         {state.status === "idle" && (
@@ -347,6 +375,79 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
 
         {state.status === "error" && (
           <div className={styles.error}>{state.error}</div>
+        )}
+
+        {/* ── Mockup toggle — appears once an image is loaded ── */}
+        {imageSrc && imageNaturalSize && (
+          <>
+            <button
+              className={`${styles.mockupToggleBtn} ${mockupActive ? styles.mockupToggleBtnActive : ""}`}
+              onClick={() => {
+                if (mockupActive) {
+                  onSetMockup?.(null);
+                  setMockupOpen(false);
+                } else {
+                  setMockupOpen((o) => !o);
+                }
+              }}
+            >
+              {mockupActive ? "Mockup On — Click to Hide" : "Show Mockup on Bed"}
+            </button>
+
+            {mockupOpen && !mockupActive && (
+              <div className={styles.mockupCalibration}>
+                <div className={styles.mockupPreviewWrap}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={imageSrc} alt="" className={styles.mockupPreviewImg} />
+                  <div
+                    className={styles.mockupZoneOverlay}
+                    style={{ top: `${mockupTop}%`, height: `${mockupBottom - mockupTop}%` }}
+                  />
+                  <div className={styles.mockupLineTop} style={{ top: `${mockupTop}%` }} />
+                  <div className={styles.mockupLineBottom} style={{ top: `${mockupBottom}%` }} />
+                </div>
+
+                <label className={styles.mockupSliderRow}>
+                  <span className={styles.mockupSliderLabel}>Print top</span>
+                  <input type="range" min={0} max={mockupBottom - 1} value={mockupTop}
+                    onChange={(e) => setMockupTop(Number(e.target.value))}
+                    className={styles.mockupSlider} />
+                  <span className={styles.mockupSliderVal}>{mockupTop}%</span>
+                </label>
+
+                <label className={styles.mockupSliderRow}>
+                  <span className={styles.mockupSliderLabel}>Print bottom</span>
+                  <input type="range" min={mockupTop + 1} max={100} value={mockupBottom}
+                    onChange={(e) => setMockupBottom(Number(e.target.value))}
+                    className={styles.mockupSlider} />
+                  <span className={styles.mockupSliderVal}>{mockupBottom}%</span>
+                </label>
+
+                <label className={styles.mockupSliderRow}>
+                  <span className={styles.mockupSliderLabel}>Opacity</span>
+                  <input type="range" min={10} max={80} value={mockupOpacity}
+                    onChange={(e) => setMockupOpacity(Number(e.target.value))}
+                    className={styles.mockupSlider} />
+                  <span className={styles.mockupSliderVal}>{mockupOpacity}%</span>
+                </label>
+
+                <button
+                  className={styles.mockupApplyBtn}
+                  onClick={() => {
+                    onSetMockup?.({
+                      src: imageSrc,
+                      naturalWidth: imageNaturalSize.w,
+                      naturalHeight: imageNaturalSize.h,
+                      printTopPct: mockupTop / 100,
+                      printBottomPct: mockupBottom / 100,
+                      opacity: mockupOpacity / 100,
+                    });
+                    setMockupOpen(false);
+                  }}
+                >Apply to Bed</button>
+              </div>
+            )}
+          </>
         )}
 
         {state.result && state.draft && (
@@ -512,6 +613,7 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft }: Props) {
             </div>
           </>
         )}
+
       </div>
     </section>
   );

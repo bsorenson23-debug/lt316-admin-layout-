@@ -10,6 +10,7 @@ import type {
   TopAnchorMode,
   TumblerPlacementProfile,
 } from "../types/export";
+import { isTaperWarpApplicable, applyTaperWarpToExportItem } from "./taperWarp";
 import { resolveRotaryCenterXmm } from "./rotaryCenter.ts";
 import { isFiniteNumber } from "./guards.ts";
 import { round4 as toRounded, round2 as toRounded2 } from "./geometry.ts";
@@ -202,6 +203,7 @@ export function buildLightBurnExportPayload(args: {
     anchorMode: TopAnchorMode;
     placementProfile?: TumblerPlacementProfile | null;
   };
+  taperWarpEnabled?: boolean;
 }): LightBurnExportPayload {
   const warnings: string[] = [];
   const isTumblerMode = args.workspaceMode === "tumbler-wrap";
@@ -227,12 +229,22 @@ export function buildLightBurnExportPayload(args: {
     : null;
   const exportOrigin = resolvedExportOrigin ?? { xMm: 0, yMm: 0 };
 
-  const items = shouldApplyRotary
+  const rawItems = shouldApplyRotary
     ? applyRotaryPlacementToItems({
         items: args.items,
         exportOrigin,
       })
     : toUnshiftedExportItems(args.items);
+
+  // Apply taper warp correction (horizontal scale per item Y position)
+  const items =
+    args.taperWarpEnabled && isTaperWarpApplicable(args.bedConfig)
+      ? rawItems.map((exportItem) => {
+          const templateYcenter =
+            exportItem.yMm - exportOrigin.yMm + exportItem.heightMm / 2;
+          return applyTaperWarpToExportItem(exportItem, templateYcenter, args.bedConfig);
+        })
+      : rawItems;
 
   return {
     kind: "lt316-lightburn-export",
@@ -459,6 +471,7 @@ export function buildLightBurnExportArtifacts(args: {
     anchorMode: TopAnchorMode;
     placementProfile?: TumblerPlacementProfile | null;
   };
+  taperWarpEnabled?: boolean;
 }): LightBurnExportArtifacts {
   const artworkPayload = buildLightBurnExportPayload({
     bedConfig: args.bedConfig,
@@ -467,6 +480,7 @@ export function buildLightBurnExportArtifacts(args: {
     templateHeightMm: args.templateHeightMm,
     items: args.items,
     rotary: args.rotary,
+    taperWarpEnabled: args.taperWarpEnabled,
   });
 
   if (!args.includeLightBurnSetup) {

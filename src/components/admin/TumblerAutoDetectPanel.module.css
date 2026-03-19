@@ -1,6 +1,10 @@
 .panel {
+  flex-shrink: 0;
+  border-top: 1px solid #2a2a2a;
   border-bottom: 1px solid #2a2a2a;
   background: #191919;
+  overflow-y: auto;
+  max-height: 55%;
 }
 
 .header {
@@ -282,6 +286,27 @@
   cursor: not-allowed;
 }
 
+/* ---- Loading spinner on detect button ---- */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.primaryBtnLoading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.primaryBtnLoading::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(212, 237, 218, 0.3);
+  border-top-color: #d4edda;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
 .lowConfidence {
   color: #f6b36f;
 }
@@ -373,4 +398,240 @@
 
 .overrideRow .select {
   width: 130px;
+}
+
+/* ── Mockup toggle button ── */
+.mockupToggleBtn {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  background: none;
+  color: #555;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  text-align: center;
+}
+.mockupToggleBtn:hover {
+  border-color: #4a4a4a;
+  color: #888;
+}
+.mockupToggleBtnActive {
+  border-color: #7ecfa8;
+  color: #7ecfa8;
+  background: rgba(20, 60, 35, 0.3);
+}
+.mockupToggleBtnActive:hover {
+  background: rgba(20, 60, 35, 0.5);
+}
+
+/* ── Mockup calibration panel ── */
+.mockupCalibration {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: #141414;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+}
+
+.mockupPreviewWrap {
+  position: relative;
+  width: 100%;
+  line-height: 0;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #111;
+  max-height: 140px;
+}
+
+.mockupPreviewImg {
+  width: 100%;
+  max-height: 140px;
+  display: block;
+  object-fit: contain;
+  opacity: 0.8;
+}
+
+.mockupZoneOverlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(126, 207, 168, 0.15);
+  pointer-events: none;
+}
+
+.mockupLineTop {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: #7ecfa8;
+  pointer-events: none;
+  transform: translateY(-1px);
+}
+
+.mockupLineBottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: #6ab0e8;
+  pointer-events: none;
+}
+
+.mockupSliderRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mockupSliderLabel {
+  font-size: 10px;
+  color: #666;
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.mockupSlider {
+  flex: 1;
+  accent-color: #5a9fd4;
+  cursor: pointer;
+}
+
+.mockupSliderVal {
+  font-size: 10px;
+  font-family: monospace;
+  color: #888;
+  min-width: 28px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.mockupApplyBtn {
+  width: 100%;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 12px;
+  background: #1c3a28;
+  border: 1px solid #2a5a3a;
+  border-radius: 5px;
+  color: #7ecfa8;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.mockupApplyBtn:hover {
+  background: #224530;
+}
+
+/* ── 3D model drop zone ── */
+.modelDivider {
+  height: 1px;
+  background: #2a2a2a;
+  margin: 4px 0;
+}
+
+.modelDrop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 10px;
+  border: 1px dashed #2e2e2e;
+  border-radius: 8px;
+  background: #141414;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: center;
+}
+.modelDrop:hover {
+  border-color: #4a4a4a;
+  background: #181818;
+}
+.modelDropActive {
+  border-color: #5a9fd4;
+  background: rgba(20, 34, 52, 0.4);
+}
+.modelDropLoaded {
+  border-style: solid;
+  border-color: #3a3a3a;
+  background: #1a1a1a;
+}
+
+.modelDropIcon {
+  font-size: 20px;
+  color: #3a3a3a;
+  line-height: 1;
+}
+.modelDropLoaded .modelDropIcon {
+  color: #6ab0e8;
+}
+
+.modelDropText {
+  font-size: 11px;
+  font-weight: 600;
+  color: #555;
+}
+.modelDropHint {
+  font-size: 10px;
+  color: #3a3a3a;
+  letter-spacing: 0.04em;
+}
+.modelDropName {
+  font-size: 11px;
+  font-weight: 600;
+  color: #aaa;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modelDropExt {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #6ab0e8;
+  padding: 1px 5px;
+  border: 1px solid #2a4a5a;
+  border-radius: 3px;
+  background: rgba(20, 40, 60, 0.5);
+}
+
+.modelActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.modelNote {
+  font-size: 10px;
+  color: #444;
+  font-style: italic;
+}
+.modelClearBtn {
+  font-size: 10px;
+  color: #666;
+  background: none;
+  border: 1px solid #2e2e2e;
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.modelClearBtn:hover {
+  color: #e05050;
+  border-color: #5c2a2a;
+}
+
+/* ── 3D model viewer ── */
+.modelViewerWrap {
+  width: 100%;
+  height: 260px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #2a2a2a;
+  background: #0e0e14;
 }
