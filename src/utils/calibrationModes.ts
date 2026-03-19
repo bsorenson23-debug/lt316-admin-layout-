@@ -7,6 +7,7 @@ export type CalibrationMode =
   | "rotary"
   | "export"
   | "lens"
+  | "laser"
   | "geometry"
   | "red-light"
   | "distortion";
@@ -23,6 +24,7 @@ export const CALIBRATION_MODE_DEFINITIONS: CalibrationModeDefinition[] = [
   { id: "rotary", label: "Rotary", implemented: true },
   { id: "export", label: "Export", implemented: true },
   { id: "lens", label: "Lens", implemented: false },
+  { id: "laser", label: "Laser", implemented: true },
   { id: "geometry", label: "Geometry", implemented: false },
   { id: "red-light", label: "Red Light", implemented: false },
   { id: "distortion", label: "Distortion", implemented: false },
@@ -52,6 +54,12 @@ const LENS_OVERLAY_KEYS: CalibrationOverlayKey[] = [
   "showLensFieldOutline",
 ];
 
+const LASER_OVERLAY_KEYS: CalibrationOverlayKey[] = [
+  "showHoleGrid",
+  "showCenterline",
+  "showOrigin",
+];
+
 const GEOMETRY_OVERLAY_KEYS: CalibrationOverlayKey[] = [
   "showHoleGrid",
   "showCenterline",
@@ -74,6 +82,7 @@ const MODE_OVERLAY_KEYS: Record<CalibrationMode, CalibrationOverlayKey[]> = {
   rotary: ROTARY_OVERLAY_KEYS,
   export: EXPORT_OVERLAY_KEYS,
   lens: LENS_OVERLAY_KEYS,
+  laser: LASER_OVERLAY_KEYS,
   geometry: GEOMETRY_OVERLAY_KEYS,
   "red-light": RED_LIGHT_OVERLAY_KEYS,
   distortion: DISTORTION_OVERLAY_KEYS,

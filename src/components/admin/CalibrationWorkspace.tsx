@@ -73,6 +73,9 @@ import {
   type RotaryMeasurementFocus,
 } from "./RotaryMeasurementGuide";
 import { RotaryPresetSharePanel } from "./RotaryPresetSharePanel";
+import { LaserTypePanel } from "./LaserTypePanel";
+import type { LaserProfile, LaserLens } from "@/types/laserProfile";
+import { LASER_SOURCE_LABELS, LASER_SOURCE_COLORS } from "@/types/laserProfile";
 import styles from "./CalibrationWorkspace.module.css";
 import type { CalibrationHole, LensCalibrationResult } from "@/utils/lensCalibration";
 import {
@@ -219,6 +222,10 @@ export function CalibrationWorkspace() {
   const [customDraft, setCustomDraft] = React.useState<RotaryModeDraft>(() =>
     buildEmptyRotaryDraft(bedCenterXmm)
   );
+  // Laser type mode — active laser + lens selection (resolved objects pushed up from panel)
+  const [activeLaserProfile, setActiveLaserProfile] = React.useState<LaserProfile | null>(null);
+  const [activeLens, setActiveLens] = React.useState<LaserLens | null>(null);
+
   const [lensProfileId, setLensProfileId] = React.useState<LensProfileId>(LENS_PROFILES[0].id);
   const [lensSequenceHoles, setLensSequenceHoles] = React.useState<CalibrationHole[]>([]);
   const [lensCalibration, setLensCalibration] = React.useState<LensCalibrationState>({
@@ -1250,6 +1257,17 @@ export function CalibrationWorkspace() {
       );
     }
 
+    if (activeMode === "laser") {
+      return (
+        <LaserTypePanel
+          onSelectionChange={(laser, lens) => {
+            setActiveLaserProfile(laser);
+            setActiveLens(lens);
+          }}
+        />
+      );
+    }
+
     return (
       <PlaceholderBlock
         title="Controls"
@@ -1410,6 +1428,61 @@ export function CalibrationWorkspace() {
             <dd>{lensProfile.label}</dd>
             <dt>Lens Inset</dt>
             <dd>{formatMm(lensProfile.fieldInsetMm)}</dd>
+          </dl>
+        </section>
+      );
+    }
+
+    if (activeMode === "laser") {
+      if (!activeLaserProfile) {
+        return (
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Active Setup</div>
+            <div className={styles.info}>Select a laser profile on the left to set up your machine.</div>
+          </section>
+        );
+      }
+      return (
+        <section className={styles.card}>
+          <div className={styles.sectionLabel}>Active Setup</div>
+          <dl className={styles.valueGrid}>
+            <dt>Laser</dt>
+            <dd>
+              <span style={{
+                display: "inline-block",
+                background: LASER_SOURCE_COLORS[activeLaserProfile.sourceType],
+                color: "#fff",
+                fontSize: "9px",
+                fontWeight: 700,
+                padding: "1px 5px",
+                borderRadius: "999px",
+                marginRight: "5px",
+              }}>
+                {LASER_SOURCE_LABELS[activeLaserProfile.sourceType]}
+              </span>
+              {activeLaserProfile.name}
+            </dd>
+            {activeLaserProfile.source && <><dt>Source</dt><dd>{activeLaserProfile.source}</dd></>}
+            {activeLaserProfile.wattagePeak > 0 && <><dt>Wattage</dt><dd>{activeLaserProfile.wattagePeak} W</dd></>}
+            <dt>Lens</dt>
+            <dd>
+              {activeLens ? (
+                <span style={{
+                  display: "inline-block",
+                  background: "#22293a",
+                  border: "1px solid #3a5a8a",
+                  color: "#b0c8d8",
+                  fontSize: "10px",
+                  padding: "2px 8px",
+                  borderRadius: "999px",
+                }}>
+                  {activeLens.name}
+                </span>
+              ) : <span style={{ color: "#555" }}>None selected</span>}
+            </dd>
+            {activeLens && <><dt>Focal Length</dt><dd>{activeLens.focalLengthMm} mm</dd></>}
+            {activeLens?.kerfMm != null && <><dt>Kerf</dt><dd>{activeLens.kerfMm} mm</dd></>}
+            {activeLens?.notes && <><dt>Notes</dt><dd>{activeLens.notes}</dd></>}
           </dl>
         </section>
       );
