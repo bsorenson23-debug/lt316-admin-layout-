@@ -44,6 +44,7 @@ import { TextPersonalizationPanel } from "./TextPersonalizationPanel";
 import { CameraOverlayPanel } from "./CameraOverlayPanel";
 import { TextToolPanel } from "./TextToolPanel";
 import { TestGridPanel } from "./TestGridPanel";
+import { FlatBedItemPanel } from "./FlatBedItemPanel";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -435,6 +436,7 @@ export function AdminLayoutShell() {
 
           {rightTab === "tools" && (
             <>
+              <FlatBedItemPanel />
               <TextToolPanel onAddAsset={handleAddTextAsset} />
               <TextPersonalizationPanel />
               <CameraOverlayPanel onCaptureOverlay={handleCameraCapture} />
