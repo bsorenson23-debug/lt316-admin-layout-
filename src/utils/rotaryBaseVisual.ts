@@ -5,14 +5,8 @@ import type {
   RotaryPlacementPreset,
 } from "../types/export.ts";
 import type { RotaryHoleAnchorSelection } from "./rotaryAnchoring.ts";
-
-function isFiniteNumber(value: number | null | undefined): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function roundTo4(value: number): number {
-  return Number(value.toFixed(4));
-}
+import { isFiniteNumber } from "./guards.ts";
+import { round4 as roundTo4 } from "./geometry.ts";
 
 function normalizeMountHoles(
   value: RotaryMountHoleOffset[] | undefined

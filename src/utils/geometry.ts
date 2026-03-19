@@ -44,6 +44,25 @@ export function calcBedScale(
 }
 
 // ---------------------------------------------------------------------------
+// Numeric helpers
+// ---------------------------------------------------------------------------
+
+/** Clamp a number between min and max (inclusive). */
+export function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** Round to 4 decimal places (used for mm coordinate precision). */
+export function round4(value: number): number {
+  return Number(value.toFixed(4));
+}
+
+/** Round to 2 decimal places (used for display-quality mm values). */
+export function round2(value: number): number {
+  return Number(value.toFixed(2));
+}
+
+// ---------------------------------------------------------------------------
 // Snapping (reserved for future snap-to-grid / jig features)
 // ---------------------------------------------------------------------------
 

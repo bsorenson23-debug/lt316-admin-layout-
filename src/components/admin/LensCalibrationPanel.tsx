@@ -14,7 +14,7 @@ import { analyseCalibrationVideo } from "@/utils/videoRedDotAnalysis";
 import {
   buildCalSequenceLbrn,
   downloadTextFile,
-} from "@/utils/calSequenceLbrn";
+} from "@/utils/lightBurnCalSequence";
 import styles from "./LensCalibrationPanel.module.css";
 
 type WizardStep = "setup" | "record" | "processing" | "results";

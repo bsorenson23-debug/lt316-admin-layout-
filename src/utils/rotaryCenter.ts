@@ -1,6 +1,4 @@
-function isFiniteNumber(value: number | null | undefined): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
+import { isFiniteNumber } from "./guards.ts";
 
 export function getBedCenterXmm(bedWidthMm: number | null | undefined): number {
   if (!isFiniteNumber(bedWidthMm) || bedWidthMm <= 0) return 0;

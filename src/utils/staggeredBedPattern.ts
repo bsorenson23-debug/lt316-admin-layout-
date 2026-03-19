@@ -1,3 +1,5 @@
+import { clamp, round4 as round } from "./geometry.ts";
+
 export type BedPatternType = "staggered";
 
 export type BedPatternConfig = {
@@ -28,14 +30,6 @@ export const DEFAULT_STAGGERED_BED_PATTERN: BedPatternConfig = {
   alternateRowOffsetXmm: 12.5,
   patternType: "staggered",
 };
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function round(value: number): number {
-  return Number(value.toFixed(4));
-}
 
 export function getBedCenter(bounds: BedBoundsMm): { xMm: number; yMm: number } {
   return {

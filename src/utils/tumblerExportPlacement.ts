@@ -11,21 +11,11 @@ import type {
   TumblerPlacementProfile,
 } from "../types/export";
 import { resolveRotaryCenterXmm } from "./rotaryCenter.ts";
-
-function isFiniteNumber(value: number | null | undefined): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
+import { isFiniteNumber } from "./guards.ts";
+import { round4 as toRounded, round2 as toRounded2 } from "./geometry.ts";
 
 function clampNonNegative(value: number): number {
   return value < 0 ? 0 : value;
-}
-
-function toRounded(value: number): number {
-  return Number(value.toFixed(4));
-}
-
-function toRounded2(value: number): number {
-  return Number(value.toFixed(2));
 }
 
 function inferShapeType(

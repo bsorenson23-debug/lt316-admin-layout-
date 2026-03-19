@@ -9,6 +9,7 @@ import {
   PlacedItemPatch,
   SvgAsset,
 } from "@/types/admin";
+import { clamp } from "@/utils/geometry";
 import { parseSvgAsset, defaultPlacedSize, normalizeSvgToArtworkBounds } from "@/utils/svg";
 import { TumblerSpecDraft } from "@/types/tumblerAutoSize";
 import {
@@ -31,9 +32,6 @@ import styles from "./AdminLayoutShell.module.css";
 type TumblerViewMode = "wrap" | "two-sided";
 type ActiveSide = "front" | "back";
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
 
 function isDevEnvironment() {
   return process.env.NODE_ENV !== "production";

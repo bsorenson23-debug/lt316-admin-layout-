@@ -1,5 +1,5 @@
 import type { BedConfig, TumblerGuideBand } from "../types/admin";
-import { mmToPx } from "./geometry.ts";
+import { mmToPx, clamp } from "./geometry.ts";
 
 function isFinitePositive(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -58,10 +58,6 @@ export function getGrooveGuideOverlayMetrics(args: {
     lowerYpx,
     bandHeightPx,
   };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 export function computeCenteredItemYBetweenGuides(args: {

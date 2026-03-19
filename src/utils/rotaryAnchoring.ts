@@ -1,13 +1,7 @@
 import type { RotaryMountReferenceMode } from "../types/export.ts";
 import type { BedHole } from "./staggeredBedPattern.ts";
-
-function isFiniteNumber(value: number | null | undefined): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function roundTo4(value: number): number {
-  return Number(value.toFixed(4));
-}
+import { isFiniteNumber } from "./guards.ts";
+import { round4 as roundTo4 } from "./geometry.ts";
 
 export type BedHoleReference = {
   row: number;

@@ -1,3 +1,4 @@
+import { clamp } from "./geometry.ts";
 import { normalizeBedConfig } from "../types/admin.ts";
 import type { BedConfig } from "../types/admin.ts";
 import {
@@ -30,10 +31,6 @@ type DimensionField =
   | "topDiameter"
   | "bottomDiameter"
   | "usableHeight";
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
 
 function isFinitePositive(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;

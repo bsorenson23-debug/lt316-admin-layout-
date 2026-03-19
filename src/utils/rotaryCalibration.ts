@@ -11,9 +11,7 @@ export interface RotaryPreviewValues {
   exportOriginYmm: number;
 }
 
-function round4(value: number): number {
-  return Number(value.toFixed(4));
-}
+import { round4 } from "./geometry.ts";
 
 export function buildRotaryPlacementPreview(
   input: RotaryPreviewInput

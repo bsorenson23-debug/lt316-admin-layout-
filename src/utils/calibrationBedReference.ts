@@ -1,5 +1,6 @@
 import type { BedOrigin } from "../types/export.ts";
 import { mapBedMmToCanvasPercent } from "./staggeredBedPattern.ts";
+import { clamp } from "./geometry.ts";
 
 export type RotaryCalibrationOverlay = {
   showHoleGrid: boolean;
@@ -47,10 +48,6 @@ export const DEFAULT_CALIBRATION_OVERLAY_TOGGLES: CalibrationOverlayToggles = {
   showMountFootprint: false,
   showExportPreview: true,
 };
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
 
 function resolveOriginPercent(origin: BedOrigin): { x: number; y: number } {
   switch (origin) {

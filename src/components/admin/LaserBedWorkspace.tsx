@@ -17,7 +17,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { BedConfig, PlacedItem, PlacedItemPatch, SvgAsset } from "@/types/admin";
-import { calcBedScale, mmToPx, pxToMm } from "@/utils/geometry";
+import { calcBedScale, clamp, mmToPx, pxToMm } from "@/utils/geometry";
 import {
   getActiveTumblerGuideBand,
   getGrooveGuideOverlayMetrics,
@@ -36,9 +36,6 @@ const CENTER_TARGET_INNER_PX = 1.8;
 const BED_VERTICAL_LIFT_PX = 14;
 const BOTTOM_LABEL_OFFSET_PX = 12;
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
 
 function snapToStep(value: number, step: number): number {
   if (!Number.isFinite(step) || step <= 0) return value;
