@@ -378,6 +378,9 @@ export function AdminLayoutShell() {
                 isPlacementArmed={isPlacementArmed}
                 framePreview={null}
                 hideToolbar
+                tumblerViewMode={tumblerViewMode}
+                onTumblerViewModeChange={setTumblerViewMode}
+                onWorkspaceModeChange={handleWorkspaceModeChange}
                 onPlaceAsset={handlePlaceAsset}
                 onSelectItem={handleSelectItem}
                 onUpdateItem={handleUpdateItem}
@@ -401,6 +404,9 @@ export function AdminLayoutShell() {
                 isPlacementArmed={isPlacementArmed}
                 framePreview={null}
                 hideToolbar
+                tumblerViewMode={tumblerViewMode}
+                onTumblerViewModeChange={setTumblerViewMode}
+                onWorkspaceModeChange={handleWorkspaceModeChange}
                 onPlaceAsset={handleBackPlaceAsset}
                 onSelectItem={handleBackSelectItem}
                 onUpdateItem={handleBackUpdateItem}

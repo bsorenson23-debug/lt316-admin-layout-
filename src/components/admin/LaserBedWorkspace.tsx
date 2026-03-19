@@ -257,7 +257,7 @@ export function LaserBedWorkspace({
       )}
 
       {/* ── Mode selector — large centered overlay ── */}
-      {!hideToolbar && (onWorkspaceModeChange || (bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange)) && (
+      {(onWorkspaceModeChange || (bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange)) && (
         <div className={styles.modeOverlay}>
           {onWorkspaceModeChange && (
             <>
