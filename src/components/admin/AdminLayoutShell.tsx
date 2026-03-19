@@ -343,7 +343,11 @@ export function AdminLayoutShell() {
             onSetMockup={setMockupConfig}
             mockupActive={mockupConfig !== null}
           />
-          <FlatBedItemPanel />
+          <FlatBedItemPanel
+            bedWidthMm={bedConfig.width}
+            bedHeightMm={bedConfig.height}
+            onPlaceToBed={setMockupConfig}
+          />
         </SvgAssetLibraryPanel>
         <Model3DPanel />
       </aside>
