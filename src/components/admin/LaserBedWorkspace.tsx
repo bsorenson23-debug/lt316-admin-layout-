@@ -230,32 +230,6 @@ export function LaserBedWorkspace({
     <div className={styles.wrapper} ref={containerRef}>
       {/* Toolbar row */}
       <div className={styles.toolbar}>
-        {/* Mode pills — Flat Bed / Tumbler */}
-        {onWorkspaceModeChange && (
-          <div className={styles.modePills}>
-            <button
-              className={`${styles.modePill} ${bedConfig.workspaceMode === "flat-bed" ? styles.modePillActive : ""}`}
-              onClick={() => onWorkspaceModeChange("flat-bed")}
-            >Flat Bed</button>
-            <button
-              className={`${styles.modePill} ${bedConfig.workspaceMode === "tumbler-wrap" ? styles.modePillActive : ""}`}
-              onClick={() => onWorkspaceModeChange("tumbler-wrap")}
-            >Tumbler</button>
-          </div>
-        )}
-        {/* Wrap / Two-Sided — tumbler only */}
-        {bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange && (
-          <div className={styles.viewToggle}>
-            <button
-              className={`${styles.viewToggleBtn} ${tumblerViewMode === "wrap" ? styles.viewToggleBtnActive : ""}`}
-              onClick={() => onTumblerViewModeChange("wrap")}
-            >Wrap</button>
-            <button
-              className={`${styles.viewToggleBtn} ${tumblerViewMode === "two-sided" ? styles.viewToggleBtnActive : ""}`}
-              onClick={() => onTumblerViewModeChange("two-sided")}
-            >Two-Sided</button>
-          </div>
-        )}
         <span className={styles.bedInfo}>
           {formatMm(bedConfig.width)} x {formatMm(bedConfig.height)} mm
           &nbsp;|&nbsp; grid: {formatMm(bedConfig.gridSpacing)} mm
@@ -276,6 +250,36 @@ export function LaserBedWorkspace({
           </button>
         )}
       </div>
+
+      {/* ── Mode selector — large centered overlay ── */}
+      {(onWorkspaceModeChange || (bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange)) && (
+        <div className={styles.modeOverlay}>
+          {onWorkspaceModeChange && (
+            <>
+              <button
+                className={`${styles.modeBtn} ${bedConfig.workspaceMode === "flat-bed" ? styles.modeBtnActive : ""}`}
+                onClick={() => onWorkspaceModeChange("flat-bed")}
+              >
+                Flat Bed
+              </button>
+              <button
+                className={`${styles.modeBtn} ${bedConfig.workspaceMode === "tumbler-wrap" ? styles.modeBtnActive : ""}`}
+                onClick={() => onWorkspaceModeChange("tumbler-wrap")}
+              >
+                Tumbler
+              </button>
+            </>
+          )}
+          {bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange && (
+            <button
+              className={`${styles.modeBtn} ${tumblerViewMode === "two-sided" ? styles.modeBtnActive : ""}`}
+              onClick={() => onTumblerViewModeChange(tumblerViewMode === "two-sided" ? "wrap" : "two-sided")}
+            >
+              Split Screen
+            </button>
+          )}
+        </div>
+      )}
 
       {/* SVG canvas */}
       <svg

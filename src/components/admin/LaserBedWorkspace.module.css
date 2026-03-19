@@ -2,8 +2,9 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-    background: #e5e5e5;
+  background: #e5e5e5;
   overflow: hidden;
+  position: relative;
 }
 
 .toolbar {
@@ -32,44 +33,48 @@
   font-family: monospace;
 }
 
-/* ---- Workspace mode pills (Flat Bed / Tumbler) ---- */
-.modePills {
-  display: inline-flex;
-  border: 1px solid #303030;
-  border-radius: 20px;
-  overflow: hidden;
-  flex-shrink: 0;
+/* ---- Mode overlay (Flat Bed / Tumbler / Split Screen) ---- */
+.modeOverlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  display: flex;
+  gap: 12px;
+  pointer-events: none;
 }
 
-.modePill {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  padding: 4px 13px;
-  background: none;
-  border: none;
+.modeBtn {
+  pointer-events: auto;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 12px 28px;
+  background: rgba(16, 16, 16, 0.80);
+  border: 2px solid #2e2e2e;
+  border-radius: 999px;
   color: #555;
   cursor: pointer;
-  transition: background 120ms, color 120ms;
+  transition: border-color 140ms, color 140ms, background 140ms;
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
 }
 
-.modePill:not(:last-child) {
-  border-right: 1px solid #303030;
+.modeBtn:hover {
+  border-color: #505050;
+  color: #909090;
 }
 
-.modePill:hover {
-  background: #1e1e1e;
-  color: #999;
+.modeBtnActive {
+  border-color: #5a9fd4;
+  color: #7dbfef;
+  background: rgba(20, 34, 52, 0.88);
 }
 
-.modePillActive {
-  background: #1a2535;
-  color: #6ab0e8;
-}
-
-.modePillActive:hover {
-  background: #1a2535;
-  color: #6ab0e8;
+.modeBtnActive:hover {
+  border-color: #7dbfef;
+  color: #9ecff5;
 }
 
 /* ---- View mode toggle (Wrap / Two-Sided) ---- */
