@@ -72,6 +72,7 @@ import {
   RotaryMeasurementGuide,
   type RotaryMeasurementFocus,
 } from "./RotaryMeasurementGuide";
+import { RotaryPresetSharePanel } from "./RotaryPresetSharePanel";
 import styles from "./CalibrationWorkspace.module.css";
 import type { CalibrationHole, LensCalibrationResult } from "@/utils/lensCalibration";
 import {
@@ -1475,6 +1476,7 @@ export function CalibrationWorkspace() {
             </div>
           </section>
           {renderRightPanel()}
+          <RotaryPresetSharePanel onPresetsChanged={() => setPresets(getRotaryPresets())} />
         </aside>
       </div>
     </section>

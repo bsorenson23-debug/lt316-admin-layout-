@@ -87,6 +87,43 @@ export function OrdersPanel({ bedConfig, assetNames, onLoadOrder }: Props) {
     setConfirmDeleteId(null);
   };
 
+  const csvInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleCsvImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = reader.result as string;
+      const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      // Skip header row if first cell looks like a label (non-numeric, no special chars)
+      const dataLines = /^[a-zA-Z\s_]+$/.test(lines[0]?.split(",")[0] ?? "") ? lines.slice(1) : lines;
+      const newOrders: OrderRecord[] = dataLines.map((line) => {
+        const cols = line.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+        const [customerName = "", engravingText = "", powerSpeedNotes = ""] = cols;
+        return {
+          id: `order-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          createdAt: new Date().toISOString(),
+          customerName: customerName || "Unknown",
+          engravingText: engravingText || undefined,
+          tumblerBrand: bedConfig.tumblerBrand,
+          tumblerModel: bedConfig.tumblerModel,
+          tumblerProfileId: bedConfig.tumblerProfileId,
+          assetNames: [...assetNames],
+          bedConfigSnapshot: { ...bedConfig },
+          powerSpeedNotes: powerSpeedNotes || undefined,
+          status: "pending" as const,
+        };
+      }).filter((o) => o.customerName !== "Unknown" || dataLines.length === 1);
+      if (newOrders.length > 0) {
+        const next = [...newOrders, ...orders];
+        persist(next);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
   const isTumbler = bedConfig.workspaceMode === "tumbler-wrap";
   const activeCount = orders.filter(
     (o) => o.status !== "complete" && o.status !== "cancelled"
@@ -158,9 +195,15 @@ export function OrdersPanel({ bedConfig, assetNames, onLoadOrder }: Props) {
               </div>
             </div>
           ) : (
-            <button className={styles.newOrderBtn} onClick={() => setCreating(true)}>
-              + New Order from Current
-            </button>
+            <div className={styles.newOrderRow}>
+              <button className={styles.newOrderBtn} onClick={() => setCreating(true)}>
+                + New Order from Current
+              </button>
+              <button className={styles.importCsvBtn} onClick={() => csvInputRef.current?.click()} title="Import orders from CSV (columns: customerName, engravingText, powerSpeedNotes)">
+                CSV
+              </button>
+              <input ref={csvInputRef} type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={handleCsvImport} />
+            </div>
           )}
 
           {orders.length === 0 && !creating && (

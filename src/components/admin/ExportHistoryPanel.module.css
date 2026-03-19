@@ -1,0 +1,23 @@
+.panel { border-bottom:1px solid #2a2a2a; background:#1a1a1a; }
+.toggle { width:100%; display:flex; align-items:center; justify-content:space-between; padding:9px 14px; background:none; border:none; cursor:pointer; border-bottom:1px solid #222; text-align:left; }
+.toggle:hover { background:#1e1e1e; }
+.toggleLabel { font-size:11px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#888; display:flex; align-items:center; gap:7px; }
+.chevron { font-size:11px; color:#555; }
+.countBadge { font-size:9px; background:#2a2a2a; border:1px solid #3a3a3a; color:#666; border-radius:10px; padding:1px 6px; }
+
+.body { padding:8px 10px 10px; display:flex; flex-direction:column; gap:6px; }
+.searchInput { width:100%; box-sizing:border-box; background:#1e1e1e; border:1px solid #2e2e2e; border-radius:4px; color:#bbb; font-size:10px; padding:4px 7px; }
+.searchInput:focus { outline:none; border-color:#444; }
+.empty { font-size:10px; color:#444; font-style:italic; line-height:1.5; }
+
+.entryCard { border:1px solid #252525; border-radius:5px; background:#1c1c1c; padding:6px 8px; display:flex; flex-direction:column; gap:3px; }
+.entryTop { display:flex; align-items:center; justify-content:space-between; }
+.entryDate { font-size:10px; color:#555; font-family:monospace; }
+.reexportBtn { font-size:9px; padding:2px 7px; border-radius:3px; background:#1a2a1c; border:1px solid #2a4228; color:#6ecfa0; cursor:pointer; white-space:nowrap; }
+.reexportBtn:hover { background:#203524; }
+.entryMeta { display:flex; gap:4px; flex-wrap:wrap; }
+.chip { font-size:9px; background:#252525; border:1px solid #303030; border-radius:3px; padding:1px 5px; color:#888; }
+.chipMat { font-size:9px; background:#1e2820; border:1px solid #2a3e28; border-radius:3px; padding:1px 5px; color:#6a9a7a; }
+.entryDims { font-size:10px; color:#555; font-family:monospace; }
+.clearBtn { font-size:10px; padding:5px 8px; background:none; border:1px solid #2e2e2e; border-radius:4px; color:#555; cursor:pointer; transition:color 0.1s, border-color 0.1s; }
+.clearBtn:hover { color:#d98a8a; border-color:#5c2a2a; }

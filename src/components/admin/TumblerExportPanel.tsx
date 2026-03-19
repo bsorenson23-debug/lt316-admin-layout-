@@ -16,6 +16,7 @@ import {
 import { buildLightBurnLbrn, downloadLbrnFile } from "@/utils/lightBurnLbrnExport";
 import { isTaperWarpApplicable } from "@/utils/taperWarp";
 import type { LbrnMaterialSettings } from "@/utils/lightBurnLbrnExport";
+import { appendExportHistory, fingerprintItems } from "./ExportHistoryPanel";
 import styles from "./TumblerExportPanel.module.css";
 
 export interface FramePreview {
@@ -269,6 +270,20 @@ export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChang
               const mat = materialSettings ?? undefined;
               downloadLbrnFile(buildLightBurnLbrn(exportArtifacts.artworkPayload, mat), `${name}.lbrn2`);
               setShowNextSteps(true);
+              appendExportHistory({
+                tumblerBrand: bedConfig.tumblerBrand,
+                tumblerModel: bedConfig.tumblerModel,
+                tumblerProfileId: bedConfig.tumblerProfileId,
+                rotaryPresetId: selectedPreset?.id,
+                rotaryPresetName: selectedPreset?.name,
+                materialLabel: mat?.label,
+                templateWidthMm: bedConfig.width,
+                templateHeightMm: bedConfig.height,
+                artworkFingerprint: fingerprintItems(placedItems),
+                itemsSnapshot: placedItems.map((p) => ({ name: p.name, x: p.x, y: p.y, width: p.width, height: p.height, rotation: p.rotation })),
+                exportOriginXmm: previewOrigin.xMm,
+                exportOriginYmm: previewOrigin.yMm,
+              });
             }}
           >
             Export for LightBurn

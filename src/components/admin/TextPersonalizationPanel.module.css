@@ -1,0 +1,18 @@
+.panel { border-bottom:1px solid #2a2a2a; background:#1a1a1a; }
+.toggle { width:100%; display:flex; align-items:center; justify-content:space-between; padding:9px 14px; background:none; border:none; cursor:pointer; border-bottom:1px solid #222; text-align:left; }
+.toggle:hover { background:#1e1e1e; }
+.toggleLabel { font-size:11px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#888; }
+.chevron { font-size:11px; color:#555; }
+.body { padding:10px 14px 14px; display:flex; flex-direction:column; gap:7px; }
+.label { font-size:10px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#555; }
+.textarea { width:100%; box-sizing:border-box; background:#1e1e1e; border:1px solid #2e2e2e; border-radius:4px; color:#bbb; font-size:11px; padding:6px 8px; resize:vertical; }
+.textarea:focus { outline:none; border-color:#444; }
+.previewBox { background:#161616; border:1px solid #2a2a2a; border-radius:4px; padding:8px; font-size:13px; color:#e0e0e0; font-family:monospace; min-height:28px; word-break:break-all; }
+.previewNav { display:flex; align-items:center; gap:6px; }
+.navBtn { background:none; border:1px solid #2e2e2e; border-radius:3px; color:#666; font-size:11px; padding:2px 7px; cursor:pointer; }
+.navBtn:hover:not(:disabled) { color:#ccc; border-color:#555; }
+.navBtn:disabled { opacity:0.35; cursor:not-allowed; }
+.navCount { font-size:10px; color:#555; }
+.exportBtn { width:100%; font-size:11px; font-weight:600; padding:7px 10px; border-radius:4px; cursor:pointer; background:#2a3e6a; border:1px solid #3d5c9a; color:#c0d8ff; transition:background 100ms; }
+.exportBtn:hover:not(:disabled) { background:#334d82; }
+.exportBtn:disabled { opacity:0.45; cursor:not-allowed; }

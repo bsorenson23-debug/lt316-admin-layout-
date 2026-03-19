@@ -1,0 +1,21 @@
+.panel { border-bottom:1px solid #2a2a2a; background:#1a1a1a; }
+.toggle { width:100%; display:flex; align-items:center; justify-content:space-between; padding:9px 14px; background:none; border:none; cursor:pointer; border-bottom:1px solid #222; text-align:left; }
+.toggle:hover { background:#1e1e1e; }
+.toggleLabel { font-size:11px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#888; }
+.chevron { font-size:11px; color:#555; }
+.body { padding:10px 14px 14px; display:flex; flex-direction:column; gap:6px; }
+.textInput { width:100%; box-sizing:border-box; background:#1e1e1e; border:1px solid #2e2e2e; border-radius:4px; color:#e0e0e0; font-size:13px; padding:6px 8px; }
+.textInput:focus { outline:none; border-color:#555; }
+.row { display:flex; gap:6px; align-items:center; }
+.fieldGroup { display:flex; flex-direction:column; gap:3px; flex:1; }
+.fieldLabel { font-size:10px; color:#555; }
+.select { width:100%; background:#242424; border:1px solid #333; border-radius:4px; color:#e0e0e0; font-size:11px; padding:4px 6px; }
+.numInput { width:100%; background:#242424; border:1px solid #333; border-radius:4px; color:#e0e0e0; font-size:11px; padding:4px 6px; }
+.numInput:focus, .select:focus { outline:none; border-color:#555; }
+.checkRow { display:flex; gap:12px; align-items:center; }
+.checkLabel { font-size:11px; color:#888; display:flex; align-items:center; gap:4px; cursor:pointer; }
+.colorInput { width:32px; height:22px; border:1px solid #333; border-radius:3px; padding:1px; background:#242424; cursor:pointer; }
+.previewBox { background:#f0f0f0; border-radius:4px; overflow:hidden; min-height:40px; display:flex; align-items:center; justify-content:center; }
+.addBtn { width:100%; font-size:11px; font-weight:600; padding:7px 10px; border-radius:4px; cursor:pointer; background:#4e3a2a; border:1px solid #7a5a3d; color:#f0d8c0; transition:background 100ms; }
+.addBtn:hover:not(:disabled) { background:#5e4a34; }
+.addBtn:disabled { opacity:0.45; cursor:not-allowed; }

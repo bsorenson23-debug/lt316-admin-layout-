@@ -1,0 +1,19 @@
+.panel { border-bottom:1px solid #2a2a2a; background:#1a1a1a; }
+.toggle { width:100%; display:flex; align-items:center; justify-content:space-between; padding:9px 14px; background:none; border:none; cursor:pointer; border-bottom:1px solid #222; text-align:left; }
+.toggle:hover { background:#1e1e1e; }
+.toggleLabel { font-size:11px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#888; }
+.chevron { font-size:11px; color:#555; }
+
+.body { padding:10px 14px 14px; display:flex; flex-direction:column; gap:7px; }
+.sectionLabel { font-size:10px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#555; }
+.select { width:100%; background:#242424; border:1px solid #333; border-radius:4px; color:#e0e0e0; font-size:11px; padding:5px 6px; }
+.textarea { width:100%; box-sizing:border-box; background:#1e1e1e; border:1px solid #2e2e2e; border-radius:4px; color:#bbb; font-size:10px; font-family:monospace; padding:6px 8px; resize:vertical; }
+.textarea:focus { outline:none; border-color:#444; }
+
+.primaryBtn { width:100%; font-size:11px; font-weight:600; padding:7px 10px; border-radius:4px; cursor:pointer; background:#2a4e3a; border:1px solid #3d7055; color:#c8eedd; transition:background 100ms; }
+.primaryBtn:hover { background:#325f47; }
+.primaryBtn:disabled { opacity:0.45; cursor:not-allowed; }
+
+.divider { height:1px; background:#252525; margin:3px 0; }
+.errorMsg { font-size:10px; color:#d98a8a; }
+.successMsg { font-size:10px; color:#7ecfa8; }

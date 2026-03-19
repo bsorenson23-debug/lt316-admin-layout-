@@ -59,9 +59,16 @@
   gap: 6px;
 }
 
+/* ── New order row (button + CSV import) ── */
+.newOrderRow {
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
+}
+
 /* ── New order button ── */
 .newOrderBtn {
-  width: 100%;
+  flex: 1;
   padding: 7px 10px;
   font-size: 11px;
   font-weight: 600;
@@ -76,6 +83,24 @@
 .newOrderBtn:hover {
   border-color: #f97316;
   color: #f97316;
+}
+
+.importCsvBtn {
+  padding: 7px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: 1px dashed #2e2e2e;
+  border-radius: 6px;
+  background: none;
+  color: #555;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+}
+.importCsvBtn:hover {
+  border-color: #6ab0e8;
+  color: #6ab0e8;
 }
 
 /* ── New order form ── */

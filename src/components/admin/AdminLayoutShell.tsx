@@ -20,6 +20,7 @@ import {
   getPlacedArtworkBounds,
 } from "@/utils/alignment";
 import { applyTumblerSuggestion } from "@/utils/tumblerAutoSize";
+import { checkSvgQuality } from "@/utils/svgQualityCheck";
 import { centerArtworkBetweenGrooves, getActiveTumblerGuideBand } from "@/utils/tumblerGuides";
 import { SvgAssetLibraryPanel } from "./SvgAssetLibraryPanel";
 import { LaserBedWorkspace } from "./LaserBedWorkspace";
@@ -35,6 +36,13 @@ import type { ActiveMaterialSettings } from "./MaterialProfilePanel";
 import { ProofMockupPanel } from "./ProofMockupPanel";
 import { SprCalibrationPanel } from "./SprCalibrationPanel";
 import { BatchQueuePanel } from "./BatchQueuePanel";
+import { MachineProfilePanel } from "./MachineProfilePanel";
+import { ExportHistoryPanel } from "./ExportHistoryPanel";
+import { RotaryPresetSharePanel } from "./RotaryPresetSharePanel";
+import { TextPersonalizationPanel } from "./TextPersonalizationPanel";
+import { CameraOverlayPanel } from "./CameraOverlayPanel";
+import { TextToolPanel } from "./TextToolPanel";
+import { TestGridPanel } from "./TestGridPanel";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -77,6 +85,7 @@ export function AdminLayoutShell() {
   const handleUploadAssets = useCallback(async (files: FileList) => {
     const accepted: SvgAsset[] = [];
     const rejected: string[] = [];
+    const qualityNotes: string[] = [];
 
     for (const file of Array.from(files)) {
       if (file.type !== "image/svg+xml" && !/\.svg$/i.test(file.name)) {
@@ -84,6 +93,16 @@ export function AdminLayoutShell() {
       }
       try {
         const content = await file.text();
+        // Quality check — surface errors as rejections, warnings as notes
+        const quality = checkSvgQuality(content);
+        if (quality.hasErrors) {
+          const msgs = quality.issues.filter((i) => i.severity === "error").map((i) => i.message).join("; ");
+          rejected.push(`${file.name}: ${msgs}`); continue;
+        }
+        if (quality.hasWarnings) {
+          const msgs = quality.issues.filter((i) => i.severity === "warn").map((i) => i.code).join(", ");
+          qualityNotes.push(`${file.name}: ${msgs}`);
+        }
         const id = `asset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const parsed = parseSvgAsset(id, file.name, content);
         try {
@@ -106,6 +125,9 @@ export function AdminLayoutShell() {
     if (accepted.length > 0) {
       setSvgAssets((prev) => [...prev, ...accepted]);
       if (!selectedAssetId) setSelectedAssetId(accepted[0].id);
+    }
+    if (qualityNotes.length > 0) {
+      setInspectorNote(`Quality warnings: ${qualityNotes.slice(0, 2).join(" | ")}${qualityNotes.length > 2 ? " | ..." : ""}`);
     }
     if (rejected.length > 0) {
       const preview = rejected.slice(0, 2).join(" | ") + (rejected.length > 2 ? " | ..." : "");
@@ -265,6 +287,37 @@ export function AdminLayoutShell() {
   // Derived list of asset names for order capture
   const assetNames = svgAssets.map((a) => a.name);
 
+  const handleAddTextAsset = useCallback((svgContent: string, fileName: string) => {
+    const id = `asset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    try {
+      const parsed = parseSvgAsset(id, fileName, svgContent);
+      try {
+        const norm = normalizeSvgToArtworkBounds(parsed.content, parsed.artworkBounds);
+        setSvgAssets((prev) => [...prev, {
+          ...parsed, content: norm.svgText,
+          viewBox: `${norm.documentBounds.x} ${norm.documentBounds.y} ${norm.documentBounds.width} ${norm.documentBounds.height}`,
+          naturalWidth: norm.documentBounds.width, naturalHeight: norm.documentBounds.height,
+          documentBounds: norm.documentBounds, artworkBounds: norm.artworkBounds,
+        }]);
+      } catch { setSvgAssets((prev) => [...prev, parsed]); }
+    } catch { /* noop */ }
+  }, []);
+
+  const handleCameraCapture = useCallback((dataUrl: string) => {
+    const img = new Image();
+    img.onload = () => {
+      setMockupConfig({
+        src: dataUrl,
+        naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight,
+        printTopPct: 0.1,
+        printBottomPct: 0.9,
+        opacity: 0.5,
+      });
+    };
+    img.src = dataUrl;
+  }, []);
+
   return (
     <div className={styles.shell}>
       {/* LEFT */}
@@ -343,6 +396,13 @@ export function AdminLayoutShell() {
           mockupConfig={mockupConfig}
         />
         <SprCalibrationPanel bedConfig={bedConfig} />
+        <TextToolPanel onAddAsset={handleAddTextAsset} />
+        <TextPersonalizationPanel />
+        <CameraOverlayPanel onCaptureOverlay={handleCameraCapture} />
+        <TestGridPanel bedWidthMm={bedConfig.width} bedHeightMm={bedConfig.height} />
+        <MachineProfilePanel />
+        <ExportHistoryPanel bedConfig={bedConfig} placedItems={placedItems} />
+        <RotaryPresetSharePanel />
       </aside>
     </div>
   );
