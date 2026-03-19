@@ -77,6 +77,7 @@ import { LaserTypePanel } from "./LaserTypePanel";
 import type { LaserProfile, LaserLens } from "@/types/laserProfile";
 import { LASER_SOURCE_LABELS, LASER_SOURCE_COLORS } from "@/types/laserProfile";
 import { getBestPreset } from "@/data/laserMaterialPresets";
+import type { FlatBedItem } from "@/data/flatBedItems";
 import styles from "./CalibrationWorkspace.module.css";
 import type { CalibrationHole, LensCalibrationResult } from "@/utils/lensCalibration";
 import {
@@ -227,6 +228,7 @@ export function CalibrationWorkspace() {
   const [activeLaserProfile, setActiveLaserProfile] = React.useState<LaserProfile | null>(null);
   const [activeLens, setActiveLens] = React.useState<LaserLens | null>(null);
   const [selectedMaterialSlug, setSelectedMaterialSlug] = React.useState<string>("");
+  const [selectedFlatBedItem, setSelectedFlatBedItem] = React.useState<FlatBedItem | null>(null);
 
   const [lensProfileId, setLensProfileId] = React.useState<LensProfileId>(LENS_PROFILES[0].id);
   const [lensSequenceHoles, setLensSequenceHoles] = React.useState<CalibrationHole[]>([]);
@@ -1266,6 +1268,10 @@ export function CalibrationWorkspace() {
             setActiveLaserProfile(laser);
             setActiveLens(lens);
           }}
+          onItemSelect={(item) => {
+            setSelectedFlatBedItem(item);
+            if (item) setSelectedMaterialSlug(item.material);
+          }}
         />
       );
     }
@@ -1457,8 +1463,14 @@ export function CalibrationWorkspace() {
       );
     }
 
-    const suggestedPreset = selectedMaterialSlug
-      ? getBestPreset(activeLaserProfile.sourceType, activeLaserProfile.wattagePeak, selectedMaterialSlug)
+    const effectiveMaterial = selectedMaterialSlug;
+    const suggestedPreset = effectiveMaterial
+      ? getBestPreset(
+          activeLaserProfile.sourceType,
+          activeLaserProfile.wattagePeak,
+          effectiveMaterial,
+          selectedFlatBedItem?.productHint,
+        )
       : null;
 
     return (
@@ -1506,9 +1518,38 @@ export function CalibrationWorkspace() {
           </dl>
         </section>
 
+        {selectedFlatBedItem && (
+          <section className={styles.card}>
+            <div className={styles.sectionLabel}>Item Dimensions</div>
+            <dl className={styles.valueGrid}>
+              <dt>Item</dt>
+              <dd>{selectedFlatBedItem.label}</dd>
+              <dt>Material</dt>
+              <dd>{selectedFlatBedItem.materialLabel}</dd>
+              <dt>Width</dt>
+              <dd>{selectedFlatBedItem.widthMm} mm ({(selectedFlatBedItem.widthMm / 25.4).toFixed(2)}&quot;)</dd>
+              <dt>Height</dt>
+              <dd>{selectedFlatBedItem.heightMm} mm ({(selectedFlatBedItem.heightMm / 25.4).toFixed(2)}&quot;)</dd>
+              <dt>Thickness</dt>
+              <dd>{selectedFlatBedItem.thicknessMm} mm — set focus height</dd>
+              {selectedFlatBedItem.notes && (
+                <>
+                  <dt style={{ gridColumn: "1 / -1", color: "#555", fontSize: "10px", paddingTop: "4px" }}>Note</dt>
+                  <dd style={{ gridColumn: "1 / -1", color: "#888", fontSize: "10px", fontStyle: "italic" }}>{selectedFlatBedItem.notes}</dd>
+                </>
+              )}
+            </dl>
+          </section>
+        )}
+
         <section className={styles.card}>
           <div className={styles.sectionLabel}>Suggested Settings</div>
           <div style={{ padding: "4px 0 6px" }}>
+            {selectedFlatBedItem && (
+              <div style={{ fontSize: "10px", color: "#6ab0e8", marginBottom: "6px" }}>
+                Auto-set from item: {selectedFlatBedItem.materialLabel}
+              </div>
+            )}
             <select
               className={styles.selectInput}
               value={selectedMaterialSlug}

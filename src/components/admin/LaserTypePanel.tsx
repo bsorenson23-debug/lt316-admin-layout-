@@ -8,12 +8,20 @@ import {
   getLaserProfiles, saveLaserProfile, deleteLaserProfile,
   getActiveLaserId, setActiveLaserId, getActiveLensId, setActiveLensId,
 } from "@/utils/laserProfileState";
+import {
+  FLAT_BED_ITEMS,
+  FLAT_BED_CATEGORIES,
+  FLAT_BED_CATEGORY_LABELS,
+  type FlatBedItem,
+  type FlatBedCategory,
+} from "@/data/flatBedItems";
 
 interface Props {
   onSelectionChange?: (laser: LaserProfile | null, lens: LaserLens | null) => void;
+  onItemSelect?: (item: FlatBedItem | null) => void;
 }
 
-export function LaserTypePanel({ onSelectionChange }: Props) {
+export function LaserTypePanel({ onSelectionChange, onItemSelect }: Props) {
   const [profiles, setProfiles] = useState<LaserProfile[]>(() => getLaserProfiles());
   const [activeLaserId, setActiveLaserIdState] = useState<string | null>(() => getActiveLaserId());
   const [activeLensId, setActiveLensIdState] = useState<string | null>(() => getActiveLensId());
@@ -32,6 +40,10 @@ export function LaserTypePanel({ onSelectionChange }: Props) {
   const [lDraftFocal, setLDraftFocal] = useState("");
   const [lDraftKerf, setLDraftKerf] = useState("");
   const [lDraftNotes, setLDraftNotes] = useState("");
+
+  // Flat bed item lookup state
+  const [itemCategory, setItemCategory] = useState<FlatBedCategory | "">("");
+  const [selectedItemId, setSelectedItemId] = useState<string>("");
 
   const activeProfile = profiles.find(p => p.id === activeLaserId) ?? null;
 
@@ -375,6 +387,47 @@ export function LaserTypePanel({ onSelectionChange }: Props) {
           )}
         </section>
       )}
+      {/* === FLAT BED ITEM LOOKUP === */}
+      <section className={styles.card}>
+        <div className={styles.sectionLabel}>Flat Bed Item Lookup</div>
+
+        {/* Category filter */}
+        <div className={styles.categoryRow}>
+          <button
+            className={`${styles.catBtn} ${itemCategory === "" ? styles.catBtnActive : ""}`}
+            onClick={() => { setItemCategory(""); setSelectedItemId(""); onItemSelect?.(null); }}
+          >All</button>
+          {FLAT_BED_CATEGORIES.map(cat => (
+            <button
+              key={cat}
+              className={`${styles.catBtn} ${itemCategory === cat ? styles.catBtnActive : ""}`}
+              onClick={() => { setItemCategory(cat); setSelectedItemId(""); onItemSelect?.(null); }}
+            >
+              {FLAT_BED_CATEGORY_LABELS[cat]}
+            </button>
+          ))}
+        </div>
+
+        {/* Item select */}
+        <select
+          className={styles.selectInput}
+          value={selectedItemId}
+          onChange={e => {
+            const id = e.target.value;
+            setSelectedItemId(id);
+            const item = FLAT_BED_ITEMS.find(i => i.id === id) ?? null;
+            onItemSelect?.(item);
+          }}
+        >
+          <option value="">— Select item —</option>
+          {FLAT_BED_ITEMS
+            .filter(i => !itemCategory || i.category === itemCategory)
+            .map(i => (
+              <option key={i.id} value={i.id}>{i.label}</option>
+            ))
+          }
+        </select>
+      </section>
     </div>
   );
 }
