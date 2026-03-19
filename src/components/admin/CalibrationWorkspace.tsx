@@ -76,6 +76,7 @@ import { RotaryPresetSharePanel } from "./RotaryPresetSharePanel";
 import { LaserTypePanel } from "./LaserTypePanel";
 import type { LaserProfile, LaserLens } from "@/types/laserProfile";
 import { LASER_SOURCE_LABELS, LASER_SOURCE_COLORS } from "@/types/laserProfile";
+import { getBestPreset } from "@/data/laserMaterialPresets";
 import styles from "./CalibrationWorkspace.module.css";
 import type { CalibrationHole, LensCalibrationResult } from "@/utils/lensCalibration";
 import {
@@ -225,6 +226,7 @@ export function CalibrationWorkspace() {
   // Laser type mode — active laser + lens selection (resolved objects pushed up from panel)
   const [activeLaserProfile, setActiveLaserProfile] = React.useState<LaserProfile | null>(null);
   const [activeLens, setActiveLens] = React.useState<LaserLens | null>(null);
+  const [selectedMaterialSlug, setSelectedMaterialSlug] = React.useState<string>("");
 
   const [lensProfileId, setLensProfileId] = React.useState<LensProfileId>(LENS_PROFILES[0].id);
   const [lensSequenceHoles, setLensSequenceHoles] = React.useState<CalibrationHole[]>([]);
@@ -1434,15 +1436,33 @@ export function CalibrationWorkspace() {
     }
 
     if (activeMode === "laser") {
-      if (!activeLaserProfile) {
-        return (
-          <section className={styles.card}>
-            <div className={styles.sectionLabel}>Active Setup</div>
-            <div className={styles.info}>Select a laser profile on the left to set up your machine.</div>
-          </section>
-        );
-      }
+      return renderLaserRightPanel();
+    }
+
+    return (
+      <PlaceholderBlock
+        title="Readout"
+        copy={`Compact ${activeMode} readout and warnings are staged as placeholders.`}
+      />
+    );
+  };
+
+  const renderLaserRightPanel = () => {
+    if (!activeLaserProfile) {
       return (
+        <section className={styles.card}>
+          <div className={styles.sectionLabel}>Active Setup</div>
+          <div className={styles.info}>Select a laser profile on the left to set up your machine.</div>
+        </section>
+      );
+    }
+
+    const suggestedPreset = selectedMaterialSlug
+      ? getBestPreset(activeLaserProfile.sourceType, activeLaserProfile.wattagePeak, selectedMaterialSlug)
+      : null;
+
+    return (
+      <>
         <section className={styles.card}>
           <div className={styles.sectionLabel}>Active Setup</div>
           <dl className={styles.valueGrid}>
@@ -1485,14 +1505,82 @@ export function CalibrationWorkspace() {
             {activeLens?.notes && <><dt>Notes</dt><dd>{activeLens.notes}</dd></>}
           </dl>
         </section>
-      );
-    }
 
-    return (
-      <PlaceholderBlock
-        title="Readout"
-        copy={`Compact ${activeMode} readout and warnings are staged as placeholders.`}
-      />
+        <section className={styles.card}>
+          <div className={styles.sectionLabel}>Suggested Settings</div>
+          <div style={{ padding: "4px 0 6px" }}>
+            <select
+              className={styles.selectInput}
+              value={selectedMaterialSlug}
+              onChange={e => setSelectedMaterialSlug(e.target.value)}
+              style={{ width: "100%", marginBottom: "8px" }}
+            >
+              <option value="">— Select material —</option>
+              <option value="powder-coat">Powder Coat (Metal)</option>
+              <option value="anodized-aluminum">Anodized Aluminum</option>
+              <option value="stainless-steel">Stainless Steel</option>
+              <option value="aluminum-bare">Aluminum (Bare)</option>
+              <option value="brass">Brass</option>
+              <option value="copper">Copper</option>
+              <option value="titanium">Titanium</option>
+              <option value="cermark-steel">Cermark / Steel Marking</option>
+              <option value="painted-metal">Painted Metal</option>
+              <option value="wood-soft">Wood — Soft (Pine, Basswood)</option>
+              <option value="wood-hard">Wood — Hard (Oak, Maple)</option>
+              <option value="plywood">Plywood</option>
+              <option value="mdf">MDF</option>
+              <option value="acrylic-cast">Acrylic — Cast</option>
+              <option value="acrylic-opaque">Acrylic — Opaque / Colored</option>
+              <option value="leather-natural">Leather — Natural</option>
+              <option value="leather-synthetic">Leather — Synthetic</option>
+              <option value="glass">Glass</option>
+              <option value="slate">Slate</option>
+              <option value="ceramic">Ceramic</option>
+              <option value="rubber">Rubber</option>
+              <option value="plastic-abs">Plastic — ABS</option>
+              <option value="paper">Paper / Cardstock</option>
+              <option value="fabric">Fabric</option>
+              <option value="gold">Gold (Plated/Filled)</option>
+            </select>
+          </div>
+          {suggestedPreset ? (
+            <dl className={styles.valueGrid}>
+              <dt>Effect</dt><dd style={{ textTransform: "capitalize" }}>{suggestedPreset.effect.replace("-", " ")}</dd>
+              <dt>Power</dt>
+              <dd>
+                {suggestedPreset.powerPctMin != null && suggestedPreset.powerPctMax != null
+                  ? `${suggestedPreset.powerPctMin}–${suggestedPreset.powerPctMax}%`
+                  : `${suggestedPreset.powerPct}%`}
+              </dd>
+              <dt>Speed</dt>
+              <dd>
+                {suggestedPreset.speedMmSMin != null && suggestedPreset.speedMmSMax != null
+                  ? `${suggestedPreset.speedMmSMin}–${suggestedPreset.speedMmSMax} mm/s`
+                  : `${suggestedPreset.speedMmS} mm/s`}
+              </dd>
+              <dt>Line Interval</dt><dd>{suggestedPreset.lineIntervalMm} mm</dd>
+              <dt>Passes</dt><dd>{suggestedPreset.passes}</dd>
+              {suggestedPreset.frequencyKhz != null && <><dt>Frequency</dt><dd>{suggestedPreset.frequencyKhz} kHz</dd></>}
+              {suggestedPreset.pulseWidthNs != null && <><dt>Pulse Width</dt><dd>{suggestedPreset.pulseWidthNs} ns</dd></>}
+              {suggestedPreset.crossHatch && <><dt>Cross Hatch</dt><dd>Yes</dd></>}
+              <dt>Confidence</dt>
+              <dd style={{ color: suggestedPreset.confidence === "verified" ? "#7ecfa8" : suggestedPreset.confidence === "community" ? "#b0c8d8" : "#808080", textTransform: "capitalize" }}>
+                {suggestedPreset.confidence}
+              </dd>
+              {suggestedPreset.notes && (
+                <>
+                  <dt style={{ gridColumn: "1 / -1", paddingTop: "4px", color: "#555", fontSize: "10px" }}>Note</dt>
+                  <dd style={{ gridColumn: "1 / -1", color: "#888", fontSize: "10px", fontStyle: "italic" }}>{suggestedPreset.notes}</dd>
+                </>
+              )}
+            </dl>
+          ) : selectedMaterialSlug ? (
+            <div className={styles.info}>No preset found for this laser + material combination.</div>
+          ) : (
+            <div className={styles.info}>Select a material above to see suggested starting settings.</div>
+          )}
+        </section>
+      </>
     );
   };
 
