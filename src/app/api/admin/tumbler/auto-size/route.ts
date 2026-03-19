@@ -31,10 +31,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const arrayBuffer = await image.arrayBuffer();
+    const imageBytes = new Uint8Array(arrayBuffer);
+
     const result = await runTumblerAutoSize({
       fileName: image.name,
       mimeType: image.type,
       byteLength: image.size,
+      imageBytes,
     });
 
     return NextResponse.json(result);

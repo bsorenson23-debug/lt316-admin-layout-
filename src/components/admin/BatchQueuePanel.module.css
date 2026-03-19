@@ -1,0 +1,206 @@
+/* ── Panel shell ──────────────────────────────────────────────── */
+.panel {
+  border-bottom: 1px solid #2a2a2a;
+  background: #1a1a1a;
+}
+
+.toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-bottom: 1px solid #222;
+  text-align: left;
+}
+.toggle:hover { background: #1e1e1e; }
+
+.toggleLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.chevron { font-size: 11px; color: #555; }
+
+.countBadge {
+  background: #2a4e3a;
+  border: 1px solid #3d7055;
+  color: #8ddbb6;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 1px 6px;
+  min-width: 18px;
+  text-align: center;
+}
+
+/* ── Body ── */
+.body {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.empty {
+  font-size: 10px;
+  color: #444;
+  font-style: italic;
+  line-height: 1.5;
+  padding: 2px 2px;
+}
+
+/* ── Group cards ── */
+.groupCard {
+  border: 1px solid #272727;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #1e1e1e;
+}
+
+.setupChangeWarning {
+  font-size: 10px;
+  color: #d4a060;
+  background: #2a2010;
+  border-bottom: 1px solid #3a2f14;
+  padding: 4px 8px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 8px;
+}
+
+.groupMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.groupName {
+  font-size: 11px;
+  font-weight: 600;
+  color: #d0d0d0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.groupModel {
+  font-size: 10px;
+  color: #666;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.groupCount {
+  font-size: 9px;
+  color: #555;
+  margin-top: 2px;
+}
+
+.groupActions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.loadBtn {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: #222;
+  border: 1px solid #333;
+  color: #888;
+  transition: background 100ms, color 100ms;
+  white-space: nowrap;
+}
+.loadBtn:hover { background: #2a2a2a; color: #c0c0c0; }
+.loadBtnLoaded {
+  background: #162219;
+  border-color: #2a5238;
+  color: #7ecfa8;
+}
+
+.expandBtn {
+  font-size: 9px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+  border: 1px solid #2e2e2e;
+  color: #555;
+  transition: color 100ms;
+}
+.expandBtn:hover { color: #888; }
+
+/* ── Order list (expanded) ── */
+.orderList {
+  border-top: 1px solid #252525;
+  padding: 4px 0;
+}
+
+.orderRow {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.orderName {
+  font-weight: 500;
+  color: #c0c0c0;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.orderText {
+  font-size: 10px;
+  color: #666;
+  font-style: italic;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orderStatus {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.status_pending    { color: #666; }
+.status_proofSent  { color: #c8a83a; }
+.status_approved   { color: #5a98c8; }
+.status_inProgress { color: #e8853a; }
+.status_complete   { color: #5aad7a; }
+.status_cancelled  { color: #555; }
+
+/* ── Summary row ── */
+.summary {
+  font-size: 10px;
+  color: #444;
+  text-align: center;
+  padding-top: 2px;
+  font-style: italic;
+}

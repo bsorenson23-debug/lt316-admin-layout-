@@ -88,6 +88,11 @@ export function computeAlignmentPatch(
     nextY += bedConfig.height / 2 - artworkCenterY;
   }
 
+  // Tumbler-wrap: shift artwork center to 180° opposite side (half circumference)
+  if (mode === "opposite-logo") {
+    nextX += bedConfig.width / 2 - artworkCenterX;
+  }
+
   return { x: nextX, y: nextY };
 }
 

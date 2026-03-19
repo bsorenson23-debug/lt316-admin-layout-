@@ -151,6 +151,7 @@ export function LaserBedWorkspace({
 
   const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
   const showGuideBands = shouldRenderTumblerGuideBand(bedConfig);
+  const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
 
   useEffect(() => {
     if (!isDevEnvironment()) return;
@@ -435,6 +436,15 @@ export function LaserBedWorkspace({
               bedWidthMm={bedConfig.width}
               band={activeGuideBand}
               scale={scale}
+            />
+          )}
+
+          {/* Seam line — tumbler wrap only */}
+          {isTumblerMode && (
+            <SeamLineOverlay
+              bedConfig={bedConfig}
+              placedItems={placedItems}
+              bedPxH={bedPxH}
             />
           )}
 
@@ -1142,6 +1152,79 @@ function OriginMarker({
       >
         (0, 0)
       </text>
+    </g>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Seam line overlay — tumbler wrap mode
+// Shows the wrap join seam at x=0 and warns if artwork crosses the boundary
+// ---------------------------------------------------------------------------
+
+const SEAM_CROSS_THRESHOLD_MM = 2;
+
+function SeamLineOverlay({
+  bedConfig,
+  placedItems,
+  bedPxH,
+}: {
+  bedConfig: BedConfig;
+  placedItems: PlacedItem[];
+  bedPxH: number;
+}) {
+  const hasSeamCrossing = placedItems.some(
+    (p) =>
+      p.x < SEAM_CROSS_THRESHOLD_MM ||
+      p.x + p.width > bedConfig.width - SEAM_CROSS_THRESHOLD_MM
+  );
+
+  return (
+    <g pointerEvents="none">
+      {/* Seam line at x=0 */}
+      <line
+        x1={0} y1={0}
+        x2={0} y2={bedPxH}
+        stroke={hasSeamCrossing ? "#d4852a" : "#555"}
+        strokeWidth={1.5}
+        strokeDasharray="4 3"
+        opacity={0.8}
+      />
+      <text
+        x={4}
+        y={12}
+        fill={hasSeamCrossing ? "#d4852a" : "#555"}
+        fontSize={8}
+        fontFamily="monospace"
+        opacity={0.9}
+      >
+        SEAM
+      </text>
+
+      {/* Warning badge if artwork crosses seam */}
+      {hasSeamCrossing && (
+        <g>
+          <rect
+            x={4}
+            y={20}
+            width={74}
+            height={14}
+            rx={3}
+            fill="#3a2810"
+            stroke="#5a3e18"
+            strokeWidth={0.8}
+          />
+          <text
+            x={41}
+            y={30}
+            fill="#d4a060"
+            fontSize={8}
+            fontFamily="monospace"
+            textAnchor="middle"
+          >
+            ⚠ artwork near seam
+          </text>
+        </g>
+      )}
     </g>
   );
 }

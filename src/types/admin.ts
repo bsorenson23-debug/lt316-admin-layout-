@@ -233,4 +233,6 @@ export type ItemAlignmentMode =
   | "center-bed"
   | "center-x"
   | "center-y"
-  | "fit-bed";
+  | "fit-bed"
+  /** Tumbler-wrap only: shift X by half the template width (180° from origin) */
+  | "opposite-logo";

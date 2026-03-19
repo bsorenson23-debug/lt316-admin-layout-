@@ -84,6 +84,7 @@ export function SelectedItemInspector({
   const handleCenterBetweenGuides = () => onCenterBetweenGuides(selectedItem.id);
   const handleNormalize = () => onNormalizeItem(selectedItem.id);
   const positionLimit = Math.max(bedConfig.width, bedConfig.height) * 2;
+  const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
   const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
   const guideMetrics = activeGuideBand
     ? getGuideBandMetrics(activeGuideBand)
@@ -180,6 +181,15 @@ export function SelectedItemInspector({
           <button className={styles.actionBtn} onClick={() => handleAlign("fit-bed")}>
             Fit to Bed
           </button>
+          {isTumblerMode && (
+            <button
+              className={styles.actionBtnAccent}
+              onClick={() => handleAlign("opposite-logo")}
+              title="Center artwork at 180° from origin (opposite brand logo side)"
+            >
+              ⊕ Opposite Logo
+            </button>
+          )}
         </div>
 
         {activeGuideBand && guideMetrics && (

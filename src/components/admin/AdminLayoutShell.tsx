@@ -34,6 +34,7 @@ import { MaterialProfilePanel } from "./MaterialProfilePanel";
 import type { ActiveMaterialSettings } from "./MaterialProfilePanel";
 import { ProofMockupPanel } from "./ProofMockupPanel";
 import { SprCalibrationPanel } from "./SprCalibrationPanel";
+import { BatchQueuePanel } from "./BatchQueuePanel";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -214,10 +215,11 @@ export function AdminLayoutShell() {
     setPlacedItems((prev) => prev.map((p) =>
       p.id !== id ? p : { ...p, ...computeAlignmentPatch(p, bedConfig, mode) }
     ));
-    if (mode === "center-bed")  setInspectorNote("Centered using artwork bounds");
-    if (mode === "center-x")    setInspectorNote("Centered horizontally");
-    if (mode === "center-y")    setInspectorNote("Centered vertically");
-    if (mode === "fit-bed")     setInspectorNote("Fitted to bed");
+    if (mode === "center-bed")    setInspectorNote("Centered using artwork bounds");
+    if (mode === "center-x")      setInspectorNote("Centered horizontally");
+    if (mode === "center-y")      setInspectorNote("Centered vertically");
+    if (mode === "fit-bed")       setInspectorNote("Fitted to bed");
+    if (mode === "opposite-logo") setInspectorNote("Placed opposite logo (180°)");
   }, [bedConfig]);
 
   const handleNormalizeItem = useCallback((id: string) => {
@@ -315,6 +317,7 @@ export function AdminLayoutShell() {
           assetNames={assetNames}
           onLoadOrder={handleLoadOrder}
         />
+        <BatchQueuePanel onLoadOrder={handleLoadOrder} />
         <BedSettingsPanel bedConfig={bedConfig} onUpdateBedConfig={setBedConfig} />
         <MaterialProfilePanel onMaterialChange={setMaterialSettings} />
         <TumblerExportPanel

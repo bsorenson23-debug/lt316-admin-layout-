@@ -23,10 +23,11 @@
     "test:lightburn-path-validation": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/server/lightburn/validateLightBurnPaths.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
     "@types/three": "^0.183.1",
-    "next": "16.1.6",
+    "next": "^16.2.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "three": "^0.183.2"
