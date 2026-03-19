@@ -45,6 +45,7 @@ import { CameraOverlayPanel } from "./CameraOverlayPanel";
 import { TextToolPanel } from "./TextToolPanel";
 import { TestGridPanel } from "./TestGridPanel";
 import { FlatBedItemPanel } from "./FlatBedItemPanel";
+import { FlatBedAutoDetectPanel } from "./FlatBedAutoDetectPanel";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -308,6 +309,37 @@ export function AdminLayoutShell() {
     } catch { /* noop */ }
   }, []);
 
+  const handleApplyFlatBedItem = useCallback((item: import("@/data/flatBedItems").FlatBedItem) => {
+    const w = bedConfig.width;
+    const h = bedConfig.height;
+    const x = ((w - item.widthMm) / 2).toFixed(2);
+    const y = ((h - item.heightMm) / 2).toFixed(2);
+    const colors: Record<string, string> = {
+      drinkware: "#4a8aaa", "plate-board": "#6aaa5a", "coaster-tile": "#aa8a4a",
+      "sign-plaque": "#aa5a8a", "patch-tag": "#5aaa8a", tech: "#7a5aaa", other: "#8a8a5a",
+    };
+    const c = colors[item.category] ?? "#6a8a9b";
+    const cx = (w / 2).toFixed(2);
+    const labelY = ((h - item.heightMm) / 2 + item.heightMm / 2 - 5).toFixed(2);
+    const dimY   = ((h - item.heightMm) / 2 + item.heightMm / 2 + 7).toFixed(2);
+    const label = item.label.length > 28 ? item.label.slice(0, 27) + "…" : item.label;
+    const svg = [
+      `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">`,
+      `<rect x="${x}" y="${y}" width="${item.widthMm}" height="${item.heightMm}" fill="${c}28" stroke="${c}cc" stroke-width="0.6" stroke-dasharray="3,1.5"/>`,
+      `<text x="${cx}" y="${labelY}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="7" fill="${c}ee">${label}</text>`,
+      `<text x="${cx}" y="${dimY}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="5.5" fill="${c}99">${item.widthMm} \u00d7 ${item.heightMm} mm \u2022 ${item.thicknessMm}mm thick</text>`,
+      `</svg>`,
+    ].join("");
+    setMockupConfig({
+      src: `data:image/svg+xml;base64,${btoa(svg)}`,
+      naturalWidth: w,
+      naturalHeight: h,
+      printTopPct: 0,
+      printBottomPct: 1,
+      opacity: 0.85,
+    });
+  }, [bedConfig.width, bedConfig.height]);
+
   const handleCameraCapture = useCallback((dataUrl: string) => {
     const img = new Image();
     img.onload = () => {
@@ -343,10 +375,10 @@ export function AdminLayoutShell() {
             onSetMockup={setMockupConfig}
             mockupActive={mockupConfig !== null}
           />
-          <FlatBedItemPanel
-            bedWidthMm={bedConfig.width}
-            bedHeightMm={bedConfig.height}
-            onPlaceToBed={setMockupConfig}
+          <FlatBedAutoDetectPanel
+            onApplyItem={handleApplyFlatBedItem}
+            onSetMockup={setMockupConfig}
+            mockupActive={mockupConfig !== null}
           />
         </SvgAssetLibraryPanel>
         <Model3DPanel />
