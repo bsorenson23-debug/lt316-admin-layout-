@@ -343,6 +343,7 @@ export function AdminLayoutShell() {
             onSetMockup={setMockupConfig}
             mockupActive={mockupConfig !== null}
           />
+          <FlatBedItemPanel />
         </SvgAssetLibraryPanel>
         <Model3DPanel />
       </aside>
