@@ -239,7 +239,7 @@ export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChang
         <PreflightChecklist
           isTumblerMode={isTumblerMode}
           hasItems={placedItems.length > 0}
-          hasPreset={Boolean(selectedPresetId)}
+          hasPreset={!rotaryEnabled || Boolean(selectedPresetId)}
           hasDiameter={Boolean(exportArtifacts.artworkPayload.cylinder?.objectDiameterMm)}
           hasTemplateDimensions={bedConfig.width > 0 && bedConfig.height > 0}
           hasTopAnchor={Boolean(selectedPreset?.rotaryTopYmm)}

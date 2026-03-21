@@ -20,17 +20,25 @@
     "test:calibration-bed-reference": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/calibrationBedReference.test.ts",
     "test:staggered-bed-pattern": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/staggeredBedPattern.test.ts",
     "test:lightburn-path-settings": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/lightBurnPathSettings.test.ts",
-    "test:lightburn-path-validation": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/server/lightburn/validateLightBurnPaths.test.ts"
+    "test:lightburn-path-validation": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/server/lightburn/validateLightBurnPaths.test.ts",
+    "test:fiber-color": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/fiberColorCalc.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
+    "@imgly/background-removal": "^1.7.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
+    "@svgdotjs/svg.js": "^3.2.5",
     "@types/three": "^0.183.1",
+    "gsap": "^3.14.2",
     "jszip": "^3.10.1",
+    "konva": "^10.2.3",
     "next": "^16.2.0",
+    "paper": "^0.12.18",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "react-konva": "^19.2.3",
+    "replicate": "^1.4.0",
     "three": "^0.183.2"
   },
   "devDependencies": {

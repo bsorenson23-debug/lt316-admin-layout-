@@ -197,7 +197,7 @@ export async function analyzeFlatBedWithVision(
     const mediaType = normalizeMediaType(input.mimeType);
 
     const message = await client.messages.create({
-      model: "claude-opus-4-6",
+      model: "claude-opus-4-5",
       max_tokens: 512,
       system: VISION_SYSTEM_PROMPT,
       messages: [
@@ -221,9 +221,8 @@ export async function analyzeFlatBedWithVision(
 
     return parseFlatBedVisionResponse(rawText);
   } catch (err) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("[flatbed-vision] analysis failed:", err);
-    }
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[flatbed-vision] analysis failed:", err);
     return {
       category: null,
       itemId: null,
@@ -233,7 +232,7 @@ export async function analyzeFlatBedWithVision(
       heightMm: null,
       thicknessMm: null,
       confidence: 0.1,
-      notes: ["Vision analysis failed — API error."],
+      notes: [`Vision analysis failed — ${msg}`],
     };
   }
 }

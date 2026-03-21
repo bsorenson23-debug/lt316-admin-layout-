@@ -2,7 +2,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #141414;
+  background: var(--bg-input);
   overflow: hidden;
   position: relative;
 }
@@ -12,10 +12,11 @@
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid var(--border-normal);
   flex-shrink: 0;
   flex-wrap: wrap;
   overflow: visible;
+  background: var(--bg-panel);
 }
 
 .toolbarTitle {
@@ -23,13 +24,13 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #888;
+  color: var(--text-muted);
   flex-shrink: 0;
 }
 
 .bedInfo {
   font-size: 11px;
-  color: #555;
+  color: var(--text-muted);
   font-family: monospace;
 }
 
@@ -48,28 +49,30 @@
 /* ---- Destructive confirm ---- */
 .confirmLabel {
   font-size: 11px;
-  color: #c2c2c2;
+  color: var(--text-secondary);
 }
 .confirmYes {
   font-size: 11px;
   padding: 3px 10px;
-  border-radius: 4px;
-  border: 1px solid #5c2a2a;
-  background: rgba(160, 42, 42, 0.18);
-  color: #f1b6b6;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+  color: var(--error);
   cursor: pointer;
+  transition: background var(--transition);
 }
-.confirmYes:hover { background: rgba(160, 42, 42, 0.32); }
+.confirmYes:hover { background: rgba(248, 113, 113, 0.18); }
 .confirmNo {
   font-size: 11px;
   padding: 3px 10px;
-  border-radius: 4px;
-  border: 1px solid #333;
-  background: #242424;
-  color: #888;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-normal);
+  background: var(--bg-input);
+  color: var(--text-muted);
   cursor: pointer;
+  transition: background var(--transition), color var(--transition);
 }
-.confirmNo:hover { background: #2d2d2d; }
+.confirmNo:hover { background: var(--bg-hover); color: var(--text-secondary); }
 
 .modeBtn {
   pointer-events: auto;
@@ -78,20 +81,21 @@
   letter-spacing: 0.05em;
   padding: 12px 28px;
   background: rgba(16, 16, 16, 0.80);
-  border: 2px solid #2e2e2e;
+  border: 2px solid var(--border-normal);
   border-radius: 999px;
-  color: #555;
+  color: var(--text-muted);
   cursor: pointer;
-  transition: border-color 140ms, color 140ms, background 140ms;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
   white-space: nowrap;
   backdrop-filter: blur(4px);
 }
 
 .modeBtn:hover {
-  border-color: #505050;
-  color: #909090;
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
 }
 
+/* Blue active state is intentional — distinguishes mode from accent actions */
 .modeBtnActive {
   border-color: #5a9fd4;
   color: #7dbfef;
@@ -106,8 +110,8 @@
 /* ---- View mode toggle (Wrap / Two-Sided) ---- */
 .viewToggle {
   display: inline-flex;
-  border: 1px solid #2e2e2e;
-  border-radius: 5px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -119,49 +123,50 @@
   padding: 3px 10px;
   background: none;
   border: none;
-  color: #555;
+  color: var(--text-muted);
   cursor: pointer;
-  transition: background 120ms, color 120ms;
+  transition: background var(--transition), color var(--transition);
 }
 
 .viewToggleBtn:not(:last-child) {
-  border-right: 1px solid #2e2e2e;
+  border-right: 1px solid var(--border-normal);
 }
 
 .viewToggleBtn:hover {
-  background: #1e1e1e;
-  color: #999;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
 }
 
+/* Green active is intentional — matches the "front" pane color */
 .viewToggleBtnActive {
-  background: #1c2e24;
-  color: #7ecfa8;
+  background: var(--success-bg);
+  color: var(--success);
 }
 
 .viewToggleBtnActive:hover {
-  background: #1c2e24;
-  color: #7ecfa8;
+  background: var(--success-bg);
+  color: var(--success);
 }
 
 .activeTip {
   font-size: 11px;
-  color: #f97316;
+  color: var(--accent);
   margin-left: auto;
 }
 
 .clearBtn {
   font-size: 11px;
-  color: #e05050;
+  color: var(--error);
   background: none;
-  border: 1px solid #3a2020;
+  border: 1px solid var(--error-border);
   cursor: pointer;
   padding: 4px 10px;
-  border-radius: 4px;
-  transition: background 0.15s;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition);
   margin-left: 8px;
 }
 .clearBtn:hover {
-  background: rgba(224, 80, 80, 0.12);
+  background: var(--error-bg);
 }
 
 .canvas {
@@ -174,12 +179,13 @@
 .framePreviewLabel {
   font-size: 9px;
   font-family: monospace;
-  fill: #4ea8c8;
+  fill: var(--info);
   pointer-events: none;
   user-select: none;
 }
 
 /* ---- Origin chip (toolbar) ---- */
+/* Warm amber is intentional branding for the origin/home point indicator */
 .originChip {
   position: relative;
   display: inline-flex;
@@ -187,7 +193,7 @@
   gap: 5px;
   padding: 3px 8px;
   border: 1px solid #5a3e28;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: #1c1510;
   cursor: default;
   flex-shrink: 0;
@@ -218,7 +224,7 @@
   z-index: 50;
   background: #1e1510;
   border: 1px solid #5a3e28;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 10px 12px;
   width: 268px;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
@@ -246,7 +252,7 @@
 
 .originTooltipLabel {
   font-size: 10px;
-  color: #777;
+  color: var(--text-muted);
   white-space: nowrap;
   min-width: 96px;
 }
@@ -257,13 +263,13 @@
   font-family: monospace;
   background: #241a10;
   border: 1px solid #4a3520;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 1px 6px;
 }
 
 .originTooltipHint {
   font-size: 10px;
-  color: #999;
+  color: var(--text-secondary);
   line-height: 1.5;
   border-top: 1px solid #2e2218;
   padding-top: 6px;

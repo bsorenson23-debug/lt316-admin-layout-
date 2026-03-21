@@ -1,0 +1,382 @@
+.panel {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-normal);
+  background: var(--bg-card);
+  overflow-y: auto;
+  max-height: 60%;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.statusBadge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+
+.statusCalibrated {
+  color: var(--success);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+}
+
+.statusUncalibrated {
+  color: var(--warning);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+}
+
+.body {
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sectionLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* ── Field rows ── */
+.fieldRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fieldUnit {
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  min-width: 28px;
+}
+
+.input {
+  width: 80px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 4px 6px;
+  text-align: right;
+  outline: none;
+  appearance: textfield;
+  -moz-appearance: textfield;
+  transition: border-color var(--transition-fast);
+}
+
+.input::-webkit-outer-spin-button,
+.input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+}
+
+.input:focus {
+  border-color: var(--accent);
+}
+
+.inputWide {
+  width: 120px;
+  text-align: left;
+}
+
+.select {
+  width: 80px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 4px 6px;
+  transition: border-color var(--transition-fast);
+}
+
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ── ED preview ── */
+.edPreview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.edValue {
+  font-weight: 700;
+  font-family: monospace;
+  color: var(--text-primary);
+}
+
+/* ── Color swatch ── */
+.swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  flex-shrink: 0;
+}
+
+.swatchLabel {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ── Bracket test lines ── */
+.testLines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.testLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.testLine:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.testLineSelected {
+  border-color: var(--info);
+  background: var(--info-bg);
+}
+
+.testLineCenter {
+  border-left: 2px solid var(--accent);
+}
+
+.testLineNum {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-dim);
+  min-width: 14px;
+  flex-shrink: 0;
+}
+
+.testLineSelected .testLineNum {
+  color: var(--info);
+}
+
+.testLineBar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+}
+
+.testLineParams {
+  font-size: 9px;
+  font-family: monospace;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.testLineSelected .testLineParams {
+  color: var(--text-muted);
+}
+
+.testLineED {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--text-muted);
+  min-width: 48px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ── Buttons ── */
+.primaryBtn {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.generateBtn {
+  background: var(--info-bg);
+  border: 1px solid var(--info-border);
+  color: var(--info);
+}
+
+.generateBtn:hover {
+  background: rgba(96, 165, 250, 0.14);
+}
+
+.saveBtn {
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success);
+}
+
+.saveBtn:hover:not(:disabled) {
+  background: rgba(74, 222, 128, 0.14);
+}
+
+.primaryBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.secondaryBtn {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: none;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition);
+}
+
+.secondaryBtn:hover {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.dangerBtn {
+  color: var(--error);
+  border-color: var(--error-border);
+}
+
+.dangerBtn:hover {
+  background: var(--error-bg);
+}
+
+/* ── Result section ── */
+.resultBox {
+  padding: 8px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.resultRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.resultValue {
+  font-family: monospace;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* ── Profile selector ── */
+.profileRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.profileSelect {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 5px 6px;
+}
+
+.profileSelect:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ── Radio-style material toggle ── */
+.materialToggle {
+  display: flex;
+  gap: 4px;
+}
+
+.materialBtn {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-align: center;
+}
+
+.materialBtn:hover {
+  border-color: var(--border-strong);
+}
+
+.materialBtnActive {
+  border-color: var(--info);
+  color: var(--info);
+  background: var(--info-bg);
+}
+
+/* ── Inline row of two buttons ── */
+.btnRow {
+  display: flex;
+  gap: 6px;
+}
+
+.btnRow > * {
+  flex: 1;
+}

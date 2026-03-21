@@ -1,13 +1,13 @@
 .panel {
-  border-bottom: 1px solid #2a2a2a;
-  background: #1a1a1a;
+  border-bottom: 1px solid var(--border-normal);
+  background: var(--bg-card);
 }
 
 .header {
   display: flex;
   align-items: center;
-  padding: 12px 14px 8px;
-  border-bottom: 1px solid #242424;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .title {
@@ -15,7 +15,7 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #888;
+  color: var(--text-muted);
 }
 
 .body {
@@ -35,7 +35,7 @@
 
 .fieldLabel {
   font-size: 12px;
-  color: #999;
+  color: var(--text-secondary);
   flex-shrink: 0;
   min-width: 92px;
 }
@@ -49,56 +49,58 @@
 /* ---- Number input ---- */
 .numInput {
   width: 80px;
-  background: #242424;
-  border: 1px solid #333;
-  border-radius: 4px;
-  color: #e0e0e0;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
   font-size: 12px;
   padding: 4px 8px;
   text-align: right;
   outline: none;
   appearance: textfield;
   -moz-appearance: textfield;
+  transition: border-color var(--transition-fast);
 }
 .numInput::-webkit-outer-spin-button,
 .numInput::-webkit-inner-spin-button {
   -webkit-appearance: none;
 }
 .numInput:focus {
-  border-color: #f97316;
+  border-color: var(--accent);
 }
 
 /* ---- Select ---- */
 .select {
   width: 140px;
-  background: #242424;
-  border: 1px solid #333;
-  border-radius: 4px;
-  color: #e0e0e0;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
   font-size: 12px;
   padding: 4px 6px;
   outline: none;
+  transition: border-color var(--transition-fast);
 }
 .select:focus {
-  border-color: #f97316;
+  border-color: var(--accent);
 }
 
 .readonlyValue {
   min-width: 80px;
   text-align: right;
   padding: 4px 8px;
-  border: 1px solid #313131;
-  border-radius: 4px;
-  color: #d9d9d9;
-  background: #1f1f1f;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  background: var(--bg-input);
   font-size: 12px;
   font-family: "Courier New", monospace;
 }
 
 /* ---- Collapsible section ---- */
 .collapsibleSection {
-  border: 1px solid #242424;
-  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
@@ -108,15 +110,16 @@
   align-items: center;
   justify-content: space-between;
   padding: 7px 10px;
-  background: #222;
+  background: var(--bg-elevated);
   border: none;
   cursor: pointer;
   text-align: left;
   gap: 8px;
+  transition: background var(--transition-fast);
 }
 
 .sectionToggle:hover {
-  background: #272727;
+  background: var(--bg-hover);
 }
 
 .sectionToggleLabel {
@@ -124,12 +127,12 @@
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: #777;
+  color: var(--text-muted);
 }
 
 .sectionToggleChevron {
   font-size: 11px;
-  color: #555;
+  color: var(--text-dim);
   flex-shrink: 0;
 }
 
@@ -138,7 +141,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: #1a1a1a;
+  background: var(--bg-card);
   animation: sectionOpen 0.14s ease;
 }
 
@@ -164,7 +167,7 @@
   display: inline-block;
   width: 32px;
   height: 18px;
-  background: #333;
+  background: var(--border-strong);
   border-radius: 9px;
   transition: background 0.2s;
   position: relative;
@@ -174,14 +177,14 @@
   position: absolute;
   width: 12px;
   height: 12px;
-  background: #888;
+  background: var(--text-muted);
   border-radius: 50%;
   top: 3px;
   left: 3px;
   transition: transform 0.2s, background 0.2s;
 }
 .toggle input:checked + .toggleTrack {
-  background: #f97316;
+  background: var(--accent);
 }
 .toggle input:checked + .toggleTrack::after {
   transform: translateX(14px);
@@ -198,16 +201,17 @@
 .lbPathInput {
   flex: 1;
   min-width: 0;
-  background: #1e1e1e;
-  border: 1px solid #333;
-  border-radius: 4px;
-  color: #c8c8c8;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
   font-size: 11px;
   padding: 4px 6px;
   outline: none;
   font-family: monospace;
+  transition: border-color var(--transition-fast);
 }
-.lbPathInput:focus { border-color: #f97316; }
+.lbPathInput:focus { border-color: var(--accent); }
 
 .lbStatus {
   font-size: 13px;
@@ -222,15 +226,15 @@
   padding: 5px 10px;
   font-size: 11px;
   font-weight: 600;
-  background: #242424;
-  border: 1px solid #3a3a3a;
-  border-radius: 4px;
-  color: #aaa;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background var(--transition), border-color var(--transition);
 }
 .lbValidateBtn:hover:not(:disabled) {
-  background: #2d2d2d;
+  background: var(--bg-hover);
   border-color: #4a4a4a;
 }
 .lbValidateBtn:disabled {

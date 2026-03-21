@@ -4,8 +4,8 @@
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-  background: #141414;
-  color: #e0e0e0;
+  background: var(--bg-base);
+  color: var(--text-primary);
   font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
   font-size: 13px;
 }
@@ -17,8 +17,9 @@
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #2a2a2a;
+  border-right: 1px solid var(--border-normal);
   overflow: hidden;
+  background: var(--bg-panel);
 }
 
 .centerPanel {
@@ -36,54 +37,62 @@
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #2a2a2a;
+  border-left: 1px solid var(--border-normal);
   overflow: hidden;
   gap: 0;
+  background: var(--bg-panel);
 }
 
 /* ── Tab bar ────────────────────────────────────────────────────── */
 .tabBar {
   display: flex;
   align-items: flex-end;
-  gap: 2px;
+  gap: 1px;
   padding: 6px 8px 0;
-  border-bottom: 1px solid #2a2a2a;
-  background: #141414;
+  border-bottom: 1px solid var(--border-normal);
+  background: var(--bg-panel);
   flex-shrink: 0;
 }
 
 .tab,
 .tabActive {
-  padding: 5px 12px 6px;
-  border-radius: 5px 5px 0 0;
+  padding: 5px 11px 7px;
+  border-radius: 4px 4px 0 0;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   cursor: pointer;
-  border: 1px solid transparent;
-  border-bottom: none;
+  border: none;
   background: none;
-  transition: color 120ms, background 120ms;
+  transition: color var(--transition), background var(--transition);
   white-space: nowrap;
+  position: relative;
 }
 
 .tab {
-  color: #4a4a4a;
-  border-color: transparent;
+  color: var(--text-dim);
 }
 
 .tab:hover {
-  color: #777;
-  background: #1a1a1a;
+  color: var(--text-secondary);
+  background: var(--bg-card);
 }
 
+/* Active tab — underline indicator instead of border box */
 .tabActive {
-  color: #d8d8d8;
-  background: #1a1a1a;
-  border-color: #2a2a2a;
-  border-bottom-color: #1a1a1a;
-  position: relative;
-  bottom: -1px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+}
+
+.tabActive::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
 }
 
 .tabCalibrationLink {
@@ -97,7 +106,7 @@
   padding: 3px 6px 4px;
   border-radius: 4px;
   white-space: nowrap;
-  transition: color 120ms, background 120ms;
+  transition: color var(--transition), background var(--transition);
   position: relative;
   bottom: -1px;
 }
@@ -113,10 +122,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #1a1a1a;
+  background: var(--bg-card);
 }
-.tabPane::-webkit-scrollbar { width: 4px; }
-.tabPane::-webkit-scrollbar-thumb { background: #2e2e2e; border-radius: 2px; }
 
 /* ── Split view ─────────────────────────────────────────────────── */
 .splitView {
@@ -143,9 +150,9 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #444;
-  background: #161616;
-  border-bottom: 1px solid #222;
+  color: var(--text-dim);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .splitPaneActive .splitPaneLabel {
@@ -155,7 +162,7 @@
 
 .splitDivider {
   width: 1px;
-  background: #252525;
+  background: var(--border-subtle);
   flex-shrink: 0;
 }
 
@@ -166,8 +173,8 @@
   justify-content: center;
   gap: 6px;
   padding: 6px 12px;
-  background: #161616;
-  border-bottom: 1px solid #242424;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-normal);
   flex-shrink: 0;
 }
 
@@ -177,17 +184,17 @@
   letter-spacing: 0.05em;
   padding: 4px 14px;
   background: none;
-  border: 1px solid #2e2e2e;
+  border: 1px solid var(--border-normal);
   border-radius: 999px;
-  color: #555;
+  color: var(--text-muted);
   cursor: pointer;
-  transition: border-color 140ms, color 140ms, background 140ms;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
   white-space: nowrap;
 }
 
 .splitModeBtn:hover {
-  border-color: #505050;
-  color: #909090;
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
 }
 
 .splitModeBtnActive {
@@ -204,7 +211,7 @@
 .splitHeaderSep {
   width: 1px;
   height: 16px;
-  background: #2e2e2e;
+  background: var(--border-normal);
   margin: 0 4px;
   flex-shrink: 0;
 }

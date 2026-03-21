@@ -25,7 +25,7 @@ import { checkSvgQuality } from "@/utils/svgQualityCheck";
 import { centerArtworkBetweenGrooves, getActiveTumblerGuideBand } from "@/utils/tumblerGuides";
 import { SvgAssetLibraryPanel } from "./SvgAssetLibraryPanel";
 import { LaserBedWorkspace } from "./LaserBedWorkspace";
-import type { FramePreviewProp, BedMockupConfig } from "./LaserBedWorkspace";
+import type { FramePreviewProp, BedMockupConfig, FlatBedItemOverlay } from "./LaserBedWorkspace";
 import { BedSettingsPanel } from "./BedSettingsPanel";
 import { TumblerAutoDetectPanel } from "./TumblerAutoDetectPanel";
 import { Model3DPanel } from "./Model3DPanel";
@@ -46,6 +46,9 @@ import { TextToolPanel } from "./TextToolPanel";
 import { TestGridPanel } from "./TestGridPanel";
 import { FlatBedItemPanel } from "./FlatBedItemPanel";
 import { FlatBedAutoDetectPanel } from "./FlatBedAutoDetectPanel";
+import { ColorLayerPanel } from "./ColorLayerPanel";
+import { type LaserLayer, buildDefaultLayers } from "@/types/laserLayer";
+import { FiberColorCalibrationPanel } from "./FiberColorCalibrationPanel";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -75,6 +78,16 @@ export function AdminLayoutShell() {
 
   // -- Tumbler mockup overlay -----------------------------------------------
   const [mockupConfig, setMockupConfig] = useState<BedMockupConfig | null>(null);
+
+  // -- Flat bed item footprint overlay --------------------------------------
+  const [flatBedItemOverlay, setFlatBedItemOverlay] = useState<FlatBedItemOverlay | null>(null);
+
+  // -- Color laser layers ---------------------------------------------------
+  const [laserLayers, setLaserLayers] = useState<LaserLayer[]>(() => buildDefaultLayers());
+
+  const handleUpdateLayer = useCallback((layer: LaserLayer) => {
+    setLaserLayers(prev => prev.map(l => l.id === layer.id ? layer : l));
+  }, []);
 
   // -- Derived --------------------------------------------------------------
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
@@ -309,36 +322,25 @@ export function AdminLayoutShell() {
     } catch { /* noop */ }
   }, []);
 
-  const handleApplyFlatBedItem = useCallback((item: import("@/data/flatBedItems").FlatBedItem) => {
-    const w = bedConfig.width;
-    const h = bedConfig.height;
-    const x = ((w - item.widthMm) / 2).toFixed(2);
-    const y = ((h - item.heightMm) / 2).toFixed(2);
-    const colors: Record<string, string> = {
-      drinkware: "#4a8aaa", "plate-board": "#6aaa5a", "coaster-tile": "#aa8a4a",
-      "sign-plaque": "#aa5a8a", "patch-tag": "#5aaa8a", tech: "#7a5aaa", other: "#8a8a5a",
-    };
-    const c = colors[item.category] ?? "#6a8a9b";
-    const cx = (w / 2).toFixed(2);
-    const labelY = ((h - item.heightMm) / 2 + item.heightMm / 2 - 5).toFixed(2);
-    const dimY   = ((h - item.heightMm) / 2 + item.heightMm / 2 + 7).toFixed(2);
-    const label = item.label.length > 28 ? item.label.slice(0, 27) + "…" : item.label;
-    const svg = [
-      `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">`,
-      `<rect x="${x}" y="${y}" width="${item.widthMm}" height="${item.heightMm}" fill="${c}28" stroke="${c}cc" stroke-width="0.6" stroke-dasharray="3,1.5"/>`,
-      `<text x="${cx}" y="${labelY}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="7" fill="${c}ee">${label}</text>`,
-      `<text x="${cx}" y="${dimY}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="5.5" fill="${c}99">${item.widthMm} \u00d7 ${item.heightMm} mm \u2022 ${item.thicknessMm}mm thick</text>`,
-      `</svg>`,
-    ].join("");
-    setMockupConfig({
-      src: `data:image/svg+xml;base64,${btoa(svg)}`,
-      naturalWidth: w,
-      naturalHeight: h,
-      printTopPct: 0,
-      printBottomPct: 1,
-      opacity: 0.85,
+  const handleApplyFlatBedItem = useCallback((
+    item: import("@/data/flatBedItems").FlatBedItem,
+    imageSrc?: string,
+    imageNaturalWidth?: number,
+    imageNaturalHeight?: number,
+  ) => {
+    setFlatBedItemOverlay({
+      itemId: item.id,
+      widthMm: item.widthMm,
+      heightMm: item.heightMm,
+      thicknessMm: item.thicknessMm,
+      label: item.label,
+      category: item.category,
+      material: item.material,
+      imageSrc,
+      imageNaturalWidth,
+      imageNaturalHeight,
     });
-  }, [bedConfig.width, bedConfig.height]);
+  }, []);
 
   const handleCameraCapture = useCallback((dataUrl: string) => {
     const img = new Image();
@@ -367,21 +369,44 @@ export function AdminLayoutShell() {
           uploadError={uploadError}
           onPlaceSelectedAsset={handlePlaceSelectedAssetOnBed}
           onRemoveAsset={handleRemoveAsset}
+          onUpdateAssetContent={(id, newContent) =>
+            setSvgAssets(prev => prev.map(a => a.id === id ? { ...a, content: newContent } : a))
+          }
           onClearAll={handleClearAssets}
         >
-          <TumblerAutoDetectPanel
-            bedConfig={bedConfig}
-            onApplyDraft={handleApplyTumblerDraft}
-            onSetMockup={setMockupConfig}
-            mockupActive={mockupConfig !== null}
-          />
-          <FlatBedAutoDetectPanel
-            onApplyItem={handleApplyFlatBedItem}
-            onSetMockup={setMockupConfig}
-            mockupActive={mockupConfig !== null}
-          />
+          {isTumblerMode ? (
+            <TumblerAutoDetectPanel
+              bedConfig={bedConfig}
+              onApplyDraft={handleApplyTumblerDraft}
+              onSetMockup={setMockupConfig}
+              mockupActive={mockupConfig !== null}
+            />
+          ) : (
+            <FlatBedAutoDetectPanel
+              onApplyItem={handleApplyFlatBedItem}
+              onSetMockup={setMockupConfig}
+              onClearItemOverlay={() => setFlatBedItemOverlay(null)}
+              mockupActive={mockupConfig !== null}
+            />
+          )}
         </SvgAssetLibraryPanel>
-        <Model3DPanel />
+        <Model3DPanel
+          placedItems={placedItems}
+          bedWidthMm={bedConfig.width}
+          bedHeightMm={bedConfig.height}
+          workspaceMode={bedConfig.workspaceMode}
+          tumblerDims={
+            bedConfig.workspaceMode === "tumbler-wrap" && bedConfig.tumblerDiameterMm > 0
+              ? {
+                  overallHeightMm: bedConfig.tumblerOverallHeightMm ?? 215,
+                  diameterMm: bedConfig.tumblerDiameterMm,
+                  topDiameterMm: bedConfig.tumblerTopDiameterMm,
+                  bottomDiameterMm: bedConfig.tumblerBottomDiameterMm,
+                  printableHeightMm: bedConfig.tumblerPrintableHeightMm ?? bedConfig.height,
+                }
+              : null
+          }
+        />
       </aside>
 
       {/* CENTER */}
@@ -395,6 +420,7 @@ export function AdminLayoutShell() {
           framePreview={framePreview}
           showTwoSidedCrosshairs={isTumblerMode}
           mockupConfig={mockupConfig}
+          flatBedItemOverlay={flatBedItemOverlay}
           onWorkspaceModeChange={handleWorkspaceModeChange}
           onPlaceAsset={handlePlaceAsset}
           onSelectItem={handleSelectItem}
@@ -473,6 +499,12 @@ export function AdminLayoutShell() {
 
           {rightTab === "tools" && (
             <>
+              <ColorLayerPanel
+                layers={laserLayers}
+                onUpdateLayer={handleUpdateLayer}
+                onSetLayers={setLaserLayers}
+                activeAssetContent={svgAssets.find(a => a.id === selectedAssetId)?.content}
+              />
               <FlatBedItemPanel />
               <TextToolPanel onAddAsset={handleAddTextAsset} />
               <TextPersonalizationPanel />
@@ -484,6 +516,7 @@ export function AdminLayoutShell() {
           {rightTab === "setup" && (
             <>
               <MachineProfilePanel />
+              <FiberColorCalibrationPanel />
               <SprCalibrationPanel bedConfig={bedConfig} />
               <RotaryPresetSharePanel />
             </>

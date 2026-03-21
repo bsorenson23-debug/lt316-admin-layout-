@@ -13,13 +13,18 @@
  * Shows an empty state when nothing is selected.
  */
 
-import React from "react";
+import React, { useState, lazy, Suspense } from "react";
 import {
   BedConfig,
   ItemAlignmentMode,
   PlacedItem,
   PlacedItemPatch,
 } from "@/types/admin";
+
+// Lazy-load the simulator overlay (GSAP is large, don't bundle unless needed)
+const LaserSimulatorOverlay = lazy(() =>
+  import("./LaserSimulatorOverlay").then(m => ({ default: m.LaserSimulatorOverlay }))
+);
 import {
   getActiveTumblerGuideBand,
   getGuideBandMetrics,
@@ -83,6 +88,7 @@ export function SelectedItemInspector({
   const handleAlign = (mode: ItemAlignmentMode) => onAlignItem(selectedItem.id, mode);
   const handleCenterBetweenGuides = () => onCenterBetweenGuides(selectedItem.id);
   const handleNormalize = () => onNormalizeItem(selectedItem.id);
+  const [showSimulator, setShowSimulator] = useState(false);
   const positionLimit = Math.max(bedConfig.width, bedConfig.height) * 2;
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
   const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
@@ -240,8 +246,32 @@ export function SelectedItemInspector({
           </button>
         </div>
 
+        {/* ── Laser Simulation ── */}
+        <div className={styles.sectionLabel}>Laser Tools</div>
+        <button
+          className={styles.actionBtn}
+          style={{ background: "#0a1a2a", borderColor: "#1a4a6a", color: "#5ab0d0" }}
+          onClick={() => setShowSimulator(true)}
+          title="Animate the laser path using GSAP to preview engrave order and estimate time"
+        >
+          ▶ Simulate Engrave
+        </button>
+
         {statusNote && <div className={styles.statusNote}>{statusNote}</div>}
       </div>
+
+      {/* GSAP Laser Simulator Overlay */}
+      {showSimulator && (
+        <Suspense fallback={null}>
+          <LaserSimulatorOverlay
+            svgContent={selectedItem.svgText}
+            itemName={selectedItem.name.replace(/\.svg$/i, "")}
+            speedMmPerSec={100}
+            passes={1}
+            onClose={() => setShowSimulator(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

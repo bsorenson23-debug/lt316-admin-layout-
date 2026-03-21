@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="285.88mm" height="175mm"
+     viewBox="0 0 285.88 175">
+  <!--
+    YETI Rambler 30oz ground-truth wrap test fixture
+    outsideDiameterMm = 91  →  wrapWidthMm = π × 91 ≈ 285.88
+    usableHeightMm    = 175  →  printHeightMm = 175
+
+    PASS condition:
+      "FRONT" label faces the camera (center of visible face)
+      "SEAM" label is hidden at the back (cylinder seam)
+      Centered cross sits dead-center of the front face
+      Red left edge and blue right edge meet at the back seam
+  -->
+
+  <!-- Background fill -->
+  <rect x="0" y="0" width="285.88" height="175" fill="#1a1a2e"/>
+
+  <!-- Red left edge (U=0 seam side) -->
+  <rect x="0" y="0" width="3" height="175" fill="#ff3333"/>
+
+  <!-- Blue right edge (U=1 seam side) -->
+  <rect x="282.88" y="0" width="3" height="175" fill="#3366ff"/>
+
+  <!-- Centered cross — at the midpoint of the wrap -->
+  <line x1="142.94" y1="0"   x2="142.94" y2="175" stroke="#ffcc00" stroke-width="1"/>
+  <line x1="0"      y1="87.5" x2="285.88" y2="87.5" stroke="#ffcc00" stroke-width="1"/>
+
+  <!-- FRONT label — centered on the wrap (what the camera should see) -->
+  <text x="142.94" y="80" text-anchor="middle"
+        font-family="monospace" font-size="24" font-weight="bold" fill="#ffffff">
+    FRONT
+  </text>
+
+  <!-- SEAM label — at the left edge (should wrap to back / hidden seam) -->
+  <text x="14" y="80" text-anchor="start"
+        font-family="monospace" font-size="14" font-weight="bold" fill="#ff6666">
+    SEAM
+  </text>
+
+  <!-- SEAM label — at the right edge (should wrap to back / hidden seam) -->
+  <text x="271.88" y="80" text-anchor="end"
+        font-family="monospace" font-size="14" font-weight="bold" fill="#6699ff">
+    SEAM
+  </text>
+
+  <!-- Corner coordinate labels for orientation reference -->
+  <text x="6"      y="14" font-family="monospace" font-size="9" fill="#888">(0,0)</text>
+  <text x="265.88" y="14" font-family="monospace" font-size="9" fill="#888" text-anchor="end">(W,0)</text>
+  <text x="6"      y="170" font-family="monospace" font-size="9" fill="#888">(0,H)</text>
+  <text x="265.88" y="170" font-family="monospace" font-size="9" fill="#888" text-anchor="end">(W,H)</text>
+</svg>
