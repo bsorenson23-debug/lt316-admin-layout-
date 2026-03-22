@@ -18,7 +18,9 @@ import {
   getTumblerConfidenceLevel,
   toTumblerSpecDraft,
 } from "@/utils/tumblerAutoSize";
+import { detectTumblerFromImage } from "@/lib/autoDetect";
 import type { BedMockupConfig } from "./LaserBedWorkspace";
+import { FileDropZone } from "./shared/FileDropZone";
 import styles from "./TumblerAutoDetectPanel.module.css";
 
 interface Props {
@@ -214,24 +216,8 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft, onSetMockup, m
         error: null,
       }));
 
-      const formData = new FormData();
-      formData.set("image", file);
-
       try {
-        const response = await fetch("/api/admin/tumbler/auto-size", {
-          method: "POST",
-          body: formData,
-        });
-        const payload = (await response.json()) as
-          | TumblerAutoSizeResponse
-          | { error?: string };
-
-        if (!response.ok) {
-          throw new Error(getErrorMessage(payload));
-        }
-
-        const result = payload as TumblerAutoSizeResponse;
-        const detectedDraft = toTumblerSpecDraft(result.suggestion, result.calculation);
+        const { response: result, draft: detectedDraft } = await detectTumblerFromImage(file);
 
         setState((prev) => {
           let nextDraft = detectedDraft;
@@ -328,35 +314,35 @@ export function TumblerAutoDetectPanel({ bedConfig, onApplyDraft, onSetMockup, m
 
       <div className={styles.body}>
         <div className={styles.sectionLabel}>Upload Image</div>
-        <input
-          type="file"
+        <FileDropZone
           accept="image/*"
-          className={styles.fileInput}
-          onChange={(e) => {
-            const file = e.target.files?.[0] ?? null;
+          fileName={selectedImage?.name ?? state.fileName ?? null}
+          onFileSelected={(file) => {
             setSelectedImage(file);
             setImageSrc(null);
             setImageNaturalSize(null);
-            if (file) {
-              const reader = new FileReader();
-              reader.onload = (ev) => {
-                const src = ev.target?.result as string;
-                if (!src) return;
-                setImageSrc(src);
-                const img = new window.Image();
-                img.onload = () => setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
-                img.src = src;
-              };
-              reader.readAsDataURL(file);
-            }
-            // Clear any active mockup when a new image is loaded
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              const src = ev.target?.result as string;
+              if (!src) return;
+              setImageSrc(src);
+              const img = new window.Image();
+              img.onload = () => setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+              img.src = src;
+            };
+            reader.readAsDataURL(file);
+            onSetMockup?.(null);
+            setMockupOpen(false);
+          }}
+          onClear={() => {
+            setSelectedImage(null);
+            setImageSrc(null);
+            setImageNaturalSize(null);
+            setState(INITIAL_STATE);
             onSetMockup?.(null);
             setMockupOpen(false);
           }}
         />
-        <div className={styles.fileName}>
-          {selectedImage?.name ?? state.fileName ?? "No image selected"}
-        </div>
         <button
           className={`${styles.primaryBtn} ${state.status === "loading" ? styles.primaryBtnLoading : ""}`}
           disabled={!selectedImage || state.status === "loading"}

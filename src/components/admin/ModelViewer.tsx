@@ -26,6 +26,21 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as THREE from "three";
 
 // ---------------------------------------------------------------------------
+// Suppress noisy Three.js deprecation warnings
+// ---------------------------------------------------------------------------
+if (typeof window !== "undefined") {
+  const _origWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    if (typeof args[0] === "string" && (
+      args[0].includes("PCFSoftShadowMap") ||
+      args[0].includes("THREE.Clock") ||
+      args[0].includes("THREE.THREE.Clock")
+    )) return;
+    _origWarn.apply(console, args);
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Public interfaces
 // ---------------------------------------------------------------------------
 
@@ -46,12 +61,17 @@ export interface BedOverlayData {
   bedWidthMm: number;
   bedHeightMm: number;
   workspaceMode: "flat-bed" | "tumbler-wrap";
+  /** The raw canvas element — used for direct CanvasTexture on GLB meshes */
+  canvas?: HTMLCanvasElement;
 }
 
 export interface ModelViewerProps {
   file: File;
   overlay?: BedOverlayData | null;
   tumblerDims?: TumblerDimensions | null;
+  handleArcDeg?: number;
+  /** Stable ref to the bed texture canvas — avoids identity churn from state */
+  bedCanvas?: HTMLCanvasElement | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,15 +137,18 @@ function LoadingIndicator() {
 // Auto-fit on first load
 // ---------------------------------------------------------------------------
 
-function AutoFit() {
+function AutoFit({ url }: { url: string }) {
   const bounds = useBounds();
-  const fitted = useRef(false);
+  const lastUrl = useRef<string | null>(null);
   useEffect(() => {
-    if (!fitted.current) {
-      fitted.current = true;
+    // Fit camera once per unique model URL — not on every render
+    if (lastUrl.current === url) return;
+    lastUrl.current = url;
+    const timer = setTimeout(() => {
       bounds.refresh().clip().fit();
-    }
-  });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [url, bounds]);
   return null;
 }
 
@@ -320,22 +343,6 @@ function OverlayCylinder({
   const rTop = topR > gap ? topR : fallbackR;
   const rBot = botR > gap ? botR : fallbackR;
 
-  // ── Temporary debug logging ──
-  const thetaStart = 0;
-  const thetaLength = Math.PI * 2;
-  const handleArcDeg = (thetaLength * 180) / Math.PI;
-  console.log('[TumblerWrap]', {
-    diameterMm: dims.diameterMm,
-    printHeightMm: dims.printableHeightMm,
-    wrapWidthMm: overlay.bedWidthMm,
-    canvasWidthPx: (texture.image as HTMLImageElement)?.naturalWidth ?? 'pending',
-    canvasHeightPx: (texture.image as HTMLImageElement)?.naturalHeight ?? 'pending',
-    textureSource: uvDebug ? 'uvDebugCanvas' : 'dataURL',
-    handleArcDeg,
-    thetaLength,
-    thetaStart,
-  });
-
   return (
     <mesh position={[center.x, center.y, center.z]}>
       {/* open-ended cylinder, 64 segments for smooth curve */}
@@ -437,46 +444,346 @@ function ObjMesh({
   );
 }
 
-function GltfMesh({
-  url, dims, onReady,
-}: { url: string; dims?: TumblerDimensions | null; onReady?: OnReady }) {
-  const gltf = useLoader(GLTFLoader, url);
+// ---------------------------------------------------------------------------
+// Find handle angle by locating the vertex furthest from the Y axis.
+// The handle protrudes outward from the cylinder body, so the vertex
+// with max radial distance marks the handle direction.
+// Returns angle in radians (atan2 convention: 0 = +Z).
+// ---------------------------------------------------------------------------
 
+function findHandleAngle(geometry: THREE.BufferGeometry): number {
+  const pos = geometry.attributes.position;
+  let maxDist = 0;
+  let handleAngle = 0;
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const distFromAxis = Math.sqrt(x * x + z * z);
+
+    if (distFromAxis > maxDist) {
+      maxDist = distFromAxis;
+      handleAngle = Math.atan2(x, z);
+    }
+  }
+
+  return handleAngle;
+}
+
+// ---------------------------------------------------------------------------
+// Generate cylindrical UV projection for meshes without UVs.
+// Uses the measured handle angle to place the seam at the handle
+// and center the printable arc on the front face (opposite handle).
+// ---------------------------------------------------------------------------
+
+function generateCylindricalUVs(
+  geometry: THREE.BufferGeometry,
+  handleAngle: number,
+  handleArcDeg: number = 0,
+) {
+  const pos = geometry.attributes.position;
+  const uvs = new Float32Array(pos.count * 2);
+
+  // Front center is directly opposite the handle
+  const frontAngle = handleAngle + Math.PI;
+
+  // Y bounds for V coordinate
+  let minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const yRange = maxY - minY || 1;
+
+  const printableArcRad = (2 * Math.PI) - (handleArcDeg * Math.PI / 180);
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const y = pos.getY(i);
+
+    // Angle of this vertex around Y axis
+    const vertexAngle = Math.atan2(x, z);
+
+    // Angle relative to front center, normalized to -PI..PI
+    let relAngle = vertexAngle - frontAngle;
+    while (relAngle > Math.PI) relAngle -= 2 * Math.PI;
+    while (relAngle < -Math.PI) relAngle += 2 * Math.PI;
+
+    // Map printable arc to U 0..1
+    let u = (relAngle + printableArcRad / 2) / printableArcRad;
+    u = Math.max(0, Math.min(1, u));
+
+    // V = height 0..1, flipped so top of artwork = top of tumbler
+    const v = (y - minY) / yRange;
+
+    uvs[i * 2] = u;
+    uvs[i * 2 + 1] = 1 - v;
+  }
+
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  geometry.attributes.uv.needsUpdate = true;
+}
+
+function GltfMesh({
+  url, dims, handleArcDeg, overlayCanvas, onReady,
+}: {
+  url: string;
+  dims?: TumblerDimensions | null;
+  handleArcDeg?: number;
+  overlayCanvas?: HTMLCanvasElement | null;
+  onReady?: OnReady;
+}) {
+  const gltf = useLoader(GLTFLoader, url);
+  const overlayMeshRef = useRef<THREE.Mesh | null>(null);
+  const overlayTextureRef = useRef<THREE.CanvasTexture | null>(null);
+  const overlayMatRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  const debugGroupRef = useRef<THREE.Group | null>(null);
+  const measuredHandleAngleRef = useRef<number>(0);
+
+  // ── Phase 1: Scale to physical mm + Phase 2: Detect handle ──
   const transform = useMemo(() => {
     const box = new THREE.Box3().setFromObject(gltf.scene);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    return computeModelTransform(size, dims);
+    const rawSize = box.getSize(new THREE.Vector3());
+    return computeModelTransform(rawSize, dims);
   }, [gltf.scene, dims]);
 
-  // ── Temporary debug: log GLB scene graph (dev only) ──
+  // ── Phase 1+2+5: Scale, detect handle, add debug visuals ──
   useEffect(() => {
-    if (process.env.NODE_ENV !== "development") return;
-    console.log("[GLB Scene] Root:", gltf.scene.name, "children:", gltf.scene.children.length);
+    if (!gltf?.scene || !dims) return;
+
+    // Find body mesh
+    let bodyMesh: THREE.Mesh | null = null;
     gltf.scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
-        console.log("[GLB Mesh]", {
-          name: obj.name,
-          uuid: obj.uuid,
-          geometryType: obj.geometry?.type,
-          vertexCount: obj.geometry?.attributes?.position?.count,
-          materialType: Array.isArray(obj.material)
-            ? obj.material.map((m: THREE.Material) => m.type)
-            : obj.material?.type,
-          uvChannels: Object.keys(obj.geometry?.attributes || {})
-            .filter((k) => k.startsWith("uv")),
-          boundingBox: (() => {
-            const b = new THREE.Box3().setFromObject(obj);
-            return {
-              sizeX: +(b.max.x - b.min.x).toFixed(3),
-              sizeY: +(b.max.y - b.min.y).toFixed(3),
-              sizeZ: +(b.max.z - b.min.z).toFixed(3),
-            };
-          })(),
-        });
+      if (obj instanceof THREE.Mesh && !bodyMesh) {
+        bodyMesh = obj;
       }
     });
-  }, [gltf.scene]);
+    if (!bodyMesh) return;
+    const mesh = bodyMesh as THREE.Mesh;
+
+    // ── Phase 1: Log raw bounding box for diagnostics ──
+    const rawBox = new THREE.Box3().setFromObject(gltf.scene);
+    const rawSize = rawBox.getSize(new THREE.Vector3());
+    console.log("[GltfMesh] raw bounding box size:",
+      { x: rawSize.x.toFixed(4), y: rawSize.y.toFixed(4), z: rawSize.z.toFixed(4) });
+    console.log("[GltfMesh] scale factor:", transform.scale.toFixed(4));
+
+    // After scale is applied by the parent <group>, effective mm sizes are:
+    const effectiveDiameter = Math.max(rawSize.x, rawSize.z) * transform.scale;
+    const effectiveHeight = rawSize.y * transform.scale;
+    console.log("[GltfMesh] effective mm:",
+      { diameter: effectiveDiameter.toFixed(1), height: effectiveHeight.toFixed(1) });
+
+    // ── Phase 2: Find handle angle from geometry ──
+    const handleAngle = findHandleAngle(mesh.geometry);
+    measuredHandleAngleRef.current = handleAngle;
+    console.log("[GltfMesh] handle angle:",
+      (handleAngle * 180 / Math.PI).toFixed(1) + "°",
+      { x: Math.sin(handleAngle).toFixed(3), z: Math.cos(handleAngle).toFixed(3) });
+
+    // ── Generate cylindrical UVs using measured handle angle ──
+    const hasUVs = !!mesh.geometry.attributes.uv;
+    if (!hasUVs) {
+      generateCylindricalUVs(mesh.geometry, handleAngle, handleArcDeg ?? 0);
+    }
+
+    // ── Phase 5: Debug visuals — calibration circle + handle indicator ──
+    // Clean up previous debug group
+    if (debugGroupRef.current) {
+      gltf.scene.remove(debugGroupRef.current);
+      debugGroupRef.current.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+          else obj.material.dispose();
+        }
+      });
+    }
+
+    const debugGroup = new THREE.Group();
+    debugGroup.name = "debug-handle-visuals";
+
+    // Measurements in native (pre-scale) units — the parent <group> applies scale
+    const nativeRadius = Math.max(rawSize.x, rawSize.z) / 2;
+    const nativeHalfHeight = rawSize.y / 2;
+    const rawCenter = rawBox.getCenter(new THREE.Vector3());
+
+    // Blue circle at top rim showing physical diameter
+    const circleGeo = new THREE.RingGeometry(
+      nativeRadius - 0.3 / transform.scale,
+      nativeRadius + 0.3 / transform.scale,
+      64,
+    );
+    const circleMat = new THREE.MeshBasicMaterial({
+      color: 0x00aaff,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.7,
+    });
+    const circle = new THREE.Mesh(circleGeo, circleMat);
+    circle.rotation.x = -Math.PI / 2;
+    circle.position.set(rawCenter.x, rawCenter.y + nativeHalfHeight, rawCenter.z);
+    debugGroup.add(circle);
+
+    // Red dot at handle position on the top rim
+    const dotSize = 1.5 / transform.scale; // 1.5mm in native units
+    const handleDotGeo = new THREE.SphereGeometry(dotSize, 8, 8);
+    const handleDotMat = new THREE.MeshBasicMaterial({ color: 0xff3300 });
+    const handleDot = new THREE.Mesh(handleDotGeo, handleDotMat);
+    handleDot.position.set(
+      rawCenter.x + Math.sin(handleAngle) * nativeRadius,
+      rawCenter.y + nativeHalfHeight,
+      rawCenter.z + Math.cos(handleAngle) * nativeRadius,
+    );
+    debugGroup.add(handleDot);
+
+    // Green dot at front face (opposite handle) for reference
+    const frontAngle = handleAngle + Math.PI;
+    const frontDotGeo = new THREE.SphereGeometry(dotSize, 8, 8);
+    const frontDotMat = new THREE.MeshBasicMaterial({ color: 0x00ff44 });
+    const frontDot = new THREE.Mesh(frontDotGeo, frontDotMat);
+    frontDot.position.set(
+      rawCenter.x + Math.sin(frontAngle) * nativeRadius,
+      rawCenter.y + nativeHalfHeight,
+      rawCenter.z + Math.cos(frontAngle) * nativeRadius,
+    );
+    debugGroup.add(frontDot);
+
+    gltf.scene.add(debugGroup);
+    debugGroupRef.current = debugGroup;
+
+    return () => {
+      if (debugGroupRef.current) {
+        gltf.scene.remove(debugGroupRef.current);
+        debugGroupRef.current.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.geometry.dispose();
+            if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+            else obj.material.dispose();
+          }
+        });
+        debugGroupRef.current = null;
+      }
+    };
+  }, [gltf.scene, dims, handleArcDeg, transform.scale]);
+
+  // ── Phase 4: Overlay cylinder using measured handle angle ──
+  // Original GLB material is NEVER touched — overlay sits 0.5mm proud.
+  useEffect(() => {
+    if (!gltf?.scene || !dims) return;
+
+    let bodyMesh: THREE.Mesh | null = null;
+    gltf.scene.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && obj.name !== "artwork-overlay" && !bodyMesh) {
+        bodyMesh = obj;
+      }
+    });
+    if (!bodyMesh) return;
+
+    if (overlayCanvas) {
+      const handleAngle = measuredHandleAngleRef.current;
+      const frontAngle = handleAngle + Math.PI;
+      const arc = handleArcDeg ?? 0;
+      const printableArcRad = ((360 - arc) / 360) * Math.PI * 2;
+
+      // Measure in native (pre-scale) units
+      const rawBox = new THREE.Box3().setFromObject(bodyMesh);
+      const rawSize = rawBox.getSize(new THREE.Vector3());
+      const rawCenter = rawBox.getCenter(new THREE.Vector3());
+      const nativeRadius = Math.max(rawSize.x, rawSize.z) / 2;
+      // 0.5mm proud, converted to native units
+      const overlayRadius = nativeRadius + 0.5 / transform.scale;
+      const nativeHeight = dims.printableHeightMm / transform.scale;
+
+      // thetaStart: CylinderGeometry theta=0 starts at +X, goes CCW from top.
+      // frontAngle is in atan2(x,z) convention where 0 = +Z.
+      // Convert: CylinderGeometry angle = atan2(x,z) rotated by -π/2
+      // So cylTheta = frontAngle + π/2, then center the arc there.
+      const cylFront = frontAngle + Math.PI / 2;
+      const thetaStart = cylFront - printableArcRad / 2;
+
+      // ── Create or update texture ──
+      if (!overlayTextureRef.current) {
+        const tex = new THREE.CanvasTexture(overlayCanvas);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.wrapS = THREE.ClampToEdgeWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.needsUpdate = true;
+        overlayTextureRef.current = tex;
+      } else {
+        overlayTextureRef.current.image = overlayCanvas;
+        overlayTextureRef.current.needsUpdate = true;
+      }
+
+      // ── Create or update overlay mesh ──
+      if (!overlayMeshRef.current) {
+        const geo = new THREE.CylinderGeometry(
+          overlayRadius, overlayRadius, nativeHeight, 64, 1, true,
+          thetaStart, printableArcRad,
+        );
+        const mat = new THREE.MeshBasicMaterial({
+          map: overlayTextureRef.current,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          side: THREE.FrontSide,
+        });
+        overlayMatRef.current = mat;
+
+        const overlayMesh = new THREE.Mesh(geo, mat);
+        overlayMesh.position.copy(rawCenter);
+        overlayMesh.name = "artwork-overlay";
+        overlayMeshRef.current = overlayMesh;
+
+        (bodyMesh as THREE.Mesh).parent?.add(overlayMesh);
+      } else {
+        overlayMeshRef.current.geometry.dispose();
+        overlayMeshRef.current.geometry = new THREE.CylinderGeometry(
+          overlayRadius, overlayRadius, nativeHeight, 64, 1, true,
+          thetaStart, printableArcRad,
+        );
+        overlayMeshRef.current.position.copy(rawCenter);
+        if (overlayMatRef.current) {
+          overlayMatRef.current.map = overlayTextureRef.current;
+          overlayMatRef.current.needsUpdate = true;
+        }
+      }
+    } else {
+      // ── Remove overlay when cleared ──
+      if (overlayMeshRef.current) {
+        overlayMeshRef.current.parent?.remove(overlayMeshRef.current);
+        overlayMeshRef.current.geometry.dispose();
+        overlayMeshRef.current = null;
+      }
+      if (overlayMatRef.current) {
+        overlayMatRef.current.dispose();
+        overlayMatRef.current = null;
+      }
+      if (overlayTextureRef.current) {
+        overlayTextureRef.current.dispose();
+        overlayTextureRef.current = null;
+      }
+    }
+
+    return () => {
+      if (overlayMeshRef.current) {
+        overlayMeshRef.current.parent?.remove(overlayMeshRef.current);
+        overlayMeshRef.current.geometry.dispose();
+        overlayMeshRef.current = null;
+      }
+      if (overlayMatRef.current) {
+        overlayMatRef.current.dispose();
+        overlayMatRef.current = null;
+      }
+      if (overlayTextureRef.current) {
+        overlayTextureRef.current.dispose();
+        overlayTextureRef.current = null;
+      }
+    };
+  }, [gltf.scene, overlayCanvas, dims, handleArcDeg, transform.scale]);
 
   const ref = useRef<THREE.Group>(null);
   useEffect(() => { if (ref.current) onReady?.(ref.current); });
@@ -489,13 +796,13 @@ function GltfMesh({
 }
 
 function ModelByExtension({
-  url, ext, dims, onReady,
-}: { url: string; ext: string; dims?: TumblerDimensions | null; onReady?: OnReady }) {
+  url, ext, dims, handleArcDeg, overlayCanvas, onReady,
+}: { url: string; ext: string; dims?: TumblerDimensions | null; handleArcDeg?: number; overlayCanvas?: HTMLCanvasElement | null; onReady?: OnReady }) {
   if (ext === "stl") return <StlMesh url={url} dims={dims} onReady={onReady} />;
   if (ext === "obj") return <ObjMesh url={url} dims={dims} onReady={onReady} />;
   if (ext === "glb" || ext === "gltf") return (
     <Suspense fallback={null}>
-      <GltfMesh url={url} dims={dims} onReady={onReady} />
+      <GltfMesh url={url} dims={dims} handleArcDeg={handleArcDeg} overlayCanvas={overlayCanvas} onReady={onReady} />
     </Suspense>
   );
   return (
@@ -542,7 +849,9 @@ class CanvasErrorBoundary extends Component<
 // Public component
 // ---------------------------------------------------------------------------
 
-export default function ModelViewer({ file, overlay, tumblerDims }: ModelViewerProps) {
+export default function ModelViewer({ file, overlay, tumblerDims, handleArcDeg, bedCanvas }: ModelViewerProps) {
+  // Use stable bedCanvas ref prop — only present when overlay is active
+  const overlayCanvas = overlay ? (bedCanvas ?? null) : null;
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
 
@@ -606,7 +915,7 @@ export default function ModelViewer({ file, overlay, tumblerDims }: ModelViewerP
   return (
     <CanvasErrorBoundary>
       <Canvas
-        shadows="soft"
+        shadows={false}
         frameloop="demand"
         dpr={[1, 1.5]}
         camera={{ fov: 35, near: nearClip, far: farClip }}
@@ -622,15 +931,17 @@ export default function ModelViewer({ file, overlay, tumblerDims }: ModelViewerP
 
         <StudioLights />
 
-        <Bounds fit clip observe margin={1.3}>
+        <Bounds observe={false} margin={2.0}>
           <Suspense fallback={<LoadingIndicator />}>
             <ModelByExtension
               url={url} ext={ext}
               dims={tumblerDims}
+              handleArcDeg={handleArcDeg}
+              overlayCanvas={overlayCanvas}
               onReady={handleModelReady}
             />
           </Suspense>
-          <AutoFit />
+          <AutoFit url={url} />
         </Bounds>
 
         {/* Engravable zone highlight — shown when tumbler loaded, no design yet */}
@@ -639,11 +950,15 @@ export default function ModelViewer({ file, overlay, tumblerDims }: ModelViewerP
         )}
 
         {/* Design overlay — cylindrical for tumblers, flat plane for flat bed */}
-        {overlay && modelBounds && (
-          isTumbler && tumblerDims
+        {/* Skip OverlayCylinder for GLB files — texture is applied directly to the mesh */}
+        {overlay && modelBounds && (() => {
+          const isGlb = ext === "glb" || ext === "gltf";
+          const useDirectTexture = isGlb && isTumbler && !!overlayCanvas;
+          if (useDirectTexture) return null; // handled by GltfMesh
+          return isTumbler && tumblerDims
             ? <OverlayCylinder overlay={overlay} dims={tumblerDims} modelBounds={modelBounds} />
-            : <OverlayPlane overlay={overlay} modelBounds={modelBounds} />
-        )}
+            : <OverlayPlane overlay={overlay} modelBounds={modelBounds} />;
+        })()}
 
         <ContactShadows
           position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}

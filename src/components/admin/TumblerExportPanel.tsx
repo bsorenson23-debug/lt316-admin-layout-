@@ -26,11 +26,18 @@ export interface FramePreview {
   heightMm: number;
 }
 
+export type PreflightNavTarget =
+  | "rotary-preset"
+  | "cylinder-diameter"
+  | "template-dimensions"
+  | "top-anchor";
+
 interface Props {
   bedConfig: BedConfig;
   placedItems: PlacedItem[];
   onFramePreviewChange?: (preview: FramePreview | null) => void;
   materialSettings?: LbrnMaterialSettings | null;
+  onPreflightNav?: (target: PreflightNavTarget) => void;
 }
 
 function fmt(n: number) { return n.toFixed(2); }
@@ -74,7 +81,7 @@ function downloadJson(payload: unknown, filename: string): void {
 
 // ---------------------------------------------------------------------------
 
-export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChange, materialSettings }: Props) {
+export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChange, materialSettings, onPreflightNav }: Props) {
   const [rotaryEnabled,       setRotaryEnabled]       = React.useState(false);
   const [availablePresets,    setAvailablePresets]    = React.useState<RotaryPlacementPreset[]>(DEFAULT_ROTARY_PLACEMENT_PRESETS);
   const [selectedPresetId,    setSelectedPresetId]    = React.useState("");
@@ -164,6 +171,7 @@ export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChang
                 <div className={styles.fieldRow}>
                   <span className={styles.fieldLabel}>Preset</span>
                   <select
+                    id="rotary-preset-select"
                     className={styles.select}
                     value={selectedPresetId}
                     onChange={(e) => setSelectedPresetId(e.target.value)}
@@ -243,6 +251,7 @@ export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChang
           hasDiameter={Boolean(exportArtifacts.artworkPayload.cylinder?.objectDiameterMm)}
           hasTemplateDimensions={bedConfig.width > 0 && bedConfig.height > 0}
           hasTopAnchor={Boolean(selectedPreset?.rotaryTopYmm)}
+          onNavigate={onPreflightNav}
         />
 
         {/* ── Taper Warp toggle ── */}
@@ -317,17 +326,19 @@ export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChang
 
 function PreflightChecklist({
   isTumblerMode, hasItems, hasPreset, hasDiameter, hasTemplateDimensions, hasTopAnchor,
+  onNavigate,
 }: {
   isTumblerMode: boolean; hasItems: boolean; hasPreset: boolean;
   hasDiameter: boolean; hasTemplateDimensions: boolean; hasTopAnchor: boolean;
+  onNavigate?: (target: PreflightNavTarget) => void;
 }) {
-  const items: { label: string; status: "pass" | "fail" | "warn" }[] = isTumblerMode
+  const items: { label: string; status: "pass" | "fail" | "warn"; action?: PreflightNavTarget }[] = isTumblerMode
     ? [
         { label: "Artwork on bed",        status: hasItems              ? "pass" : "fail" },
-        { label: "Rotary preset",         status: hasPreset             ? "pass" : "fail" },
-        { label: "Cylinder diameter",     status: hasDiameter           ? "pass" : "fail" },
-        { label: "Template dimensions",   status: hasTemplateDimensions ? "pass" : "pass" },
-        { label: "Top anchor calibrated", status: hasTopAnchor          ? "pass" : "warn" },
+        { label: "Rotary preset",         status: hasPreset             ? "pass" : "fail", action: "rotary-preset" },
+        { label: "Cylinder diameter",     status: hasDiameter           ? "pass" : "fail", action: "cylinder-diameter" },
+        { label: "Template dimensions",   status: hasTemplateDimensions ? "pass" : "pass", action: "template-dimensions" },
+        { label: "Top anchor calibrated", status: hasTopAnchor          ? "pass" : "warn", action: "top-anchor" },
       ]
     : [
         { label: "Artwork on bed",      status: hasItems              ? "pass" : "fail" },
@@ -342,19 +353,37 @@ function PreflightChecklist({
       <div className={styles.preflightTitle}>
         Pre-flight{failCount > 0 ? ` · ${failCount} issue${failCount > 1 ? "s" : ""}` : warnCount > 0 ? " · 1 warning" : " · Ready"}
       </div>
-      {items.map((item) => (
-        <div
-          key={item.label}
-          className={`${styles.preflightItem} ${
-            item.status === "pass" ? styles.preflightPass
-              : item.status === "warn" ? styles.preflightWarn
-              : styles.preflightFail
-          }`}
-        >
-          <span className={styles.preflightDot} />
-          {item.label}
-        </div>
-      ))}
+      {items.map((item) => {
+        const statusClass =
+          item.status === "pass" ? styles.preflightPass
+            : item.status === "warn" ? styles.preflightWarn
+            : styles.preflightFail;
+
+        if (item.action && onNavigate) {
+          return (
+            <button
+              key={item.label}
+              type="button"
+              className={`${styles.preflightItem} ${styles.preflightItemClickable} ${statusClass}`}
+              onClick={() => onNavigate(item.action!)}
+            >
+              <span className={styles.preflightDot} />
+              {item.label}
+              <span className={styles.preflightArrow}>→</span>
+            </button>
+          );
+        }
+
+        return (
+          <div
+            key={item.label}
+            className={`${styles.preflightItem} ${statusClass}`}
+          >
+            <span className={styles.preflightDot} />
+            {item.label}
+          </div>
+        );
+      })}
     </div>
   );
 }

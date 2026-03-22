@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   BedConfig,
@@ -30,6 +31,7 @@ import { BedSettingsPanel } from "./BedSettingsPanel";
 import { TumblerAutoDetectPanel } from "./TumblerAutoDetectPanel";
 import { Model3DPanel } from "./Model3DPanel";
 import { TumblerExportPanel } from "./TumblerExportPanel";
+import type { PreflightNavTarget } from "./TumblerExportPanel";
 import { SelectedItemInspector } from "./SelectedItemInspector";
 import { OrdersPanel } from "./OrdersPanel";
 import { MaterialProfilePanel } from "./MaterialProfilePanel";
@@ -49,6 +51,10 @@ import { FlatBedAutoDetectPanel } from "./FlatBedAutoDetectPanel";
 import { ColorLayerPanel } from "./ColorLayerPanel";
 import { type LaserLayer, buildDefaultLayers } from "@/types/laserLayer";
 import { FiberColorCalibrationPanel } from "./FiberColorCalibrationPanel";
+import { TemplateGallery } from "./TemplateGallery";
+import { TemplateCreateForm } from "./TemplateCreateForm";
+import type { ProductTemplate } from "@/types/productTemplate";
+import { loadTemplates } from "@/lib/templateStorage";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -305,6 +311,34 @@ export function AdminLayoutShell() {
 
   // Right panel tab
   const [rightTab, setRightTab] = useState<"workflow" | "tools" | "setup">("workflow");
+  const router = useRouter();
+
+  const scrollAndPulse = useCallback((elementId: string) => {
+    setTimeout(() => {
+      const el = document.getElementById(elementId);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("preflight-pulse");
+      setTimeout(() => el.classList.remove("preflight-pulse"), 1000);
+    }, 150);
+  }, []);
+
+  const handlePreflightNav = useCallback((target: PreflightNavTarget) => {
+    switch (target) {
+      case "rotary-preset":
+        scrollAndPulse("rotary-preset-select");
+        break;
+      case "cylinder-diameter":
+        scrollAndPulse("bed-cylinder-diameter");
+        break;
+      case "template-dimensions":
+        scrollAndPulse("bed-template-dimensions");
+        break;
+      case "top-anchor":
+        router.push("/admin/calibration");
+        break;
+    }
+  }, [scrollAndPulse, router]);
 
   const handleAddTextAsset = useCallback((svgContent: string, fileName: string) => {
     const id = `asset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -357,6 +391,47 @@ export function AdminLayoutShell() {
     img.src = dataUrl;
   }, []);
 
+  // -- Product template system -----------------------------------------------
+  const [selectedTemplate, setSelectedTemplate] = useState<ProductTemplate | null>(null);
+  const [showTemplateGallery, setShowTemplateGallery] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<ProductTemplate | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const handleTemplateSelect = useCallback((template: ProductTemplate) => {
+    // Apply all dimensions at once via bedConfig
+    const isRotary = template.productType === "tumbler" || template.productType === "mug" || template.productType === "bottle";
+    const mode: WorkspaceMode = isRotary ? "tumbler-wrap" : "flat-bed";
+
+    setBedConfig((prev) =>
+      normalizeBedConfig({
+        ...prev,
+        workspaceMode: mode,
+        tumblerDiameterMm: template.dimensions.diameterMm,
+        tumblerPrintableHeightMm: template.dimensions.printHeightMm,
+        ...(isRotary
+          ? {
+              tumblerOutsideDiameterMm: template.dimensions.diameterMm,
+              tumblerUsableHeightMm: template.dimensions.printHeightMm,
+            }
+          : {
+              flatWidth: template.dimensions.templateWidthMm,
+              flatHeight: template.dimensions.printHeightMm,
+            }),
+      })
+    );
+
+    setSelectedTemplate(template);
+    setShowTemplateGallery(false);
+    setShowCreateForm(false);
+
+    // Show toast
+    setToastMessage(`${template.name} loaded \u2014 place your artwork`);
+    setTimeout(() => setToastMessage(null), 2200);
+  }, []);
+
+  const previewTemplates = React.useMemo(() => loadTemplates().slice(0, 4), []);
+
   return (
     <div className={styles.shell}>
       {/* LEFT */}
@@ -390,6 +465,76 @@ export function AdminLayoutShell() {
             />
           )}
         </SvgAssetLibraryPanel>
+
+        {/* ── Product template section ── */}
+        <div className={styles.productSection}>
+          <span className={styles.productSectionTitle}>Product</span>
+          {selectedTemplate ? (
+            <div className={styles.selectedTemplateCard}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={selectedTemplate.thumbnailDataUrl}
+                alt={selectedTemplate.name}
+                className={styles.selectedTemplateThumb}
+              />
+              <div className={styles.selectedTemplateInfo}>
+                <span className={styles.selectedTemplateName}>{selectedTemplate.name}</span>
+                <span className={styles.selectedTemplateDims}>
+                  {selectedTemplate.dimensions.diameterMm > 0
+                    ? `${selectedTemplate.dimensions.diameterMm}mm \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`
+                    : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`}
+                </span>
+                <div className={styles.templateActions}>
+                  <button
+                    type="button"
+                    className={styles.changeLink}
+                    onClick={() => setShowTemplateGallery(true)}
+                  >
+                    Change
+                  </button>
+                  {!selectedTemplate.builtIn && (
+                    <button
+                      type="button"
+                      className={styles.changeLink}
+                      onClick={() => {
+                        setEditingTemplate(selectedTemplate);
+                        setShowCreateForm(true);
+                        setShowTemplateGallery(true);
+                      }}
+                    >
+                      Edit
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className={styles.productMiniGrid}>
+                {previewTemplates.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={styles.productMiniCard}
+                    onClick={() => handleTemplateSelect(t)}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={t.thumbnailDataUrl} alt={t.name} className={styles.productMiniThumb} />
+                    <span className={styles.productMiniName}>{t.name}</span>
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className={styles.seeAllBtn}
+                onClick={() => setShowTemplateGallery(true)}
+              >
+                See all {"\u2192"}
+              </button>
+            </>
+          )}
+        </div>
+
         <Model3DPanel
           placedItems={placedItems}
           bedWidthMm={bedConfig.width}
@@ -406,6 +551,8 @@ export function AdminLayoutShell() {
                 }
               : null
           }
+          handleArcDeg={selectedTemplate?.dimensions?.handleArcDeg ?? 0}
+          modelPathOverride={selectedTemplate?.glbPath ?? null}
         />
       </aside>
 
@@ -476,6 +623,7 @@ export function AdminLayoutShell() {
                 placedItems={placedItems}
                 onFramePreviewChange={setFramePreview}
                 materialSettings={materialSettings}
+                onPreflightNav={handlePreflightNav}
               />
               <SelectedItemInspector
                 selectedItem={selectedItem}
@@ -523,6 +671,73 @@ export function AdminLayoutShell() {
           )}
         </div>
       </aside>
+
+      {/* ── Template gallery modal ── */}
+      {showTemplateGallery && (
+        <div className={styles.modalBackdrop} onClick={() => { setShowTemplateGallery(false); setShowCreateForm(false); setEditingTemplate(null); }}>
+          <div className={styles.modalContainer} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <span className={styles.modalTitle}>
+                {showCreateForm
+                  ? editingTemplate ? "Edit template" : "Create new template"
+                  : "Select product"}
+              </span>
+              <button
+                type="button"
+                className={styles.modalCloseBtn}
+                onClick={() => { setShowTemplateGallery(false); setShowCreateForm(false); setEditingTemplate(null); }}
+              >
+                ×
+              </button>
+            </div>
+            <div className={styles.modalBody}>
+              {showCreateForm ? (
+                <TemplateCreateForm
+                  editingTemplate={editingTemplate ?? undefined}
+                  onSave={(t) => {
+                    // If the edited template is the active one, re-select to sync workspace
+                    if (editingTemplate && selectedTemplate?.id === t.id) {
+                      handleTemplateSelect(t);
+                    } else if (!editingTemplate) {
+                      handleTemplateSelect(t);
+                    }
+                    setShowCreateForm(false);
+                    setEditingTemplate(null);
+                    if (editingTemplate) {
+                      setToastMessage("Template updated");
+                      setTimeout(() => setToastMessage(null), 2200);
+                    }
+                  }}
+                  onCancel={() => { setShowCreateForm(false); setEditingTemplate(null); }}
+                />
+              ) : (
+                <TemplateGallery
+                  onSelect={handleTemplateSelect}
+                  onCreateNew={() => { setEditingTemplate(null); setShowCreateForm(true); }}
+                  onEdit={(t) => { setEditingTemplate(t); setShowCreateForm(true); }}
+                  selectedId={selectedTemplate?.id}
+                />
+              )}
+            </div>
+            {!showCreateForm && (
+              <div className={styles.modalFooter}>
+                <button
+                  type="button"
+                  className={styles.modalCreateBtn}
+                  onClick={() => { setEditingTemplate(null); setShowCreateForm(true); }}
+                >
+                  Create new template
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Toast ── */}
+      {toastMessage && (
+        <div className={styles.toast}>{toastMessage}</div>
+      )}
     </div>
   );
 }

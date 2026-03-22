@@ -10,6 +10,7 @@ import {
 } from "@/data/flatBedItems";
 import type { FlatBedAutoDetectResponse, FlatBedConfidenceLevel } from "@/server/flatbed/runFlatBedAutoDetect";
 import type { BedMockupConfig } from "./LaserBedWorkspace";
+import { FileDropZone } from "./shared/FileDropZone";
 import styles from "./FlatBedAutoDetectPanel.module.css";
 
 interface Props {
@@ -87,7 +88,6 @@ function buildApplyItem(
 }
 
 export function FlatBedAutoDetectPanel({ onApplyItem, onSetMockup, onClearItemOverlay, mockupActive }: Props) {
-  const inputRef = React.useRef<HTMLInputElement>(null);
   const [selectedImage, setSelectedImage] = React.useState<File | null>(null);
   const [imageSrc, setImageSrc] = React.useState<string | null>(null);
   const [imageNaturalSize, setImageNaturalSize] = React.useState<{ w: number; h: number } | null>(null);
@@ -319,14 +319,10 @@ export function FlatBedAutoDetectPanel({ onApplyItem, onSetMockup, onClearItemOv
 
       <div className={styles.body}>
         <div className={styles.sectionLabel}>Upload Image or Paste URL</div>
-        <input
-          ref={inputRef}
-          type="file"
+        <FileDropZone
           accept="image/*"
-          className={styles.fileInput}
-          onChange={(e) => {
-            const file = e.target.files?.[0] ?? null;
-            e.target.value = ""; // reset so same file can be re-selected
+          fileName={selectedImage?.name ?? null}
+          onFileSelected={(file) => {
             setSelectedImage(file);
             setImageSrc(null);
             setImageNaturalSize(null);
@@ -334,33 +330,21 @@ export function FlatBedAutoDetectPanel({ onApplyItem, onSetMockup, onClearItemOv
             setState(INITIAL_STATE);
             setBgRemovedSrc(null);
             setBgRemovalStatus("idle");
-            if (file) {
-              const reader = new FileReader();
-              reader.onload = (ev) => {
-                const src = ev.target?.result as string;
-                if (!src) return;
-                setImageSrc(src);
-                const img = new window.Image();
-                img.onload = () => setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
-                img.src = src;
-              };
-              reader.readAsDataURL(file);
-            }
-            // Clear any active mockup when a new image is loaded
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              const src = ev.target?.result as string;
+              if (!src) return;
+              setImageSrc(src);
+              const img = new window.Image();
+              img.onload = () => setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+              img.src = src;
+            };
+            reader.readAsDataURL(file);
             onSetMockup?.(null);
             setMockupOpen(false);
           }}
+          onClear={handleClear}
         />
-        <button
-          type="button"
-          className={styles.uploadBtn}
-          onClick={() => inputRef.current?.click()}
-        >
-          + Upload Image
-        </button>
-        <div className={styles.fileName}>
-          {selectedImage?.name ?? "No image selected"}
-        </div>
 
         <div className={styles.urlRow}>
           <input

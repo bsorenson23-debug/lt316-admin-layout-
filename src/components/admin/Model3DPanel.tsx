@@ -25,7 +25,7 @@ async function buildBedTexture(
   items: PlacedItem[],
   bedWidthMm: number,
   bedHeightMm: number,
-): Promise<string> {
+): Promise<{ dataUrl: string; canvas: HTMLCanvasElement }> {
   const SCALE = 4; // px per mm — enough resolution for a 300mm bed
   const W = Math.ceil(bedWidthMm * SCALE);
   const H = Math.ceil(bedHeightMm * SCALE);
@@ -68,7 +68,7 @@ async function buildBedTexture(
     });
   }
 
-  return canvas.toDataURL("image/png");
+  return { dataUrl: canvas.toDataURL("image/png"), canvas };
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +79,8 @@ export interface Model3DPanelProps {
   bedHeightMm?: number;
   workspaceMode?: "flat-bed" | "tumbler-wrap";
   tumblerDims?: TumblerDimensions | null;
+  handleArcDeg?: number;
+  modelPathOverride?: string | null;
 }
 
 export function Model3DPanel({
@@ -87,6 +89,8 @@ export function Model3DPanel({
   bedHeightMm = 100,
   workspaceMode = "flat-bed",
   tumblerDims,
+  handleArcDeg,
+  modelPathOverride,
 }: Model3DPanelProps) {
   const [modelFile, setModelFile] = React.useState<File | null>(null);
   const [sizeError, setSizeError] = React.useState<string | null>(null);
@@ -97,6 +101,7 @@ export function Model3DPanel({
   const [templateLoading, setTemplateLoading] = React.useState<string | null>(null);
   const [templateError, setTemplateError] = React.useState<string | null>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const bedCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
 
   const filteredTemplates = GLB_TEMPLATES.filter((t) =>
     t.workspaceModes.includes(workspaceMode)
@@ -115,6 +120,7 @@ export function Model3DPanel({
     setModelFile(file);
     setViewerOpen(false);
     setOverlay(null); // clear old overlay when model changes
+    bedCanvasRef.current = null;
   }, []);
 
   const clear = () => {
@@ -122,6 +128,7 @@ export function Model3DPanel({
     setViewerOpen(false);
     setSizeError(null);
     setOverlay(null);
+    bedCanvasRef.current = null;
   };
 
   const loadTemplate = React.useCallback(async (tpl: GlbTemplate) => {
@@ -145,12 +152,34 @@ export function Model3DPanel({
     }
   }, [accept]);
 
+  // Auto-load GLB when a product template is selected
+  React.useEffect(() => {
+    if (!modelPathOverride) return;
+    // Skip if the currently loaded model already matches this path
+    const expectedName = modelPathOverride.split("/").pop() ?? "";
+    if (modelFile?.name === expectedName) return;
+
+    fetch(modelPathOverride)
+      .then((r) => {
+        if (!r.ok) throw new Error(`404: ${modelPathOverride}`);
+        return r.blob();
+      })
+      .then((blob) => {
+        const filename = modelPathOverride.split("/").pop() ?? "model.glb";
+        const file = new File([blob], filename, { type: "model/gltf-binary" });
+        accept(file);
+        setViewerOpen(true);
+      })
+      .catch((err) => console.warn("[Model3DPanel] auto-load failed:", err));
+  }, [modelPathOverride, accept]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSnapDesign = React.useCallback(async () => {
     if (!hasItems) return;
     setSnapping(true);
     try {
-      const dataUrl = await buildBedTexture(placedItems, bedWidthMm, bedHeightMm);
-      setOverlay({ dataUrl, bedWidthMm, bedHeightMm, workspaceMode });
+      const result = await buildBedTexture(placedItems, bedWidthMm, bedHeightMm);
+      bedCanvasRef.current = result.canvas;
+      setOverlay({ dataUrl: result.dataUrl, bedWidthMm, bedHeightMm, workspaceMode });
     } catch (e) {
       console.error("[Model3DPanel] overlay build failed", e);
     } finally {
@@ -241,7 +270,7 @@ export function Model3DPanel({
             {overlay && (
               <button
                 className={styles.snapClearBtn}
-                onClick={() => setOverlay(null)}
+                onClick={() => { setOverlay(null); bedCanvasRef.current = null; }}
                 title="Remove design overlay"
               >
                 ✕
@@ -258,7 +287,13 @@ export function Model3DPanel({
 
         {modelFile && viewable && viewerOpen && (
           <div className={styles.viewerWrap}>
-            <ModelViewer file={modelFile} overlay={overlay} tumblerDims={tumblerDims} />
+            <ModelViewer
+              file={modelFile}
+              overlay={overlay}
+              tumblerDims={tumblerDims}
+              handleArcDeg={handleArcDeg}
+              bedCanvas={bedCanvasRef.current}
+            />
           </div>
         )}
 

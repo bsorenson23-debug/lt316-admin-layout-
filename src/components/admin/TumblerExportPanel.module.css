@@ -298,6 +298,48 @@
 .preflightFail { color: #d98a8a; }
 .preflightWarn { color: #d4aa5a; }
 
+.preflightItemClickable {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 3px 0;
+  cursor: pointer;
+  text-align: left;
+  font-size: inherit;
+  font-family: inherit;
+  color: inherit;
+}
+
+.preflightItemClickable:hover {
+  color: var(--info);
+}
+
+.preflightItemClickable:hover .preflightDot {
+  outline: 2px solid var(--info-border);
+  outline-offset: 1px;
+}
+
+.preflightArrow {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.preflightItemClickable:hover .preflightArrow {
+  opacity: 1;
+  color: var(--info);
+}
+
+/* Ensure clickable affordance is never overridden by status classes */
+.preflightItemClickable.preflightFail,
+.preflightItemClickable.preflightPass,
+.preflightItemClickable.preflightWarn {
+  cursor: pointer;
+}
+
 /* ── Export button row ────────────────────────────────────────── */
 .exportBtnRow {
   display: flex;

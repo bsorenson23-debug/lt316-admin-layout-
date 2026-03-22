@@ -1,0 +1,265 @@
+/* ── Form layout ───────────────────────────────────────────────── */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 560px;
+}
+
+/* ── Sections ──────────────────────────────────────────────────── */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sectionTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* ── Field rows ────────────────────────────────────────────────── */
+.fieldRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fieldLabel {
+  width: 120px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.fieldHint {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* ── Inputs ────────────────────────────────────────────────────── */
+.textInput {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  transition: border-color 150ms;
+}
+
+.textInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.textInput::placeholder {
+  color: var(--text-dim);
+}
+
+.numInput {
+  width: 90px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: monospace;
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+  transition: border-color 150ms;
+}
+
+.numInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.numInput::-webkit-outer-spin-button,
+.numInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+}
+
+.selectInput {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.readOnly {
+  flex: 1;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text-muted);
+}
+
+/* ── Thumbnail preview ─────────────────────────────────────────── */
+.thumbPreview {
+  width: 80px;
+  height: 80px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  border: 1px solid var(--border-normal);
+  background: var(--bg-base);
+}
+
+.thumbRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.thumbDropZone {
+  flex: 1;
+}
+
+/* ── GLB path input ────────────────────────────────────────────── */
+.glbRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.glbPathConfirm {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--success);
+}
+
+/* ── Auto-detect ──────────────────────────────────────────────── */
+.detectBtn {
+  padding: 7px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-dark);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 150ms, opacity 150ms;
+}
+
+.detectBtn:hover {
+  background: var(--accent-dim);
+}
+
+.detectBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.detectBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+}
+
+.detectBannerText {
+  flex: 1;
+  font-size: 12px;
+  color: var(--success);
+}
+
+.detectRerunBtn {
+  padding: 4px 10px;
+  border: 1px solid var(--success-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--success);
+  font-size: 10px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 100ms;
+}
+
+.detectRerunBtn:hover {
+  background: var(--success-bg);
+}
+
+.detectRerunBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.detectErrorBanner {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  font-size: 12px;
+  color: var(--error);
+}
+
+/* ── Error ─────────────────────────────────────────────────────── */
+.error {
+  font-size: 11px;
+  color: var(--error);
+}
+
+/* ── Button row ────────────────────────────────────────────────── */
+.btnRow {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cancelBtn {
+  padding: 8px 16px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 100ms;
+}
+
+.cancelBtn:hover {
+  background: var(--bg-hover);
+}
+
+.saveBtn {
+  padding: 8px 20px;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 150ms;
+}
+
+.saveBtn:hover {
+  opacity: 0.88;
+}
+
+.saveBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

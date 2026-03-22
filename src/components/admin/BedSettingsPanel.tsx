@@ -176,15 +176,17 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
               )}
 
               <FieldRow label="Diameter (mm)">
-                <DraftNumberInput
-                  className={styles.numInput}
-                  value={bedConfig.tumblerDiameterMm}
-                  min={10}
-                  max={300}
-                  step={0.1}
-                  onValueChange={(value) => handleNumber("tumblerDiameterMm", value)}
-                  aria-label="Tumbler diameter in mm"
-                />
+                <span id="bed-cylinder-diameter">
+                  <DraftNumberInput
+                    className={styles.numInput}
+                    value={bedConfig.tumblerDiameterMm}
+                    min={10}
+                    max={300}
+                    step={0.1}
+                    onValueChange={(value) => handleNumber("tumblerDiameterMm", value)}
+                    aria-label="Tumbler diameter in mm"
+                  />
+                </span>
               </FieldRow>
 
               <FieldRow label="Print Height (mm)">
@@ -202,7 +204,7 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
               </FieldRow>
 
               <FieldRow label="Template W (mm)">
-                <span className={styles.readonlyValue}>{wrapWidthMm.toFixed(2)}</span>
+                <span id="bed-template-dimensions" className={styles.readonlyValue}>{wrapWidthMm.toFixed(2)}</span>
               </FieldRow>
 
               {activeGuideBand && (
@@ -224,15 +226,17 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
           ) : (
             <>
               <FieldRow label="Width (mm)">
-                <DraftNumberInput
-                  className={styles.numInput}
-                  value={bedConfig.flatWidth}
-                  min={10}
-                  max={2000}
-                  step={10}
-                  onValueChange={(value) => handleNumber("flatWidth", value)}
-                  aria-label="Bed width in mm"
-                />
+                <span id="bed-template-dimensions">
+                  <DraftNumberInput
+                    className={styles.numInput}
+                    value={bedConfig.flatWidth}
+                    min={10}
+                    max={2000}
+                    step={10}
+                    onValueChange={(value) => handleNumber("flatWidth", value)}
+                    aria-label="Bed width in mm"
+                  />
+                </span>
               </FieldRow>
 
               <FieldRow label="Height (mm)">

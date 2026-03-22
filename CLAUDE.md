@@ -484,6 +484,7 @@ Internal domain coordinates are always millimeters. Pixel conversion only happen
 | POST | `/api/admin/image/remove-bg` | Accepts `multipart/form-data` with `image`; calls Replicate BiRefNet; returns `{ dataUrl }` |
 | POST | `/api/admin/image/segment` | Accepts `image` + `points` + `labels`; calls Replicate SAM2; returns `{ maskDataUrl }` |
 | GET | `/api/admin/lightburn/validate-paths` | Validates LightBurn install/output paths on the server |
+| POST | `/api/admin/models/upload` | Accepts `multipart/form-data` with `file` (GLB/GLTF); saves to `/public/models/templates/`; returns `{ path }` |
 
 **Environment variables:**
 ```
@@ -533,3 +534,48 @@ npm run test:fiber-color
 - **Batch queue** — `BatchQueuePanel` exists but the full batch processing workflow (multiple orders → single export run) appears incomplete.
 - **TextToolPanel / TextPersonalizationPanel** — panels exist; depth of text-to-path conversion implementation is unclear.
 - **VideoRedDotAnalysis** — `videoRedDotAnalysis.ts` exists for camera-based red dot calibration but the video capture UI integration is not visible in the main shell.
+
+---
+
+### ProductTemplate system (added March 2026)
+Replaces manual per-job dimension/settings entry with a one-click
+product catalog.
+
+Storage: localStorage key "lt316_product_templates"
+Types: src/types/productTemplate.ts
+Storage service: src/lib/templateStorage.ts
+Seed data: src/data/builtInTemplates.ts (do not modify glbTemplates.ts)
+Thumbnail util: src/lib/generateThumbnail.ts
+Components: TemplateGallery.tsx, TemplateCreateForm.tsx
+
+When a template is selected via handleTemplateSelect():
+- All TumblerDimensions fields update simultaneously
+- Material profile and rotary preset are set automatically
+- GLB model loads automatically
+- Pre-flight goes from 4 failing checks to 1 (artwork only)
+
+Thumbnails are stored as base64 PNG data URLs (120x120) inside
+the template JSON in localStorage. No separate file serving needed.
+Edit/delete rules:
+- builtIn: true → read-only, no edit or delete controls shown
+- builtIn: false → full edit (TemplateCreateForm in edit mode)
+  and delete (with inline confirmation, no browser confirm())
+- updateTemplate() sets builtIn: false — editing a built-in makes
+  it user-owned so loadTemplates() won't overwrite it from source
+- After editing the active template, re-run handleTemplateSelect
+  with the updated data to keep workspace in sync
+
+GLB files for templates are stored in /public/models/templates/.
+Uploaded via POST /api/admin/models/upload (saves to local disk).
+Path stored in ProductTemplate.glbPath (e.g. "/models/templates/yeti-rambler-40oz.glb").
+Note: Vercel serverless does NOT persist writes to /public.
+For production, this route needs to write to S3/R2/Supabase Storage.
+
+Source of truth for tumbler specs: `src/data/tumblerProfiles.ts`.
+ProductTemplate.dimensions should always be seeded from
+tumblerProfiles.ts values, not from BedConfig defaults.
+When adding new templates, check tumblerProfiles.ts first.
+
+Example: YETI Rambler 40oz = diameter 104mm, printHeight 241mm
+(the default BedConfig values of 87mm/145mm are fallbacks for
+when no template or profile is loaded — not real product specs).
