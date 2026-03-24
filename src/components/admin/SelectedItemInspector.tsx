@@ -172,7 +172,100 @@ export function SelectedItemInspector({
           />
         </div>
 
-        {/* ---- Actions ---- */}
+        {/* ---- Smart Placement (tumbler-wrap) ---- */}
+        {isTumblerMode && (
+          <>
+            <div className={styles.sectionLabel}>Quick Placement</div>
+            <div className={styles.presetGrid}>
+              <button
+                className={styles.presetBtn}
+                onClick={() => handleAlign("center-on-front")}
+                title="Center artwork on the front face, opposite the handle"
+              >
+                <span className={styles.presetIcon}>
+                  <svg viewBox="0 0 24 24" width="16" height="16">
+                    <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <circle cx="12" cy="2" r="2" fill="var(--text-muted)" />
+                    <circle cx="12" cy="22" r="3" fill="var(--accent)" />
+                  </svg>
+                </span>
+                <span>Center Front</span>
+              </button>
+              <button
+                className={styles.presetBtn}
+                onClick={() => handleAlign("opposite-logo")}
+                title="Place in upper third, opposite the manufacturer logo zone"
+              >
+                <span className={styles.presetIcon}>
+                  <svg viewBox="0 0 24 24" width="16" height="16">
+                    <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <circle cx="12" cy="2" r="2" fill="var(--text-muted)" />
+                    <circle cx="12" cy="19" r="3" fill="var(--accent)" />
+                  </svg>
+                </span>
+                <span>Opposite Logo</span>
+              </button>
+              <button
+                className={styles.presetBtn}
+                onClick={() => handleAlign("right-of-handle")}
+                title="Faces you when holding the tumbler in your right hand"
+              >
+                <span className={styles.presetIcon}>
+                  <svg viewBox="0 0 24 24" width="16" height="16">
+                    <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <circle cx="12" cy="2" r="2" fill="var(--text-muted)" />
+                    <circle cx="17" cy="20" r="3" fill="var(--accent)" />
+                  </svg>
+                </span>
+                <span>Right Hand</span>
+              </button>
+              <button
+                className={styles.presetBtn}
+                onClick={() => handleAlign("left-of-handle")}
+                title="Faces you when holding the tumbler in your left hand"
+              >
+                <span className={styles.presetIcon}>
+                  <svg viewBox="0 0 24 24" width="16" height="16">
+                    <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <circle cx="12" cy="2" r="2" fill="var(--text-muted)" />
+                    <circle cx="7" cy="20" r="3" fill="var(--accent)" />
+                  </svg>
+                </span>
+                <span>Left Hand</span>
+              </button>
+              <button
+                className={styles.presetBtn}
+                onClick={() => handleAlign("full-wrap")}
+                title="Scale artwork to fill the entire printable wrap area"
+              >
+                <span className={styles.presetIcon}>
+                  <svg viewBox="0 0 24 24" width="16" height="16">
+                    <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <circle cx="12" cy="2" r="2" fill="var(--text-muted)" />
+                    <path d="M4 18 A10 10 0 0 0 20 18" fill="none" stroke="var(--accent)" strokeWidth="2.5" />
+                  </svg>
+                </span>
+                <span>Full Wrap</span>
+              </button>
+              <button
+                className={styles.presetBtn}
+                onClick={() => handleAlign("back-side")}
+                title="Place artwork on the back of the tumbler, behind the handle"
+              >
+                <span className={styles.presetIcon}>
+                  <svg viewBox="0 0 24 24" width="16" height="16">
+                    <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <circle cx="12" cy="2" r="2" fill="var(--text-muted)" />
+                    <circle cx="12" cy="5" r="3" fill="var(--accent)" />
+                  </svg>
+                </span>
+                <span>Back Side</span>
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ---- Manual Alignment ---- */}
         <div className={styles.sectionLabel}>Alignment</div>
         <div className={styles.alignActions}>
           <button className={styles.actionBtn} onClick={() => handleAlign("center-bed")}>
@@ -187,15 +280,6 @@ export function SelectedItemInspector({
           <button className={styles.actionBtn} onClick={() => handleAlign("fit-bed")}>
             Fit to Bed
           </button>
-          {isTumblerMode && (
-            <button
-              className={styles.actionBtnAccent}
-              onClick={() => handleAlign("opposite-logo")}
-              title="Center artwork at 180° from origin (opposite brand logo side)"
-            >
-              ⊕ Opposite Logo
-            </button>
-          )}
         </div>
 
         {activeGuideBand && guideMetrics && (

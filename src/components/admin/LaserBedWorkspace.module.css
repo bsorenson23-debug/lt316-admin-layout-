@@ -10,16 +10,23 @@
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border-normal);
   flex-shrink: 0;
-  flex-wrap: wrap;
   overflow: visible;
   background: var(--bg-panel);
 }
 
-.toolbarTitle {
+.toolbarLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolbarBrand {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -28,22 +35,113 @@
   flex-shrink: 0;
 }
 
-.bedInfo {
+.toolbarProduct {
   font-size: 11px;
-  color: var(--text-muted);
-  font-family: monospace;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* ---- Mode overlay (Flat Bed / Tumbler / Split Screen) ---- */
-.modeOverlay {
-  position: absolute;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 10;
+.toolbarProductEmpty {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.toolbarZoom {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--text-dim);
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.toolbarZoomReset {
+  font-size: 10px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 4px;
+}
+.toolbarZoomReset:hover {
+  color: var(--accent-hover);
+}
+
+.toolbarPlacing {
+  font-size: 11px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.toolbarCenter {
   display: flex;
-  gap: 12px;
-  pointer-events: none;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.clearLink {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--transition);
+}
+.clearLink:hover {
+  color: var(--error);
+}
+
+/* ---- Tumbler sub-toggle (Grid / 3D) ---- */
+.viewSubToggle {
+  display: flex;
+  gap: 2px;
+  margin-left: 4px;
+  padding: 2px;
+  border-radius: 6px;
+  background: rgba(10, 10, 18, 0.7);
+  border: 1px solid var(--border-subtle);
+  backdrop-filter: blur(4px);
+}
+
+.viewSubBtn {
+  pointer-events: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.viewSubBtn:hover {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.viewSubBtnActive {
+  border-color: #5a9fd4;
+  color: #7dbfef;
+  background: rgba(20, 34, 52, 0.88);
+}
+
+.viewSubBtnActive:hover {
+  border-color: #7dbfef;
+  color: #9ecff5;
 }
 
 /* ---- Destructive confirm ---- */
@@ -75,19 +173,17 @@
 .confirmNo:hover { background: var(--bg-hover); color: var(--text-secondary); }
 
 .modeBtn {
-  pointer-events: auto;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  padding: 12px 28px;
-  background: rgba(16, 16, 16, 0.80);
-  border: 2px solid var(--border-normal);
-  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 3px 10px;
+  background: transparent;
+  border: 1px solid var(--border-normal);
+  border-radius: 4px;
   color: var(--text-muted);
   cursor: pointer;
   transition: border-color var(--transition), color var(--transition), background var(--transition);
   white-space: nowrap;
-  backdrop-filter: blur(4px);
 }
 
 .modeBtn:hover {
@@ -107,68 +203,6 @@
   color: #9ecff5;
 }
 
-/* ---- View mode toggle (Wrap / Two-Sided) ---- */
-.viewToggle {
-  display: inline-flex;
-  border: 1px solid var(--border-normal);
-  border-radius: var(--radius);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.viewToggleBtn {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  padding: 3px 10px;
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: background var(--transition), color var(--transition);
-}
-
-.viewToggleBtn:not(:last-child) {
-  border-right: 1px solid var(--border-normal);
-}
-
-.viewToggleBtn:hover {
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-}
-
-/* Green active is intentional — matches the "front" pane color */
-.viewToggleBtnActive {
-  background: var(--success-bg);
-  color: var(--success);
-}
-
-.viewToggleBtnActive:hover {
-  background: var(--success-bg);
-  color: var(--success);
-}
-
-.activeTip {
-  font-size: 11px;
-  color: var(--accent);
-  margin-left: auto;
-}
-
-.clearBtn {
-  font-size: 11px;
-  color: var(--error);
-  background: none;
-  border: 1px solid var(--error-border);
-  cursor: pointer;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  transition: background var(--transition);
-  margin-left: 8px;
-}
-.clearBtn:hover {
-  background: var(--error-bg);
-}
-
 .canvas {
   flex: 1;
   display: block;
@@ -184,94 +218,4 @@
   user-select: none;
 }
 
-/* ---- Origin chip (toolbar) ---- */
-/* Warm amber is intentional branding for the origin/home point indicator */
-.originChip {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
-  border: 1px solid #5a3e28;
-  border-radius: var(--radius-sm);
-  background: #1c1510;
-  cursor: default;
-  flex-shrink: 0;
-  user-select: none;
-}
 
-.originChipDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #a54444;
-  flex-shrink: 0;
-}
-
-.originChipText {
-  font-size: 10px;
-  font-family: monospace;
-  color: #c49a6a;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
-/* ---- Origin tooltip ---- */
-.originTooltip {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 50;
-  background: #1e1510;
-  border: 1px solid #5a3e28;
-  border-radius: var(--radius-lg);
-  padding: 10px 12px;
-  width: 268px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
-  pointer-events: none;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.originTooltipTitle {
-  display: block;
-  font-size: 11px;
-  font-weight: 700;
-  color: #e0c49a;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  margin-bottom: 2px;
-}
-
-.originTooltipRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.originTooltipLabel {
-  font-size: 10px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  min-width: 96px;
-}
-
-.originTooltipValue {
-  font-size: 10px;
-  color: #d4a96a;
-  font-family: monospace;
-  background: #241a10;
-  border: 1px solid #4a3520;
-  border-radius: var(--radius-sm);
-  padding: 1px 6px;
-}
-
-.originTooltipHint {
-  font-size: 10px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  border-top: 1px solid #2e2218;
-  padding-top: 6px;
-  margin-top: 2px;
-}

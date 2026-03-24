@@ -30,6 +30,9 @@ import {
   getActiveTumblerGuideBand,
 } from "@/utils/tumblerGuides";
 import { svgToDataUrl } from "@/utils/svg";
+import { hasDarkBackground, removeBlackBackground } from "@/lib/removeBlackBg";
+import { generateOverlayCanvas } from "@/lib/overlayGenerator";
+import { generateTumblerSchematic } from "@/lib/generateTumblerSchematic";
 import styles from "./LaserBedWorkspace.module.css";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -145,9 +148,24 @@ interface Props {
   isPlacementArmed: boolean;
   framePreview?: FramePreviewProp | null;
   onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
+  tumblerViewMode?: "grid" | "3d-placement";
+  onTumblerViewModeChange?: (mode: "grid" | "3d-placement") => void;
   showTwoSidedCrosshairs?: boolean;
   mockupConfig?: BedMockupConfig | null;
   flatBedItemOverlay?: FlatBedItemOverlay | null;
+  handleArcDeg?: number;
+  /** Product name for the status bar (e.g. "YETI Rambler 40oz") */
+  productName?: string;
+  /** Product template photo data URL — shown as semi-transparent background on the bed */
+  templateOverlayUrl?: string | null;
+  /** Back face photo data URL — shown at the seam edges of the bed */
+  backOverlayUrl?: string | null;
+  /** Overlay display mode: geometric schematic, full photo, or off */
+  overlayMode?: "schematic" | "photo" | "off";
+  /** Overlay opacity as a percentage 0–100 (applied as 0–1) */
+  overlayOpacityPct?: number;
+  /** Show split front/back overlay with zone labels */
+  twoSidedMode?: boolean;
   onPlaceAsset: (xMm: number, yMm: number) => void;
   onSelectItem: (id: string | null) => void;
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
@@ -255,38 +273,6 @@ function buildFlatBedItemSvg(
 </svg>`;
 }
 
-// ─── OriginChip (DOM toolbar component, unchanged) ────────────────────────────
-
-function OriginChip({ originPosition }: { originPosition: BedConfig["originPosition"] }) {
-  const [showTip, setShowTip] = useState(false);
-  const label = originPosition === "bottom-left" ? "Bottom-Left" : "Top-Left";
-  return (
-    <div className={styles.originChip}
-      onMouseEnter={() => setShowTip(true)}
-      onMouseLeave={() => setShowTip(false)}
-    >
-      <span className={styles.originChipDot} />
-      <span className={styles.originChipText}>Origin: {label} · Absolute</span>
-      {showTip && (
-        <div className={styles.originTooltip}>
-          <span className={styles.originTooltipTitle}>Job Start Position</span>
-          <div className={styles.originTooltipRow}>
-            <span className={styles.originTooltipLabel}>LightBurn mode</span>
-            <span className={styles.originTooltipValue}>Absolute Coords</span>
-          </div>
-          <div className={styles.originTooltipRow}>
-            <span className={styles.originTooltipLabel}>Machine origin</span>
-            <span className={styles.originTooltipValue}>{label} corner</span>
-          </div>
-          <div className={styles.originTooltipHint}>
-            In LightBurn → Device Settings, set Origin to match.
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── useLoadImage hook ────────────────────────────────────────────────────────
 
 function useLoadImage(src: string | null | undefined): HTMLImageElement | null {
@@ -303,6 +289,33 @@ function useLoadImage(src: string | null | undefined): HTMLImageElement | null {
   return img;
 }
 
+/** Load an image and auto-strip dark backgrounds (instant threshold-based). */
+function useLoadOverlayImage(src: string | null | undefined): HTMLImageElement | null {
+  const raw = useLoadImage(src);
+  const [processed, setProcessed] = useState<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (!raw) { setProcessed(null); return; }
+    // Check if the image has a dark background
+    if (hasDarkBackground(raw)) {
+      const cleanUrl = removeBlackBackground(raw);
+      if (cleanUrl) {
+        let cancelled = false;
+        const el = new window.Image();
+        el.onload = () => { if (!cancelled) setProcessed(el); };
+        el.onerror = () => { if (!cancelled) setProcessed(raw); }; // fallback to original
+        el.src = cleanUrl;
+        return () => { cancelled = true; };
+      }
+    }
+    // No dark background or removal failed — use as-is
+    setProcessed(raw);
+  }, [raw]);
+
+  return processed;
+}
+
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function LaserBedWorkspace({
@@ -313,9 +326,18 @@ export function LaserBedWorkspace({
   isPlacementArmed,
   framePreview,
   onWorkspaceModeChange,
+  tumblerViewMode = "grid",
+  onTumblerViewModeChange,
   showTwoSidedCrosshairs = false,
   mockupConfig,
   flatBedItemOverlay,
+  handleArcDeg = 0,
+  productName,
+  templateOverlayUrl,
+  backOverlayUrl,
+  overlayMode = "off",
+  overlayOpacityPct = 12,
+  twoSidedMode = false,
   onPlaceAsset,
   onSelectItem,
   onUpdateItem,
@@ -336,6 +358,39 @@ export function LaserBedWorkspace({
   // Image caches
   const [imageCache, setImageCache] = useState<Map<string, HTMLImageElement>>(new Map());
   const mockupImg = useLoadImage(mockupConfig?.src ?? null);
+
+  // Template product overlay — auto-strips dark backgrounds (photo mode only)
+  const templatePhotoImg = useLoadOverlayImage(overlayMode === "photo" ? (templateOverlayUrl ?? null) : null);
+  const backPhotoImg = useLoadOverlayImage(overlayMode === "photo" ? (backOverlayUrl ?? null) : null);
+
+  // Generate overlay canvas — schematic (dimension-based) or photo
+  const overlayCanvas = useMemo(() => {
+    if (overlayMode === "off") return null;
+    const diameterMm = bedConfig.tumblerDiameterMm ?? (bedConfig.width / Math.PI);
+
+    if (overlayMode === "schematic") {
+      return generateTumblerSchematic({
+        wrapWidthMm: bedConfig.width,
+        printHeightMm: bedConfig.height,
+        diameterMm,
+        handleArcDeg,
+        twoSided: twoSidedMode,
+      }, basePxPerMm);
+    }
+
+    // Photo mode — needs loaded images
+    if (!templatePhotoImg) return null;
+    return generateOverlayCanvas({
+      bedPxW: bedConfig.width * basePxPerMm,
+      bedPxH: bedConfig.height * basePxPerMm,
+      pxPerMm: basePxPerMm,
+      diameterMm,
+      frontImg: templatePhotoImg,
+      backImg: backPhotoImg,
+      handleArcDeg,
+      twoSided: twoSidedMode,
+    });
+  }, [overlayMode, templatePhotoImg, backPhotoImg, bedConfig.width, bedConfig.height, bedConfig.tumblerDiameterMm, basePxPerMm, handleArcDeg, twoSidedMode]);
 
   // Pan state refs
   const isPanningRef    = useRef(false);
@@ -483,12 +538,13 @@ export function LaserBedWorkspace({
     if (!isPlacementArmed || !placementAsset) { onSelectItem(null); return; }
     let { x: xMm, y: yMm } = pointerToBedMm(pointer);
     if (showTwoSidedCrosshairs) {
-      const snapR = bedConfig.width * 0.15;
-      for (const ch of [
-        { x: bedConfig.width * 0.25, y: bedConfig.height * 0.5 },
-        { x: bedConfig.width * 0.75, y: bedConfig.height * 0.5 },
-      ]) {
-        if (Math.hypot(xMm - ch.x, yMm - ch.y) <= snapR) { xMm = ch.x; yMm = ch.y; break; }
+      // Snap to FRONT (center) if click is within 20% of bed width
+      const frontX = bedConfig.width / 2;
+      const centerY = bedConfig.height / 2;
+      const snapR = bedConfig.width * 0.20;
+      if (Math.hypot(xMm - frontX, yMm - centerY) <= snapR) {
+        xMm = frontX;
+        yMm = centerY;
       }
     }
     onPlaceAsset(xMm, yMm);
@@ -515,27 +571,48 @@ export function LaserBedWorkspace({
     const step = bedConfig.gridSpacing;
     const w = bedConfig.width;
     const h = bedConfig.height;
-    for (let x = -w / 2; x <= w / 2; x += step) {
-      els.push(
-        <Text key={`xl${x}`}
-          x={((x + w / 2) * basePxPerMm) - 10} y={bedPxH + BOTTOM_LABEL_OFFSET_PX}
-          text={formatMm(x)} fontSize={9} fontFamily="monospace" fill="#505050"
-          width={20} align="center" listening={false} />
-      );
-    }
-    for (let y = -h / 2; y <= h / 2; y += step) {
-      els.push(
-        <Text key={`yl${y}`}
-          x={-30} y={(y + h / 2) * basePxPerMm - 4}
-          text={formatMm(y)} fontSize={9} fontFamily="monospace" fill="#505050"
-          width={28} align="right" listening={false} />
-      );
+    const isTumbler = showTwoSidedCrosshairs;
+    // Tumbler mode: absolute 0→width / 0→height (top=0 = top rim)
+    // Flat-bed mode: centered -w/2→w/2 / -h/2→h/2
+    if (isTumbler) {
+      for (let x = 0; x <= w; x += step) {
+        els.push(
+          <Text key={`xl${x}`}
+            x={(x * basePxPerMm) - 10} y={bedPxH + BOTTOM_LABEL_OFFSET_PX}
+            text={formatMm(x)} fontSize={9} fontFamily="monospace" fill="#505050"
+            width={20} align="center" listening={false} />
+        );
+      }
+      for (let y = 0; y <= h; y += step) {
+        els.push(
+          <Text key={`yl${y}`}
+            x={-30} y={y * basePxPerMm - 4}
+            text={formatMm(y)} fontSize={9} fontFamily="monospace" fill="#505050"
+            width={28} align="right" listening={false} />
+        );
+      }
+    } else {
+      for (let x = -w / 2; x <= w / 2; x += step) {
+        els.push(
+          <Text key={`xl${x}`}
+            x={((x + w / 2) * basePxPerMm) - 10} y={bedPxH + BOTTOM_LABEL_OFFSET_PX}
+            text={formatMm(x)} fontSize={9} fontFamily="monospace" fill="#505050"
+            width={20} align="center" listening={false} />
+        );
+      }
+      for (let y = -h / 2; y <= h / 2; y += step) {
+        els.push(
+          <Text key={`yl${y}`}
+            x={-30} y={(y + h / 2) * basePxPerMm - 4}
+            text={formatMm(y)} fontSize={9} fontFamily="monospace" fill="#505050"
+            width={28} align="right" listening={false} />
+        );
+      }
     }
     return els;
-  }, [bedConfig.gridSpacing, bedConfig.width, bedConfig.height, basePxPerMm, bedPxW, bedPxH]);
+  }, [bedConfig.gridSpacing, bedConfig.width, bedConfig.height, basePxPerMm, bedPxW, bedPxH, showTwoSidedCrosshairs]);
 
   // ── Tumbler guides ────────────────────────────────────────────────────────
-  const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
   const showGuideBands = shouldRenderTumblerGuideBand(bedConfig);
   const activeGuideBand = getActiveTumblerGuideBand(bedConfig);
 
@@ -592,45 +669,97 @@ export function LaserBedWorkspace({
     );
   }, [bedConfig.crosshairMode, bedConfig.originPosition, bedPxW, bedPxH]);
 
-  // ── Two-sided crosshairs (tumbler) ────────────────────────────────────────
+  // ── Tumbler wrap guides ──────────────────────────────────────────────────
+  // Clean reference lines: FRONT center (blue), handle center (orange),
+  // seam labels, height indicators. No filled zones or hatching.
   const twoSidedCrosshairNodes = useMemo(() => {
     if (!showTwoSidedCrosshairs) return null;
-    const points = [
-      { xMm: bedConfig.width * 0.25, label: "FRONT", color: "#7ecfa8" },
-      { xMm: bedConfig.width * 0.75, label: "BACK",  color: "#6ab0e8" },
-    ];
+    const wrapW = bedConfig.width;
+    const frontXPx = (wrapW / 2) * basePxPerMm;
+
     return (
       <Group listening={false}>
-        <Line points={[bedPxW / 2, 0, bedPxW / 2, bedPxH]} stroke="#2a2a2a" strokeWidth={1} dash={[4,4]} />
-        {points.map(({ xMm, label, color }) => {
-          const pcx = xMm * basePxPerMm;
-          const pcy = bedPxH / 2;
-          const armH = bedPxH * 0.28;
-          const armW = bedPxW * 0.12;
-          return (
-            <Group key={label}>
-              <Line points={[pcx, pcy - armH, pcx, pcy + armH]} stroke={color} strokeWidth={1} opacity={0.35} />
-              <Line points={[pcx - armW, pcy, pcx + armW, pcy]} stroke={color} strokeWidth={1} opacity={0.35} />
-              <Line points={[pcx, pcy - 6, pcx + 6, pcy, pcx, pcy + 6, pcx - 6, pcy, pcx, pcy - 6]}
-                stroke={color} strokeWidth={1.5} opacity={0.9} closed />
-              <Circle x={pcx} y={pcy} radius={2} fill={color} opacity={0.9} />
-              <Text x={pcx - 20} y={pcy - armH - 16} text={label} fontSize={10}
-                fontFamily="monospace" fill={color} opacity={0.85} width={40} align="center" />
-            </Group>
-          );
-        })}
+        {/* ── FRONT line — dominant blue landmark ── */}
+        <Line
+          points={[frontXPx, 0, frontXPx, bedPxH]}
+          stroke="rgba(40,120,200,0.7)"
+          strokeWidth={2}
+          dash={[8, 4]}
+        />
+        <Text
+          x={frontXPx - 55}
+          y={4}
+          text={"\u2193 Front face center"}
+          fontSize={10}
+          fontFamily="system-ui, sans-serif"
+          fill="rgba(40,120,200,0.6)"
+          width={110}
+          align="center"
+        />
+        <Text
+          x={frontXPx - 22}
+          y={bedPxH - 18}
+          text="FRONT"
+          fontSize={13}
+          fontFamily="system-ui, sans-serif"
+          fontStyle="bold"
+          fill="rgba(40,120,200,0.85)"
+          width={44}
+          align="center"
+        />
+
+        {/* ── BACK / seam — subtle at left edge ── */}
+        <Line
+          points={[0, 0, 0, bedPxH]}
+          stroke="rgba(255,255,255,0.15)"
+          strokeWidth={1}
+          dash={[4, 8]}
+        />
+        <Text x={4} y={4} text="BACK" fontSize={9}
+          fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.3)" />
+        <Text x={4} y={bedPxH - 14} text="seam" fontSize={8}
+          fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.2)" />
+
+        {/* ── Handle center line — orange dashed at both wrap edges ── */}
+        {handleArcDeg > 0 && (
+          <>
+            {/* Right edge = handle center (opposite front face) */}
+            <Line
+              points={[bedPxW, 0, bedPxW, bedPxH]}
+              stroke="rgba(255,150,50,0.4)"
+              strokeWidth={1.5}
+              dash={[6, 4]}
+            />
+            <Text
+              x={bedPxW - 90}
+              y={4}
+              text={"handle center \u2193"}
+              fontSize={9}
+              fontFamily="system-ui, sans-serif"
+              fill="rgba(255,150,50,0.5)"
+              width={86}
+              align="right"
+            />
+            {/* Left edge also = handle center (wrap point) */}
+            <Line
+              points={[0, 0, 0, bedPxH]}
+              stroke="rgba(255,150,50,0.4)"
+              strokeWidth={1.5}
+              dash={[6, 4]}
+            />
+          </>
+        )}
+
+        {/* ── Tumbler height indicators along left edge ── */}
+        <Line points={[-6, 0, 12, 0]} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />
+        <Text x={-70} y={-2} text={"\u2190 Top rim"} fontSize={9}
+          fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.35)" width={64} align="right" />
+        <Line points={[-6, bedPxH, 12, bedPxH]} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />
+        <Text x={-70} y={bedPxH - 12} text={"\u2190 Bottom"} fontSize={9}
+          fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.35)" width={64} align="right" />
       </Group>
     );
-  }, [showTwoSidedCrosshairs, bedConfig.width, bedPxW, bedPxH, basePxPerMm]);
-
-  // ── Seam line (tumbler) ───────────────────────────────────────────────────
-  const seamLineNode = useMemo(() => {
-    if (!isTumblerMode) return null;
-    return (
-      <Line points={[0, 0, 0, bedPxH]} stroke="#4a4a4a" strokeWidth={2}
-        dash={[6,4]} opacity={0.6} listening={false} />
-    );
-  }, [isTumblerMode, bedPxH]);
+  }, [showTwoSidedCrosshairs, bedConfig.width, bedPxW, bedPxH, basePxPerMm, handleArcDeg]);
 
   // ── BedMockup position calc ───────────────────────────────────────────────
   const mockupImageProps = useMemo(() => {
@@ -664,60 +793,72 @@ export function LaserBedWorkspace({
       ref={containerRef}
       style={{ cursor: isPlacementArmed ? "crosshair" : "default" }}
     >
-      {/* ── HTML toolbar ── */}
+      {/* ── Status bar — 3 zones: product name | mode toggle | clear ── */}
       <div className={styles.toolbar}>
-        <span className={styles.bedInfo}>
-          {formatMm(bedConfig.width)} × {formatMm(bedConfig.height)} mm
-          &nbsp;|&nbsp; grid: {formatMm(bedConfig.gridSpacing)} mm
-        </span>
-        <OriginChip originPosition={bedConfig.originPosition} />
-
-        {zoom !== 1 && (
-          <span className={styles.activeTip} style={{ color: "#8ab0c8" }}>
-            {Math.round(zoom * 100)}%&nbsp;
-            <button onClick={resetView}
-              style={{ background: "none", border: "none", color: "#8ab0c8", cursor: "pointer", fontSize: 11, textDecoration: "underline", padding: 0 }}>
-              reset
-            </button>
-          </span>
-        )}
-
-        {isPlacementArmed && placementAsset ? (
-          <span className={styles.activeTip}>
-            Click bed to place &quot;{placementAsset.name.replace(/\.svg$/i, "")}&quot;
-          </span>
-        ) : (
-          <span className={styles.activeTip} style={{ color: "#555" }}>
-            Select an asset, then click &quot;Place on Bed&quot; · Scroll to zoom · Middle-drag to pan
-          </span>
-        )}
-
-        {placedItems.length > 0 && (
-          clearConfirm ? (
-            <>
-              <span className={styles.confirmLabel}>Clear all items?</span>
-              <button className={styles.confirmYes} onClick={() => { onClearWorkspace(); setClearConfirm(false); }}>Yes</button>
-              <button className={styles.confirmNo}  onClick={() => setClearConfirm(false)}>Cancel</button>
-            </>
+        {/* LEFT: Product name */}
+        <div className={styles.toolbarLeft}>
+          <span className={styles.toolbarBrand}>LT316</span>
+          {productName ? (
+            <span className={styles.toolbarProduct}>{" \u2014 "}{productName}</span>
           ) : (
-            <button className={styles.clearBtn} onClick={() => setClearConfirm(true)}>Clear Workspace</button>
-          )
-        )}
-      </div>
-
-      {/* ── Mode selector overlay ── */}
-      {onWorkspaceModeChange && (
-        <div className={styles.modeOverlay}>
-          <button
-            className={`${styles.modeBtn} ${bedConfig.workspaceMode === "flat-bed"     ? styles.modeBtnActive : ""}`}
-            onClick={() => onWorkspaceModeChange("flat-bed")}
-          >Flat Bed</button>
-          <button
-            className={`${styles.modeBtn} ${bedConfig.workspaceMode === "tumbler-wrap" ? styles.modeBtnActive : ""}`}
-            onClick={() => onWorkspaceModeChange("tumbler-wrap")}
-          >Tumbler</button>
+            <span className={styles.toolbarProductEmpty}>{" \u2014 Select a product"}</span>
+          )}
+          {zoom !== 1 && (
+            <span className={styles.toolbarZoom}>
+              {Math.round(zoom * 100)}%
+              <button onClick={resetView} className={styles.toolbarZoomReset}>reset</button>
+            </span>
+          )}
+          {isPlacementArmed && placementAsset && (
+            <span className={styles.toolbarPlacing}>
+              Click to place &quot;{placementAsset.name.replace(/\.svg$/i, "")}&quot;
+            </span>
+          )}
         </div>
-      )}
+
+        {/* CENTER: Mode toggles */}
+        <div className={styles.toolbarCenter}>
+          {onWorkspaceModeChange && (
+            <>
+              <button
+                className={`${styles.modeBtn} ${bedConfig.workspaceMode === "flat-bed" ? styles.modeBtnActive : ""}`}
+                onClick={() => onWorkspaceModeChange("flat-bed")}
+              >Flat Bed</button>
+              <button
+                className={`${styles.modeBtn} ${bedConfig.workspaceMode === "tumbler-wrap" ? styles.modeBtnActive : ""}`}
+                onClick={() => onWorkspaceModeChange("tumbler-wrap")}
+              >Tumbler</button>
+              {bedConfig.workspaceMode === "tumbler-wrap" && onTumblerViewModeChange && (
+                <div className={styles.viewSubToggle}>
+                  <button
+                    className={`${styles.viewSubBtn} ${tumblerViewMode === "grid" ? styles.viewSubBtnActive : ""}`}
+                    onClick={() => onTumblerViewModeChange("grid")}
+                  >Grid</button>
+                  <button
+                    className={`${styles.viewSubBtn} ${tumblerViewMode === "3d-placement" ? styles.viewSubBtnActive : ""}`}
+                    onClick={() => onTumblerViewModeChange("3d-placement")}
+                  >3D</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* RIGHT: Clear workspace */}
+        <div className={styles.toolbarRight}>
+          {placedItems.length > 0 && (
+            clearConfirm ? (
+              <>
+                <span className={styles.confirmLabel}>Clear?</span>
+                <button className={styles.confirmYes} onClick={() => { onClearWorkspace(); setClearConfirm(false); }}>Yes</button>
+                <button className={styles.confirmNo}  onClick={() => setClearConfirm(false)}>No</button>
+              </>
+            ) : (
+              <button className={styles.clearLink} onClick={() => setClearConfirm(true)}>Clear Workspace</button>
+            )
+          )}
+        </div>
+      </div>
 
       {/* ── Konva Stage ── */}
       <Stage
@@ -743,6 +884,19 @@ export function LaserBedWorkspace({
               fill="#1a1e22" stroke="#2a3a45" strokeWidth={1}
               onClick={handleBedClick}
             />
+
+            {/* ── Product overlay — schematic (full alpha, pre-tuned) or photo (user opacity) ── */}
+            {overlayCanvas && (
+              <KonvaImage
+                image={overlayCanvas}
+                x={0}
+                y={0}
+                width={bedPxW}
+                height={bedPxH}
+                opacity={overlayMode === "schematic" ? 1 : overlayOpacityPct / 100}
+                listening={false}
+              />
+            )}
 
             {/* Mockup overlay */}
             {mockupImg && mockupImageProps && (
@@ -775,10 +929,7 @@ export function LaserBedWorkspace({
             {/* Tumbler guides */}
             {tumblerGuideNodes}
 
-            {/* Seam line */}
-            {seamLineNode}
-
-            {/* Two-sided crosshairs */}
+            {/* Tumbler wrap guides (FRONT, handle zone, seam) */}
             {twoSidedCrosshairNodes}
 
             {/* Coordinate labels */}

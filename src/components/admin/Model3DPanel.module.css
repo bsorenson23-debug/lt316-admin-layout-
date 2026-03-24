@@ -332,3 +332,94 @@
   border: 1px solid var(--border-normal);
   background: #0e0e14;
 }
+
+/* ── Calibration sliders ── */
+.calibrationSection {
+  padding: 6px 0;
+}
+
+.calibrateBtn {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.calibrateBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.calibrateHint {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.calibrateRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.calibrateLabel {
+  font-size: 10px;
+  color: var(--text-secondary);
+  width: 48px;
+  flex-shrink: 0;
+}
+
+.calibrateSlider {
+  flex: 1;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.calibrateValue {
+  font-size: 10px;
+  color: var(--text-primary);
+  width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.calibrateBtns {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.calibrateSaveBtn {
+  flex: 1;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  color: var(--bg-base);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.calibrateSaveBtn:hover {
+  background: var(--accent-hover);
+}
+
+.calibrateCancelBtn {
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.calibrateCancelBtn:hover {
+  background: var(--bg-hover);
+}

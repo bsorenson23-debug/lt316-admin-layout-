@@ -1,0 +1,20 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  background: rgba(20, 20, 20, 0.95);
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  padding: 5px 12px;
+  color: #c0c0c0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  transition: border-color 120ms, color 120ms;
+}
+
+.btn:hover {
+  border-color: #4b7384;
+  color: #e0e0e0;
+}

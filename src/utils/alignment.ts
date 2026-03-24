@@ -90,7 +90,45 @@ export function computeAlignmentPatch(
 
   // Tumbler-wrap: shift artwork center to 180° opposite side (half circumference)
   if (mode === "opposite-logo") {
+    // Center on front face, upper third (avoids typical bottom-right logo zone)
     nextX += bedConfig.width / 2 - artworkCenterX;
+    nextY += bedConfig.height * 0.35 - artworkCenterY;
+  }
+
+  // Tumbler-wrap: center artwork horizontally on the FRONT marker (bed center)
+  if (mode === "center-on-front") {
+    nextX += bedConfig.width / 2 - artworkCenterX;
+    nextY += bedConfig.height / 2 - artworkCenterY;
+  }
+
+  // Tumbler-wrap: right of handle — faces the user when held in right hand
+  // Offset 15% of wrap width to the right of front center
+  if (mode === "right-of-handle") {
+    nextX += (bedConfig.width / 2 + bedConfig.width * 0.15) - artworkCenterX;
+    nextY += bedConfig.height / 2 - artworkCenterY;
+  }
+
+  // Tumbler-wrap: left of handle — faces the user when held in left hand
+  // Offset 15% of wrap width to the left of front center
+  if (mode === "left-of-handle") {
+    nextX += (bedConfig.width / 2 - bedConfig.width * 0.15) - artworkCenterX;
+    nextY += bedConfig.height / 2 - artworkCenterY;
+  }
+
+  // Tumbler-wrap: scale artwork to fill the full printable arc width
+  if (mode === "full-wrap") {
+    // Use the full bed (printable arc) — handle exclusion zone is not yet tracked here
+    nextWidth = bedConfig.width;
+    nextHeight = bedConfig.height;
+    nextX = 0;
+    nextY = 0;
+    return { x: nextX, y: nextY, width: nextWidth, height: nextHeight };
+  }
+
+  // Tumbler-wrap: back side — near grid origin (behind handle / seam area)
+  if (mode === "back-side") {
+    nextX += 0 - artworkCenterX + artwork.width / 2;
+    nextY += bedConfig.height / 2 - artworkCenterY;
   }
 
   return { x: nextX, y: nextY };

@@ -93,7 +93,7 @@ export const BUILT_IN_TEMPLATES: ProductTemplate[] = [
     laserType: "fiber",
     productType: "tumbler",
     thumbnailDataUrl: TUMBLER_THUMB,
-    glbPath: "",
+    glbPath: "/models/templates/yeti-40oz-body.glb",
     dimensions: {
       diameterMm: 104,
       printHeightMm: 241,

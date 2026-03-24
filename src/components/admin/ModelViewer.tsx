@@ -19,11 +19,15 @@ import {
   Grid,
   Html,
   useProgress,
+  Decal,
 } from "@react-three/drei";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as THREE from "three";
+import type { PlacedItem } from "@/types/admin";
+import { YetiRambler40oz } from "./models/YetiRambler40oz";
+import type { DecalItem } from "./models/YetiRambler40oz";
 
 // ---------------------------------------------------------------------------
 // Suppress noisy Three.js deprecation warnings
@@ -55,23 +59,24 @@ export interface TumblerDimensions {
   printableHeightMm: number;
 }
 
-export interface BedOverlayData {
-  /** Pre-rendered PNG data URL of all placed items */
-  dataUrl: string;
-  bedWidthMm: number;
-  bedHeightMm: number;
-  workspaceMode: "flat-bed" | "tumbler-wrap";
-  /** The raw canvas element — used for direct CanvasTexture on GLB meshes */
-  canvas?: HTMLCanvasElement;
+/** Per-item rasterized texture for 3D Decal projection */
+export interface ItemTexture {
+  itemId: string;
+  canvas: HTMLCanvasElement;
 }
 
 export interface ModelViewerProps {
   file: File;
-  overlay?: BedOverlayData | null;
+  placedItems?: PlacedItem[];
+  itemTextures?: Map<string, HTMLCanvasElement>;
+  bedWidthMm?: number;
+  bedHeightMm?: number;
   tumblerDims?: TumblerDimensions | null;
   handleArcDeg?: number;
-  /** Stable ref to the bed texture canvas — avoids identity churn from state */
-  bedCanvas?: HTMLCanvasElement | null;
+  /** Original GLB path — used to select specific model components */
+  glbPath?: string | null;
+  /** Tumbler mapping from the wizard — orients the front face */
+  tumblerMapping?: import("@/types/productTemplate").TumblerMapping;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,187 +213,7 @@ function EngravableZoneRing({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Cylindrical overlay — wraps the bed design around the tumbler surface
-// ---------------------------------------------------------------------------
 
-// ── UV debug texture — enabled via ?uvdebug=true query param ─────────────
-
-function createUvDebugTexture(): THREE.CanvasTexture {
-  const W = 1024;
-  const H = 512;
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d")!;
-
-  // Background
-  ctx.fillStyle = "#1a1a2e";
-  ctx.fillRect(0, 0, W, H);
-
-  // Grid lines
-  const cols = 10;
-  const rows = 5;
-  ctx.strokeStyle = "rgba(255,255,255,0.25)";
-  ctx.lineWidth = 1;
-  for (let c = 0; c <= cols; c++) {
-    const x = (c / cols) * W;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-  }
-  for (let r = 0; r <= rows; r++) {
-    const y = (r / rows) * H;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-  }
-
-  // Coordinate labels at grid intersections
-  ctx.font = "bold 13px monospace";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  for (let c = 0; c <= cols; c++) {
-    for (let r = 0; r <= rows; r++) {
-      const u = (c / cols).toFixed(1);
-      const v = (r / rows).toFixed(1);
-      const x = (c / cols) * W;
-      const y = (r / rows) * H;
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(x - 26, y - 9, 52, 18);
-      ctx.fillStyle = "#eee";
-      ctx.fillText(`${u},${v}`, x, y);
-    }
-  }
-
-  // Red left edge (U=0 seam)
-  ctx.fillStyle = "rgba(255,40,40,0.7)";
-  ctx.fillRect(0, 0, 6, H);
-  ctx.save();
-  ctx.translate(16, H / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.font = "bold 16px monospace";
-  ctx.fillStyle = "#ff4444";
-  ctx.textAlign = "center";
-  ctx.fillText("U=0 SEAM (LEFT)", 0, 0);
-  ctx.restore();
-
-  // Blue right edge (U=1 seam)
-  ctx.fillStyle = "rgba(40,100,255,0.7)";
-  ctx.fillRect(W - 6, 0, 6, H);
-  ctx.save();
-  ctx.translate(W - 16, H / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.font = "bold 16px monospace";
-  ctx.fillStyle = "#4488ff";
-  ctx.textAlign = "center";
-  ctx.fillText("U=1 SEAM (RIGHT)", 0, 0);
-  ctx.restore();
-
-  // Center cross-hair label
-  ctx.font = "bold 18px monospace";
-  ctx.fillStyle = "#ffcc00";
-  ctx.textAlign = "center";
-  ctx.fillText("CENTER (0.5, 0.5)", W / 2, H / 2 - 20);
-  ctx.strokeStyle = "#ffcc00";
-  ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(W / 2 - 30, H / 2); ctx.lineTo(W / 2 + 30, H / 2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(W / 2, H / 2 - 30); ctx.lineTo(W / 2, H / 2 + 30); ctx.stroke();
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.needsUpdate = true;
-  return tex;
-}
-
-function isUvDebugEnabled(): boolean {
-  if (typeof window === "undefined") return false;
-  return new URLSearchParams(window.location.search).get("uvdebug") === "true";
-}
-
-function OverlayCylinder({
-  overlay, dims, modelBounds,
-}: { overlay: BedOverlayData; dims: TumblerDimensions; modelBounds: THREE.Box3 }) {
-  const uvDebug = useMemo(() => isUvDebugEnabled(), []);
-
-  const texture = useMemo(() => {
-    if (uvDebug) {
-      const dbg = createUvDebugTexture();
-      // Apply same offset as real texture so we can see where the seam lands
-      dbg.offset.set(0.75, 0);
-      return dbg;
-    }
-    const tex = new THREE.TextureLoader().load(overlay.dataUrl);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.ClampToEdgeWrapping;
-
-    // CylinderGeometry UV: U=0 starts at +X, advances clockwise (from top).
-    // The front of the tumbler (+Z, facing the default camera) is at U ≈ 0.25.
-    // Shift so that the center of the bed texture (U=0.5) sits at the front face.
-    // offset = 0.25 - 0.5 = -0.25 → wrapped = 0.75
-    tex.offset.set(0.75, 0);
-    tex.needsUpdate = true;
-    return tex;
-  }, [overlay.dataUrl, uvDebug]);
-
-  const size = modelBounds.getSize(new THREE.Vector3());
-  const center = modelBounds.getCenter(new THREE.Vector3());
-
-  // Radii from actual model bounds + tiny gap to prevent z-fighting
-  const gap = 1.0; // 1mm
-  const topR = (dims.topDiameterMm ?? dims.diameterMm) / 2 + gap;
-  const botR = (dims.bottomDiameterMm ?? dims.diameterMm) / 2 + gap;
-
-  // Fallback: if dims radii are 0 (not yet filled in), derive from model bounds
-  const fallbackR = Math.max(size.x, size.z) / 2 + gap;
-  const rTop = topR > gap ? topR : fallbackR;
-  const rBot = botR > gap ? botR : fallbackR;
-
-  return (
-    <mesh position={[center.x, center.y, center.z]}>
-      {/* open-ended cylinder, 64 segments for smooth curve */}
-      <cylinderGeometry args={[rTop, rBot, dims.printableHeightMm, 64, 1, true]} />
-      <meshBasicMaterial
-        map={texture}
-        transparent={!uvDebug}
-        alphaTest={uvDebug ? 0 : 0.05}
-        side={THREE.FrontSide}
-        depthWrite={false}
-        opacity={uvDebug ? 1.0 : 0.9}
-      />
-    </mesh>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Flat overlay plane — used for flat-bed mode
-// ---------------------------------------------------------------------------
-
-function OverlayPlane({
-  overlay, modelBounds,
-}: { overlay: BedOverlayData; modelBounds: THREE.Box3 }) {
-  const texture = useMemo(() => {
-    const tex = new THREE.TextureLoader().load(overlay.dataUrl);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.wrapS = THREE.ClampToEdgeWrapping;
-    tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.needsUpdate = true;
-    return tex;
-  }, [overlay.dataUrl]);
-
-  const size = modelBounds.getSize(new THREE.Vector3());
-  const center = modelBounds.getCenter(new THREE.Vector3());
-  const zPos = modelBounds.max.z + 0.5;
-
-  return (
-    <mesh position={[center.x, center.y, zPos]}>
-      <planeGeometry args={[size.x * 0.88, size.y * 0.82]} />
-      <meshBasicMaterial
-        map={texture} transparent alphaTest={0.08}
-        depthWrite={false} opacity={0.92}
-      />
-    </mesh>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Format-specific mesh components — each applies physical scaling
@@ -444,367 +269,212 @@ function ObjMesh({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Find handle angle by locating the vertex furthest from the Y axis.
-// The handle protrudes outward from the cylinder body, so the vertex
-// with max radial distance marks the handle direction.
-// Returns angle in radians (atan2 convention: 0 = +Z).
-// ---------------------------------------------------------------------------
-
-function findHandleAngle(geometry: THREE.BufferGeometry): number {
-  const pos = geometry.attributes.position;
-  let maxDist = 0;
-  let handleAngle = 0;
-
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const z = pos.getZ(i);
-    const distFromAxis = Math.sqrt(x * x + z * z);
-
-    if (distFromAxis > maxDist) {
-      maxDist = distFromAxis;
-      handleAngle = Math.atan2(x, z);
-    }
-  }
-
-  return handleAngle;
-}
-
-// ---------------------------------------------------------------------------
-// Generate cylindrical UV projection for meshes without UVs.
-// Uses the measured handle angle to place the seam at the handle
-// and center the printable arc on the front face (opposite handle).
-// ---------------------------------------------------------------------------
-
-function generateCylindricalUVs(
-  geometry: THREE.BufferGeometry,
-  handleAngle: number,
-  handleArcDeg: number = 0,
-) {
-  const pos = geometry.attributes.position;
-  const uvs = new Float32Array(pos.count * 2);
-
-  // Front center is directly opposite the handle
-  const frontAngle = handleAngle + Math.PI;
-
-  // Y bounds for V coordinate
-  let minY = Infinity, maxY = -Infinity;
-  for (let i = 0; i < pos.count; i++) {
-    const y = pos.getY(i);
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  }
-  const yRange = maxY - minY || 1;
-
-  const printableArcRad = (2 * Math.PI) - (handleArcDeg * Math.PI / 180);
-
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const z = pos.getZ(i);
-    const y = pos.getY(i);
-
-    // Angle of this vertex around Y axis
-    const vertexAngle = Math.atan2(x, z);
-
-    // Angle relative to front center, normalized to -PI..PI
-    let relAngle = vertexAngle - frontAngle;
-    while (relAngle > Math.PI) relAngle -= 2 * Math.PI;
-    while (relAngle < -Math.PI) relAngle += 2 * Math.PI;
-
-    // Map printable arc to U 0..1
-    let u = (relAngle + printableArcRad / 2) / printableArcRad;
-    u = Math.max(0, Math.min(1, u));
-
-    // V = height 0..1, flipped so top of artwork = top of tumbler
-    const v = (y - minY) / yRange;
-
-    uvs[i * 2] = u;
-    uvs[i * 2 + 1] = 1 - v;
-  }
-
-  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
-  geometry.attributes.uv.needsUpdate = true;
-}
 
 function GltfMesh({
-  url, dims, handleArcDeg, overlayCanvas, onReady,
+  url, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, onReady,
 }: {
   url: string;
   dims?: TumblerDimensions | null;
   handleArcDeg?: number;
-  overlayCanvas?: HTMLCanvasElement | null;
+  placedItems?: PlacedItem[];
+  itemTextures?: Map<string, HTMLCanvasElement>;
+  bedWidthMm?: number;
+  bedHeightMm?: number;
   onReady?: OnReady;
 }) {
   const gltf = useLoader(GLTFLoader, url);
-  const overlayMeshRef = useRef<THREE.Mesh | null>(null);
-  const overlayTextureRef = useRef<THREE.CanvasTexture | null>(null);
-  const overlayMatRef = useRef<THREE.MeshBasicMaterial | null>(null);
-  const debugGroupRef = useRef<THREE.Group | null>(null);
-  const measuredHandleAngleRef = useRef<number>(0);
 
-  // ── Phase 1: Scale to physical mm + Phase 2: Detect handle ──
+  // ── Scale to physical mm ──
   const transform = useMemo(() => {
     const box = new THREE.Box3().setFromObject(gltf.scene);
     const rawSize = box.getSize(new THREE.Vector3());
     return computeModelTransform(rawSize, dims);
   }, [gltf.scene, dims]);
 
-  // ── Phase 1+2+5: Scale, detect handle, add debug visuals ──
-  useEffect(() => {
-    if (!gltf?.scene || !dims) return;
+  // ── Extract body mesh geometry + material from the GLB scene ──
+  // We render the mesh explicitly (not via <primitive>) so Decals can be children.
+  const bodyMeshData = useMemo(() => {
+    let foundGeometry: THREE.BufferGeometry | null = null;
+    let foundMaterial: THREE.Material | THREE.Material[] | null = null;
+    const otherObjects: THREE.Object3D[] = [];
 
-    // Find body mesh
-    let bodyMesh: THREE.Mesh | null = null;
     gltf.scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh && !bodyMesh) {
-        bodyMesh = obj;
+      if (obj instanceof THREE.Mesh && !foundGeometry) {
+        foundGeometry = obj.geometry;
+        foundMaterial = obj.material;
       }
     });
-    if (!bodyMesh) return;
-    const mesh = bodyMesh as THREE.Mesh;
 
-    // ── Phase 1: Log raw bounding box for diagnostics ──
-    const rawBox = new THREE.Box3().setFromObject(gltf.scene);
-    const rawSize = rawBox.getSize(new THREE.Vector3());
-    console.log("[GltfMesh] raw bounding box size:",
-      { x: rawSize.x.toFixed(4), y: rawSize.y.toFixed(4), z: rawSize.z.toFixed(4) });
-    console.log("[GltfMesh] scale factor:", transform.scale.toFixed(4));
+    // Collect non-body children for rendering separately
+    gltf.scene.children.forEach((child) => {
+      if (child instanceof THREE.Mesh && child.geometry === foundGeometry) return;
+      otherObjects.push(child);
+    });
 
-    // After scale is applied by the parent <group>, effective mm sizes are:
-    const effectiveDiameter = Math.max(rawSize.x, rawSize.z) * transform.scale;
-    const effectiveHeight = rawSize.y * transform.scale;
-    console.log("[GltfMesh] effective mm:",
-      { diameter: effectiveDiameter.toFixed(1), height: effectiveHeight.toFixed(1) });
+    return { geometry: foundGeometry, material: foundMaterial, otherObjects };
+  }, [gltf.scene]);
 
-    // ── Phase 2: Find handle angle from geometry ──
-    const handleAngle = findHandleAngle(mesh.geometry);
-    measuredHandleAngleRef.current = handleAngle;
-    console.log("[GltfMesh] handle angle:",
-      (handleAngle * 180 / Math.PI).toFixed(1) + "°",
-      { x: Math.sin(handleAngle).toFixed(3), z: Math.cos(handleAngle).toFixed(3) });
+  // ── Per-item Three.js textures (keyed by item ID) ──
+  const threeTextures = useMemo(() => {
+    if (!itemTextures) return new Map<string, THREE.CanvasTexture>();
+    const map = new Map<string, THREE.CanvasTexture>();
+    itemTextures.forEach((canvas, id) => {
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.needsUpdate = true;
+      map.set(id, tex);
+    });
+    return map;
+  }, [itemTextures]);
 
-    // ── Generate cylindrical UVs using measured handle angle ──
-    const hasUVs = !!mesh.geometry.attributes.uv;
-    if (!hasUVs) {
-      generateCylindricalUVs(mesh.geometry, handleAngle, handleArcDeg ?? 0);
-    }
+  // ── Compute per-item Decal configs ──
+  // Bed grid is an unwrapped cylinder:
+  //   width  = wrapWidthMm = π × diameter
+  //   height = printHeightMm
+  //   FRONT  = x center of grid (wrapWidthMm / 2)
+  // Decal position/scale are in native (pre-scale) units because
+  // the parent <group> applies transform.scale uniformly.
+  const decalConfigs = useMemo(() => {
+    if (!dims || !placedItems?.length || !bedWidthMm || !bedHeightMm) return [];
 
-    // ── Phase 5: Debug visuals — calibration circle + handle indicator ──
-    // Clean up previous debug group
-    if (debugGroupRef.current) {
-      gltf.scene.remove(debugGroupRef.current);
-      debugGroupRef.current.traverse((obj) => {
-        if (obj instanceof THREE.Mesh) {
-          obj.geometry.dispose();
-          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-          else obj.material.dispose();
-        }
+    const radius = (dims.diameterMm ?? 98) / 2;
+    const wrapWidth = bedWidthMm;
+    const printHeight = bedHeightMm;
+    const frontX = wrapWidth / 2;
+    const s = transform.scale;
+
+    return placedItems
+      .filter((item) => item.visible !== false)
+      .map((item) => {
+        const artCenterX = (item.x + item.width / 2) - frontX;
+        const artCenterY = (printHeight / 2) - (item.y + item.height / 2);
+        const angleRad = artCenterX / radius;
+
+        const posX = Math.sin(angleRad) * radius;
+        const posZ = Math.cos(angleRad) * radius;
+        const posY = artCenterY;
+
+        return {
+          itemId: item.id,
+          position: [posX / s, posY / s, posZ / s] as [number, number, number],
+          rotation: [0, -angleRad, 0] as [number, number, number],
+          scale: [item.width / s, item.height / s, 20 / s] as [number, number, number],
+        };
       });
-    }
-
-    const debugGroup = new THREE.Group();
-    debugGroup.name = "debug-handle-visuals";
-
-    // Measurements in native (pre-scale) units — the parent <group> applies scale
-    const nativeRadius = Math.max(rawSize.x, rawSize.z) / 2;
-    const nativeHalfHeight = rawSize.y / 2;
-    const rawCenter = rawBox.getCenter(new THREE.Vector3());
-
-    // Blue circle at top rim showing physical diameter
-    const circleGeo = new THREE.RingGeometry(
-      nativeRadius - 0.3 / transform.scale,
-      nativeRadius + 0.3 / transform.scale,
-      64,
-    );
-    const circleMat = new THREE.MeshBasicMaterial({
-      color: 0x00aaff,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      transparent: true,
-      opacity: 0.7,
-    });
-    const circle = new THREE.Mesh(circleGeo, circleMat);
-    circle.rotation.x = -Math.PI / 2;
-    circle.position.set(rawCenter.x, rawCenter.y + nativeHalfHeight, rawCenter.z);
-    debugGroup.add(circle);
-
-    // Red dot at handle position on the top rim
-    const dotSize = 1.5 / transform.scale; // 1.5mm in native units
-    const handleDotGeo = new THREE.SphereGeometry(dotSize, 8, 8);
-    const handleDotMat = new THREE.MeshBasicMaterial({ color: 0xff3300 });
-    const handleDot = new THREE.Mesh(handleDotGeo, handleDotMat);
-    handleDot.position.set(
-      rawCenter.x + Math.sin(handleAngle) * nativeRadius,
-      rawCenter.y + nativeHalfHeight,
-      rawCenter.z + Math.cos(handleAngle) * nativeRadius,
-    );
-    debugGroup.add(handleDot);
-
-    // Green dot at front face (opposite handle) for reference
-    const frontAngle = handleAngle + Math.PI;
-    const frontDotGeo = new THREE.SphereGeometry(dotSize, 8, 8);
-    const frontDotMat = new THREE.MeshBasicMaterial({ color: 0x00ff44 });
-    const frontDot = new THREE.Mesh(frontDotGeo, frontDotMat);
-    frontDot.position.set(
-      rawCenter.x + Math.sin(frontAngle) * nativeRadius,
-      rawCenter.y + nativeHalfHeight,
-      rawCenter.z + Math.cos(frontAngle) * nativeRadius,
-    );
-    debugGroup.add(frontDot);
-
-    gltf.scene.add(debugGroup);
-    debugGroupRef.current = debugGroup;
-
-    return () => {
-      if (debugGroupRef.current) {
-        gltf.scene.remove(debugGroupRef.current);
-        debugGroupRef.current.traverse((obj) => {
-          if (obj instanceof THREE.Mesh) {
-            obj.geometry.dispose();
-            if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-            else obj.material.dispose();
-          }
-        });
-        debugGroupRef.current = null;
-      }
-    };
-  }, [gltf.scene, dims, handleArcDeg, transform.scale]);
-
-  // ── Phase 4: Overlay cylinder using measured handle angle ──
-  // Original GLB material is NEVER touched — overlay sits 0.5mm proud.
-  useEffect(() => {
-    if (!gltf?.scene || !dims) return;
-
-    let bodyMesh: THREE.Mesh | null = null;
-    gltf.scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh && obj.name !== "artwork-overlay" && !bodyMesh) {
-        bodyMesh = obj;
-      }
-    });
-    if (!bodyMesh) return;
-
-    if (overlayCanvas) {
-      const handleAngle = measuredHandleAngleRef.current;
-      const frontAngle = handleAngle + Math.PI;
-      const arc = handleArcDeg ?? 0;
-      const printableArcRad = ((360 - arc) / 360) * Math.PI * 2;
-
-      // Measure in native (pre-scale) units
-      const rawBox = new THREE.Box3().setFromObject(bodyMesh);
-      const rawSize = rawBox.getSize(new THREE.Vector3());
-      const rawCenter = rawBox.getCenter(new THREE.Vector3());
-      const nativeRadius = Math.max(rawSize.x, rawSize.z) / 2;
-      // 0.5mm proud, converted to native units
-      const overlayRadius = nativeRadius + 0.5 / transform.scale;
-      const nativeHeight = dims.printableHeightMm / transform.scale;
-
-      // thetaStart: CylinderGeometry theta=0 starts at +X, goes CCW from top.
-      // frontAngle is in atan2(x,z) convention where 0 = +Z.
-      // Convert: CylinderGeometry angle = atan2(x,z) rotated by -π/2
-      // So cylTheta = frontAngle + π/2, then center the arc there.
-      const cylFront = frontAngle + Math.PI / 2;
-      const thetaStart = cylFront - printableArcRad / 2;
-
-      // ── Create or update texture ──
-      if (!overlayTextureRef.current) {
-        const tex = new THREE.CanvasTexture(overlayCanvas);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.wrapS = THREE.ClampToEdgeWrapping;
-        tex.wrapT = THREE.ClampToEdgeWrapping;
-        tex.needsUpdate = true;
-        overlayTextureRef.current = tex;
-      } else {
-        overlayTextureRef.current.image = overlayCanvas;
-        overlayTextureRef.current.needsUpdate = true;
-      }
-
-      // ── Create or update overlay mesh ──
-      if (!overlayMeshRef.current) {
-        const geo = new THREE.CylinderGeometry(
-          overlayRadius, overlayRadius, nativeHeight, 64, 1, true,
-          thetaStart, printableArcRad,
-        );
-        const mat = new THREE.MeshBasicMaterial({
-          map: overlayTextureRef.current,
-          transparent: true,
-          opacity: 0.95,
-          depthWrite: false,
-          side: THREE.FrontSide,
-        });
-        overlayMatRef.current = mat;
-
-        const overlayMesh = new THREE.Mesh(geo, mat);
-        overlayMesh.position.copy(rawCenter);
-        overlayMesh.name = "artwork-overlay";
-        overlayMeshRef.current = overlayMesh;
-
-        (bodyMesh as THREE.Mesh).parent?.add(overlayMesh);
-      } else {
-        overlayMeshRef.current.geometry.dispose();
-        overlayMeshRef.current.geometry = new THREE.CylinderGeometry(
-          overlayRadius, overlayRadius, nativeHeight, 64, 1, true,
-          thetaStart, printableArcRad,
-        );
-        overlayMeshRef.current.position.copy(rawCenter);
-        if (overlayMatRef.current) {
-          overlayMatRef.current.map = overlayTextureRef.current;
-          overlayMatRef.current.needsUpdate = true;
-        }
-      }
-    } else {
-      // ── Remove overlay when cleared ──
-      if (overlayMeshRef.current) {
-        overlayMeshRef.current.parent?.remove(overlayMeshRef.current);
-        overlayMeshRef.current.geometry.dispose();
-        overlayMeshRef.current = null;
-      }
-      if (overlayMatRef.current) {
-        overlayMatRef.current.dispose();
-        overlayMatRef.current = null;
-      }
-      if (overlayTextureRef.current) {
-        overlayTextureRef.current.dispose();
-        overlayTextureRef.current = null;
-      }
-    }
-
-    return () => {
-      if (overlayMeshRef.current) {
-        overlayMeshRef.current.parent?.remove(overlayMeshRef.current);
-        overlayMeshRef.current.geometry.dispose();
-        overlayMeshRef.current = null;
-      }
-      if (overlayMatRef.current) {
-        overlayMatRef.current.dispose();
-        overlayMatRef.current = null;
-      }
-      if (overlayTextureRef.current) {
-        overlayTextureRef.current.dispose();
-        overlayTextureRef.current = null;
-      }
-    };
-  }, [gltf.scene, overlayCanvas, dims, handleArcDeg, transform.scale]);
+  }, [dims, placedItems, bedWidthMm, bedHeightMm, transform.scale]);
 
   const ref = useRef<THREE.Group>(null);
   useEffect(() => { if (ref.current) onReady?.(ref.current); });
 
   return (
     <group ref={ref} scale={transform.scale} rotation={transform.rotation}>
-      <primitive object={gltf.scene} castShadow receiveShadow />
+      {/* Body mesh rendered explicitly so Decals can be direct children */}
+      {bodyMeshData.geometry && (
+        <mesh
+          geometry={bodyMeshData.geometry}
+          material={bodyMeshData.material ?? undefined}
+          castShadow
+          receiveShadow
+        >
+          {decalConfigs.map((cfg) => {
+            const tex = threeTextures.get(cfg.itemId);
+            if (!tex) return null;
+            return (
+              <Decal
+                key={cfg.itemId}
+                position={cfg.position}
+                rotation={cfg.rotation}
+                scale={cfg.scale}
+              >
+                <meshBasicMaterial
+                  map={tex}
+                  transparent
+                  depthTest
+                  depthWrite={false}
+                  polygonOffset
+                  polygonOffsetFactor={-10}
+                />
+              </Decal>
+            );
+          })}
+        </mesh>
+      )}
+      {/* Render any other scene objects (handle, lid, etc.) */}
+      {bodyMeshData.otherObjects.map((obj, i) => (
+        <primitive key={i} object={obj} />
+      ))}
     </group>
   );
 }
 
+// ── Build DecalItem[] from PlacedItems + texture map ──
+function buildDecalItems(
+  placedItems: PlacedItem[] | undefined,
+  itemTextures: Map<string, HTMLCanvasElement> | undefined,
+): DecalItem[] {
+  if (!placedItems || !itemTextures) return [];
+  return placedItems
+    .filter((item) => item.visible !== false && itemTextures.has(item.id))
+    .map((item) => ({
+      id: item.id,
+      canvas: itemTextures.get(item.id)!,
+      gridX: item.x,
+      gridY: item.y,
+      gridW: item.width,
+      gridH: item.height,
+    }));
+}
+
+// Known model component registry — maps GLB path substrings to components
+const KNOWN_MODELS: { match: string; key: string }[] = [
+  { match: "yeti-40oz-body", key: "yeti40oz" },
+  { match: "yeti-40-0z", key: "yeti40oz" },
+  { match: "yeti_40oz", key: "yeti40oz" },
+];
+
 function ModelByExtension({
-  url, ext, dims, handleArcDeg, overlayCanvas, onReady,
-}: { url: string; ext: string; dims?: TumblerDimensions | null; handleArcDeg?: number; overlayCanvas?: HTMLCanvasElement | null; onReady?: OnReady }) {
+  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, tumblerMapping, onReady,
+}: {
+  url: string; ext: string; dims?: TumblerDimensions | null; handleArcDeg?: number;
+  placedItems?: PlacedItem[]; itemTextures?: Map<string, HTMLCanvasElement>;
+  bedWidthMm?: number; bedHeightMm?: number; glbPath?: string | null;
+  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; onReady?: OnReady;
+}) {
   if (ext === "stl") return <StlMesh url={url} dims={dims} onReady={onReady} />;
   if (ext === "obj") return <ObjMesh url={url} dims={dims} onReady={onReady} />;
-  if (ext === "glb" || ext === "gltf") return (
-    <Suspense fallback={null}>
-      <GltfMesh url={url} dims={dims} handleArcDeg={handleArcDeg} overlayCanvas={overlayCanvas} onReady={onReady} />
-    </Suspense>
-  );
+
+  if (ext === "glb" || ext === "gltf") {
+    // Check if this is a known model with a dedicated component
+    const knownModel = glbPath ? KNOWN_MODELS.find((m) => glbPath.includes(m.match)) : null;
+
+    if (knownModel?.key === "yeti40oz" && dims) {
+      const decalItems = buildDecalItems(placedItems, itemTextures);
+      return (
+        <Suspense fallback={null}>
+          <YetiRambler40oz
+            placedItems={decalItems}
+            diameterMm={dims.diameterMm}
+            printHeightMm={dims.printableHeightMm}
+            wrapWidthMm={bedWidthMm ?? Math.PI * dims.diameterMm}
+            handleArcDeg={handleArcDeg ?? 0}
+            glbPath={glbPath ?? undefined}
+            tumblerMapping={tumblerMapping}
+            onReady={onReady}
+          />
+        </Suspense>
+      );
+    }
+
+    // Fallback: generic GLB loader
+    return (
+      <Suspense fallback={null}>
+        <GltfMesh url={url} dims={dims} handleArcDeg={handleArcDeg}
+          placedItems={placedItems} itemTextures={itemTextures}
+          bedWidthMm={bedWidthMm} bedHeightMm={bedHeightMm} onReady={onReady} />
+      </Suspense>
+    );
+  }
+
   return (
     <Html center>
       <span style={{ color: "#f87171", fontSize: 11 }}>Unsupported format: .{ext}</span>
@@ -849,9 +519,9 @@ class CanvasErrorBoundary extends Component<
 // Public component
 // ---------------------------------------------------------------------------
 
-export default function ModelViewer({ file, overlay, tumblerDims, handleArcDeg, bedCanvas }: ModelViewerProps) {
-  // Use stable bedCanvas ref prop — only present when overlay is active
-  const overlayCanvas = overlay ? (bedCanvas ?? null) : null;
+export default function ModelViewer({
+  file, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping,
+}: ModelViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
 
@@ -893,8 +563,6 @@ export default function ModelViewer({ file, overlay, tumblerDims, handleArcDeg, 
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
 
   // ── Adaptive scene scale based on physical dimensions ──────────────────────
-  // When tumblerDims provided: 1 unit = 1mm → grid/shadow/camera in mm
-  // Otherwise: normalized (Bounds handles fit)
   const H = tumblerDims?.overallHeightMm ?? 200;
   const isMmScale = !!tumblerDims;
 
@@ -910,7 +578,7 @@ export default function ModelViewer({ file, overlay, tumblerDims, handleArcDeg, 
 
   if (!url) return null;
 
-  const isTumbler = overlay?.workspaceMode === "tumbler-wrap" || !!tumblerDims;
+  const hasItems = !!placedItems?.length && !!itemTextures?.size;
 
   return (
     <CanvasErrorBoundary>
@@ -937,28 +605,22 @@ export default function ModelViewer({ file, overlay, tumblerDims, handleArcDeg, 
               url={url} ext={ext}
               dims={tumblerDims}
               handleArcDeg={handleArcDeg}
-              overlayCanvas={overlayCanvas}
+              placedItems={placedItems}
+              itemTextures={itemTextures}
+              bedWidthMm={bedWidthMm}
+              bedHeightMm={bedHeightMm}
+              glbPath={glbPath}
+              tumblerMapping={tumblerMapping}
               onReady={handleModelReady}
             />
           </Suspense>
           <AutoFit url={url} />
         </Bounds>
 
-        {/* Engravable zone highlight — shown when tumbler loaded, no design yet */}
-        {tumblerDims && modelBounds && !overlay && (
+        {/* Engravable zone highlight — shown when tumbler loaded, no items placed */}
+        {tumblerDims && modelBounds && !hasItems && (
           <EngravableZoneRing dims={tumblerDims} modelBounds={modelBounds} />
         )}
-
-        {/* Design overlay — cylindrical for tumblers, flat plane for flat bed */}
-        {/* Skip OverlayCylinder for GLB files — texture is applied directly to the mesh */}
-        {overlay && modelBounds && (() => {
-          const isGlb = ext === "glb" || ext === "gltf";
-          const useDirectTexture = isGlb && isTumbler && !!overlayCanvas;
-          if (useDirectTexture) return null; // handled by GltfMesh
-          return isTumbler && tumblerDims
-            ? <OverlayCylinder overlay={overlay} dims={tumblerDims} modelBounds={modelBounds} />
-            : <OverlayPlane overlay={overlay} modelBounds={modelBounds} />;
-        })()}
 
         <ContactShadows
           position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}

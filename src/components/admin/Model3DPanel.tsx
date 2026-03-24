@@ -2,7 +2,7 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
-import type { ModelViewerProps, BedOverlayData, TumblerDimensions } from "./ModelViewer";
+import type { ModelViewerProps, TumblerDimensions } from "./ModelViewer";
 import type { PlacedItem } from "@/types/admin";
 import { GLB_TEMPLATES } from "@/data/glbTemplates";
 import type { GlbTemplate } from "@/data/glbTemplates";
@@ -17,58 +17,33 @@ const ModelViewer = dynamic<ModelViewerProps>(
 );
 
 // ---------------------------------------------------------------------------
-// Renders all placed SVG items onto an off-screen canvas → PNG data URL
-// The canvas is transparent so only the actual vector art has alpha > 0.
+// Rasterize a single PlacedItem's SVG into its own canvas (4 px/mm)
 // ---------------------------------------------------------------------------
 
-async function buildBedTexture(
-  items: PlacedItem[],
-  bedWidthMm: number,
-  bedHeightMm: number,
-): Promise<{ dataUrl: string; canvas: HTMLCanvasElement }> {
-  const SCALE = 4; // px per mm — enough resolution for a 300mm bed
-  const W = Math.ceil(bedWidthMm * SCALE);
-  const H = Math.ceil(bedHeightMm * SCALE);
+const PX_PER_MM = 4;
 
+async function rasterizeItem(item: PlacedItem): Promise<HTMLCanvasElement> {
   const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
+  canvas.width = Math.ceil(item.width * PX_PER_MM);
+  canvas.height = Math.ceil(item.height * PX_PER_MM);
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Could not get 2D context");
+  if (!ctx) return canvas;
 
-  ctx.clearRect(0, 0, W, H); // transparent background
+  const blob = new Blob([item.svgText], { type: "image/svg+xml" });
+  const blobUrl = URL.createObjectURL(blob);
 
-  for (const item of items) {
-    if (item.visible === false) continue;
+  await new Promise<void>((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(blobUrl);
+      resolve();
+    };
+    img.onerror = () => { URL.revokeObjectURL(blobUrl); resolve(); };
+    img.src = blobUrl;
+  });
 
-    const blob = new Blob([item.svgText], { type: "image/svg+xml" });
-    const blobUrl = URL.createObjectURL(blob);
-
-    await new Promise<void>((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        const cx = (item.x + item.width / 2) * SCALE;
-        const cy = (item.y + item.height / 2) * SCALE;
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate((item.rotation * Math.PI) / 180);
-        ctx.drawImage(
-          img,
-          (-item.width * SCALE) / 2,
-          (-item.height * SCALE) / 2,
-          item.width * SCALE,
-          item.height * SCALE,
-        );
-        ctx.restore();
-        URL.revokeObjectURL(blobUrl);
-        resolve();
-      };
-      img.onerror = () => { URL.revokeObjectURL(blobUrl); resolve(); };
-      img.src = blobUrl;
-    });
-  }
-
-  return { dataUrl: canvas.toDataURL("image/png"), canvas };
+  return canvas;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +56,12 @@ export interface Model3DPanelProps {
   tumblerDims?: TumblerDimensions | null;
   handleArcDeg?: number;
   modelPathOverride?: string | null;
+  /** Tumbler mapping from the wizard — orients the front face */
+  tumblerMapping?: import("@/types/productTemplate").TumblerMapping;
+  /** Lifted model file — parent tracks it for center 3D view */
+  onModelFileChange?: (file: File | null) => void;
+  /** Callback to save calibration offsets to the template's tumblerMapping */
+  onUpdateCalibration?: (offsetX: number, offsetY: number, rotation: number) => void;
 }
 
 export function Model3DPanel({
@@ -91,17 +72,35 @@ export function Model3DPanel({
   tumblerDims,
   handleArcDeg,
   modelPathOverride,
+  tumblerMapping,
+  onModelFileChange,
+  onUpdateCalibration,
 }: Model3DPanelProps) {
-  const [modelFile, setModelFile] = React.useState<File | null>(null);
+  const [modelFile, setModelFileLocal] = React.useState<File | null>(null);
+
+  // Sync with parent
+  const setModelFile = React.useCallback((file: File | null) => {
+    setModelFileLocal(file);
+    onModelFileChange?.(file);
+  }, [onModelFileChange]);
   const [sizeError, setSizeError] = React.useState<string | null>(null);
   const [dragOver, setDragOver] = React.useState(false);
   const [viewerOpen, setViewerOpen] = React.useState(false);
-  const [overlay, setOverlay] = React.useState<BedOverlayData | null>(null);
-  const [snapping, setSnapping] = React.useState(false);
+  const [itemTextures, setItemTextures] = React.useState<Map<string, HTMLCanvasElement>>(new Map());
   const [templateLoading, setTemplateLoading] = React.useState<string | null>(null);
   const [templateError, setTemplateError] = React.useState<string | null>(null);
+  const [showCalibration, setShowCalibration] = React.useState(false);
+  const [calX, setCalX] = React.useState(tumblerMapping?.calibrationOffsetX ?? 0);
+  const [calY, setCalY] = React.useState(tumblerMapping?.calibrationOffsetY ?? 0);
+  const [calRot, setCalRot] = React.useState(tumblerMapping?.calibrationRotation ?? 0);
   const inputRef = React.useRef<HTMLInputElement>(null);
-  const bedCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+
+  // Sync calibration sliders with mapping changes (e.g. template switch)
+  React.useEffect(() => {
+    setCalX(tumblerMapping?.calibrationOffsetX ?? 0);
+    setCalY(tumblerMapping?.calibrationOffsetY ?? 0);
+    setCalRot(tumblerMapping?.calibrationRotation ?? 0);
+  }, [tumblerMapping?.calibrationOffsetX, tumblerMapping?.calibrationOffsetY, tumblerMapping?.calibrationRotation]);
 
   const filteredTemplates = GLB_TEMPLATES.filter((t) =>
     t.workspaceModes.includes(workspaceMode)
@@ -119,16 +118,12 @@ export function Model3DPanel({
     setSizeError(null);
     setModelFile(file);
     setViewerOpen(false);
-    setOverlay(null); // clear old overlay when model changes
-    bedCanvasRef.current = null;
-  }, []);
+  }, [setModelFile]);
 
   const clear = () => {
     setModelFile(null);
     setViewerOpen(false);
     setSizeError(null);
-    setOverlay(null);
-    bedCanvasRef.current = null;
   };
 
   const loadTemplate = React.useCallback(async (tpl: GlbTemplate) => {
@@ -173,19 +168,35 @@ export function Model3DPanel({
       .catch((err) => console.warn("[Model3DPanel] auto-load failed:", err));
   }, [modelPathOverride, accept]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSnapDesign = React.useCallback(async () => {
-    if (!hasItems) return;
-    setSnapping(true);
-    try {
-      const result = await buildBedTexture(placedItems, bedWidthMm, bedHeightMm);
-      bedCanvasRef.current = result.canvas;
-      setOverlay({ dataUrl: result.dataUrl, bedWidthMm, bedHeightMm, workspaceMode });
-    } catch (e) {
-      console.error("[Model3DPanel] overlay build failed", e);
-    } finally {
-      setSnapping(false);
+  // Serialized key so the effect re-fires when items move/resize, not just on reference changes
+  const itemPositionKey = React.useMemo(
+    () => placedItems.map(i => `${i.id}:${i.x}:${i.y}:${i.width}:${i.height}`).join("|"),
+    [placedItems],
+  );
+
+  // Auto-rasterize each placed item into its own canvas texture
+  // Runs whenever items change — no manual "Snap" button needed
+  React.useEffect(() => {
+    if (!viewerOpen || !hasItems) {
+      setItemTextures(new Map());
+      return;
     }
-  }, [placedItems, bedWidthMm, bedHeightMm, workspaceMode, hasItems]);
+
+    let cancelled = false;
+    const visible = placedItems.filter((i) => i.visible !== false);
+
+    Promise.all(
+      visible.map(async (item) => {
+        const canvas = await rasterizeItem(item);
+        return [item.id, canvas] as [string, HTMLCanvasElement];
+      }),
+    ).then((entries) => {
+      if (!cancelled) setItemTextures(new Map(entries));
+    });
+
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerOpen, itemPositionKey, hasItems]);
 
   return (
     <section className={styles.panel}>
@@ -252,33 +263,6 @@ export function Model3DPanel({
           </button>
         )}
 
-        {/* Snap design button — only shown when model is open and items exist */}
-        {modelFile && viewable && viewerOpen && (
-          <div className={styles.snapRow}>
-            <button
-              className={`${styles.snapBtn} ${overlay ? styles.snapBtnApplied : ""}`}
-              onClick={handleSnapDesign}
-              disabled={!hasItems || snapping}
-              title={!hasItems ? "Place items on the bed first" : "Render bed design onto 3D model"}
-            >
-              {snapping
-                ? "Building…"
-                : overlay
-                  ? "⟳ Re-snap Design"
-                  : "◈ Snap Design to 3D"}
-            </button>
-            {overlay && (
-              <button
-                className={styles.snapClearBtn}
-                onClick={() => { setOverlay(null); bedCanvasRef.current = null; }}
-                title="Remove design overlay"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-        )}
-
         {modelFile && !viewable && (
           <div className={styles.unsupported}>
             .{modelExt.toUpperCase()} — live preview not supported
@@ -286,15 +270,107 @@ export function Model3DPanel({
         )}
 
         {modelFile && viewable && viewerOpen && (
-          <div className={styles.viewerWrap}>
-            <ModelViewer
-              file={modelFile}
-              overlay={overlay}
-              tumblerDims={tumblerDims}
-              handleArcDeg={handleArcDeg}
-              bedCanvas={bedCanvasRef.current}
-            />
-          </div>
+          <>
+            <div className={styles.viewerWrap}>
+              <ModelViewer
+                file={modelFile}
+                placedItems={placedItems}
+                itemTextures={itemTextures}
+                bedWidthMm={bedWidthMm}
+                bedHeightMm={bedHeightMm}
+                tumblerDims={tumblerDims}
+                handleArcDeg={handleArcDeg}
+                glbPath={modelPathOverride}
+                tumblerMapping={showCalibration && tumblerMapping
+                  ? { ...tumblerMapping, calibrationOffsetX: calX, calibrationOffsetY: calY, calibrationRotation: calRot }
+                  : tumblerMapping}
+              />
+            </div>
+
+            {/* Calibrate 3D preview — slider-based offset adjustment */}
+            {tumblerMapping && onUpdateCalibration && (
+              <div className={styles.calibrationSection}>
+                {!showCalibration ? (
+                  <button
+                    type="button"
+                    className={styles.calibrateBtn}
+                    onClick={() => setShowCalibration(true)}
+                  >
+                    Calibrate 3D Preview
+                  </button>
+                ) : (
+                  <>
+                    <div className={styles.calibrateHint}>
+                      Adjust until the 3D preview matches the grid placement
+                    </div>
+                    <label className={styles.calibrateRow}>
+                      <span className={styles.calibrateLabel}>Rotation</span>
+                      <input
+                        type="range"
+                        min={-180}
+                        max={180}
+                        step={1}
+                        value={calRot}
+                        onChange={(e) => setCalRot(Number(e.target.value))}
+                        className={styles.calibrateSlider}
+                      />
+                      <span className={styles.calibrateValue}>{calRot}&deg;</span>
+                    </label>
+                    <label className={styles.calibrateRow}>
+                      <span className={styles.calibrateLabel}>H offset</span>
+                      <input
+                        type="range"
+                        min={-180}
+                        max={180}
+                        step={1}
+                        value={calX}
+                        onChange={(e) => setCalX(Number(e.target.value))}
+                        className={styles.calibrateSlider}
+                      />
+                      <span className={styles.calibrateValue}>{calX}mm</span>
+                    </label>
+                    <label className={styles.calibrateRow}>
+                      <span className={styles.calibrateLabel}>V offset</span>
+                      <input
+                        type="range"
+                        min={-180}
+                        max={180}
+                        step={1}
+                        value={calY}
+                        onChange={(e) => setCalY(Number(e.target.value))}
+                        className={styles.calibrateSlider}
+                      />
+                      <span className={styles.calibrateValue}>{calY}mm</span>
+                    </label>
+                    <div className={styles.calibrateBtns}>
+                      <button
+                        type="button"
+                        className={styles.calibrateSaveBtn}
+                        onClick={() => {
+                          onUpdateCalibration(calX, calY, calRot);
+                          setShowCalibration(false);
+                        }}
+                      >
+                        Save Calibration
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.calibrateCancelBtn}
+                        onClick={() => {
+                          setCalX(tumblerMapping.calibrationOffsetX ?? 0);
+                          setCalY(tumblerMapping.calibrationOffsetY ?? 0);
+                          setCalRot(tumblerMapping.calibrationRotation ?? 0);
+                          setShowCalibration(false);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </>
         )}
 
         {/* ── Admin template library ── */}

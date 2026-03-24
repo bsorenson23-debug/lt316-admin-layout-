@@ -367,6 +367,28 @@
   color: var(--text-dim);
 }
 
+.mappedBadge {
+  display: inline-flex;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.unmappedBadge {
+  display: inline-flex;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
 /* ── Add card ──────────────────────────────────────────────────── */
 .addCard {
   display: flex;

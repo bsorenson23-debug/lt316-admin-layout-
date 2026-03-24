@@ -30,6 +30,8 @@ import type { FramePreviewProp, BedMockupConfig, FlatBedItemOverlay } from "./La
 import { BedSettingsPanel } from "./BedSettingsPanel";
 import { TumblerAutoDetectPanel } from "./TumblerAutoDetectPanel";
 import { Model3DPanel } from "./Model3DPanel";
+import { TumblerPlacementView } from "./TumblerPlacementView";
+import { AccordionSection } from "./AccordionSection";
 import { TumblerExportPanel } from "./TumblerExportPanel";
 import type { PreflightNavTarget } from "./TumblerExportPanel";
 import { SelectedItemInspector } from "./SelectedItemInspector";
@@ -54,7 +56,7 @@ import { FiberColorCalibrationPanel } from "./FiberColorCalibrationPanel";
 import { TemplateGallery } from "./TemplateGallery";
 import { TemplateCreateForm } from "./TemplateCreateForm";
 import type { ProductTemplate } from "@/types/productTemplate";
-import { loadTemplates } from "@/lib/templateStorage";
+import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -88,6 +90,15 @@ export function AdminLayoutShell() {
   // -- Flat bed item footprint overlay --------------------------------------
   const [flatBedItemOverlay, setFlatBedItemOverlay] = useState<FlatBedItemOverlay | null>(null);
 
+  // -- Tumbler view mode (grid vs 3D placement) ----------------------------
+  const [tumblerViewMode, setTumblerViewMode] = useState<"grid" | "3d-placement">("grid");
+
+  // -- Product photo overlay on grid ----------------------------------------
+  const [overlayMode, setOverlayMode] = useState<"schematic" | "photo" | "off">("schematic");
+  const [overlayOpacity, setOverlayOpacity] = useState(12); // percent (5–50)
+  const [twoSidedMode, setTwoSidedMode] = useState(false);
+  const [bgRemovalStatus, setBgRemovalStatus] = useState<"idle" | "running" | "done" | "failed">("idle");
+
   // -- Color laser layers ---------------------------------------------------
   const [laserLayers, setLaserLayers] = useState<LaserLayer[]>(() => buildDefaultLayers());
 
@@ -97,9 +108,44 @@ export function AdminLayoutShell() {
 
   // -- Derived --------------------------------------------------------------
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
+  const is3DPlacement = isTumblerMode && tumblerViewMode === "3d-placement";
   const placementAsset = svgAssets.find((a) => a.id === placementAssetId) ?? null;
+
+  // Tumbler dimensions — shared between left panel preview and center 3D view
+  const tumblerDims = React.useMemo(() => {
+    if (!isTumblerMode || bedConfig.tumblerDiameterMm <= 0) return null;
+    return {
+      overallHeightMm: bedConfig.tumblerOverallHeightMm ?? 215,
+      diameterMm: bedConfig.tumblerDiameterMm,
+      topDiameterMm: bedConfig.tumblerTopDiameterMm,
+      bottomDiameterMm: bedConfig.tumblerBottomDiameterMm,
+      printableHeightMm: bedConfig.tumblerPrintableHeightMm ?? bedConfig.height,
+    };
+  }, [isTumblerMode, bedConfig]);
+
   const isPlacementArmed = placementAsset !== null;
   const selectedItem = placedItems.find((p) => p.id === selectedItemId) ?? null;
+
+  // -------------------------------------------------------------------------
+  // Build a PlacedItem from an SvgAsset at a given center point (mm)
+  // -------------------------------------------------------------------------
+  const buildPlacedItem = useCallback((
+    asset: SvgAsset, xMm: number, yMm: number,
+  ): PlacedItem => {
+    const maxAutoSize = Math.max(40, Math.min(100, Math.min(bedConfig.width, bedConfig.height) * 0.35));
+    const { width, height } = defaultPlacedSize(asset, maxAutoSize);
+    const id = `item-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const itemX = xMm - width / 2;
+    const itemY = yMm - height / 2;
+    const defaults = { x: itemX, y: itemY, width, height, rotation: 0 };
+    return {
+      id, assetId: asset.id, name: asset.name,
+      svgText: asset.content, sourceSvgText: asset.content,
+      documentBounds: { ...asset.documentBounds },
+      artworkBounds: { ...asset.artworkBounds },
+      x: itemX, y: itemY, width, height, rotation: 0, defaults,
+    };
+  }, [bedConfig]);
 
   // -------------------------------------------------------------------------
   // Asset library handlers
@@ -147,6 +193,15 @@ export function AdminLayoutShell() {
     if (accepted.length > 0) {
       setSvgAssets((prev) => [...prev, ...accepted]);
       if (!selectedAssetId) setSelectedAssetId(accepted[0].id);
+
+      // Auto-place each uploaded SVG centered on the bed (skip the old "Place on Bed" step)
+      const newItems: PlacedItem[] = accepted.map((asset) =>
+        buildPlacedItem(asset, bedConfig.width / 2, bedConfig.height / 2),
+      );
+      if (newItems.length > 0) {
+        setPlacedItems((prev) => [...prev, ...newItems]);
+        setSelectedItemId(newItems[newItems.length - 1].id);
+      }
     }
     if (qualityNotes.length > 0) {
       setInspectorNote(`Quality warnings: ${qualityNotes.slice(0, 2).join(" | ")}${qualityNotes.length > 2 ? " | ..." : ""}`);
@@ -155,7 +210,7 @@ export function AdminLayoutShell() {
       const preview = rejected.slice(0, 2).join(" | ") + (rejected.length > 2 ? " | ..." : "");
       setUploadError(`Skipped ${rejected.length} file(s): ${preview}`);
     } else { setUploadError(null); }
-  }, [selectedAssetId]);
+  }, [selectedAssetId, buildPlacedItem, bedConfig]);
 
   const handleRemoveAsset = useCallback((assetId: string) => {
     setSvgAssets((prev) => {
@@ -182,21 +237,6 @@ export function AdminLayoutShell() {
   // -------------------------------------------------------------------------
   // Item handlers
   // -------------------------------------------------------------------------
-  const buildPlacedItem = useCallback((
-    asset: SvgAsset, xMm: number, yMm: number,
-  ): PlacedItem => {
-    const maxAutoSize = Math.max(40, Math.min(100, Math.min(bedConfig.width, bedConfig.height) * 0.35));
-    const { width, height } = defaultPlacedSize(asset, maxAutoSize);
-    const id = `item-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const defaults = { x: xMm, y: yMm, width, height, rotation: 0 };
-    return {
-      id, assetId: asset.id, name: asset.name,
-      svgText: asset.content, sourceSvgText: asset.content,
-      documentBounds: { ...asset.documentBounds },
-      artworkBounds: { ...asset.artworkBounds },
-      x: xMm, y: yMm, width, height, rotation: 0, defaults,
-    };
-  }, [bedConfig]);
 
   const handlePlaceAsset = useCallback((xMm: number, yMm: number) => {
     if (!placementAssetId) return;
@@ -210,9 +250,21 @@ export function AdminLayoutShell() {
   }, [placementAssetId, svgAssets, buildPlacedItem]);
 
   const handlePlaceSelectedAssetOnBed = useCallback(() => {
-    if (selectedAssetId) setPlacementAssetId(selectedAssetId);
+    if (!selectedAssetId) return;
+    // In tumbler mode, auto-place at front-center immediately
+    if (isTumblerMode) {
+      const asset = svgAssets.find((a) => a.id === selectedAssetId);
+      if (asset) {
+        const item = buildPlacedItem(asset, bedConfig.width / 2, bedConfig.height / 2);
+        setPlacedItems((prev) => [...prev, item]);
+        setSelectedItemId(item.id);
+        setInspectorNote(null);
+        return;
+      }
+    }
+    setPlacementAssetId(selectedAssetId);
     setInspectorNote(null);
-  }, [selectedAssetId]);
+  }, [selectedAssetId, isTumblerMode, svgAssets, buildPlacedItem, bedConfig]);
 
   const handleSelectItem = useCallback((id: string | null) => {
     setSelectedItemId(id);
@@ -259,11 +311,12 @@ export function AdminLayoutShell() {
     setPlacedItems((prev) => prev.map((p) =>
       p.id !== id ? p : { ...p, ...computeAlignmentPatch(p, bedConfig, mode) }
     ));
-    if (mode === "center-bed")    setInspectorNote("Centered using artwork bounds");
-    if (mode === "center-x")      setInspectorNote("Centered horizontally");
-    if (mode === "center-y")      setInspectorNote("Centered vertically");
-    if (mode === "fit-bed")       setInspectorNote("Fitted to bed");
-    if (mode === "opposite-logo") setInspectorNote("Placed opposite logo (180°)");
+    if (mode === "center-bed")      setInspectorNote("Centered using artwork bounds");
+    if (mode === "center-x")        setInspectorNote("Centered horizontally");
+    if (mode === "center-y")        setInspectorNote("Centered vertically");
+    if (mode === "fit-bed")         setInspectorNote("Fitted to bed");
+    if (mode === "opposite-logo")   setInspectorNote("Placed opposite logo (180°)");
+    if (mode === "center-on-front") setInspectorNote("Centered on front face");
   }, [bedConfig]);
 
   const handleNormalizeItem = useCallback((id: string) => {
@@ -300,6 +353,7 @@ export function AdminLayoutShell() {
 
   const handleWorkspaceModeChange = useCallback((mode: WorkspaceMode) => {
     setBedConfig((prev) => normalizeBedConfig({ ...prev, workspaceMode: mode }));
+    if (mode !== "tumbler-wrap") setTumblerViewMode("grid");
   }, []);
 
   const handleLoadOrder = useCallback((snapshot: BedConfig) => {
@@ -309,8 +363,13 @@ export function AdminLayoutShell() {
   // Derived list of asset names for order capture
   const assetNames = svgAssets.map((a) => a.name);
 
-  // Right panel tab
+  // Right panel tab + accordion
   const [rightTab, setRightTab] = useState<"workflow" | "tools" | "setup">("workflow");
+  const [openSection, setOpenSection] = useState<string | null>(null);
+  const [showOrders, setShowOrders] = useState(false);
+  const handleAccordionToggle = useCallback((id: string) => {
+    setOpenSection((prev) => (prev === id ? null : id));
+  }, []);
   const router = useRouter();
 
   const scrollAndPulse = useCallback((elementId: string) => {
@@ -398,6 +457,33 @@ export function AdminLayoutShell() {
   const [editingTemplate, setEditingTemplate] = useState<ProductTemplate | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Left panel state machine
+  const leftPanelState = React.useMemo(() => {
+    if (!selectedTemplate) return "no-template" as const;
+    if (placedItems.length === 0) return "no-artwork" as const;
+    return "ready" as const;
+  }, [selectedTemplate, placedItems.length]);
+
+  // Accordion summary strings for the right panel
+  const bedSummary = React.useMemo(() => {
+    if (isTumblerMode) {
+      return `\u00F8${bedConfig.tumblerDiameterMm}mm \u00D7 ${bedConfig.tumblerPrintableHeightMm ?? bedConfig.height}mm`;
+    }
+    return `${bedConfig.flatWidth} \u00D7 ${bedConfig.flatHeight}mm`;
+  }, [isTumblerMode, bedConfig]);
+
+  const materialSummary = React.useMemo(() => {
+    if (!materialSettings) return "Not set";
+    return materialSettings.label;
+  }, [materialSettings]);
+
+  const gridSummary = React.useMemo(() => {
+    return `Grid: ${bedConfig.gridSpacing}mm \u2014 Snap: ${bedConfig.snapToGrid ? "On" : "Off"}`;
+  }, [bedConfig.gridSpacing, bedConfig.snapToGrid]);
+
+  // Ref for the standalone artwork upload button (state B)
+  const artworkFileRef = React.useRef<HTMLInputElement>(null);
+
   const handleTemplateSelect = useCallback((template: ProductTemplate) => {
     // Apply all dimensions at once via bedConfig
     const isRotary = template.productType === "tumbler" || template.productType === "mug" || template.productType === "bottle";
@@ -424,11 +510,30 @@ export function AdminLayoutShell() {
     setSelectedTemplate(template);
     setShowTemplateGallery(false);
     setShowCreateForm(false);
+    setBgRemovalStatus("idle");
 
     // Show toast
     setToastMessage(`${template.name} loaded \u2014 place your artwork`);
     setTimeout(() => setToastMessage(null), 2200);
   }, []);
+
+  const handleUpdateCalibration = useCallback((offsetX: number, offsetY: number, rotation: number) => {
+    if (!selectedTemplate) return;
+    const updatedMapping = {
+      ...(selectedTemplate.tumblerMapping ?? {
+        frontFaceRotation: 0,
+        handleCenterAngle: Math.PI,
+        handleArcDeg: 0,
+        isMapped: false,
+      }),
+      calibrationOffsetX: offsetX,
+      calibrationOffsetY: offsetY,
+      calibrationRotation: rotation,
+    };
+    const updated = { ...selectedTemplate, tumblerMapping: updatedMapping };
+    updateTemplate(updated.id, updated);
+    setSelectedTemplate(updated);
+  }, [selectedTemplate]);
 
   const previewTemplates = React.useMemo(() => loadTemplates().slice(0, 4), []);
 
@@ -436,146 +541,492 @@ export function AdminLayoutShell() {
     <div className={styles.shell}>
       {/* LEFT */}
       <aside className={styles.leftPanel}>
-        <SvgAssetLibraryPanel
-          assets={svgAssets}
-          selectedAssetId={selectedAssetId}
-          onSelectAsset={setSelectedAssetId}
-          onUpload={handleUploadAssets}
-          uploadError={uploadError}
-          onPlaceSelectedAsset={handlePlaceSelectedAssetOnBed}
-          onRemoveAsset={handleRemoveAsset}
-          onUpdateAssetContent={(id, newContent) =>
-            setSvgAssets(prev => prev.map(a => a.id === id ? { ...a, content: newContent } : a))
-          }
-          onClearAll={handleClearAssets}
-        >
-          {isTumblerMode ? (
-            <TumblerAutoDetectPanel
-              bedConfig={bedConfig}
-              onApplyDraft={handleApplyTumblerDraft}
-              onSetMockup={setMockupConfig}
-              mockupActive={mockupConfig !== null}
-            />
-          ) : (
-            <FlatBedAutoDetectPanel
-              onApplyItem={handleApplyFlatBedItem}
-              onSetMockup={setMockupConfig}
-              onClearItemOverlay={() => setFlatBedItemOverlay(null)}
-              mockupActive={mockupConfig !== null}
-            />
-          )}
-        </SvgAssetLibraryPanel>
+        {/* ── Step indicator ── */}
+        <div className={styles.stepIndicator}>
+          <span className={`${styles.stepPill} ${selectedTemplate ? styles.stepPillDone : styles.stepPillActive}`}>
+            <span className={styles.stepPillNumber}>{selectedTemplate ? "\u2713" : "1"}</span>
+            Product
+          </span>
+          <span className={`${styles.stepPill} ${leftPanelState === "ready" ? styles.stepPillDone : leftPanelState === "no-artwork" ? styles.stepPillActive : ""}`}>
+            <span className={styles.stepPillNumber}>{leftPanelState === "ready" ? "\u2713" : "2"}</span>
+            Artwork
+          </span>
+          <span className={`${styles.stepPill} ${leftPanelState === "ready" ? styles.stepPillActive : ""}`}>
+            <span className={styles.stepPillNumber}>3</span>
+            Export
+          </span>
+        </div>
 
-        {/* ── Product template section ── */}
-        <div className={styles.productSection}>
-          <span className={styles.productSectionTitle}>Product</span>
-          {selectedTemplate ? (
-            <div className={styles.selectedTemplateCard}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={selectedTemplate.thumbnailDataUrl}
-                alt={selectedTemplate.name}
-                className={styles.selectedTemplateThumb}
-              />
-              <div className={styles.selectedTemplateInfo}>
-                <span className={styles.selectedTemplateName}>{selectedTemplate.name}</span>
-                <span className={styles.selectedTemplateDims}>
-                  {selectedTemplate.dimensions.diameterMm > 0
-                    ? `${selectedTemplate.dimensions.diameterMm}mm \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`
-                    : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`}
+        <div className={styles.leftPanelScroll}>
+          {/* ══════════════════════════════════════════════════════════ */}
+          {/* STATE A — No template selected                           */}
+          {/* ══════════════════════════════════════════════════════════ */}
+          {leftPanelState === "no-template" && (
+            <>
+              <div className={styles.selectProductPrompt}>
+                <span className={styles.selectProductPromptText}>
+                  Select a product to get started
                 </span>
-                <div className={styles.templateActions}>
-                  <button
-                    type="button"
-                    className={styles.changeLink}
-                    onClick={() => setShowTemplateGallery(true)}
-                  >
-                    Change
-                  </button>
-                  {!selectedTemplate.builtIn && (
+                <button
+                  type="button"
+                  className={styles.selectProductBtn}
+                  onClick={() => setShowTemplateGallery(true)}
+                >
+                  Browse Products
+                </button>
+              </div>
+
+              {/* Quick-pick grid */}
+              <div className={styles.productSection}>
+                <span className={styles.productSectionTitle}>Quick select</span>
+                <div className={styles.productMiniGrid}>
+                  {previewTemplates.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={styles.productMiniCard}
+                      onClick={() => handleTemplateSelect(t)}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={t.thumbnailDataUrl} alt={t.name} className={styles.productMiniThumb} />
+                      <span className={styles.productMiniName}>{t.name}</span>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className={styles.seeAllBtn}
+                  onClick={() => setShowTemplateGallery(true)}
+                >
+                  See all {"\u2192"}
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════ */}
+          {/* STATE B — Template selected, no artwork                   */}
+          {/* ══════════════════════════════════════════════════════════ */}
+          {leftPanelState === "no-artwork" && selectedTemplate && (
+            <>
+              {/* Compact product card */}
+              <div className={styles.productCardCompact}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={selectedTemplate.thumbnailDataUrl}
+                  alt={selectedTemplate.name}
+                  className={styles.productCardCompactThumb}
+                />
+                <div className={styles.productCardCompactInfo}>
+                  <span className={styles.productCardCompactName}>{selectedTemplate.name}</span>
+                  <span className={styles.productCardCompactDims}>
+                    {selectedTemplate.dimensions.diameterMm > 0
+                      ? `\u00F8${selectedTemplate.dimensions.diameterMm}mm \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`
+                      : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.productCardCompactChange}
+                  onClick={() => setShowTemplateGallery(true)}
+                >
+                  Change
+                </button>
+              </div>
+
+              {/* Product photo overlay controls */}
+              <div className={styles.overlayControlsRow}>
+                <div className={styles.overlayModeToggle}>
+                  <button type="button"
+                    className={`${styles.overlayModeBtn} ${overlayMode === "schematic" ? styles.overlayModeBtnActive : ""}`}
+                    onClick={() => setOverlayMode("schematic")}
+                  >Schematic</button>
+                  <button type="button"
+                    className={`${styles.overlayModeBtn} ${overlayMode === "photo" ? styles.overlayModeBtnActive : ""}`}
+                    onClick={() => setOverlayMode("photo")}
+                  >Photo</button>
+                  <button type="button"
+                    className={`${styles.overlayModeBtn} ${overlayMode === "off" ? styles.overlayModeBtnActive : ""}`}
+                    onClick={() => setOverlayMode("off")}
+                  >Off</button>
+                </div>
+                {overlayMode !== "off" && (
+                  <>
+                    <label className={styles.overlaySubToggle}>
+                      <input
+                        type="checkbox"
+                        checked={twoSidedMode}
+                        onChange={(e) => setTwoSidedMode(e.target.checked)}
+                      />
+                      <span>2-sided placement</span>
+                    </label>
+                    {overlayMode === "photo" && (
+                      <>
+                        <div className={styles.overlaySliderRow}>
+                          <span>Opacity</span>
+                          <input
+                            type="range"
+                            min={5}
+                            max={50}
+                            step={1}
+                            value={overlayOpacity}
+                            onChange={(e) => setOverlayOpacity(Number(e.target.value))}
+                          />
+                          <span>{overlayOpacity}%</span>
+                        </div>
+                        {selectedTemplate && (
+                          <button
+                            type="button"
+                            className={styles.overlayBgRemoveBtn}
+                            disabled={bgRemovalStatus === "running"}
+                            onClick={async () => {
+                              if (!selectedTemplate) return;
+                              const photoUrl = selectedTemplate.productPhotoFullUrl
+                                ?? selectedTemplate.frontPhotoDataUrl
+                                ?? selectedTemplate.thumbnailDataUrl;
+                              if (!photoUrl) return;
+                              setBgRemovalStatus("running");
+                              try {
+                                const res = await fetch(photoUrl);
+                                const blob = await res.blob();
+                                const { removeBackground } = await import("@imgly/background-removal");
+                                const clean = await removeBackground(blob, {
+                                  model: "isnet_quint8",
+                                  proxyToWorker: false,
+                                  output: { format: "image/png", quality: 0.9 },
+                                });
+                                const reader = new FileReader();
+                                reader.onloadend = () => {
+                                  const cleanUrl = reader.result as string;
+                                  if (!cleanUrl) { setBgRemovalStatus("failed"); return; }
+                                  const updated = {
+                                    ...selectedTemplate,
+                                    productPhotoFullUrl: cleanUrl,
+                                    frontPhotoDataUrl: cleanUrl,
+                                  };
+                                  updateTemplate(updated.id, updated);
+                                  setSelectedTemplate(updated);
+                                  setBgRemovalStatus("done");
+                                };
+                                reader.onerror = () => setBgRemovalStatus("failed");
+                                reader.readAsDataURL(clean);
+                              } catch {
+                                setBgRemovalStatus("failed");
+                              }
+                            }}
+                          >
+                            {bgRemovalStatus === "running" ? "Removing background\u2026"
+                              : bgRemovalStatus === "done" ? "Background removed \u2713"
+                              : bgRemovalStatus === "failed" ? "Failed \u2014 retry?"
+                              : "AI remove background"}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Artwork upload section */}
+              <div
+                className={styles.artworkUploadSection}
+                onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add(styles.artworkUploadDragOver); }}
+                onDragLeave={(e) => { e.currentTarget.classList.remove(styles.artworkUploadDragOver); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.classList.remove(styles.artworkUploadDragOver);
+                  if (e.dataTransfer.files.length) handleUploadAssets(e.dataTransfer.files);
+                }}
+              >
+                <span className={styles.artworkSectionLabel}>Artwork</span>
+                <input
+                  ref={artworkFileRef}
+                  type="file"
+                  accept=".svg,image/svg+xml"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    if (e.target.files?.length) {
+                      handleUploadAssets(e.target.files);
+                      e.target.value = "";
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className={styles.artworkUploadBtn}
+                  onClick={() => artworkFileRef.current?.click()}
+                >
+                  + Upload SVG
+                </button>
+                <span className={styles.artworkUploadHint}>
+                  Drop an SVG file or click to browse
+                </span>
+              </div>
+            </>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════ */}
+          {/* STATE C — Template + artwork placed (ready)               */}
+          {/* ══════════════════════════════════════════════════════════ */}
+          {leftPanelState === "ready" && selectedTemplate && (
+            <>
+              {/* Compact product card */}
+              <div className={styles.productCardCompact}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={selectedTemplate.thumbnailDataUrl}
+                  alt={selectedTemplate.name}
+                  className={styles.productCardCompactThumb}
+                />
+                <div className={styles.productCardCompactInfo}>
+                  <span className={styles.productCardCompactName}>{selectedTemplate.name}</span>
+                  <span className={styles.productCardCompactDims}>
+                    {selectedTemplate.dimensions.diameterMm > 0
+                      ? `\u00F8${selectedTemplate.dimensions.diameterMm}mm \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`
+                      : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.productCardCompactChange}
+                  onClick={() => setShowTemplateGallery(true)}
+                >
+                  Change
+                </button>
+              </div>
+
+              {/* Product photo overlay controls */}
+              <div className={styles.overlayControlsRow}>
+                <div className={styles.overlayModeToggle}>
+                  <button type="button"
+                    className={`${styles.overlayModeBtn} ${overlayMode === "schematic" ? styles.overlayModeBtnActive : ""}`}
+                    onClick={() => setOverlayMode("schematic")}
+                  >Schematic</button>
+                  <button type="button"
+                    className={`${styles.overlayModeBtn} ${overlayMode === "photo" ? styles.overlayModeBtnActive : ""}`}
+                    onClick={() => setOverlayMode("photo")}
+                  >Photo</button>
+                  <button type="button"
+                    className={`${styles.overlayModeBtn} ${overlayMode === "off" ? styles.overlayModeBtnActive : ""}`}
+                    onClick={() => setOverlayMode("off")}
+                  >Off</button>
+                </div>
+                {overlayMode !== "off" && (
+                  <>
+                    <label className={styles.overlaySubToggle}>
+                      <input
+                        type="checkbox"
+                        checked={twoSidedMode}
+                        onChange={(e) => setTwoSidedMode(e.target.checked)}
+                      />
+                      <span>2-sided placement</span>
+                    </label>
+                    {overlayMode === "photo" && (
+                      <>
+                        <div className={styles.overlaySliderRow}>
+                          <span>Opacity</span>
+                          <input
+                            type="range"
+                            min={5}
+                            max={50}
+                            step={1}
+                            value={overlayOpacity}
+                            onChange={(e) => setOverlayOpacity(Number(e.target.value))}
+                          />
+                          <span>{overlayOpacity}%</span>
+                        </div>
+                        {selectedTemplate && (
+                          <button
+                            type="button"
+                            className={styles.overlayBgRemoveBtn}
+                            disabled={bgRemovalStatus === "running"}
+                            onClick={async () => {
+                              if (!selectedTemplate) return;
+                              const photoUrl = selectedTemplate.productPhotoFullUrl
+                                ?? selectedTemplate.frontPhotoDataUrl
+                                ?? selectedTemplate.thumbnailDataUrl;
+                              if (!photoUrl) return;
+                              setBgRemovalStatus("running");
+                              try {
+                                const res = await fetch(photoUrl);
+                                const blob = await res.blob();
+                                const { removeBackground } = await import("@imgly/background-removal");
+                                const clean = await removeBackground(blob, {
+                                  model: "isnet_quint8",
+                                  proxyToWorker: false,
+                                  output: { format: "image/png", quality: 0.9 },
+                                });
+                                const reader = new FileReader();
+                                reader.onloadend = () => {
+                                  const cleanUrl = reader.result as string;
+                                  if (!cleanUrl) { setBgRemovalStatus("failed"); return; }
+                                  const updated = {
+                                    ...selectedTemplate,
+                                    productPhotoFullUrl: cleanUrl,
+                                    frontPhotoDataUrl: cleanUrl,
+                                  };
+                                  updateTemplate(updated.id, updated);
+                                  setSelectedTemplate(updated);
+                                  setBgRemovalStatus("done");
+                                };
+                                reader.onerror = () => setBgRemovalStatus("failed");
+                                reader.readAsDataURL(clean);
+                              } catch {
+                                setBgRemovalStatus("failed");
+                              }
+                            }}
+                          >
+                            {bgRemovalStatus === "running" ? "Removing background\u2026"
+                              : bgRemovalStatus === "done" ? "Background removed \u2713"
+                              : bgRemovalStatus === "failed" ? "Failed \u2014 retry?"
+                              : "AI remove background"}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Artwork cards */}
+              {placedItems.map((item) => (
+                <div key={item.id} className={styles.artworkCard}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/svg+xml,${encodeURIComponent(item.svgText)}`}
+                    alt={item.name}
+                    className={styles.artworkCardThumb}
+                  />
+                  <div className={styles.artworkCardInfo}>
+                    <span className={styles.artworkCardName}>{item.name}</span>
+                    <span className={styles.artworkCardDims}>
+                      {item.width.toFixed(1)} \u00D7 {item.height.toFixed(1)}mm
+                    </span>
+                  </div>
+                  <div className={styles.artworkCardActions}>
                     <button
                       type="button"
-                      className={styles.changeLink}
+                      className={styles.artworkCardBtn}
                       onClick={() => {
-                        setEditingTemplate(selectedTemplate);
-                        setShowCreateForm(true);
-                        setShowTemplateGallery(true);
+                        artworkFileRef.current?.click();
                       }}
+                      title="Replace artwork"
                     >
-                      Edit
+                      Replace
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      className={`${styles.artworkCardBtn} ${styles.artworkCardBtnDanger}`}
+                      onClick={() => handleDeleteItem(item.id)}
+                      title="Remove from bed"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
+              ))}
+
+              {/* Add more artwork */}
+              <div className={styles.artworkUploadSection}>
+                <input
+                  ref={artworkFileRef}
+                  type="file"
+                  accept=".svg,image/svg+xml"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    if (e.target.files?.length) {
+                      handleUploadAssets(e.target.files);
+                      e.target.value = "";
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className={styles.artworkUploadBtn}
+                  onClick={() => artworkFileRef.current?.click()}
+                  style={{ padding: "8px 0", fontSize: "12px" }}
+                >
+                  + Add more artwork
+                </button>
               </div>
-            </div>
-          ) : (
-            <>
-              <div className={styles.productMiniGrid}>
-                {previewTemplates.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={styles.productMiniCard}
-                    onClick={() => handleTemplateSelect(t)}
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={t.thumbnailDataUrl} alt={t.name} className={styles.productMiniThumb} />
-                    <span className={styles.productMiniName}>{t.name}</span>
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                className={styles.seeAllBtn}
-                onClick={() => setShowTemplateGallery(true)}
-              >
-                See all {"\u2192"}
-              </button>
+
+              {/* 3D preview — temporarily hidden until properly oriented GLB is ready */}
+              {false && !is3DPlacement && (
+                <Model3DPanel
+                  placedItems={placedItems}
+                  bedWidthMm={bedConfig.width}
+                  bedHeightMm={bedConfig.height}
+                  workspaceMode={bedConfig.workspaceMode}
+                  tumblerDims={tumblerDims}
+                  handleArcDeg={selectedTemplate?.tumblerMapping?.handleArcDeg ?? selectedTemplate?.dimensions?.handleArcDeg ?? 0}
+                  modelPathOverride={selectedTemplate?.glbPath ?? null}
+                  tumblerMapping={selectedTemplate?.tumblerMapping}
+                  onUpdateCalibration={handleUpdateCalibration}
+                />
+              )}
             </>
           )}
         </div>
-
-        <Model3DPanel
-          placedItems={placedItems}
-          bedWidthMm={bedConfig.width}
-          bedHeightMm={bedConfig.height}
-          workspaceMode={bedConfig.workspaceMode}
-          tumblerDims={
-            bedConfig.workspaceMode === "tumbler-wrap" && bedConfig.tumblerDiameterMm > 0
-              ? {
-                  overallHeightMm: bedConfig.tumblerOverallHeightMm ?? 215,
-                  diameterMm: bedConfig.tumblerDiameterMm,
-                  topDiameterMm: bedConfig.tumblerTopDiameterMm,
-                  bottomDiameterMm: bedConfig.tumblerBottomDiameterMm,
-                  printableHeightMm: bedConfig.tumblerPrintableHeightMm ?? bedConfig.height,
-                }
-              : null
-          }
-          handleArcDeg={selectedTemplate?.dimensions?.handleArcDeg ?? 0}
-          modelPathOverride={selectedTemplate?.glbPath ?? null}
-        />
       </aside>
 
       {/* CENTER */}
       <main className={styles.centerPanel}>
-        <LaserBedWorkspace
-          bedConfig={bedConfig}
-          placedItems={placedItems}
-          selectedItemId={selectedItemId}
-          placementAsset={placementAsset}
-          isPlacementArmed={isPlacementArmed}
-          framePreview={framePreview}
-          showTwoSidedCrosshairs={isTumblerMode}
-          mockupConfig={mockupConfig}
-          flatBedItemOverlay={flatBedItemOverlay}
-          onWorkspaceModeChange={handleWorkspaceModeChange}
-          onPlaceAsset={handlePlaceAsset}
-          onSelectItem={handleSelectItem}
-          onUpdateItem={handleUpdateItem}
-          onNudgeSelected={handleNudgeSelected}
-          onDeleteItem={handleDeleteItem}
-          onClearWorkspace={handleClearWorkspace}
-        />
+        {/* 3D placement view — temporarily hidden until properly oriented GLB is ready */}
+        {false && is3DPlacement && tumblerDims ? (
+          <div className={styles.center3DWrap}>
+            <TumblerPlacementView
+              placedItems={placedItems}
+              tumblerDims={tumblerDims!}
+              selectedTemplate={selectedTemplate}
+              bedWidthMm={bedConfig.width}
+              bedHeightMm={bedConfig.height}
+              selectedItemId={selectedItemId}
+              onSelectItem={handleSelectItem}
+              onUpdateItem={handleUpdateItem}
+            />
+            {/* Mode toggle floats on top */}
+            <div className={styles.center3DModeOverlay}>
+              <button
+                className={`${styles.center3DModeBtn} ${!is3DPlacement ? styles.center3DModeBtnActive : ""}`}
+                onClick={() => setTumblerViewMode("grid")}
+              >Grid</button>
+              <button
+                className={`${styles.center3DModeBtn} ${is3DPlacement ? styles.center3DModeBtnActive : ""}`}
+                onClick={() => setTumblerViewMode("3d-placement")}
+              >3D</button>
+            </div>
+          </div>
+        ) : (
+          <LaserBedWorkspace
+            bedConfig={bedConfig}
+            placedItems={placedItems}
+            selectedItemId={selectedItemId}
+            placementAsset={placementAsset}
+            isPlacementArmed={isPlacementArmed}
+            framePreview={framePreview}
+            showTwoSidedCrosshairs={isTumblerMode}
+            mockupConfig={mockupConfig}
+            flatBedItemOverlay={flatBedItemOverlay}
+            handleArcDeg={selectedTemplate?.tumblerMapping?.handleArcDeg ?? selectedTemplate?.dimensions?.handleArcDeg ?? 0}
+            onWorkspaceModeChange={handleWorkspaceModeChange}
+            tumblerViewMode={tumblerViewMode}
+            onTumblerViewModeChange={setTumblerViewMode}
+            onPlaceAsset={handlePlaceAsset}
+            onSelectItem={handleSelectItem}
+            onUpdateItem={handleUpdateItem}
+            onNudgeSelected={handleNudgeSelected}
+            onDeleteItem={handleDeleteItem}
+            onClearWorkspace={handleClearWorkspace}
+            productName={selectedTemplate?.name}
+            templateOverlayUrl={selectedTemplate?.productPhotoFullUrl ?? selectedTemplate?.frontPhotoDataUrl ?? selectedTemplate?.thumbnailDataUrl ?? null}
+            backOverlayUrl={selectedTemplate?.backPhotoDataUrl ?? null}
+            overlayMode={overlayMode}
+            overlayOpacityPct={overlayOpacity}
+            twoSidedMode={twoSidedMode}
+          />
+        )}
       </main>
 
       {/* RIGHT */}
@@ -586,7 +1037,7 @@ export function AdminLayoutShell() {
             onClick={() => setRightTab("workflow")}
             type="button"
           >
-            Workflow
+            Job
           </button>
           <button
             className={rightTab === "tools" ? styles.tabActive : styles.tab}
@@ -603,21 +1054,106 @@ export function AdminLayoutShell() {
             Setup
           </button>
           <Link href="/admin/calibration" className={styles.tabCalibrationLink}>
-            Calibration →
+            Calibration {"\u2192"}
           </Link>
         </div>
 
-        <div className={styles.tabPane}>
-          {rightTab === "workflow" && (
-            <>
-              <OrdersPanel
-                bedConfig={bedConfig}
-                assetNames={assetNames}
-                onLoadOrder={handleLoadOrder}
-              />
-              <BatchQueuePanel onLoadOrder={handleLoadOrder} />
-              <BedSettingsPanel bedConfig={bedConfig} onUpdateBedConfig={setBedConfig} />
-              <MaterialProfilePanel onMaterialChange={setMaterialSettings} />
+        {rightTab === "workflow" && (
+          <>
+            {/* ZONE 2: Accordion sections (scrollable) */}
+            <div className={styles.rightAccordionScroll}>
+              {/* Orders toggle — hidden by default */}
+              {showOrders && (
+                <>
+                  <OrdersPanel
+                    bedConfig={bedConfig}
+                    assetNames={assetNames}
+                    onLoadOrder={handleLoadOrder}
+                  />
+                  <BatchQueuePanel onLoadOrder={handleLoadOrder} />
+                </>
+              )}
+              <button
+                type="button"
+                className={styles.ordersToggle}
+                onClick={() => setShowOrders((p) => !p)}
+              >
+                {showOrders ? "\u25BE" : "\u25B8"} Orders
+              </button>
+
+              {/* Selected item inspector — only when item selected */}
+              {selectedItem && (
+                <SelectedItemInspector
+                  selectedItem={selectedItem}
+                  bedConfig={bedConfig}
+                  statusNote={inspectorNote}
+                  onUpdateItem={handleUpdateItem}
+                  onAlignItem={handleAlignItem}
+                  onCenterBetweenGuides={handleCenterSelectedBetweenGuides}
+                  onResetItem={handleResetItem}
+                  onNormalizeItem={handleNormalizeItem}
+                  onDeleteItem={handleDeleteItem}
+                />
+              )}
+
+              <AccordionSection
+                id="bed"
+                title="Bed Settings"
+                summary={bedSummary}
+                isOpen={openSection === "bed"}
+                onToggle={handleAccordionToggle}
+              >
+                <BedSettingsPanel bedConfig={bedConfig} onUpdateBedConfig={setBedConfig} />
+              </AccordionSection>
+
+              <AccordionSection
+                id="material"
+                title="Material Profile"
+                summary={materialSummary}
+                isOpen={openSection === "material"}
+                onToggle={handleAccordionToggle}
+              >
+                <MaterialProfilePanel onMaterialChange={setMaterialSettings} />
+              </AccordionSection>
+
+              <AccordionSection
+                id="grid"
+                title="Grid & Snap"
+                summary={gridSummary}
+                isOpen={openSection === "grid"}
+                onToggle={handleAccordionToggle}
+              >
+                {/* Grid settings are inside BedSettingsPanel — reuse */}
+                <BedSettingsPanel bedConfig={bedConfig} onUpdateBedConfig={setBedConfig} />
+              </AccordionSection>
+
+              <AccordionSection
+                id="history"
+                title="Export History"
+                summary=""
+                isOpen={openSection === "history"}
+                onToggle={handleAccordionToggle}
+              >
+                <ExportHistoryPanel bedConfig={bedConfig} placedItems={placedItems} />
+              </AccordionSection>
+
+              <AccordionSection
+                id="mockup"
+                title="Proof Mockup"
+                summary=""
+                isOpen={openSection === "mockup"}
+                onToggle={handleAccordionToggle}
+              >
+                <ProofMockupPanel
+                  bedConfig={bedConfig}
+                  placedItems={placedItems}
+                  mockupConfig={mockupConfig}
+                />
+              </AccordionSection>
+            </div>
+
+            {/* ZONE 1: Export — pinned at bottom */}
+            <div className={styles.rightPinnedExport}>
               <TumblerExportPanel
                 bedConfig={bedConfig}
                 placedItems={placedItems}
@@ -625,51 +1161,34 @@ export function AdminLayoutShell() {
                 materialSettings={materialSettings}
                 onPreflightNav={handlePreflightNav}
               />
-              <SelectedItemInspector
-                selectedItem={selectedItem}
-                bedConfig={bedConfig}
-                statusNote={inspectorNote}
-                onUpdateItem={handleUpdateItem}
-                onAlignItem={handleAlignItem}
-                onCenterBetweenGuides={handleCenterSelectedBetweenGuides}
-                onResetItem={handleResetItem}
-                onNormalizeItem={handleNormalizeItem}
-                onDeleteItem={handleDeleteItem}
-              />
-              <ProofMockupPanel
-                bedConfig={bedConfig}
-                placedItems={placedItems}
-                mockupConfig={mockupConfig}
-              />
-              <ExportHistoryPanel bedConfig={bedConfig} placedItems={placedItems} />
-            </>
-          )}
+            </div>
+          </>
+        )}
 
-          {rightTab === "tools" && (
-            <>
-              <ColorLayerPanel
-                layers={laserLayers}
-                onUpdateLayer={handleUpdateLayer}
-                onSetLayers={setLaserLayers}
-                activeAssetContent={svgAssets.find(a => a.id === selectedAssetId)?.content}
-              />
-              <FlatBedItemPanel />
-              <TextToolPanel onAddAsset={handleAddTextAsset} />
-              <TextPersonalizationPanel />
-              <CameraOverlayPanel onCaptureOverlay={handleCameraCapture} />
-              <TestGridPanel bedWidthMm={bedConfig.width} bedHeightMm={bedConfig.height} />
-            </>
-          )}
+        {rightTab === "tools" && (
+          <div className={styles.tabPane}>
+            <ColorLayerPanel
+              layers={laserLayers}
+              onUpdateLayer={handleUpdateLayer}
+              onSetLayers={setLaserLayers}
+              activeAssetContent={svgAssets.find(a => a.id === selectedAssetId)?.content}
+            />
+            <FlatBedItemPanel />
+            <TextToolPanel onAddAsset={handleAddTextAsset} />
+            <TextPersonalizationPanel />
+            <CameraOverlayPanel onCaptureOverlay={handleCameraCapture} />
+            <TestGridPanel bedWidthMm={bedConfig.width} bedHeightMm={bedConfig.height} />
+          </div>
+        )}
 
-          {rightTab === "setup" && (
-            <>
-              <MachineProfilePanel />
-              <FiberColorCalibrationPanel />
-              <SprCalibrationPanel bedConfig={bedConfig} />
-              <RotaryPresetSharePanel />
-            </>
-          )}
-        </div>
+        {rightTab === "setup" && (
+          <div className={styles.tabPane}>
+            <MachineProfilePanel />
+            <FiberColorCalibrationPanel />
+            <SprCalibrationPanel bedConfig={bedConfig} />
+            <RotaryPresetSharePanel />
+          </div>
+        )}
       </aside>
 
       {/* ── Template gallery modal ── */}

@@ -128,6 +128,118 @@
   flex: 1;
 }
 
+/* ── Background removal before/after ──────────────────────────── */
+.bgPreviewGroup {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bgPreviewItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.bgPreviewLabel {
+  font-size: 9px;
+  color: var(--text-dim);
+}
+
+.bgPreviewLabelDone {
+  font-size: 9px;
+  color: var(--success);
+}
+
+.bgProcessing {
+  font-size: 10px;
+  color: var(--accent);
+  align-self: center;
+}
+
+.bgFailed {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-style: italic;
+  align-self: center;
+}
+
+.bgRemoveBtn {
+  font-size: 10px;
+  padding: 3px 8px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  align-self: center;
+  transition: border-color 150ms, color 150ms;
+}
+
+.bgRemoveBtn:hover {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.bgToggle {
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+}
+
+/* ── Front captured prompt ─────────────────────────────────────── */
+.frontCapturedBanner {
+  padding: 8px 12px;
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  border-radius: var(--radius);
+}
+
+.frontCapturedTitle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--success);
+}
+
+.frontCapturedHint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ── Mirror toggle ─────────────────────────────────────────────── */
+.mirrorToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mirrorToggle input[type="checkbox"] {
+  accent-color: var(--info);
+}
+
+/* ── Highlighted back drop zone ────────────────────────────────── */
+.backDropHighlight {
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 1px var(--info), 0 0 8px rgba(96, 165, 250, 0.15);
+  animation: backDropPulse 2s ease-in-out infinite;
+}
+
+@keyframes backDropPulse {
+  0%, 100% { box-shadow: 0 0 0 1px var(--info), 0 0 8px rgba(96, 165, 250, 0.15); }
+  50% { box-shadow: 0 0 0 1px var(--info), 0 0 14px rgba(96, 165, 250, 0.28); }
+}
+
 /* ── GLB path input ────────────────────────────────────────────── */
 .glbRow {
   display: flex;

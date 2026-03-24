@@ -1,14 +1,16 @@
 "use client";
 
 import React from "react";
-import type { ProductTemplate } from "@/types/productTemplate";
+import type { ProductTemplate, TumblerMapping } from "@/types/productTemplate";
 import type { AutoDetectResult } from "@/lib/autoDetect";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
 import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "@/data/rotaryPlacementPresets";
 import { saveTemplate, updateTemplate } from "@/lib/templateStorage";
 import { generateThumbnail } from "@/lib/generateThumbnail";
+import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHandleArcDeg } from "@/data/tumblerProfiles";
 import { FileDropZone } from "./shared/FileDropZone";
+import { TumblerMappingWizard } from "./TumblerMappingWizard";
 import styles from "./TemplateCreateForm.module.css";
 
 interface Props {
@@ -20,6 +22,49 @@ interface Props {
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
+
+/** Convert an image file to a data URL (max 480px on longest side for face photos) */
+function fileToFacePhotoDataUrl(file: File, maxSize = 480): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(maxSize / img.naturalWidth, maxSize / img.naturalHeight, 1);
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { URL.revokeObjectURL(img.src); resolve(""); return; }
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(img.src);
+      resolve(canvas.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(img.src); resolve(""); };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/** Flip an image data URL horizontally (mirror) for back-side overlay */
+function flipImageHorizontal(dataUrl: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(""); return; }
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = () => resolve("");
+    img.src = dataUrl;
+  });
+}
+
 
 /** Map AI product type string to our ProductTemplate product types */
 function mapProductType(aiType: string): "tumbler" | "mug" | "bottle" | "flat" {
@@ -51,6 +96,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [glbUploading, setGlbUploading] = React.useState(false);
   const [glbUploadError, setGlbUploadError] = React.useState<string | null>(null);
   const [productImageFile, setProductImageFile] = React.useState<File | null>(null);
+  const [productPhotoFullUrl, setProductPhotoFullUrl] = React.useState(editingTemplate?.productPhotoFullUrl ?? "");
 
   // ── Auto-detect ──────────────────────────────────────────────────
   const [detecting, setDetecting] = React.useState(false);
@@ -60,7 +106,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   // ── Dimensions ───────────────────────────────────────────────────
   const [diameterMm, setDiameterMm] = React.useState(editingTemplate?.dimensions.diameterMm ?? 0);
   const [printHeightMm, setPrintHeightMm] = React.useState(editingTemplate?.dimensions.printHeightMm ?? 0);
-  const [handleArcDeg, setHandleArcDeg] = React.useState(editingTemplate?.dimensions.handleArcDeg ?? 0);
+  const [handleArcDeg, setHandleArcDeg] = React.useState(() => {
+    const saved = editingTemplate?.dimensions.handleArcDeg;
+    if (saved != null && saved > 0) return saved;
+    // Default: 90° for tumblers (standard handle), 0 for flat/mug/bottle
+    const pt = editingTemplate?.productType ?? "tumbler";
+    return pt === "tumbler" ? 90 : 0;
+  });
   const [taperCorrection, setTaperCorrection] = React.useState<"none" | "top-narrow" | "bottom-narrow">(
     editingTemplate?.dimensions.taperCorrection ?? "none"
   );
@@ -75,17 +127,53 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [materialProfileId, setMaterialProfileId] = React.useState(editingTemplate?.laserSettings.materialProfileId ?? "");
   const [rotaryPresetId, setRotaryPresetId] = React.useState(editingTemplate?.laserSettings.rotaryPresetId ?? "");
 
+  // ── Tumbler mapping ─────────────────────────────────────────────
+  const [tumblerMapping, setTumblerMapping] = React.useState<TumblerMapping | undefined>(
+    editingTemplate?.tumblerMapping,
+  );
+  const [showMappingWizard, setShowMappingWizard] = React.useState(false);
+
+  // ── Front / Back face photos ──────────────────────────────────
+  const [frontPhotoDataUrl, setFrontPhotoDataUrl] = React.useState(editingTemplate?.frontPhotoDataUrl ?? "");
+  const [backPhotoDataUrl, setBackPhotoDataUrl] = React.useState(editingTemplate?.backPhotoDataUrl ?? "");
+  const [frontOriginalUrl, setFrontOriginalUrl] = React.useState("");
+  const [backOriginalUrl, setBackOriginalUrl] = React.useState("");
+  const [frontCleanUrl, setFrontCleanUrl] = React.useState("");
+  const [backCleanUrl, setBackCleanUrl] = React.useState("");
+  const [frontBgStatus, setFrontBgStatus] = React.useState<"idle" | "processing" | "done" | "failed">("idle");
+  const [backBgStatus, setBackBgStatus] = React.useState<"idle" | "processing" | "done" | "failed">("idle");
+  const [frontUseOriginal, setFrontUseOriginal] = React.useState(false);
+  const [backUseOriginal, setBackUseOriginal] = React.useState(false);
+  const [mirrorForBack, setMirrorForBack] = React.useState(true);
+
+  // Auto-mirror front photo as back when mirrorForBack is enabled
+  React.useEffect(() => {
+    if (!mirrorForBack || !frontPhotoDataUrl) {
+      if (mirrorForBack) setBackPhotoDataUrl("");
+      return;
+    }
+    let cancelled = false;
+    flipImageHorizontal(frontPhotoDataUrl).then((flipped) => {
+      if (!cancelled && flipped) setBackPhotoDataUrl(flipped);
+    });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mirrorForBack, frontPhotoDataUrl]);
+
   // ── Validation ───────────────────────────────────────────────────
   const [errors, setErrors] = React.useState<string[]>([]);
 
-  /** Handle product image selection — store file for auto-detect, also generate thumbnail */
+  /** Handle product image selection — store file for auto-detect, generate thumbnail + full-res */
   const handleProductImage = async (file: File) => {
     setProductImageFile(file);
     setDetectResult(null);
     setDetectError(null);
-    // Auto-generate thumbnail from product image (120x120 crop)
-    const dataUrl = await generateThumbnail(file);
-    setThumbDataUrl(dataUrl);
+    // Thumbnail: 120x120 cropped (for gallery cards)
+    const thumb = await generateThumbnail(file);
+    setThumbDataUrl(thumb);
+    // Full-res: max 1024px (for grid overlay)
+    const full = await fileToFacePhotoDataUrl(file, 1024);
+    if (full) setProductPhotoFullUrl(full);
   };
 
   /** Run auto-detect on the uploaded product image */
@@ -112,12 +200,33 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       if (draft.outsideDiameterMm) setDiameterMm(round2(draft.outsideDiameterMm));
       if (draft.usableHeightMm) setPrintHeightMm(round2(draft.usableHeightMm));
       else if (draft.templateHeightMm) setPrintHeightMm(round2(draft.templateHeightMm));
-      if (sug.hasHandle) setHandleArcDeg(90);
+      // Handle arc: prefer profile-specific value, fall back to 90 if hasHandle
+      const profileId = findTumblerProfileIdForBrandModel({
+        brand: sug.brand,
+        model: sug.model,
+        capacityOz: sug.capacityOz,
+      });
+      const matchedProfile = profileId ? getTumblerProfileById(profileId) : null;
+      const profileArc = getProfileHandleArcDeg(matchedProfile);
+      if (profileArc > 0) {
+        setHandleArcDeg(profileArc);
+      } else if (sug.hasHandle) {
+        setHandleArcDeg(90);
+      }
       // Product type
       setProductType(mapProductType(sug.productType));
       // Taper
       if (sug.topDiameterMm && sug.bottomDiameterMm && sug.topDiameterMm !== sug.bottomDiameterMm) {
         setTaperCorrection(sug.topDiameterMm < sug.bottomDiameterMm ? "top-narrow" : "bottom-narrow");
+      }
+
+      // Auto-assign uploaded product photo as front face (no bg removal — operator can trigger later)
+      if (productImageFile && !frontPhotoDataUrl) {
+        const original = await fileToFacePhotoDataUrl(productImageFile);
+        if (original) {
+          setFrontOriginalUrl(original);
+          setFrontPhotoDataUrl(original);
+        }
       }
     } catch (e) {
       setDetectError(e instanceof Error ? e.message : "Auto-detect failed. Fill in manually.");
@@ -170,6 +279,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       laserType,
       productType,
       thumbnailDataUrl: thumbDataUrl,
+      productPhotoFullUrl: productPhotoFullUrl || undefined,
       glbPath,
       dimensions: {
         diameterMm,
@@ -189,6 +299,9 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       createdAt: editingTemplate?.createdAt ?? now,
       updatedAt: now,
       builtIn: editingTemplate?.builtIn ?? false,
+      tumblerMapping,
+      frontPhotoDataUrl: frontPhotoDataUrl || undefined,
+      backPhotoDataUrl: backPhotoDataUrl || undefined,
     };
 
     if (isEdit) {
@@ -330,6 +443,226 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         )}
       </div>
 
+      {/* ── Front / Back face photos ─────────────────────────────── */}
+      {productType !== "flat" && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Face photos (grid overlay)</div>
+
+          {/* ── FRONT ── */}
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Front face</label>
+            <div className={styles.thumbRow}>
+              <div className={styles.thumbDropZone}>
+                <FileDropZone
+                  accept="image/*"
+                  fileName={frontPhotoDataUrl ? "front-photo" : null}
+                  label="Drop front photo"
+                  hint="Auto background removal"
+                  onFileSelected={async (f) => {
+                    const original = await fileToFacePhotoDataUrl(f);
+                    if (!original) return;
+                    setFrontOriginalUrl(original);
+                    setFrontCleanUrl("");
+                    setFrontPhotoDataUrl(original);
+                    setFrontUseOriginal(false);
+                    setMirrorForBack(true);
+                    setFrontBgStatus("idle");
+                  }}
+                  onClear={() => { setFrontPhotoDataUrl(""); setFrontOriginalUrl(""); setFrontCleanUrl(""); setFrontBgStatus("idle"); }}
+                />
+              </div>
+              {frontPhotoDataUrl && (
+                <div className={styles.bgPreviewGroup}>
+                  <div className={styles.bgPreviewItem}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={frontPhotoDataUrl} alt="Front" className={styles.thumbPreview} />
+                    {frontBgStatus === "done" && <span className={styles.bgPreviewLabelDone}>BG removed</span>}
+                  </div>
+                  {frontBgStatus === "idle" && (
+                    <button
+                      type="button"
+                      className={styles.bgRemoveBtn}
+                      onClick={async () => {
+                        setFrontBgStatus("processing");
+                        try {
+                          const res = await fetch(frontPhotoDataUrl);
+                          const blob = await res.blob();
+                          const { removeBackground } = await import("@imgly/background-removal");
+                          const clean = await removeBackground(blob, { model: "isnet_quint8", proxyToWorker: false });
+                          const reader = new FileReader();
+                          reader.onloadend = () => {
+                            const url = reader.result as string;
+                            if (url) {
+                              setFrontCleanUrl(url);
+                              setFrontPhotoDataUrl(url);
+                              setFrontBgStatus("done");
+                            } else {
+                              setFrontBgStatus("failed");
+                            }
+                          };
+                          reader.onerror = () => setFrontBgStatus("failed");
+                          reader.readAsDataURL(clean);
+                        } catch {
+                          setFrontBgStatus("failed");
+                        }
+                      }}
+                    >
+                      Remove background
+                    </button>
+                  )}
+                  {frontBgStatus === "processing" && (
+                    <span className={styles.bgProcessing}>Removing background…</span>
+                  )}
+                  {frontBgStatus === "done" && frontCleanUrl && (
+                    <label className={styles.bgToggle}>
+                      <input type="checkbox" checked={frontUseOriginal}
+                        onChange={(e) => {
+                          setFrontUseOriginal(e.target.checked);
+                          setFrontPhotoDataUrl(e.target.checked ? frontOriginalUrl : frontCleanUrl);
+                        }}
+                      /> Use original
+                    </label>
+                  )}
+                  {frontBgStatus === "failed" && (
+                    <span className={styles.bgFailed}>BG removal failed — using original</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Front captured prompt ── */}
+          {frontPhotoDataUrl && !backPhotoDataUrl && !mirrorForBack && (
+            <div className={styles.frontCapturedBanner}>
+              <div className={styles.frontCapturedTitle}>Front photo captured</div>
+              <div className={styles.frontCapturedHint}>
+                For two-sided placement, add a back photo or enable mirror below.
+              </div>
+            </div>
+          )}
+
+          {/* ── Mirror for back toggle ── */}
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel} />
+            <label className={styles.mirrorToggle}>
+              <input
+                type="checkbox"
+                checked={mirrorForBack}
+                onChange={(e) => {
+                  setMirrorForBack(e.target.checked);
+                  if (e.target.checked) {
+                    // Clear manual back photo state when switching to mirror
+                    setBackOriginalUrl("");
+                    setBackCleanUrl("");
+                    setBackBgStatus("idle");
+                    setBackUseOriginal(false);
+                  }
+                }}
+              />
+              <span>Use mirrored front photo for back side</span>
+            </label>
+          </div>
+
+          {/* ── BACK — manual upload (hidden when mirroring) ── */}
+          {!mirrorForBack && (
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Back face</label>
+              <div className={styles.thumbRow}>
+                <div className={`${styles.thumbDropZone} ${frontPhotoDataUrl && !backPhotoDataUrl ? styles.backDropHighlight : ""}`}>
+                  <FileDropZone
+                    accept="image/*"
+                    fileName={backPhotoDataUrl ? "back-photo" : null}
+                    label="Drop back photo"
+                    hint={frontPhotoDataUrl ? "Rotate tumbler 180° and photograph" : "Auto background removal"}
+                    onFileSelected={async (f) => {
+                      const original = await fileToFacePhotoDataUrl(f);
+                      if (!original) return;
+                      setBackOriginalUrl(original);
+                      setBackCleanUrl("");
+                      setBackPhotoDataUrl(original);
+                      setBackUseOriginal(false);
+                      setBackBgStatus("idle");
+                    }}
+                    onClear={() => { setBackPhotoDataUrl(""); setBackOriginalUrl(""); setBackCleanUrl(""); setBackBgStatus("idle"); }}
+                  />
+                </div>
+                {backPhotoDataUrl && (
+                  <div className={styles.bgPreviewGroup}>
+                    <div className={styles.bgPreviewItem}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={backPhotoDataUrl} alt="Back" className={styles.thumbPreview} />
+                      {backBgStatus === "done" && <span className={styles.bgPreviewLabelDone}>BG removed</span>}
+                    </div>
+                    {backBgStatus === "idle" && (
+                      <button
+                        type="button"
+                        className={styles.bgRemoveBtn}
+                        onClick={async () => {
+                          setBackBgStatus("processing");
+                          try {
+                            const res = await fetch(backPhotoDataUrl);
+                            const blob = await res.blob();
+                            const { removeBackground } = await import("@imgly/background-removal");
+                            const clean = await removeBackground(blob, { model: "isnet_quint8", proxyToWorker: false });
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                              const url = reader.result as string;
+                              if (url) {
+                                setBackCleanUrl(url);
+                                setBackPhotoDataUrl(url);
+                                setBackBgStatus("done");
+                              } else {
+                                setBackBgStatus("failed");
+                              }
+                            };
+                            reader.onerror = () => setBackBgStatus("failed");
+                            reader.readAsDataURL(clean);
+                          } catch {
+                            setBackBgStatus("failed");
+                          }
+                        }}
+                      >
+                        Remove background
+                      </button>
+                    )}
+                    {backBgStatus === "processing" && (
+                      <span className={styles.bgProcessing}>Removing background…</span>
+                    )}
+                    {backBgStatus === "done" && backCleanUrl && (
+                      <label className={styles.bgToggle}>
+                        <input type="checkbox" checked={backUseOriginal}
+                          onChange={(e) => {
+                            setBackUseOriginal(e.target.checked);
+                            setBackPhotoDataUrl(e.target.checked ? backOriginalUrl : backCleanUrl);
+                          }}
+                        /> Use original
+                      </label>
+                    )}
+                    {backBgStatus === "failed" && (
+                      <span className={styles.bgFailed}>BG removal failed — using original</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Mirror preview (when mirroring is on) ── */}
+          {mirrorForBack && backPhotoDataUrl && (
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Back (mirrored)</label>
+              <div className={styles.bgPreviewGroup}>
+                <div className={styles.bgPreviewItem}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={backPhotoDataUrl} alt="Mirrored back" className={styles.thumbPreview} />
+                  <span className={styles.bgPreviewLabel}>Auto-mirrored</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── 3D Model file ──────────────────────────────────────────── */}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>3D Model</div>
@@ -366,6 +699,26 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
             />
           </div>
         </div>
+
+        {glbPath && productType !== "flat" && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Orientation</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                type="button"
+                className={styles.detectBtn}
+                onClick={() => setShowMappingWizard(true)}
+              >
+                {tumblerMapping?.isMapped ? "Re-map orientation" : "Map tumbler orientation"}
+              </button>
+              {tumblerMapping?.isMapped && (
+                <span className={styles.glbPathConfirm}>
+                  Mapped ({((tumblerMapping.frontFaceRotation * 180) / Math.PI).toFixed(0)}&deg;) &#x2713;
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Physical dimensions ───────────────────────────────────── */}
@@ -534,6 +887,24 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           {isEdit ? "Save changes" : "Save template"}
         </button>
       </div>
+
+      {/* ── Tumbler mapping wizard modal ── */}
+      {showMappingWizard && glbPath && (
+        <TumblerMappingWizard
+          glbPath={glbPath}
+          diameterMm={diameterMm}
+          printHeightMm={printHeightMm}
+          productType={productType}
+          existingMapping={tumblerMapping}
+          handleArcDeg={handleArcDeg}
+          onSave={(mapping) => {
+            setTumblerMapping(mapping);
+            setHandleArcDeg(mapping.handleArcDeg);
+            setShowMappingWizard(false);
+          }}
+          onCancel={() => setShowMappingWizard(false)}
+        />
+      )}
     </div>
   );
 }

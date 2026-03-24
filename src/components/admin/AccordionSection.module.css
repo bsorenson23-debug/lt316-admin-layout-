@@ -1,0 +1,71 @@
+/* ── AccordionSection — collapsible settings panel ── */
+
+.section {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s;
+}
+
+.header:hover {
+  background: var(--bg-hover);
+}
+
+.chevron {
+  font-size: 9px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+  width: 10px;
+  text-align: center;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.summary {
+  flex: 1;
+  font-size: 10px;
+  color: var(--text-dim);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.summaryHidden {
+  display: none;
+}
+
+.body {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.25s ease;
+}
+
+.bodyOpen {
+  max-height: 2000px;
+  transition: max-height 0.35s ease;
+}
+
+.bodyInner {
+  padding: 0 12px 12px;
+}

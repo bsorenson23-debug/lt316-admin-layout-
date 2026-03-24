@@ -235,4 +235,14 @@ export type ItemAlignmentMode =
   | "center-y"
   | "fit-bed"
   /** Tumbler-wrap only: shift X by half the template width (180° from origin) */
-  | "opposite-logo";
+  | "opposite-logo"
+  /** Tumbler-wrap only: center artwork horizontally on the FRONT marker (bedWidth / 2) */
+  | "center-on-front"
+  /** Tumbler-wrap: right of handle — artwork faces user when held in right hand */
+  | "right-of-handle"
+  /** Tumbler-wrap: left of handle — artwork faces user when held in left hand */
+  | "left-of-handle"
+  /** Tumbler-wrap: scale artwork to fill the entire printable arc width */
+  | "full-wrap"
+  /** Tumbler-wrap: place artwork on the back side (behind handle, near grid origin) */
+  | "back-side";

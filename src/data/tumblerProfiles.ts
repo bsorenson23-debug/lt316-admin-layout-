@@ -27,6 +27,8 @@ export interface TumblerProfile {
   usableHeightMm: number;
   /** Does this model have an external carry handle? */
   hasHandle: boolean;
+  /** Handle exclusion arc in degrees (0 = no handle). Defaults to 90 when hasHandle is true. */
+  handleArcDeg?: number;
   /** Chuck rotary strongly preferred when true; roller when false */
   chuckRecommended: boolean;
   /** Visual groove/safe-zone guide overlaid on the bed canvas */
@@ -140,6 +142,7 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     overallHeightMm: 234,           // 9.21"
     usableHeightMm: 178,            // ~7.0"
     hasHandle: true,
+    handleArcDeg: 90,
     chuckRecommended: true,
     guideBand: {
       id: "stanley-quencher-20-band",
@@ -162,6 +165,7 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     overallHeightMm: 254,           // 10.0"
     usableHeightMm: 200,            // ~7.9"
     hasHandle: true,
+    handleArcDeg: 90,
     chuckRecommended: true,
     guideBand: {
       id: "stanley-quencher-30-band",
@@ -184,6 +188,7 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     overallHeightMm: 297,           // 11.69"
     usableHeightMm: 240,            // ~9.45"
     hasHandle: true,
+    handleArcDeg: 90,
     chuckRecommended: true,
     guideBand: {
       id: "stanley-quencher-40-main-band",
@@ -206,6 +211,7 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     overallHeightMm: 356,           // 14.0"
     usableHeightMm: 295,            // ~11.6"
     hasHandle: true,
+    handleArcDeg: 90,
     chuckRecommended: true,
     guideBand: {
       id: "stanley-quencher-64-band",
@@ -230,6 +236,7 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     overallHeightMm: 248,           // 9.76"
     usableHeightMm: 190,            // ~7.5"
     hasHandle: true,
+    handleArcDeg: 90,
     chuckRecommended: true,
     guideBand: {
       id: "stanley-iceflow-30-band",
@@ -405,6 +412,7 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     overallHeightMm: 155,           // 6.10"
     usableHeightMm: 110,            // ~4.33"
     hasHandle: true,
+    handleArcDeg: 90,
     chuckRecommended: true,
     guideBand: {
       id: "brumate-toddy-16-band",
@@ -484,6 +492,16 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
 
 export function getTumblerProfileById(id: string): TumblerProfile | null {
   return KNOWN_TUMBLER_PROFILES.find((profile) => profile.id === id) ?? null;
+}
+
+/**
+ * Resolve handle arc degrees for a tumbler profile.
+ * Returns explicit handleArcDeg if set, 90 if hasHandle is true, or 0.
+ */
+export function getProfileHandleArcDeg(profile: TumblerProfile | null | undefined): number {
+  if (!profile) return 0;
+  if (profile.handleArcDeg != null) return profile.handleArcDeg;
+  return profile.hasHandle ? 90 : 0;
 }
 
 function normalize(value: string | null | undefined): string {

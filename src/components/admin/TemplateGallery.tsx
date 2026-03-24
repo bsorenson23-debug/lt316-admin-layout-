@@ -246,6 +246,13 @@ export function TemplateGallery({ onSelect, onCreateNew, onEdit, selectedId }: P
                   {t.builtIn && (
                     <span className={styles.builtInBadge}>Built-in</span>
                   )}
+                  {t.productType !== "flat" && (
+                    t.tumblerMapping?.isMapped ? (
+                      <span className={styles.mappedBadge}>Mapped &#x2713;</span>
+                    ) : (
+                      <span className={styles.unmappedBadge}>Not mapped</span>
+                    )
+                  )}
                 </div>
               </div>
             </div>

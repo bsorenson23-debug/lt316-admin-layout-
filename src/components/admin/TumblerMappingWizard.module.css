@@ -1,0 +1,434 @@
+/* ── Overlay ──────────────────────────────────────────────────── */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: 920px;
+  max-width: 95vw;
+  max-height: 90vh;
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-normal);
+  box-shadow: 0 16px 64px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+/* ── Step pills ──────────────────────────────────────────────── */
+.stepRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+}
+
+.stepPill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: transparent;
+  transition: all 0.2s;
+}
+
+.stepPillCurrent {
+  background: var(--accent-dark);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+}
+
+.stepPillDone {
+  color: var(--success);
+}
+
+.stepNum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.stepPillCurrent .stepNum {
+  background: var(--accent);
+  color: var(--bg-base);
+}
+
+.stepPillDone .stepNum {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.stepLabel {
+  white-space: nowrap;
+}
+
+/* ── Body: 3D view + instructions side by side ───────────────── */
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.viewer {
+  flex: 1;
+  position: relative;
+  min-height: 500px;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.viewer canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.instructions {
+  width: 300px;
+  flex-shrink: 0;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+/* ── Step text ────────────────────────────────────────────────── */
+.stepTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.stepDesc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.stepHint {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.stepSource {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 4px 0 0;
+}
+
+/* ── Slider ───────────────────────────────────────────────────── */
+.sliderGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sliderLabel {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.sliderHints {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* ── Snap ticks under slider ──────────────────────────────────── */
+.snapTicks {
+  position: relative;
+  height: 28px;
+  margin-top: 2px;
+}
+
+.snapTick {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.snapDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-normal);
+  transition: background 0.15s;
+}
+
+.snapTickActive .snapDot {
+  background: var(--accent);
+}
+
+.snapLabel {
+  font-size: 9px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.snapTickActive .snapLabel {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.snapTick:hover .snapDot {
+  background: var(--text-muted);
+}
+
+.snapTick:hover .snapLabel {
+  color: var(--text-secondary);
+}
+
+/* ── Legend ────────────────────────────────────────────────────── */
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legendDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.legendText {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ── Summary ──────────────────────────────────────────────────── */
+.summaryBlock {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.summaryRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+}
+
+.summaryRow + .summaryRow {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.summaryLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.summaryValue {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--text-primary);
+}
+
+/* ── Height margins ───────────────────────────────────────────── */
+.marginSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.marginTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.marginRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.marginLabel {
+  font-size: 11px;
+  color: var(--text-secondary);
+  width: 90px;
+  flex-shrink: 0;
+}
+
+.marginInput {
+  width: 64px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: monospace;
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.marginInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.marginInput::-webkit-outer-spin-button,
+.marginInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+}
+
+.marginUnit {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.primaryBtn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 150ms;
+  margin-top: 4px;
+}
+
+.primaryBtn:hover {
+  opacity: 0.88;
+}
+
+.saveBtn {
+  width: 100%;
+  padding: 12px 20px;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 150ms;
+  margin-top: 4px;
+}
+
+.saveBtn:hover {
+  opacity: 0.88;
+}
+
+.secondaryBtn {
+  padding: 8px 16px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 100ms;
+  text-align: center;
+}
+
+.secondaryBtn:hover {
+  background: var(--bg-hover);
+}
+
+/* ── Footer ───────────────────────────────────────────────────── */
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+}
+
+.cancelBtn {
+  padding: 7px 16px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+
+.cancelBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+/* ── Toast ─────────────────────────────────────────────────────── */
+.confirmToast {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 20px;
+  border-radius: var(--radius);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+  animation: toastFade 1.2s ease forwards;
+}
+
+@keyframes toastFade {
+  0% { opacity: 0; transform: translateX(-50%) translateY(-4px); }
+  15% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  75% { opacity: 1; }
+  100% { opacity: 0; }
+}
