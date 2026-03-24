@@ -647,6 +647,64 @@
   cursor: not-allowed;
 }
 
+/* Screenshot proof export button */
+.screenshotBtn {
+  padding: 4px 10px;
+  font-size: 11px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.screenshotBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Body tint color picker row */
+.bodyTintRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+}
+.bodyTintLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 60px;
+}
+.bodyTintSwatch {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+.bodyTintSwatch::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.bodyTintSwatch::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+.bodyTintResetBtn {
+  padding: 2px 8px;
+  font-size: 10px;
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.bodyTintResetBtn:hover {
+  border-color: var(--border-normal);
+  color: var(--text-secondary);
+}
+
 /* Artwork upload prompt — state B */
 .artworkUploadSection {
   padding: 16px 12px;

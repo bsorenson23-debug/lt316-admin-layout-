@@ -164,8 +164,14 @@ interface Props {
   overlayMode?: "schematic" | "photo" | "off";
   /** Overlay opacity as a percentage 0–100 (applied as 0–1) */
   overlayOpacityPct?: number;
+  /** Overlay blending: "normal" or "multiply" (multiply blends into bed) */
+  overlayBlend?: "normal" | "multiply";
   /** Show split front/back overlay with zone labels */
   twoSidedMode?: boolean;
+  /** Callback for screenshot export — receives the Konva stage ref */
+  onScreenshotRequest?: () => void;
+  /** Expose stage ref for external screenshot capture */
+  stageRefCallback?: (stage: Konva.Stage | null) => void;
   onPlaceAsset: (xMm: number, yMm: number) => void;
   onSelectItem: (id: string | null) => void;
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
@@ -337,7 +343,9 @@ export function LaserBedWorkspace({
   backOverlayUrl,
   overlayMode = "off",
   overlayOpacityPct = 12,
+  overlayBlend = "normal",
   twoSidedMode = false,
+  stageRefCallback,
   onPlaceAsset,
   onSelectItem,
   onUpdateItem,
@@ -348,6 +356,12 @@ export function LaserBedWorkspace({
   const containerRef   = useRef<HTMLDivElement>(null);
   const stageRef       = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
+
+  // Expose stage ref for external screenshot capture
+  useEffect(() => {
+    stageRefCallback?.(stageRef.current);
+    return () => stageRefCallback?.(null);
+  }, [stageRefCallback]);
 
   const [containerSize, setContainerSize] = useState({ w: 800, h: 600 });
   const [basePxPerMm, setBasePxPerMm]     = useState(1);
@@ -894,6 +908,7 @@ export function LaserBedWorkspace({
                 width={bedPxW}
                 height={bedPxH}
                 opacity={overlayMode === "schematic" ? 1 : overlayOpacityPct / 100}
+                globalCompositeOperation={overlayBlend === "multiply" ? "multiply" : "source-over"}
                 listening={false}
               />
             )}

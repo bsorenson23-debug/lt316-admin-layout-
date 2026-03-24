@@ -77,6 +77,8 @@ export interface ModelViewerProps {
   glbPath?: string | null;
   /** Tumbler mapping from the wizard — orients the front face */
   tumblerMapping?: import("@/types/productTemplate").TumblerMapping;
+  /** Body tint hex color (e.g. "#b0b8c4" for stainless, "#1a1a2e" for matte black) */
+  bodyTintColor?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +273,7 @@ function ObjMesh({
 
 
 function GltfMesh({
-  url, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, onReady,
+  url, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, bodyTintColor, onReady,
 }: {
   url: string;
   dims?: TumblerDimensions | null;
@@ -280,6 +282,7 @@ function GltfMesh({
   itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number;
   bedHeightMm?: number;
+  bodyTintColor?: string;
   onReady?: OnReady;
 }) {
   const gltf = useLoader(GLTFLoader, url);
@@ -372,10 +375,13 @@ function GltfMesh({
       {bodyMeshData.geometry && (
         <mesh
           geometry={bodyMeshData.geometry}
-          material={bodyMeshData.material ?? undefined}
+          material={!bodyTintColor ? (bodyMeshData.material ?? undefined) : undefined}
           castShadow
           receiveShadow
         >
+          {bodyTintColor && (
+            <meshStandardMaterial color={bodyTintColor} metalness={0.35} roughness={0.55} />
+          )}
           {decalConfigs.map((cfg) => {
             const tex = threeTextures.get(cfg.itemId);
             if (!tex) return null;
@@ -433,12 +439,12 @@ const KNOWN_MODELS: { match: string; key: string }[] = [
 ];
 
 function ModelByExtension({
-  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, tumblerMapping, onReady,
+  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, tumblerMapping, bodyTintColor, onReady,
 }: {
   url: string; ext: string; dims?: TumblerDimensions | null; handleArcDeg?: number;
   placedItems?: PlacedItem[]; itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number; bedHeightMm?: number; glbPath?: string | null;
-  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; onReady?: OnReady;
+  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; onReady?: OnReady;
 }) {
   if (ext === "stl") return <StlMesh url={url} dims={dims} onReady={onReady} />;
   if (ext === "obj") return <ObjMesh url={url} dims={dims} onReady={onReady} />;
@@ -470,7 +476,7 @@ function ModelByExtension({
       <Suspense fallback={null}>
         <GltfMesh url={url} dims={dims} handleArcDeg={handleArcDeg}
           placedItems={placedItems} itemTextures={itemTextures}
-          bedWidthMm={bedWidthMm} bedHeightMm={bedHeightMm} onReady={onReady} />
+          bedWidthMm={bedWidthMm} bedHeightMm={bedHeightMm} bodyTintColor={bodyTintColor} onReady={onReady} />
       </Suspense>
     );
   }
@@ -520,7 +526,7 @@ class CanvasErrorBoundary extends Component<
 // ---------------------------------------------------------------------------
 
 export default function ModelViewer({
-  file, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping,
+  file, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, bodyTintColor,
 }: ModelViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
@@ -611,6 +617,7 @@ export default function ModelViewer({
               bedHeightMm={bedHeightMm}
               glbPath={glbPath}
               tumblerMapping={tumblerMapping}
+              bodyTintColor={bodyTintColor}
               onReady={handleModelReady}
             />
           </Suspense>

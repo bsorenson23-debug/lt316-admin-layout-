@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -96,8 +96,27 @@ export function AdminLayoutShell() {
   // -- Product photo overlay on grid ----------------------------------------
   const [overlayMode, setOverlayMode] = useState<"schematic" | "photo" | "off">("schematic");
   const [overlayOpacity, setOverlayOpacity] = useState(12); // percent (5–50)
+  const [overlayBlend, setOverlayBlend] = useState<"normal" | "multiply">("normal");
   const [twoSidedMode, setTwoSidedMode] = useState(false);
   const [bgRemovalStatus, setBgRemovalStatus] = useState<"idle" | "running" | "done" | "failed">("idle");
+
+  // -- Screenshot export from Konva stage ------------------------------------
+  const konvaStageRef = useRef<import("konva").default.Stage | null>(null);
+  const handleStageRef = useCallback((stage: import("konva").default.Stage | null) => {
+    konvaStageRef.current = stage;
+  }, []);
+  const handleScreenshot = useCallback(() => {
+    const stage = konvaStageRef.current;
+    if (!stage) return;
+    const dataUrl = stage.toDataURL({ pixelRatio: 2 });
+    const link = document.createElement("a");
+    link.download = `lt316-proof-${Date.now()}.png`;
+    link.href = dataUrl;
+    link.click();
+  }, []);
+
+  // -- Model body tint color -------------------------------------------------
+  const [bodyTintColor, setBodyTintColor] = useState<string>("#b0b8c4");
 
   // -- Color laser layers ---------------------------------------------------
   const [laserLayers, setLaserLayers] = useState<LaserLayer[]>(() => buildDefaultLayers());
@@ -674,6 +693,14 @@ export function AdminLayoutShell() {
                           />
                           <span>{overlayOpacity}%</span>
                         </div>
+                        <label className={styles.overlaySubToggle}>
+                          <input
+                            type="checkbox"
+                            checked={overlayBlend === "multiply"}
+                            onChange={(e) => setOverlayBlend(e.target.checked ? "multiply" : "normal")}
+                          />
+                          <span>Multiply blend</span>
+                        </label>
                         {selectedTemplate && (
                           <button
                             type="button"
@@ -725,6 +752,35 @@ export function AdminLayoutShell() {
                     )}
                   </>
                 )}
+
+                {/* Screenshot proof export */}
+                <button
+                  type="button"
+                  className={styles.screenshotBtn}
+                  onClick={handleScreenshot}
+                  title="Save workspace as proof image"
+                >
+                  Screenshot
+                </button>
+              </div>
+
+              {/* Body tint color picker */}
+              <div className={styles.bodyTintRow}>
+                <span className={styles.bodyTintLabel}>Body color</span>
+                <input
+                  type="color"
+                  value={bodyTintColor}
+                  onChange={(e) => setBodyTintColor(e.target.value)}
+                  className={styles.bodyTintSwatch}
+                />
+                <button
+                  type="button"
+                  className={styles.bodyTintResetBtn}
+                  onClick={() => setBodyTintColor("#b0b8c4")}
+                  title="Reset to default stainless"
+                >
+                  Reset
+                </button>
               </div>
 
               {/* Artwork upload section */}
@@ -836,6 +892,14 @@ export function AdminLayoutShell() {
                           />
                           <span>{overlayOpacity}%</span>
                         </div>
+                        <label className={styles.overlaySubToggle}>
+                          <input
+                            type="checkbox"
+                            checked={overlayBlend === "multiply"}
+                            onChange={(e) => setOverlayBlend(e.target.checked ? "multiply" : "normal")}
+                          />
+                          <span>Multiply blend</span>
+                        </label>
                         {selectedTemplate && (
                           <button
                             type="button"
@@ -887,6 +951,16 @@ export function AdminLayoutShell() {
                     )}
                   </>
                 )}
+
+                {/* Screenshot proof export */}
+                <button
+                  type="button"
+                  className={styles.screenshotBtn}
+                  onClick={handleScreenshot}
+                  title="Save workspace as proof image"
+                >
+                  Screenshot
+                </button>
               </div>
 
               {/* Artwork cards */}
@@ -964,6 +1038,7 @@ export function AdminLayoutShell() {
                   modelPathOverride={selectedTemplate?.glbPath ?? null}
                   tumblerMapping={selectedTemplate?.tumblerMapping}
                   onUpdateCalibration={handleUpdateCalibration}
+                  bodyTintColor={bodyTintColor}
                 />
               )}
             </>
@@ -1024,7 +1099,9 @@ export function AdminLayoutShell() {
             backOverlayUrl={selectedTemplate?.backPhotoDataUrl ?? null}
             overlayMode={overlayMode}
             overlayOpacityPct={overlayOpacity}
+            overlayBlend={overlayBlend}
             twoSidedMode={twoSidedMode}
+            stageRefCallback={handleStageRef}
           />
         )}
       </main>

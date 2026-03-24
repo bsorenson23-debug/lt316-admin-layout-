@@ -9,6 +9,7 @@ import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "@/data/rotaryPlacementPresets"
 import { saveTemplate, updateTemplate } from "@/lib/templateStorage";
 import { generateThumbnail } from "@/lib/generateThumbnail";
 import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHandleArcDeg } from "@/data/tumblerProfiles";
+import { getDefaultLaserSettings } from "@/lib/scopedDefaults";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
 import styles from "./TemplateCreateForm.module.css";
@@ -119,13 +120,28 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
   const templateWidthMm = diameterMm > 0 ? round2(Math.PI * diameterMm) : 0;
 
-  // ── Laser settings ───────────────────────────────────────────────
-  const [power, setPower] = React.useState(editingTemplate?.laserSettings.power ?? 22);
-  const [speed, setSpeed] = React.useState(editingTemplate?.laserSettings.speed ?? 350);
-  const [frequency, setFrequency] = React.useState(editingTemplate?.laserSettings.frequency ?? 100);
-  const [lineInterval, setLineInterval] = React.useState(editingTemplate?.laserSettings.lineInterval ?? 0.05);
+  // ── Laser settings (scoped defaults based on product/laser type) ──
+  const scopedDefaults = React.useMemo(
+    () => getDefaultLaserSettings(productType, laserType),
+    [productType, laserType],
+  );
+  const [power, setPower] = React.useState(editingTemplate?.laserSettings.power ?? scopedDefaults.power);
+  const [speed, setSpeed] = React.useState(editingTemplate?.laserSettings.speed ?? scopedDefaults.speed);
+  const [frequency, setFrequency] = React.useState(editingTemplate?.laserSettings.frequency ?? scopedDefaults.frequency);
+  const [lineInterval, setLineInterval] = React.useState(editingTemplate?.laserSettings.lineInterval ?? scopedDefaults.lineInterval);
   const [materialProfileId, setMaterialProfileId] = React.useState(editingTemplate?.laserSettings.materialProfileId ?? "");
   const [rotaryPresetId, setRotaryPresetId] = React.useState(editingTemplate?.laserSettings.rotaryPresetId ?? "");
+
+  // When product type or laser type changes, update laser settings to new scoped defaults
+  // (only for new templates — edits keep their values)
+  React.useEffect(() => {
+    if (isEdit) return;
+    const defaults = getDefaultLaserSettings(productType, laserType);
+    setPower(defaults.power);
+    setSpeed(defaults.speed);
+    setFrequency(defaults.frequency);
+    setLineInterval(defaults.lineInterval);
+  }, [productType, laserType, isEdit]);
 
   // ── Tumbler mapping ─────────────────────────────────────────────
   const [tumblerMapping, setTumblerMapping] = React.useState<TumblerMapping | undefined>(

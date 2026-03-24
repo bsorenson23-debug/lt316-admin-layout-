@@ -62,6 +62,8 @@ export interface Model3DPanelProps {
   onModelFileChange?: (file: File | null) => void;
   /** Callback to save calibration offsets to the template's tumblerMapping */
   onUpdateCalibration?: (offsetX: number, offsetY: number, rotation: number) => void;
+  /** Body tint hex color for 3D model material */
+  bodyTintColor?: string;
 }
 
 export function Model3DPanel({
@@ -75,6 +77,7 @@ export function Model3DPanel({
   tumblerMapping,
   onModelFileChange,
   onUpdateCalibration,
+  bodyTintColor,
 }: Model3DPanelProps) {
   const [modelFile, setModelFileLocal] = React.useState<File | null>(null);
 
@@ -281,6 +284,7 @@ export function Model3DPanel({
                 tumblerDims={tumblerDims}
                 handleArcDeg={handleArcDeg}
                 glbPath={modelPathOverride}
+                bodyTintColor={bodyTintColor}
                 tumblerMapping={showCalibration && tumblerMapping
                   ? { ...tumblerMapping, calibrationOffsetX: calX, calibrationOffsetY: calY, calibrationRotation: calRot }
                   : tumblerMapping}
