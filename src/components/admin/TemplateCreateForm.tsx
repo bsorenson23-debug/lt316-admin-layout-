@@ -3,7 +3,9 @@
 import React from "react";
 import type { ProductTemplate, TumblerMapping } from "@/types/productTemplate";
 import type { AutoDetectResult } from "@/lib/autoDetect";
+import type { TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
+import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
 import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "@/data/rotaryPlacementPresets";
 import { saveTemplate, updateTemplate } from "@/lib/templateStorage";
@@ -112,6 +114,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [detecting, setDetecting] = React.useState(false);
   const [detectResult, setDetectResult] = React.useState<AutoDetectResult | null>(null);
   const [detectError, setDetectError] = React.useState<string | null>(null);
+  const [lookupInput, setLookupInput] = React.useState("");
+  const [lookingUpItem, setLookingUpItem] = React.useState(false);
+  const [lookupResult, setLookupResult] = React.useState<TumblerItemLookupResponse | null>(null);
+  const [lookupError, setLookupError] = React.useState<string | null>(null);
 
   // ── Dimensions ───────────────────────────────────────────────────
   const [diameterMm, setDiameterMm] = React.useState(editingTemplate?.dimensions.diameterMm ?? 0);
@@ -216,7 +222,6 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       if (!cancelled && flipped) setBackPhotoDataUrl(flipped);
     });
     return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mirrorForBack, frontPhotoDataUrl]);
 
   // ── Validation ───────────────────────────────────────────────────
@@ -227,6 +232,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     setProductImageFile(file);
     setDetectResult(null);
     setDetectError(null);
+    setLookupResult(null);
+    setLookupError(null);
     // Thumbnail: 120x120 cropped (for gallery cards)
     const thumb = await generateThumbnail(file);
     setThumbDataUrl(thumb);
@@ -235,12 +242,152 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     if (full) setProductPhotoFullUrl(full);
   };
 
+  const applyProfileOrDimensions = React.useCallback((args: {
+    brand: string | null | undefined;
+    model: string | null | undefined;
+    capacityOz?: number | null;
+    outsideDiameterMm?: number | null;
+    topDiameterMm?: number | null;
+    bottomDiameterMm?: number | null;
+    overallHeightMm?: number | null;
+    usableHeightMm?: number | null;
+  }) => {
+    const profileId = findTumblerProfileIdForBrandModel({
+      brand: args.brand,
+      model: args.model,
+      capacityOz: args.capacityOz,
+    });
+    const matchedProfile = profileId ? getTumblerProfileById(profileId) : null;
+
+    if (args.outsideDiameterMm) {
+      setDiameterMm(round2(args.outsideDiameterMm));
+    } else if (matchedProfile?.outsideDiameterMm) {
+      setDiameterMm(round2(matchedProfile.outsideDiameterMm));
+    } else if (args.topDiameterMm && args.bottomDiameterMm) {
+      setDiameterMm(round2((args.topDiameterMm + args.bottomDiameterMm) / 2));
+    }
+
+    if (args.usableHeightMm) {
+      setPrintHeightMm(round2(args.usableHeightMm));
+    } else if (matchedProfile?.usableHeightMm) {
+      setPrintHeightMm(round2(matchedProfile.usableHeightMm));
+    }
+
+    const profileArc = getProfileHandleArcDeg(matchedProfile);
+    if (profileArc > 0) {
+      setHandleArcDeg(profileArc);
+    }
+
+    if (matchedProfile) {
+      const oh = matchedProfile.overallHeightMm;
+      setOverallHeightMm(round2(oh));
+      const usable = matchedProfile.usableHeightMm;
+      const topM = matchedProfile.guideBand?.upperGrooveYmm ?? round2((oh - usable) / 2);
+      const bottomM = round2(Math.max(0, oh - usable - topM));
+      setTopMarginMm(topM);
+      setBottomMarginMm(bottomM);
+      if (matchedProfile.shapeType === "tapered") {
+        const top = matchedProfile.topDiameterMm ?? null;
+        const bottom = matchedProfile.bottomDiameterMm ?? null;
+        if (top && bottom) {
+          setTaperCorrection(top < bottom ? "top-narrow" : "bottom-narrow");
+        }
+      }
+      return;
+    }
+
+    if (args.overallHeightMm) {
+      setOverallHeightMm(round2(args.overallHeightMm));
+    }
+    if (args.overallHeightMm && args.usableHeightMm) {
+      const topM = round2((args.overallHeightMm - args.usableHeightMm) / 2);
+      const bottomM = round2(Math.max(0, args.overallHeightMm - args.usableHeightMm - topM));
+      setTopMarginMm(topM);
+      setBottomMarginMm(bottomM);
+    }
+    if (args.topDiameterMm && args.bottomDiameterMm && args.topDiameterMm !== args.bottomDiameterMm) {
+      setTaperCorrection(args.topDiameterMm < args.bottomDiameterMm ? "top-narrow" : "bottom-narrow");
+    }
+  }, []);
+
+  const handleItemLookup = async () => {
+    const raw = lookupInput.trim();
+    if (!raw) return;
+
+    setLookingUpItem(true);
+    setLookupError(null);
+    setLookupResult(null);
+    setDetectError(null);
+
+    try {
+      const result = await lookupTumblerItem(raw);
+      setLookupResult(result);
+
+      const parts: string[] = [];
+      if (result.brand) parts.push(result.brand);
+      if (result.model) parts.push(result.model);
+      if (result.capacityOz) parts.push(`${result.capacityOz}oz`);
+      setName(parts.length > 0 ? parts.join(" ") : result.title ?? raw);
+      if (result.brand) setBrand(result.brand);
+      if (result.capacityOz) setCapacity(`${result.capacityOz}oz`);
+      setProductType("tumbler");
+      if (result.glbPath) setGlbPath(result.glbPath);
+
+      applyProfileOrDimensions({
+        brand: result.brand,
+        model: result.model,
+        capacityOz: result.capacityOz,
+        outsideDiameterMm: result.dimensions.outsideDiameterMm,
+        topDiameterMm: result.dimensions.topDiameterMm,
+        bottomDiameterMm: result.dimensions.bottomDiameterMm,
+        overallHeightMm: result.dimensions.overallHeightMm,
+        usableHeightMm: result.dimensions.usableHeightMm,
+      });
+
+      if (result.imageUrl) {
+        const imageRes = await fetch("/api/admin/flatbed/fetch-url", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ url: result.imageUrl }),
+        });
+        const imagePayload = await imageRes.json();
+        if (imageRes.ok && imagePayload.dataUrl) {
+          const dataUrl = imagePayload.dataUrl as string;
+          const imgFetch = await fetch(dataUrl);
+          const blob = await imgFetch.blob();
+          const mimeType = imagePayload.mimeType ?? blob.type ?? "image/jpeg";
+          const fileName = result.imageUrl.split("/").pop() ?? "lookup-image.jpg";
+          const file = new File([blob], fileName, { type: mimeType });
+          setProductImageFile(file);
+          const thumb = await generateThumbnail(file);
+          setThumbDataUrl(thumb);
+          const full = await fileToFacePhotoDataUrl(file, 1024);
+          if (full) {
+            setProductPhotoFullUrl(full);
+            setFrontOriginalUrl(full);
+            setFrontPhotoDataUrl((prev) => prev || full);
+          }
+        }
+      }
+    } catch (e) {
+      setLookupError(
+        e instanceof Error ? e.message : "Item lookup failed. Fill in manually.",
+      );
+    } finally {
+      setLookingUpItem(false);
+    }
+  };
+
   /** Run auto-detect on the uploaded product image */
   const handleAutoDetect = async () => {
     if (!productImageFile) return;
     setDetecting(true);
     setDetectError(null);
     setDetectResult(null);
+    setLookupError(null);
+    setLookupResult(null);
     try {
       const result = await detectTumblerFromImage(productImageFile);
       setDetectResult(result);
@@ -490,6 +637,44 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       {/* ── Product image + auto-detect ──────────────────────────── */}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Product image</div>
+
+        {productType !== "flat" && (
+          <div className={styles.lookupBlock}>
+            <div className={styles.lookupTitle}>Item lookup</div>
+            <div className={styles.lookupHint}>
+              Paste a product URL or exact tumbler name. The lookup will try the page first,
+              then fall back to an internal profile and safe GLB.
+            </div>
+            <div className={styles.lookupRow}>
+              <input
+                className={styles.textInput}
+                type="text"
+                value={lookupInput}
+                onChange={(e) => setLookupInput(e.target.value)}
+                placeholder="https://www.academy.com/... or Stanley IceFlow 30 oz Classic Flip Straw Tumbler"
+              />
+              <button
+                type="button"
+                className={styles.detectBtn}
+                onClick={() => void handleItemLookup()}
+                disabled={lookingUpItem || !lookupInput.trim()}
+              >
+                {lookingUpItem ? "Looking up…" : "Item lookup"}
+              </button>
+            </div>
+
+            {lookupResult && (
+              <div className={styles.lookupBanner}>
+                <span className={styles.detectBannerText}>
+                  Lookup applied: <strong>{lookupResult.title || name || "Resolved item"}</strong>
+                  {" "}({lookupResult.mode})
+                </span>
+              </div>
+            )}
+
+            {lookupError && <div className={styles.detectErrorBanner}>{lookupError}</div>}
+          </div>
+        )}
 
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>Product photo</label>
