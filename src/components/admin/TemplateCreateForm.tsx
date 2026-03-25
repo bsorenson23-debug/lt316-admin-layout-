@@ -10,8 +10,10 @@ import { saveTemplate, updateTemplate } from "@/lib/templateStorage";
 import { generateThumbnail } from "@/lib/generateThumbnail";
 import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHandleArcDeg } from "@/data/tumblerProfiles";
 import { getDefaultLaserSettings } from "@/lib/scopedDefaults";
+import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
+import { EngravableZoneEditor } from "./EngravableZoneEditor";
 import styles from "./TemplateCreateForm.module.css";
 
 interface Props {
@@ -78,6 +80,13 @@ function mapProductType(aiType: string): "tumbler" | "mug" | "bottle" | "flat" {
 
 export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props) {
   const isEdit = Boolean(editingTemplate);
+  const derivedEditingDims = React.useMemo(
+    () => (editingTemplate ? getEngravableDimensions(editingTemplate) : null),
+    [editingTemplate],
+  );
+  const editingHasExplicitMargins =
+    editingTemplate?.dimensions.topMarginMm != null ||
+    editingTemplate?.dimensions.bottomMarginMm != null;
 
   // ── Product identity ─────────────────────────────────────────────
   const [name, setName] = React.useState(editingTemplate?.name ?? "");
@@ -106,7 +115,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
   // ── Dimensions ───────────────────────────────────────────────────
   const [diameterMm, setDiameterMm] = React.useState(editingTemplate?.dimensions.diameterMm ?? 0);
-  const [printHeightMm, setPrintHeightMm] = React.useState(editingTemplate?.dimensions.printHeightMm ?? 0);
+  const [printHeightMm, setPrintHeightMm] = React.useState(
+    editingTemplate
+      ? (!editingHasExplicitMargins && derivedEditingDims
+          ? derivedEditingDims.engravableHeightMm
+          : editingTemplate.dimensions.printHeightMm)
+      : 0,
+  );
   const [handleArcDeg, setHandleArcDeg] = React.useState(() => {
     const saved = editingTemplate?.dimensions.handleArcDeg;
     if (saved != null && saved > 0) return saved;
@@ -116,6 +131,30 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   });
   const [taperCorrection, setTaperCorrection] = React.useState<"none" | "top-narrow" | "bottom-narrow">(
     editingTemplate?.dimensions.taperCorrection ?? "none"
+  );
+  const [overallHeightMm, setOverallHeightMm] = React.useState(
+    editingTemplate?.dimensions.overallHeightMm ?? derivedEditingDims?.totalHeightMm ?? 0,
+  );
+  const [topMarginMm, setTopMarginMm] = React.useState(
+    editingTemplate?.dimensions.topMarginMm ?? derivedEditingDims?.topMarginMm ?? 0,
+  );
+  const [bottomMarginMm, setBottomMarginMm] = React.useState(
+    editingTemplate?.dimensions.bottomMarginMm ?? derivedEditingDims?.bottomMarginMm ?? 0,
+  );
+  const [referencePhotoScalePct, setReferencePhotoScalePct] = React.useState(
+    editingTemplate?.dimensions.referencePhotoScalePct ?? 100,
+  );
+  const [referencePhotoOffsetYPct, setReferencePhotoOffsetYPct] = React.useState(
+    editingTemplate?.dimensions.referencePhotoOffsetYPct ?? 0,
+  );
+  const [referencePhotoAnchorY, setReferencePhotoAnchorY] = React.useState<"center" | "bottom">(
+    editingTemplate?.dimensions.referencePhotoAnchorY ?? "center",
+  );
+  const [bodyColorHex, setBodyColorHex] = React.useState(
+    editingTemplate?.dimensions.bodyColorHex ?? "#b0b8c4",
+  );
+  const [rimColorHex, setRimColorHex] = React.useState(
+    editingTemplate?.dimensions.rimColorHex ?? "#d0d0d0",
   );
 
   const templateWidthMm = diameterMm > 0 ? round2(Math.PI * diameterMm) : 0;
@@ -148,6 +187,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     editingTemplate?.tumblerMapping,
   );
   const [showMappingWizard, setShowMappingWizard] = React.useState(false);
+  const handleAutoSampleColors = React.useCallback((nextBody: string, nextRim: string) => {
+    setBodyColorHex((prev) => (prev === nextBody ? prev : nextBody));
+    setRimColorHex((prev) => (prev === nextRim ? prev : nextRim));
+  }, []);
 
   // ── Front / Back face photos ──────────────────────────────────
   const [frontPhotoDataUrl, setFrontPhotoDataUrl] = React.useState(editingTemplate?.frontPhotoDataUrl ?? "");
@@ -236,12 +279,53 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         setTaperCorrection(sug.topDiameterMm < sug.bottomDiameterMm ? "top-narrow" : "bottom-narrow");
       }
 
-      // Auto-assign uploaded product photo as front face (no bg removal — operator can trigger later)
+      // Overall height + margins from profile
+      if (matchedProfile) {
+        const oh = matchedProfile.overallHeightMm;
+        setOverallHeightMm(round2(oh));
+        const usable = matchedProfile.usableHeightMm;
+        const topM = matchedProfile.guideBand?.upperGrooveYmm ?? round2((oh - usable) / 2);
+        const bottomM = round2(Math.max(0, oh - usable - topM));
+        setTopMarginMm(topM);
+        setBottomMarginMm(bottomM);
+      } else if (sug.overallHeightMm && sug.usableHeightMm) {
+        const oh = sug.overallHeightMm;
+        setOverallHeightMm(round2(oh));
+        const topM = round2((oh - sug.usableHeightMm) / 2);
+        const bottomM = round2(Math.max(0, oh - sug.usableHeightMm - topM));
+        setTopMarginMm(topM);
+        setBottomMarginMm(bottomM);
+      }
+
+      // Auto-assign product photo as front face + auto BG removal
       if (productImageFile && !frontPhotoDataUrl) {
         const original = await fileToFacePhotoDataUrl(productImageFile);
         if (original) {
           setFrontOriginalUrl(original);
           setFrontPhotoDataUrl(original);
+          // Auto-trigger background removal
+          setFrontBgStatus("processing");
+          try {
+            const imgRes = await fetch(original);
+            const blob = await imgRes.blob();
+            const { removeBackground } = await import("@imgly/background-removal");
+            const clean = await removeBackground(blob, { model: "isnet_quint8", proxyToWorker: false });
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const url = reader.result as string;
+              if (url) {
+                setFrontCleanUrl(url);
+                setFrontPhotoDataUrl(url);
+                setFrontBgStatus("done");
+              } else {
+                setFrontBgStatus("failed");
+              }
+            };
+            reader.onerror = () => setFrontBgStatus("failed");
+            reader.readAsDataURL(clean);
+          } catch {
+            setFrontBgStatus("failed");
+          }
         }
       }
     } catch (e) {
@@ -303,6 +387,14 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         templateWidthMm,
         handleArcDeg,
         taperCorrection,
+        overallHeightMm: overallHeightMm > 0 ? overallHeightMm : undefined,
+        topMarginMm: Number.isFinite(topMarginMm) ? topMarginMm : undefined,
+        bottomMarginMm: Number.isFinite(bottomMarginMm) ? bottomMarginMm : undefined,
+        referencePhotoScalePct: Number.isFinite(referencePhotoScalePct) ? referencePhotoScalePct : undefined,
+        referencePhotoOffsetYPct: Number.isFinite(referencePhotoOffsetYPct) ? referencePhotoOffsetYPct : undefined,
+        referencePhotoAnchorY,
+        bodyColorHex: bodyColorHex || undefined,
+        rimColorHex: rimColorHex || undefined,
       },
       laserSettings: {
         power,
@@ -798,6 +890,36 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           </select>
         </div>
       </div>
+
+      {/* ── Engravable zone editor ──────────────────────────────── */}
+      {productType !== "flat" && frontPhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Engravable zone</div>
+          <EngravableZoneEditor
+            photoDataUrl={frontPhotoDataUrl}
+            overallHeightMm={overallHeightMm}
+            topMarginMm={topMarginMm}
+            bottomMarginMm={bottomMarginMm}
+            diameterMm={diameterMm}
+            photoScalePct={referencePhotoScalePct}
+            photoOffsetYPct={referencePhotoOffsetYPct}
+            photoAnchorY={referencePhotoAnchorY}
+            bodyColorHex={bodyColorHex}
+            rimColorHex={rimColorHex}
+            onChange={(top, bottom) => {
+              setTopMarginMm(top);
+              setBottomMarginMm(bottom);
+              // Keep printHeightMm in sync
+              const eng = round2(overallHeightMm - top - bottom);
+              if (eng > 0) setPrintHeightMm(eng);
+            }}
+            onPhotoScaleChange={setReferencePhotoScalePct}
+            onPhotoOffsetYChange={setReferencePhotoOffsetYPct}
+            onPhotoAnchorYChange={setReferencePhotoAnchorY}
+            onColorsChange={handleAutoSampleColors}
+          />
+        </div>
+      )}
 
       {/* ── Default laser settings ────────────────────────────────── */}
       <div className={styles.section}>

@@ -99,6 +99,7 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
       set({
         tumblerDiameterMm: value,
         tumblerOutsideDiameterMm: value,
+        tumblerTemplateWidthMm: computeTumblerWrapWidthMm(value),
         ...(isTapered
           ? {}
           : {
@@ -113,6 +114,7 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
       set({
         tumblerPrintableHeightMm: value,
         tumblerUsableHeightMm: value,
+        tumblerTemplateHeightMm: value,
       });
       return;
     }

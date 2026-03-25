@@ -37,7 +37,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "tumbler-40oz",
     label: "40oz Tumbler",
-    glbPath: "/models/templates/tumbler-40oz.glb",
+    glbPath: "/models/templates/yeti-40oz-body.glb",
     thumbnailPath: "/models/thumbnails/tumbler-40oz.png",
     icon: "🥤",
     workspaceModes: ["tumbler-wrap"],

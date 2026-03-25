@@ -29,6 +29,12 @@ export function analyzeTumblerMesh(
   geometry: THREE.BufferGeometry,
 ): TumblerGeometry {
   const pos = geometry.attributes.position;
+  const percentile = (values: number[], p: number): number => {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p)));
+    return sorted[idx];
+  };
 
   // Step 1: Find the Y extent
   let maxY = -Infinity;
@@ -69,26 +75,39 @@ export function analyzeTumblerMesh(
     }
   }
 
-  // Step 3: Compute the center of the rim circle (average XZ of rim verts)
+  // Step 3: Robust center/radius detection.
+  // Some GLBs include inner/lid vertices on the top plane; averaging all top
+  // vertices underestimates radius badly. We refine using outer-distance points.
   const center = new THREE.Vector3(0, maxY, 0);
-  if (rimVertices.length > 0) {
-    for (const v of rimVertices) {
-      center.x += v.x;
-      center.z += v.z;
-    }
-    center.x /= rimVertices.length;
-    center.z /= rimVertices.length;
-  }
+  let radius = bodyHeight / 4;
 
-  // Step 4: Compute radius as average distance from center in XZ plane
-  let totalDist = 0;
-  for (const v of rimVertices) {
-    const dx = v.x - center.x;
-    const dz = v.z - center.z;
-    totalDist += Math.sqrt(dx * dx + dz * dz);
+  if (rimVertices.length > 0) {
+    const xs = rimVertices.map((v) => v.x);
+    const zs = rimVertices.map((v) => v.z);
+    const xMin = percentile(xs, 0.05);
+    const xMax = percentile(xs, 0.95);
+    const zMin = percentile(zs, 0.05);
+    const zMax = percentile(zs, 0.95);
+
+    // Use trimmed extents instead of raw averaging.
+    // This is far more stable when handles/lids leak into the top band.
+    center.x = (xMin + xMax) / 2;
+    center.z = (zMin + zMax) / 2;
+
+    const radiusX = Math.max(0, (xMax - xMin) / 2);
+    const radiusZ = Math.max(0, (zMax - zMin) / 2);
+    const extentRadius = Math.max(radiusX, radiusZ);
+
+    const distances = rimVertices
+      .map((v) => {
+        const dx = v.x - center.x;
+        const dz = v.z - center.z;
+        return Math.sqrt(dx * dx + dz * dz);
+      });
+
+    const outerRadius = percentile(distances, 0.9);
+    radius = Math.max(extentRadius, outerRadius);
   }
-  const radius =
-    rimVertices.length > 0 ? totalDist / rimVertices.length : bodyHeight / 4;
 
   return {
     center,

@@ -4,6 +4,22 @@ export interface ProductTemplateDimensions {
   templateWidthMm: number; // computed: Math.PI * diameterMm
   handleArcDeg: number; // 0 = no handle
   taperCorrection: "none" | "top-narrow" | "bottom-narrow";
+  /** Total product height including non-engravable areas (mm) */
+  overallHeightMm?: number;
+  /** Top non-engravable margin — lid seat / rim (mm) */
+  topMarginMm?: number;
+  /** Bottom non-engravable margin — base taper (mm) */
+  bottomMarginMm?: number;
+  /** Template editor-only scale for the reference photo (percent) */
+  referencePhotoScalePct?: number;
+  /** Template editor-only vertical nudge for the reference photo (percent of editor height) */
+  referencePhotoOffsetYPct?: number;
+  /** Template editor-only vertical anchor for the reference photo */
+  referencePhotoAnchorY?: "center" | "bottom";
+  /** Sampled body color from the engravable zone */
+  bodyColorHex?: string;
+  /** Sampled rim / engraved render color */
+  rimColorHex?: string;
 }
 
 export interface ProductTemplateLaserSettings {
@@ -62,4 +78,5 @@ export interface ProductTemplate {
 export interface ProductTemplateStore {
   templates: ProductTemplate[];
   lastUpdated: string;
+  deletedBuiltInIds?: string[];
 }

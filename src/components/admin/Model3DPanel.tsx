@@ -22,7 +22,11 @@ const ModelViewer = dynamic<ModelViewerProps>(
 
 const PX_PER_MM = 4;
 
-async function rasterizeItem(item: PlacedItem): Promise<HTMLCanvasElement> {
+function clampValue(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+async function rasterizeItem(item: PlacedItem, tintColor?: string): Promise<HTMLCanvasElement> {
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(item.width * PX_PER_MM);
   canvas.height = Math.ceil(item.height * PX_PER_MM);
@@ -36,6 +40,12 @@ async function rasterizeItem(item: PlacedItem): Promise<HTMLCanvasElement> {
     const img = new Image();
     img.onload = () => {
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      if (tintColor) {
+        ctx.globalCompositeOperation = "source-in";
+        ctx.fillStyle = tintColor;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = "source-over";
+      }
       URL.revokeObjectURL(blobUrl);
       resolve();
     };
@@ -64,6 +74,10 @@ export interface Model3DPanelProps {
   onUpdateCalibration?: (offsetX: number, offsetY: number, rotation: number) => void;
   /** Body tint hex color for 3D model material */
   bodyTintColor?: string;
+  /** Rim tint for the model body bands */
+  rimTintColor?: string;
+  /** Artwork / engraving tint */
+  artworkTintColor?: string;
 }
 
 export function Model3DPanel({
@@ -78,6 +92,8 @@ export function Model3DPanel({
   onModelFileChange,
   onUpdateCalibration,
   bodyTintColor,
+  rimTintColor,
+  artworkTintColor,
 }: Model3DPanelProps) {
   const [modelFile, setModelFileLocal] = React.useState<File | null>(null);
 
@@ -92,26 +108,68 @@ export function Model3DPanel({
   const [itemTextures, setItemTextures] = React.useState<Map<string, HTMLCanvasElement>>(new Map());
   const [templateLoading, setTemplateLoading] = React.useState<string | null>(null);
   const [templateError, setTemplateError] = React.useState<string | null>(null);
+  const [templateAvailability, setTemplateAvailability] = React.useState<Record<string, boolean>>({});
   const [showCalibration, setShowCalibration] = React.useState(false);
   const [calX, setCalX] = React.useState(tumblerMapping?.calibrationOffsetX ?? 0);
   const [calY, setCalY] = React.useState(tumblerMapping?.calibrationOffsetY ?? 0);
   const [calRot, setCalRot] = React.useState(tumblerMapping?.calibrationRotation ?? 0);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const calXLimit = React.useMemo(
+    () => Math.max(15, Math.min(45, Math.round(bedWidthMm * 0.12))),
+    [bedWidthMm],
+  );
+  const calYLimit = React.useMemo(
+    () => Math.max(10, Math.min(35, Math.round(bedHeightMm * 0.2))),
+    [bedHeightMm],
+  );
+  const calRotLimit = 35;
 
   // Sync calibration sliders with mapping changes (e.g. template switch)
   React.useEffect(() => {
-    setCalX(tumblerMapping?.calibrationOffsetX ?? 0);
-    setCalY(tumblerMapping?.calibrationOffsetY ?? 0);
-    setCalRot(tumblerMapping?.calibrationRotation ?? 0);
-  }, [tumblerMapping?.calibrationOffsetX, tumblerMapping?.calibrationOffsetY, tumblerMapping?.calibrationRotation]);
+    setCalX(clampValue(tumblerMapping?.calibrationOffsetX ?? 0, -calXLimit, calXLimit));
+    setCalY(clampValue(tumblerMapping?.calibrationOffsetY ?? 0, -calYLimit, calYLimit));
+    setCalRot(clampValue(tumblerMapping?.calibrationRotation ?? 0, -calRotLimit, calRotLimit));
+  }, [
+    tumblerMapping?.calibrationOffsetX,
+    tumblerMapping?.calibrationOffsetY,
+    tumblerMapping?.calibrationRotation,
+    calXLimit,
+    calYLimit,
+  ]);
 
-  const filteredTemplates = GLB_TEMPLATES.filter((t) =>
-    t.workspaceModes.includes(workspaceMode)
+  const filteredTemplates = React.useMemo(
+    () => GLB_TEMPLATES.filter((t) => t.workspaceModes.includes(workspaceMode)),
+    [workspaceMode],
   );
 
   const modelExt = modelFile?.name.split(".").pop()?.toLowerCase() ?? "";
   const viewable = VIEWABLE_EXTS.has(modelExt);
   const hasItems = placedItems.length > 0;
+
+  // Probe template files so missing assets are disabled instead of erroring on click.
+  React.useEffect(() => {
+    if (filteredTemplates.length === 0) {
+      setTemplateAvailability({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      filteredTemplates.map(async (tpl) => {
+        try {
+          const res = await fetch(tpl.glbPath, { method: "HEAD" });
+          return [tpl.id, res.ok || res.status === 405] as const;
+        } catch {
+          return [tpl.id, false] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      const next: Record<string, boolean> = {};
+      entries.forEach(([id, ok]) => { next[id] = ok; });
+      setTemplateAvailability(next);
+    });
+    return () => { cancelled = true; };
+  }, [filteredTemplates]);
 
   const accept = React.useCallback((file: File) => {
     if (file.size > MAX_MODEL_BYTES) {
@@ -119,6 +177,7 @@ export function Model3DPanel({
       return;
     }
     setSizeError(null);
+    setTemplateError(null);
     setModelFile(file);
     setViewerOpen(false);
   }, [setModelFile]);
@@ -156,6 +215,7 @@ export function Model3DPanel({
     // Skip if the currently loaded model already matches this path
     const expectedName = modelPathOverride.split("/").pop() ?? "";
     if (modelFile?.name === expectedName) return;
+    setTemplateError(null);
 
     fetch(modelPathOverride)
       .then((r) => {
@@ -168,14 +228,59 @@ export function Model3DPanel({
         accept(file);
         setViewerOpen(true);
       })
-      .catch((err) => console.warn("[Model3DPanel] auto-load failed:", err));
+      .catch((err) => {
+        console.warn("[Model3DPanel] auto-load failed:", err);
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        setTemplateError(`Auto-load failed for ${modelPathOverride}: ${msg}`);
+      });
   }, [modelPathOverride, accept]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Serialized key so the effect re-fires when items move/resize, not just on reference changes
   const itemPositionKey = React.useMemo(
-    () => placedItems.map(i => `${i.id}:${i.x}:${i.y}:${i.width}:${i.height}`).join("|"),
+    () =>
+      placedItems
+        .map((i) => `${i.id}:${i.x}:${i.y}:${i.width}:${i.height}:${i.rotation}:${i.visible !== false}:${i.svgText.length}`)
+        .join("|"),
     [placedItems],
   );
+
+  const effectiveMapping = React.useMemo(() => {
+    if (!tumblerMapping) return tumblerMapping;
+    const base = showCalibration
+      ? {
+          ...tumblerMapping,
+          calibrationOffsetX: calX,
+          calibrationOffsetY: calY,
+          calibrationRotation: calRot,
+        }
+      : tumblerMapping;
+
+    return {
+      ...base,
+      calibrationOffsetX: clampValue(base.calibrationOffsetX ?? 0, -calXLimit, calXLimit),
+      calibrationOffsetY: clampValue(base.calibrationOffsetY ?? 0, -calYLimit, calYLimit),
+      calibrationRotation: clampValue(base.calibrationRotation ?? 0, -calRotLimit, calRotLimit),
+    };
+  }, [tumblerMapping, showCalibration, calX, calY, calRot, calXLimit, calYLimit]);
+
+  const viewerRefreshKey = React.useMemo(() => {
+    const mapKey = effectiveMapping
+      ? [
+          effectiveMapping.frontFaceRotation ?? 0,
+          effectiveMapping.handleArcDeg ?? 0,
+          effectiveMapping.calibrationOffsetX ?? 0,
+          effectiveMapping.calibrationOffsetY ?? 0,
+          effectiveMapping.calibrationRotation ?? 0,
+        ].join(":")
+      : "nomap";
+    return [
+      modelFile?.name ?? "nomodel",
+      bedWidthMm,
+      bedHeightMm,
+      itemPositionKey,
+      mapKey,
+    ].join("|");
+  }, [modelFile?.name, bedWidthMm, bedHeightMm, itemPositionKey, effectiveMapping]);
 
   // Auto-rasterize each placed item into its own canvas texture
   // Runs whenever items change — no manual "Snap" button needed
@@ -190,7 +295,7 @@ export function Model3DPanel({
 
     Promise.all(
       visible.map(async (item) => {
-        const canvas = await rasterizeItem(item);
+        const canvas = await rasterizeItem(item, artworkTintColor);
         return [item.id, canvas] as [string, HTMLCanvasElement];
       }),
     ).then((entries) => {
@@ -199,7 +304,7 @@ export function Model3DPanel({
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewerOpen, itemPositionKey, hasItems]);
+  }, [viewerOpen, itemPositionKey, hasItems, artworkTintColor]);
 
   return (
     <section className={styles.panel}>
@@ -214,7 +319,7 @@ export function Model3DPanel({
         <input
           ref={inputRef}
           type="file"
-          accept=".stl,.obj,.glb,.gltf,.step,.stp"
+          accept=".stl,.obj,.glb,.gltf"
           className={styles.fileInput}
           onChange={(e) => {
             const file = e.target.files?.[0];
@@ -250,7 +355,7 @@ export function Model3DPanel({
             <>
               <span className={styles.dropIcon}>◈</span>
               <span className={styles.dropText}>Drop 3D model here</span>
-              <span className={styles.dropHint}>STL · OBJ · GLB · STEP</span>
+              <span className={styles.dropHint}>STL · OBJ · GLB · GLTF</span>
             </>
           )}
         </div>
@@ -276,6 +381,7 @@ export function Model3DPanel({
           <>
             <div className={styles.viewerWrap}>
               <ModelViewer
+                key={viewerRefreshKey}
                 file={modelFile}
                 placedItems={placedItems}
                 itemTextures={itemTextures}
@@ -285,9 +391,8 @@ export function Model3DPanel({
                 handleArcDeg={handleArcDeg}
                 glbPath={modelPathOverride}
                 bodyTintColor={bodyTintColor}
-                tumblerMapping={showCalibration && tumblerMapping
-                  ? { ...tumblerMapping, calibrationOffsetX: calX, calibrationOffsetY: calY, calibrationRotation: calRot }
-                  : tumblerMapping}
+                rimTintColor={rimTintColor}
+                tumblerMapping={effectiveMapping}
               />
             </div>
 
@@ -307,15 +412,18 @@ export function Model3DPanel({
                     <div className={styles.calibrateHint}>
                       Adjust until the 3D preview matches the grid placement
                     </div>
+                    <div className={styles.calibrateHint}>
+                      Fine-tune only: large values can push artwork around the back and look cut off.
+                    </div>
                     <label className={styles.calibrateRow}>
                       <span className={styles.calibrateLabel}>Rotation</span>
                       <input
                         type="range"
-                        min={-180}
-                        max={180}
+                        min={-calRotLimit}
+                        max={calRotLimit}
                         step={1}
                         value={calRot}
-                        onChange={(e) => setCalRot(Number(e.target.value))}
+                        onChange={(e) => setCalRot(clampValue(Number(e.target.value), -calRotLimit, calRotLimit))}
                         className={styles.calibrateSlider}
                       />
                       <span className={styles.calibrateValue}>{calRot}&deg;</span>
@@ -324,11 +432,11 @@ export function Model3DPanel({
                       <span className={styles.calibrateLabel}>H offset</span>
                       <input
                         type="range"
-                        min={-180}
-                        max={180}
+                        min={-calXLimit}
+                        max={calXLimit}
                         step={1}
                         value={calX}
-                        onChange={(e) => setCalX(Number(e.target.value))}
+                        onChange={(e) => setCalX(clampValue(Number(e.target.value), -calXLimit, calXLimit))}
                         className={styles.calibrateSlider}
                       />
                       <span className={styles.calibrateValue}>{calX}mm</span>
@@ -337,11 +445,11 @@ export function Model3DPanel({
                       <span className={styles.calibrateLabel}>V offset</span>
                       <input
                         type="range"
-                        min={-180}
-                        max={180}
+                        min={-calYLimit}
+                        max={calYLimit}
                         step={1}
                         value={calY}
-                        onChange={(e) => setCalY(Number(e.target.value))}
+                        onChange={(e) => setCalY(clampValue(Number(e.target.value), -calYLimit, calYLimit))}
                         className={styles.calibrateSlider}
                       />
                       <span className={styles.calibrateValue}>{calY}mm</span>
@@ -351,7 +459,13 @@ export function Model3DPanel({
                         type="button"
                         className={styles.calibrateSaveBtn}
                         onClick={() => {
-                          onUpdateCalibration(calX, calY, calRot);
+                          const nextX = clampValue(calX, -calXLimit, calXLimit);
+                          const nextY = clampValue(calY, -calYLimit, calYLimit);
+                          const nextRot = clampValue(calRot, -calRotLimit, calRotLimit);
+                          onUpdateCalibration(nextX, nextY, nextRot);
+                          setCalX(nextX);
+                          setCalY(nextY);
+                          setCalRot(nextRot);
                           setShowCalibration(false);
                         }}
                       >
@@ -359,11 +473,22 @@ export function Model3DPanel({
                       </button>
                       <button
                         type="button"
+                        className={styles.calibrateResetBtn}
+                        onClick={() => {
+                          setCalX(0);
+                          setCalY(0);
+                          setCalRot(0);
+                        }}
+                      >
+                        Reset
+                      </button>
+                      <button
+                        type="button"
                         className={styles.calibrateCancelBtn}
                         onClick={() => {
-                          setCalX(tumblerMapping.calibrationOffsetX ?? 0);
-                          setCalY(tumblerMapping.calibrationOffsetY ?? 0);
-                          setCalRot(tumblerMapping.calibrationRotation ?? 0);
+                          setCalX(clampValue(tumblerMapping.calibrationOffsetX ?? 0, -calXLimit, calXLimit));
+                          setCalY(clampValue(tumblerMapping.calibrationOffsetY ?? 0, -calYLimit, calYLimit));
+                          setCalRot(clampValue(tumblerMapping.calibrationRotation ?? 0, -calRotLimit, calRotLimit));
                           setShowCalibration(false);
                         }}
                       >
@@ -388,14 +513,15 @@ export function Model3DPanel({
               {filteredTemplates.map((tpl) => {
                 const isActive = modelFile?.name === tpl.glbPath.split("/").pop();
                 const isLoading = templateLoading === tpl.id;
+                const isAvailable = templateAvailability[tpl.id] ?? true;
                 return (
                   <button
                     key={tpl.id}
                     type="button"
                     className={`${styles.templateCard} ${isActive ? styles.templateCardActive : ""}`}
                     onClick={() => void loadTemplate(tpl)}
-                    disabled={templateLoading !== null}
-                    title={tpl.label}
+                    disabled={templateLoading !== null || !isAvailable}
+                    title={isAvailable ? tpl.label : `${tpl.label} (missing model file)`}
                   >
                     <div className={styles.templateThumb}>
                       {isLoading ? (
@@ -416,6 +542,9 @@ export function Model3DPanel({
                       )}
                     </div>
                     <span className={styles.templateCardLabel}>{tpl.label}</span>
+                    {!isAvailable && (
+                      <span className={styles.templateMissing}>Missing asset</span>
+                    )}
                   </button>
                 );
               })}

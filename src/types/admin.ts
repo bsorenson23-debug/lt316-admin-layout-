@@ -80,27 +80,44 @@ export function normalizeBedConfig(config: BedConfig): BedConfig {
   let height = config.flatHeight;
 
   if (isTumbler) {
+    const templateWidth = Number.isFinite(config.tumblerTemplateWidthMm)
+      ? (config.tumblerTemplateWidthMm ?? 0)
+      : 0;
+    const templateHeight = Number.isFinite(config.tumblerTemplateHeightMm)
+      ? (config.tumblerTemplateHeightMm ?? 0)
+      : 0;
     const hasTop = Number.isFinite(config.tumblerTopDiameterMm);
     const hasBottom = Number.isFinite(config.tumblerBottomDiameterMm);
     const hasOutside = Number.isFinite(config.tumblerOutsideDiameterMm);
     const isTapered = config.tumblerShapeType === "tapered" && hasTop && hasBottom;
 
+    // Width follows live tumbler geometry first so grid + 3D stay in sync when
+    // operators tune diameter/profile values in Bed Settings.
     if (isTapered) {
       const top = config.tumblerTopDiameterMm ?? config.tumblerDiameterMm;
       const bottom = config.tumblerBottomDiameterMm ?? config.tumblerDiameterMm;
       width = Math.PI * ((top + bottom) / 2);
     } else if (hasOutside) {
       width = Math.PI * (config.tumblerOutsideDiameterMm ?? config.tumblerDiameterMm);
-    } else {
+    } else if (Number.isFinite(config.tumblerDiameterMm) && config.tumblerDiameterMm > 0) {
       width = computeTumblerWrapWidthMm(config.tumblerDiameterMm);
+    } else if (templateWidth > 0) {
+      width = templateWidth;
+    } else {
+      width = computeTumblerWrapWidthMm(DEFAULT_BED_CONFIG.tumblerDiameterMm);
     }
 
-    if (Number.isFinite(config.tumblerUsableHeightMm)) {
+    // Height should represent active printable workspace height.
+    if (Number.isFinite(config.tumblerPrintableHeightMm) && config.tumblerPrintableHeightMm > 0) {
+      height = config.tumblerPrintableHeightMm;
+    } else if (Number.isFinite(config.tumblerUsableHeightMm)) {
       height = config.tumblerUsableHeightMm ?? config.tumblerPrintableHeightMm;
     } else if (Number.isFinite(config.tumblerOverallHeightMm)) {
       height = config.tumblerOverallHeightMm ?? config.tumblerPrintableHeightMm;
+    } else if (templateHeight > 0) {
+      height = templateHeight;
     } else {
-      height = config.tumblerPrintableHeightMm;
+      height = DEFAULT_BED_CONFIG.tumblerPrintableHeightMm;
     }
   }
 
@@ -109,8 +126,8 @@ export function normalizeBedConfig(config: BedConfig): BedConfig {
     width,
     height,
     showTumblerGuideBand: config.showTumblerGuideBand ?? true,
-    tumblerTemplateWidthMm: width,
-    tumblerTemplateHeightMm: height,
+    tumblerTemplateWidthMm: isTumbler ? width : config.tumblerTemplateWidthMm,
+    tumblerTemplateHeightMm: isTumbler ? height : config.tumblerTemplateHeightMm,
   };
 }
 
@@ -236,7 +253,7 @@ export type ItemAlignmentMode =
   | "fit-bed"
   /** Tumbler-wrap only: shift X by half the template width (180° from origin) */
   | "opposite-logo"
-  /** Tumbler-wrap only: center artwork horizontally on the FRONT marker (bedWidth / 2) */
+  /** Tumbler-wrap only: center artwork on the FRONT face (bedWidth * 3/4) */
   | "center-on-front"
   /** Tumbler-wrap: right of handle — artwork faces user when held in right hand */
   | "right-of-handle"
@@ -245,4 +262,23 @@ export type ItemAlignmentMode =
   /** Tumbler-wrap: scale artwork to fill the entire printable arc width */
   | "full-wrap"
   /** Tumbler-wrap: place artwork on the back side (behind handle, near grid origin) */
-  | "back-side";
+  | "back-side"
+  /** Tumbler-wrap: center artwork within the engravable zone */
+  | "center-zone"
+  /** Tumbler-wrap: scale artwork to fit the engravable zone */
+  | "fit-zone";
+
+/** Engravable safe zone — rectangle in mm on the bed where engraving is safe */
+export interface EngravableZone {
+  /** Left edge X in mm */
+  x: number;
+  /** Top edge Y in mm */
+  y: number;
+  /** Width in mm (printable arc minus handle) */
+  width: number;
+  /** Height in mm (printable height minus margins) */
+  height: number;
+  /** Front face center X in mm (for centering artwork) */
+  frontCenterX: number;
+}
+

@@ -72,10 +72,11 @@ interface Props {
   onSelect: (template: ProductTemplate) => void;
   onCreateNew: () => void;
   onEdit?: (template: ProductTemplate) => void;
+  onDelete?: (id: string) => void;
   selectedId?: string;
 }
 
-export function TemplateGallery({ onSelect, onCreateNew, onEdit, selectedId }: Props) {
+export function TemplateGallery({ onSelect, onCreateNew, onEdit, onDelete, selectedId }: Props) {
   const [templates, setTemplates] = React.useState<ProductTemplate[]>(() => loadTemplates());
   const [filter, setFilter] = React.useState<ProductTypeFilter>("all");
   const [pendingId, setPendingId] = React.useState<string | null>(null);
@@ -90,7 +91,7 @@ export function TemplateGallery({ onSelect, onCreateNew, onEdit, selectedId }: P
 
   const handleCardClick = (t: ProductTemplate) => {
     if (manageMode) {
-      if (!t.builtIn && onEdit) {
+      if (onEdit) {
         onEdit(t);
       }
       return;
@@ -107,6 +108,7 @@ export function TemplateGallery({ onSelect, onCreateNew, onEdit, selectedId }: P
     setTimeout(() => {
       deleteTemplate(id);
       setTemplates(loadTemplates());
+      onDelete?.(id);
       setConfirmDeleteId(null);
       setFadingOutId(null);
     }, 250);
@@ -138,7 +140,7 @@ export function TemplateGallery({ onSelect, onCreateNew, onEdit, selectedId }: P
 
       {manageMode && (
         <div className={styles.manageBanner}>
-          Tap a template to edit or delete it
+          Tap any template to edit or delete it
         </div>
       )}
 
@@ -147,7 +149,7 @@ export function TemplateGallery({ onSelect, onCreateNew, onEdit, selectedId }: P
           const isSelected = t.id === selectedId || t.id === pendingId;
           const isFading = t.id === fadingOutId;
           const isConfirming = t.id === confirmDeleteId;
-          const showActions = !t.builtIn && (manageMode || undefined);
+          const showActions = manageMode || undefined;
 
           return (
             <div
@@ -184,7 +186,7 @@ export function TemplateGallery({ onSelect, onCreateNew, onEdit, selectedId }: P
               )}
 
               {/* Action icons — always visible in manage mode, hover-only otherwise */}
-              {!t.builtIn && !isConfirming && (
+              {!isConfirming && (
                 <div className={`${styles.actionRow} ${showActions ? styles.actionRowVisible : ""}`}>
                   {onEdit && (
                     <button

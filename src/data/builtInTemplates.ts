@@ -100,6 +100,11 @@ export const BUILT_IN_TEMPLATES: ProductTemplate[] = [
       templateWidthMm: round2(Math.PI * 104),
       handleArcDeg: 90,
       taperCorrection: "none",
+      overallHeightMm: 297,
+      topMarginMm: 28,
+      bottomMarginMm: 28,
+      bodyColorHex: "#1f2322",
+      rimColorHex: "#cfd2d0",
     },
     laserSettings: {
       power: 22,

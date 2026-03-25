@@ -18,14 +18,12 @@ Move them back to their original paths when ready to integrate.
 
 | File | Original Path | What It Does | To Wire Up |
 |------|--------------|--------------|------------|
-| `engravableDimensions.ts` | `lib/` | Computes printable zone from tumbler profile dimensions | Call from `handleTemplateSelect` or `TumblerExportPanel` |
 | `removeBg.ts` | `lib/` | 3-tier bg removal (@imgly client -> Replicate server -> original) | Call from "Remove BG" button in overlay controls |
 
 ## Utils
 
 | File | Original Path | What It Does | To Wire Up |
 |------|--------------|--------------|------------|
-| `curvedPhotoOverlay.ts` | `utils/` | Draws photo with cylindrical perspective distortion | Call from `ModelViewer` or overlay generator for curved preview |
 | `lightBurnSvgExport.ts` | `utils/` | `buildLightBurnExportSvg()` — builds composite mm-unit SVG for LightBurn import | **HIGH PRIORITY** — call from `TumblerExportPanel` export button |
 
 ## CSS Modules

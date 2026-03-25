@@ -57,6 +57,7 @@ import { TemplateGallery } from "./TemplateGallery";
 import { TemplateCreateForm } from "./TemplateCreateForm";
 import type { ProductTemplate } from "@/types/productTemplate";
 import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
+import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -98,7 +99,12 @@ export function AdminLayoutShell() {
   const [overlayOpacity, setOverlayOpacity] = useState(12); // percent (5–50)
   const [overlayBlend, setOverlayBlend] = useState<"normal" | "multiply">("normal");
   const [twoSidedMode, setTwoSidedMode] = useState(false);
+  const [taperWarpEnabled, setTaperWarpEnabled] = useState(true);
+  const [curvedOverlay, setCurvedOverlay] = useState(false);
   const [bgRemovalStatus, setBgRemovalStatus] = useState<"idle" | "running" | "done" | "failed">("idle");
+
+  // -- Engravable safe zone ---------------------------------------------------
+  const [engravableZone, setEngravableZone] = useState<import("@/types/admin").EngravableZone | null>(null);
 
   // -- Screenshot export from Konva stage ------------------------------------
   const konvaStageRef = useRef<import("konva").default.Stage | null>(null);
@@ -121,6 +127,14 @@ export function AdminLayoutShell() {
   // -- Color laser layers ---------------------------------------------------
   const [laserLayers, setLaserLayers] = useState<LaserLayer[]>(() => buildDefaultLayers());
 
+  // -- Product template system -----------------------------------------------
+  const [selectedTemplate, setSelectedTemplate] = useState<ProductTemplate | null>(null);
+  const [showTemplateGallery, setShowTemplateGallery] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<ProductTemplate | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [, setTemplateRefreshNonce] = useState(0);
+
   const handleUpdateLayer = useCallback((layer: LaserLayer) => {
     setLaserLayers(prev => prev.map(l => l.id === layer.id ? layer : l));
   }, []);
@@ -129,21 +143,114 @@ export function AdminLayoutShell() {
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
   const is3DPlacement = isTumblerMode && tumblerViewMode === "3d-placement";
   const placementAsset = svgAssets.find((a) => a.id === placementAssetId) ?? null;
+  const templateEngravableDims = React.useMemo(() => {
+    if (!isTumblerMode || !selectedTemplate) return null;
+    return getEngravableDimensions(selectedTemplate);
+  }, [isTumblerMode, selectedTemplate]);
 
   // Tumbler dimensions — shared between left panel preview and center 3D view
   const tumblerDims = React.useMemo(() => {
     if (!isTumblerMode || bedConfig.tumblerDiameterMm <= 0) return null;
+    const overallHeightMm =
+      templateEngravableDims?.totalHeightMm ??
+      bedConfig.tumblerOverallHeightMm ??
+      bedConfig.height;
+    const printableHeightMm =
+      templateEngravableDims?.engravableHeightMm ??
+      bedConfig.tumblerPrintableHeightMm ??
+      bedConfig.tumblerUsableHeightMm ??
+      bedConfig.height;
+    const printableTopOffsetMm =
+      templateEngravableDims?.topMarginMm ??
+      Math.max(0, (overallHeightMm - printableHeightMm) / 2);
     return {
-      overallHeightMm: bedConfig.tumblerOverallHeightMm ?? 215,
+      overallHeightMm,
       diameterMm: bedConfig.tumblerDiameterMm,
       topDiameterMm: bedConfig.tumblerTopDiameterMm,
       bottomDiameterMm: bedConfig.tumblerBottomDiameterMm,
-      printableHeightMm: bedConfig.tumblerPrintableHeightMm ?? bedConfig.height,
+      printableHeightMm,
+      printableTopOffsetMm,
     };
-  }, [isTumblerMode, bedConfig]);
+  }, [isTumblerMode, bedConfig, templateEngravableDims]);
 
   const isPlacementArmed = placementAsset !== null;
   const selectedItem = placedItems.find((p) => p.id === selectedItemId) ?? null;
+  const selectedTemplatePrintHeightMm =
+    templateEngravableDims?.engravableHeightMm ?? selectedTemplate?.dimensions.printHeightMm ?? 0;
+  const rimTintColor = selectedTemplate?.dimensions.rimColorHex ?? "#d0d0d0";
+
+  React.useEffect(() => {
+    setBodyTintColor(selectedTemplate?.dimensions.bodyColorHex ?? "#b0b8c4");
+  }, [selectedTemplate?.id, selectedTemplate?.dimensions.bodyColorHex]);
+
+  React.useEffect(() => {
+    if (!isTumblerMode || !selectedTemplate || !templateEngravableDims) return;
+
+    setBedConfig((prev) => {
+      const nextPrintableHeight = templateEngravableDims.engravableHeightMm;
+      const nextOverallHeight = templateEngravableDims.totalHeightMm;
+      const nextWidth = templateEngravableDims.circumferenceMm;
+
+      if (
+        Math.abs((prev.tumblerPrintableHeightMm ?? 0) - nextPrintableHeight) < 0.01 &&
+        Math.abs((prev.tumblerUsableHeightMm ?? 0) - nextPrintableHeight) < 0.01 &&
+        Math.abs((prev.tumblerOverallHeightMm ?? 0) - nextOverallHeight) < 0.01 &&
+        Math.abs((prev.tumblerTemplateWidthMm ?? 0) - nextWidth) < 0.01 &&
+        Math.abs((prev.tumblerTemplateHeightMm ?? 0) - nextPrintableHeight) < 0.01
+      ) {
+        return prev;
+      }
+
+      return normalizeBedConfig({
+        ...prev,
+        tumblerDiameterMm: templateEngravableDims.diameterMm,
+        tumblerOutsideDiameterMm: templateEngravableDims.diameterMm,
+        tumblerPrintableHeightMm: nextPrintableHeight,
+        tumblerUsableHeightMm: nextPrintableHeight,
+        tumblerOverallHeightMm: nextOverallHeight,
+        tumblerTemplateWidthMm: nextWidth,
+        tumblerTemplateHeightMm: nextPrintableHeight,
+      });
+    });
+  }, [isTumblerMode, selectedTemplate, templateEngravableDims]);
+
+  React.useEffect(() => {
+    if (!isTumblerMode || !selectedTemplate || !templateEngravableDims) {
+      setEngravableZone(null);
+      return;
+    }
+
+    const fullWrapW = templateEngravableDims.circumferenceMm;
+    const frontCenterX = fullWrapW * 3 / 4;
+    let zoneW = Math.max(0, Math.min(templateEngravableDims.printableWidthMm, fullWrapW));
+    if (zoneW <= 0) zoneW = fullWrapW;
+    let zoneX = frontCenterX - zoneW / 2;
+    if (zoneX < 0 || zoneX + zoneW > fullWrapW) {
+      zoneX = 0;
+      zoneW = fullWrapW;
+    }
+    const nextZone = {
+      x: zoneX,
+      y: 0,
+      width: zoneW,
+      height: templateEngravableDims.engravableHeightMm,
+      frontCenterX,
+    };
+
+    setEngravableZone((prev) => {
+      if (
+        prev &&
+        Math.abs(prev.x - nextZone.x) < 0.01 &&
+        Math.abs(prev.y - nextZone.y) < 0.01 &&
+        Math.abs(prev.width - nextZone.width) < 0.01 &&
+        Math.abs(prev.height - nextZone.height) < 0.01 &&
+        Math.abs(prev.frontCenterX - nextZone.frontCenterX) < 0.01
+      ) {
+        return prev;
+      }
+      return nextZone;
+    });
+  }, [isTumblerMode, selectedTemplate, templateEngravableDims]);
 
   // -------------------------------------------------------------------------
   // Build a PlacedItem from an SvgAsset at a given center point (mm)
@@ -214,8 +321,12 @@ export function AdminLayoutShell() {
       if (!selectedAssetId) setSelectedAssetId(accepted[0].id);
 
       // Auto-place each uploaded SVG centered on the bed (skip the old "Place on Bed" step)
+      const placementCenterX =
+        bedConfig.workspaceMode === "tumbler-wrap"
+          ? bedConfig.width * 3 / 4
+          : bedConfig.width / 2;
       const newItems: PlacedItem[] = accepted.map((asset) =>
-        buildPlacedItem(asset, bedConfig.width / 2, bedConfig.height / 2),
+        buildPlacedItem(asset, placementCenterX, bedConfig.height / 2),
       );
       if (newItems.length > 0) {
         setPlacedItems((prev) => [...prev, ...newItems]);
@@ -274,7 +385,7 @@ export function AdminLayoutShell() {
     if (isTumblerMode) {
       const asset = svgAssets.find((a) => a.id === selectedAssetId);
       if (asset) {
-        const item = buildPlacedItem(asset, bedConfig.width / 2, bedConfig.height / 2);
+        const item = buildPlacedItem(asset, bedConfig.width * 3 / 4, bedConfig.height / 2);
         setPlacedItems((prev) => [...prev, item]);
         setSelectedItemId(item.id);
         setInspectorNote(null);
@@ -328,15 +439,17 @@ export function AdminLayoutShell() {
 
   const handleAlignItem = useCallback((id: string, mode: ItemAlignmentMode) => {
     setPlacedItems((prev) => prev.map((p) =>
-      p.id !== id ? p : { ...p, ...computeAlignmentPatch(p, bedConfig, mode) }
+      p.id !== id ? p : { ...p, ...computeAlignmentPatch(p, bedConfig, mode, engravableZone) }
     ));
     if (mode === "center-bed")      setInspectorNote("Centered using artwork bounds");
     if (mode === "center-x")        setInspectorNote("Centered horizontally");
     if (mode === "center-y")        setInspectorNote("Centered vertically");
     if (mode === "fit-bed")         setInspectorNote("Fitted to bed");
-    if (mode === "opposite-logo")   setInspectorNote("Placed opposite logo (180°)");
+    if (mode === "opposite-logo")   setInspectorNote("Placed opposite logo (180\u00B0)");
     if (mode === "center-on-front") setInspectorNote("Centered on front face");
-  }, [bedConfig]);
+    if (mode === "center-zone")     setInspectorNote("Centered in engravable zone");
+    if (mode === "fit-zone")        setInspectorNote("Fitted to engravable zone");
+  }, [bedConfig, engravableZone]);
 
   const handleNormalizeItem = useCallback((id: string) => {
     let did = false;
@@ -376,7 +489,7 @@ export function AdminLayoutShell() {
   }, []);
 
   const handleLoadOrder = useCallback((snapshot: BedConfig) => {
-    setBedConfig(snapshot);
+    setBedConfig(normalizeBedConfig(snapshot));
   }, []);
 
   // Derived list of asset names for order capture
@@ -469,13 +582,6 @@ export function AdminLayoutShell() {
     img.src = dataUrl;
   }, []);
 
-  // -- Product template system -----------------------------------------------
-  const [selectedTemplate, setSelectedTemplate] = useState<ProductTemplate | null>(null);
-  const [showTemplateGallery, setShowTemplateGallery] = useState(false);
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState<ProductTemplate | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
   // Left panel state machine
   const leftPanelState = React.useMemo(() => {
     if (!selectedTemplate) return "no-template" as const;
@@ -486,7 +592,7 @@ export function AdminLayoutShell() {
   // Accordion summary strings for the right panel
   const bedSummary = React.useMemo(() => {
     if (isTumblerMode) {
-      return `\u00F8${bedConfig.tumblerDiameterMm}mm \u00D7 ${bedConfig.tumblerPrintableHeightMm ?? bedConfig.height}mm`;
+      return `\u00F8${bedConfig.tumblerDiameterMm}mm \u00D7 ${bedConfig.height}mm`;
     }
     return `${bedConfig.flatWidth} \u00D7 ${bedConfig.flatHeight}mm`;
   }, [isTumblerMode, bedConfig]);
@@ -507,17 +613,23 @@ export function AdminLayoutShell() {
     // Apply all dimensions at once via bedConfig
     const isRotary = template.productType === "tumbler" || template.productType === "mug" || template.productType === "bottle";
     const mode: WorkspaceMode = isRotary ? "tumbler-wrap" : "flat-bed";
+    const dims = isRotary ? getEngravableDimensions(template) : null;
 
     setBedConfig((prev) =>
       normalizeBedConfig({
         ...prev,
         workspaceMode: mode,
         tumblerDiameterMm: template.dimensions.diameterMm,
-        tumblerPrintableHeightMm: template.dimensions.printHeightMm,
+        tumblerPrintableHeightMm: dims?.engravableHeightMm ?? template.dimensions.printHeightMm,
+        tumblerTemplateWidthMm: template.dimensions.templateWidthMm,
+        tumblerTemplateHeightMm: dims?.engravableHeightMm ?? template.dimensions.printHeightMm,
+        tumblerOverallHeightMm:
+          template.dimensions.overallHeightMm ??
+          dims?.totalHeightMm,
         ...(isRotary
           ? {
               tumblerOutsideDiameterMm: template.dimensions.diameterMm,
-              tumblerUsableHeightMm: template.dimensions.printHeightMm,
+              tumblerUsableHeightMm: dims?.engravableHeightMm ?? template.dimensions.printHeightMm,
             }
           : {
               flatWidth: template.dimensions.templateWidthMm,
@@ -531,6 +643,28 @@ export function AdminLayoutShell() {
     setShowCreateForm(false);
     setBgRemovalStatus("idle");
 
+    // Compute engravable safe zone for rotary products
+    if (isRotary) {
+      // Handle-centered layout: front face at w*3/4 of full wrap
+      const fullWrapW = dims?.circumferenceMm ?? template.dimensions.templateWidthMm;
+      const frontCenterX = fullWrapW * 3 / 4;
+      // Engravable zone width: front face area (≈ diameter), clamped to printable arc
+      let zoneW = Math.max(0, Math.min(dims?.printableWidthMm ?? fullWrapW, fullWrapW));
+      if (zoneW <= 0) zoneW = fullWrapW;
+      let zoneX = frontCenterX - zoneW / 2;
+      if (zoneX < 0 || zoneX + zoneW > fullWrapW) {
+        zoneX = 0;
+        zoneW = fullWrapW;
+      }
+      // Vertical: bed is already sized to printHeightMm (the engravable area),
+      // so zone fills the bed. Y=0 = bed top = printable area top.
+      const zoneY = 0;
+      const zoneH = Math.min(dims?.engravableHeightMm ?? template.dimensions.printHeightMm, template.dimensions.printHeightMm);
+      setEngravableZone({ x: zoneX, y: zoneY, width: zoneW, height: zoneH, frontCenterX });
+    } else {
+      setEngravableZone(null);
+    }
+
     // Show toast
     setToastMessage(`${template.name} loaded \u2014 place your artwork`);
     setTimeout(() => setToastMessage(null), 2200);
@@ -538,6 +672,11 @@ export function AdminLayoutShell() {
 
   const handleUpdateCalibration = useCallback((offsetX: number, offsetY: number, rotation: number) => {
     if (!selectedTemplate) return;
+    const calXLimit = Math.max(15, Math.min(45, Math.round(bedConfig.width * 0.12)));
+    const calYLimit = Math.max(10, Math.min(35, Math.round(bedConfig.height * 0.2)));
+    const calRotLimit = 35;
+    const clampCal = (value: number, min: number, max: number) =>
+      Math.min(max, Math.max(min, value));
     const updatedMapping = {
       ...(selectedTemplate.tumblerMapping ?? {
         frontFaceRotation: 0,
@@ -545,16 +684,16 @@ export function AdminLayoutShell() {
         handleArcDeg: 0,
         isMapped: false,
       }),
-      calibrationOffsetX: offsetX,
-      calibrationOffsetY: offsetY,
-      calibrationRotation: rotation,
+      calibrationOffsetX: clampCal(offsetX, -calXLimit, calXLimit),
+      calibrationOffsetY: clampCal(offsetY, -calYLimit, calYLimit),
+      calibrationRotation: clampCal(rotation, -calRotLimit, calRotLimit),
     };
     const updated = { ...selectedTemplate, tumblerMapping: updatedMapping };
     updateTemplate(updated.id, updated);
     setSelectedTemplate(updated);
-  }, [selectedTemplate]);
+  }, [selectedTemplate, bedConfig.width, bedConfig.height]);
 
-  const previewTemplates = React.useMemo(() => loadTemplates().slice(0, 4), []);
+  const previewTemplates = loadTemplates().slice(0, 4);
 
   return (
     <div className={styles.shell}>
@@ -640,8 +779,8 @@ export function AdminLayoutShell() {
                   <span className={styles.productCardCompactName}>{selectedTemplate.name}</span>
                   <span className={styles.productCardCompactDims}>
                     {selectedTemplate.dimensions.diameterMm > 0
-                      ? `\u00F8${selectedTemplate.dimensions.diameterMm}mm \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`
-                      : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`}
+                      ? `\u00F8${selectedTemplate.dimensions.diameterMm}mm \u00D7 ${selectedTemplatePrintHeightMm}mm`
+                      : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplatePrintHeightMm}mm`}
                   </span>
                 </div>
                 <button
@@ -700,6 +839,22 @@ export function AdminLayoutShell() {
                             onChange={(e) => setOverlayBlend(e.target.checked ? "multiply" : "normal")}
                           />
                           <span>Multiply blend</span>
+                        </label>
+                        <label className={styles.overlaySubToggle}>
+                          <input
+                            type="checkbox"
+                            checked={taperWarpEnabled}
+                            onChange={(e) => setTaperWarpEnabled(e.target.checked)}
+                          />
+                          <span>Cylinder correction</span>
+                        </label>
+                        <label className={styles.overlaySubToggle}>
+                          <input
+                            type="checkbox"
+                            checked={curvedOverlay}
+                            onChange={(e) => setCurvedOverlay(e.target.checked)}
+                          />
+                          <span>Curved perspective</span>
                         </label>
                         {selectedTemplate && (
                           <button
@@ -773,14 +928,14 @@ export function AdminLayoutShell() {
                   onChange={(e) => setBodyTintColor(e.target.value)}
                   className={styles.bodyTintSwatch}
                 />
-                <button
-                  type="button"
-                  className={styles.bodyTintResetBtn}
-                  onClick={() => setBodyTintColor("#b0b8c4")}
-                  title="Reset to default stainless"
-                >
-                  Reset
-                </button>
+                  <button
+                    type="button"
+                    className={styles.bodyTintResetBtn}
+                    onClick={() => setBodyTintColor(selectedTemplate?.dimensions.bodyColorHex ?? "#b0b8c4")}
+                    title="Reset to template body color"
+                  >
+                    Reset
+                  </button>
               </div>
 
               {/* Artwork upload section */}
@@ -839,8 +994,8 @@ export function AdminLayoutShell() {
                   <span className={styles.productCardCompactName}>{selectedTemplate.name}</span>
                   <span className={styles.productCardCompactDims}>
                     {selectedTemplate.dimensions.diameterMm > 0
-                      ? `\u00F8${selectedTemplate.dimensions.diameterMm}mm \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`
-                      : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplate.dimensions.printHeightMm}mm`}
+                      ? `\u00F8${selectedTemplate.dimensions.diameterMm}mm \u00D7 ${selectedTemplatePrintHeightMm}mm`
+                      : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplatePrintHeightMm}mm`}
                   </span>
                 </div>
                 <button
@@ -899,6 +1054,22 @@ export function AdminLayoutShell() {
                             onChange={(e) => setOverlayBlend(e.target.checked ? "multiply" : "normal")}
                           />
                           <span>Multiply blend</span>
+                        </label>
+                        <label className={styles.overlaySubToggle}>
+                          <input
+                            type="checkbox"
+                            checked={taperWarpEnabled}
+                            onChange={(e) => setTaperWarpEnabled(e.target.checked)}
+                          />
+                          <span>Cylinder correction</span>
+                        </label>
+                        <label className={styles.overlaySubToggle}>
+                          <input
+                            type="checkbox"
+                            checked={curvedOverlay}
+                            onChange={(e) => setCurvedOverlay(e.target.checked)}
+                          />
+                          <span>Curved perspective</span>
                         </label>
                         {selectedTemplate && (
                           <button
@@ -1026,30 +1197,33 @@ export function AdminLayoutShell() {
                 </button>
               </div>
 
-              {/* 3D preview — temporarily hidden until properly oriented GLB is ready */}
-              {false && !is3DPlacement && (
-                <Model3DPanel
-                  placedItems={placedItems}
-                  bedWidthMm={bedConfig.width}
-                  bedHeightMm={bedConfig.height}
-                  workspaceMode={bedConfig.workspaceMode}
-                  tumblerDims={tumblerDims}
-                  handleArcDeg={selectedTemplate?.tumblerMapping?.handleArcDeg ?? selectedTemplate?.dimensions?.handleArcDeg ?? 0}
-                  modelPathOverride={selectedTemplate?.glbPath ?? null}
-                  tumblerMapping={selectedTemplate?.tumblerMapping}
-                  onUpdateCalibration={handleUpdateCalibration}
-                  bodyTintColor={bodyTintColor}
-                />
-              )}
             </>
+          )}
+
+          {/* 3D preview */}
+          {selectedTemplate && !is3DPlacement && (
+            <Model3DPanel
+              placedItems={placedItems}
+              bedWidthMm={bedConfig.width}
+              bedHeightMm={bedConfig.height}
+              workspaceMode={bedConfig.workspaceMode}
+              tumblerDims={tumblerDims}
+              handleArcDeg={selectedTemplate?.tumblerMapping?.handleArcDeg ?? selectedTemplate?.dimensions?.handleArcDeg ?? 0}
+              modelPathOverride={selectedTemplate?.glbPath ?? null}
+              tumblerMapping={selectedTemplate?.tumblerMapping}
+              onUpdateCalibration={handleUpdateCalibration}
+              bodyTintColor={bodyTintColor}
+              rimTintColor={rimTintColor}
+              artworkTintColor={rimTintColor}
+            />
           )}
         </div>
       </aside>
 
       {/* CENTER */}
       <main className={styles.centerPanel}>
-        {/* 3D placement view — temporarily hidden until properly oriented GLB is ready */}
-        {false && is3DPlacement && tumblerDims ? (
+        {/* 3D placement view */}
+        {is3DPlacement && tumblerDims ? (
           <div className={styles.center3DWrap}>
             <TumblerPlacementView
               placedItems={placedItems}
@@ -1097,11 +1271,16 @@ export function AdminLayoutShell() {
             productName={selectedTemplate?.name}
             templateOverlayUrl={selectedTemplate?.productPhotoFullUrl ?? selectedTemplate?.frontPhotoDataUrl ?? selectedTemplate?.thumbnailDataUrl ?? null}
             backOverlayUrl={selectedTemplate?.backPhotoDataUrl ?? null}
+            tumblerOverallHeightMm={templateEngravableDims?.totalHeightMm ?? bedConfig.tumblerOverallHeightMm}
+            tumblerTopMarginMm={templateEngravableDims?.topMarginMm}
+            tumblerBottomMarginMm={templateEngravableDims?.bottomMarginMm}
             overlayMode={overlayMode}
             overlayOpacityPct={overlayOpacity}
             overlayBlend={overlayBlend}
+            curvedOverlay={curvedOverlay}
             twoSidedMode={twoSidedMode}
             stageRefCallback={handleStageRef}
+            engravableZone={engravableZone}
           />
         )}
       </main>
@@ -1164,6 +1343,7 @@ export function AdminLayoutShell() {
                   selectedItem={selectedItem}
                   bedConfig={bedConfig}
                   statusNote={inspectorNote}
+                  engravableZone={engravableZone}
                   onUpdateItem={handleUpdateItem}
                   onAlignItem={handleAlignItem}
                   onCenterBetweenGuides={handleCenterSelectedBetweenGuides}
@@ -1237,6 +1417,8 @@ export function AdminLayoutShell() {
                 onFramePreviewChange={setFramePreview}
                 materialSettings={materialSettings}
                 onPreflightNav={handlePreflightNav}
+                taperWarpEnabled={taperWarpEnabled}
+                onTaperWarpChange={setTaperWarpEnabled}
               />
             </div>
           </>
@@ -1291,6 +1473,7 @@ export function AdminLayoutShell() {
                 <TemplateCreateForm
                   editingTemplate={editingTemplate ?? undefined}
                   onSave={(t) => {
+                    setTemplateRefreshNonce((n) => n + 1);
                     // If the edited template is the active one, re-select to sync workspace
                     if (editingTemplate && selectedTemplate?.id === t.id) {
                       handleTemplateSelect(t);
@@ -1311,6 +1494,14 @@ export function AdminLayoutShell() {
                   onSelect={handleTemplateSelect}
                   onCreateNew={() => { setEditingTemplate(null); setShowCreateForm(true); }}
                   onEdit={(t) => { setEditingTemplate(t); setShowCreateForm(true); }}
+                  onDelete={(id) => {
+                    setTemplateRefreshNonce((n) => n + 1);
+                    if (selectedTemplate?.id === id) {
+                      setSelectedTemplate(null);
+                    }
+                    setToastMessage("Template deleted");
+                    setTimeout(() => setToastMessage(null), 2200);
+                  }}
                   selectedId={selectedTemplate?.id}
                 />
               )}
@@ -1337,3 +1528,4 @@ export function AdminLayoutShell() {
     </div>
   );
 }
+

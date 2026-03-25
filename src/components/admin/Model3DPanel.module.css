@@ -310,6 +310,13 @@
   color: var(--info);
 }
 
+.templateMissing {
+  font-size: 8px;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
 @keyframes templateSpin {
   to { transform: rotate(360deg); }
 }
@@ -408,6 +415,20 @@
 }
 .calibrateSaveBtn:hover {
   background: var(--accent-hover);
+}
+
+.calibrateResetBtn {
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.calibrateResetBtn:hover {
+  background: var(--bg-hover);
 }
 
 .calibrateCancelBtn {

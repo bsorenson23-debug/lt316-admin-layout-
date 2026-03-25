@@ -33,6 +33,7 @@ import { svgToDataUrl } from "@/utils/svg";
 import { hasDarkBackground, removeBlackBackground } from "@/lib/removeBlackBg";
 import { generateOverlayCanvas } from "@/lib/overlayGenerator";
 import { generateTumblerSchematic } from "@/lib/generateTumblerSchematic";
+import { renderCurvedItems } from "@/utils/curvedItemsRenderer";
 import styles from "./LaserBedWorkspace.module.css";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -160,18 +161,28 @@ interface Props {
   templateOverlayUrl?: string | null;
   /** Back face photo data URL — shown at the seam edges of the bed */
   backOverlayUrl?: string | null;
+  /** Physical tumbler height in mm for overlay scaling */
+  tumblerOverallHeightMm?: number;
+  /** Top non-printable margin in mm for overlay anchoring */
+  tumblerTopMarginMm?: number;
+  /** Bottom non-printable margin in mm for overlay anchoring */
+  tumblerBottomMarginMm?: number;
   /** Overlay display mode: geometric schematic, full photo, or off */
   overlayMode?: "schematic" | "photo" | "off";
   /** Overlay opacity as a percentage 0–100 (applied as 0–1) */
   overlayOpacityPct?: number;
   /** Overlay blending: "normal" or "multiply" (multiply blends into bed) */
   overlayBlend?: "normal" | "multiply";
+  /** Apply cylindrical perspective distortion to photo overlay */
+  curvedOverlay?: boolean;
   /** Show split front/back overlay with zone labels */
   twoSidedMode?: boolean;
   /** Callback for screenshot export — receives the Konva stage ref */
   onScreenshotRequest?: () => void;
   /** Expose stage ref for external screenshot capture */
   stageRefCallback?: (stage: Konva.Stage | null) => void;
+  /** Engravable safe zone rectangle in mm — highlighted on the bed */
+  engravableZone?: import("@/types/admin").EngravableZone | null;
   onPlaceAsset: (xMm: number, yMm: number) => void;
   onSelectItem: (id: string | null) => void;
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
@@ -341,11 +352,16 @@ export function LaserBedWorkspace({
   productName,
   templateOverlayUrl,
   backOverlayUrl,
+  tumblerOverallHeightMm,
+  tumblerTopMarginMm,
+  tumblerBottomMarginMm,
   overlayMode = "off",
   overlayOpacityPct = 12,
   overlayBlend = "normal",
+  curvedOverlay = false,
   twoSidedMode = false,
   stageRefCallback,
+  engravableZone,
   onPlaceAsset,
   onSelectItem,
   onUpdateItem,
@@ -376,6 +392,27 @@ export function LaserBedWorkspace({
   // Template product overlay — auto-strips dark backgrounds (photo mode only)
   const templatePhotoImg = useLoadOverlayImage(overlayMode === "photo" ? (templateOverlayUrl ?? null) : null);
   const backPhotoImg = useLoadOverlayImage(overlayMode === "photo" ? (backOverlayUrl ?? null) : null);
+  const overlayOverallHeightMm = tumblerOverallHeightMm ?? bedConfig.tumblerOverallHeightMm ?? bedConfig.height;
+  const overlayMarginTotalMm = Math.max(0, overlayOverallHeightMm - bedConfig.height);
+  const overlayTopMarginMm = Math.max(
+    0,
+    tumblerTopMarginMm ??
+      (tumblerBottomMarginMm != null
+        ? Math.max(0, overlayMarginTotalMm - Math.max(0, tumblerBottomMarginMm))
+        : overlayMarginTotalMm / 2),
+  );
+  const overlayBottomMarginMm = Math.max(
+    0,
+    tumblerBottomMarginMm ?? Math.max(0, overlayMarginTotalMm - overlayTopMarginMm),
+  );
+
+  // Rasterize placed items with cylindrical distortion for curved perspective preview
+  const curvedItemsCanvas = useMemo(() => {
+    if (!curvedOverlay || !placedItems.length) return null;
+    const bw = bedConfig.width * basePxPerMm;
+    const bh = bedConfig.height * basePxPerMm;
+    return renderCurvedItems(placedItems, imageCache, bw, bh, basePxPerMm);
+  }, [curvedOverlay, placedItems, imageCache, bedConfig.width, bedConfig.height, basePxPerMm]);
 
   // Generate overlay canvas — schematic (dimension-based) or photo
   const overlayCanvas = useMemo(() => {
@@ -386,25 +423,31 @@ export function LaserBedWorkspace({
       return generateTumblerSchematic({
         wrapWidthMm: bedConfig.width,
         printHeightMm: bedConfig.height,
+        overallHeightMm: overlayOverallHeightMm,
+        topMarginMm: overlayTopMarginMm,
+        bottomMarginMm: overlayBottomMarginMm,
         diameterMm,
         handleArcDeg,
         twoSided: twoSidedMode,
       }, basePxPerMm);
     }
 
-    // Photo mode — needs loaded images
+    // Photo mode — needs loaded images (always flat, no distortion)
     if (!templatePhotoImg) return null;
     return generateOverlayCanvas({
       bedPxW: bedConfig.width * basePxPerMm,
       bedPxH: bedConfig.height * basePxPerMm,
       pxPerMm: basePxPerMm,
+      overallHeightMm: overlayOverallHeightMm,
+      topMarginMm: overlayTopMarginMm,
+      bottomMarginMm: overlayBottomMarginMm,
       diameterMm,
       frontImg: templatePhotoImg,
       backImg: backPhotoImg,
       handleArcDeg,
       twoSided: twoSidedMode,
     });
-  }, [overlayMode, templatePhotoImg, backPhotoImg, bedConfig.width, bedConfig.height, bedConfig.tumblerDiameterMm, basePxPerMm, handleArcDeg, twoSidedMode]);
+  }, [overlayMode, templatePhotoImg, backPhotoImg, bedConfig.width, bedConfig.height, bedConfig.tumblerDiameterMm, basePxPerMm, handleArcDeg, twoSidedMode, overlayOverallHeightMm, overlayTopMarginMm, overlayBottomMarginMm]);
 
   // Pan state refs
   const isPanningRef    = useRef(false);
@@ -414,8 +457,25 @@ export function LaserBedWorkspace({
   // ── Derived bed pixel dimensions ──────────────────────────────────────────
   const bedPxW = bedConfig.width  * basePxPerMm;
   const bedPxH = bedConfig.height * basePxPerMm;
+  const overlayTopOverflowPx =
+    overlayMode !== "off" && bedConfig.workspaceMode === "tumbler-wrap"
+      ? overlayTopMarginMm * basePxPerMm
+      : 0;
+  const overlayBottomOverflowPx =
+    overlayMode !== "off" && bedConfig.workspaceMode === "tumbler-wrap"
+      ? overlayBottomMarginMm * basePxPerMm
+      : 0;
+  const contentPxH = bedPxH + overlayTopOverflowPx + overlayBottomOverflowPx;
   const bedOffsetX = (containerSize.w - bedPxW) / 2;
-  const bedOffsetY = Math.max(8, (containerSize.h - bedPxH) / 2) - BED_VERTICAL_LIFT_PX;
+  const bedOffsetY = Math.max(8, (containerSize.h - contentPxH) / 2 + overlayTopOverflowPx) - BED_VERTICAL_LIFT_PX;
+  const overlayImageProps = overlayCanvas
+    ? {
+        x: 0,
+        y: -overlayTopOverflowPx,
+        width: overlayCanvas.width,
+        height: overlayCanvas.height,
+      }
+    : null;
 
   // ── FlatBedItem SVG → image ───────────────────────────────────────────────
   const flatBedSvgSrc = useMemo(() => {
@@ -553,7 +613,7 @@ export function LaserBedWorkspace({
     let { x: xMm, y: yMm } = pointerToBedMm(pointer);
     if (showTwoSidedCrosshairs) {
       // Snap to FRONT (center) if click is within 20% of bed width
-      const frontX = bedConfig.width / 2;
+      const frontX = bedConfig.width * 3 / 4;
       const centerY = bedConfig.height / 2;
       const snapR = bedConfig.width * 0.20;
       if (Math.hypot(xMm - frontX, yMm - centerY) <= snapR) {
@@ -689,11 +749,36 @@ export function LaserBedWorkspace({
   const twoSidedCrosshairNodes = useMemo(() => {
     if (!showTwoSidedCrosshairs) return null;
     const wrapW = bedConfig.width;
-    const frontXPx = (wrapW / 2) * basePxPerMm;
+    // Handle-centered layout: handle at center, front right, back left
+    const handleCenterXPx = (wrapW / 2) * basePxPerMm;
+    const frontXPx = (wrapW * 3 / 4) * basePxPerMm;
+    const backXPx = (wrapW / 4) * basePxPerMm;
 
     return (
       <Group listening={false}>
-        {/* ── FRONT line — dominant blue landmark ── */}
+        {/* ── HANDLE CENTER LINE — orange dashed at grid center ── */}
+        {handleArcDeg > 0 && (
+          <>
+            <Line
+              points={[handleCenterXPx, 0, handleCenterXPx, bedPxH]}
+              stroke="rgba(255,150,50,0.4)"
+              strokeWidth={1.5}
+              dash={[6, 4]}
+            />
+            <Text
+              x={handleCenterXPx - 55}
+              y={4}
+              text={"\u2193 handle center"}
+              fontSize={9}
+              fontFamily="system-ui, sans-serif"
+              fill="rgba(255,150,50,0.5)"
+              width={110}
+              align="center"
+            />
+          </>
+        )}
+
+        {/* ── FRONT line — blue dashed, right half center ── */}
         <Line
           points={[frontXPx, 0, frontXPx, bedPxH]}
           stroke="rgba(40,120,200,0.7)"
@@ -702,7 +787,7 @@ export function LaserBedWorkspace({
         />
         <Text
           x={frontXPx - 55}
-          y={4}
+          y={handleArcDeg > 0 ? 18 : 4}
           text={"\u2193 Front face center"}
           fontSize={10}
           fontFamily="system-ui, sans-serif"
@@ -722,47 +807,41 @@ export function LaserBedWorkspace({
           align="center"
         />
 
-        {/* ── BACK / seam — subtle at left edge ── */}
+        {/* ── BACK face center — left half ── */}
+        <Line
+          points={[backXPx, 0, backXPx, bedPxH]}
+          stroke="rgba(255,255,255,0.2)"
+          strokeWidth={1}
+          dash={[6, 4]}
+        />
+        <Text
+          x={backXPx - 22}
+          y={handleArcDeg > 0 ? 18 : 4}
+          text="BACK"
+          fontSize={9}
+          fontFamily="system-ui, sans-serif"
+          fill="rgba(255,255,255,0.3)"
+          width={44}
+          align="center"
+        />
+
+        {/* ── Seam lines — both edges (wrap start/end) ── */}
         <Line
           points={[0, 0, 0, bedPxH]}
           stroke="rgba(255,255,255,0.15)"
           strokeWidth={1}
-          dash={[4, 8]}
+          dash={[3, 5]}
         />
-        <Text x={4} y={4} text="BACK" fontSize={9}
-          fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.3)" />
         <Text x={4} y={bedPxH - 14} text="seam" fontSize={8}
           fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.2)" />
-
-        {/* ── Handle center line — orange dashed at both wrap edges ── */}
-        {handleArcDeg > 0 && (
-          <>
-            {/* Right edge = handle center (opposite front face) */}
-            <Line
-              points={[bedPxW, 0, bedPxW, bedPxH]}
-              stroke="rgba(255,150,50,0.4)"
-              strokeWidth={1.5}
-              dash={[6, 4]}
-            />
-            <Text
-              x={bedPxW - 90}
-              y={4}
-              text={"handle center \u2193"}
-              fontSize={9}
-              fontFamily="system-ui, sans-serif"
-              fill="rgba(255,150,50,0.5)"
-              width={86}
-              align="right"
-            />
-            {/* Left edge also = handle center (wrap point) */}
-            <Line
-              points={[0, 0, 0, bedPxH]}
-              stroke="rgba(255,150,50,0.4)"
-              strokeWidth={1.5}
-              dash={[6, 4]}
-            />
-          </>
-        )}
+        <Line
+          points={[bedPxW, 0, bedPxW, bedPxH]}
+          stroke="rgba(255,255,255,0.15)"
+          strokeWidth={1}
+          dash={[3, 5]}
+        />
+        <Text x={bedPxW - 30} y={bedPxH - 14} text="seam" fontSize={8}
+          fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.2)" />
 
         {/* ── Tumbler height indicators along left edge ── */}
         <Line points={[-6, 0, 12, 0]} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />
@@ -900,13 +979,13 @@ export function LaserBedWorkspace({
             />
 
             {/* ── Product overlay — schematic (full alpha, pre-tuned) or photo (user opacity) ── */}
-            {overlayCanvas && (
+            {overlayCanvas && overlayImageProps && (
               <KonvaImage
                 image={overlayCanvas}
-                x={0}
-                y={0}
-                width={bedPxW}
-                height={bedPxH}
+                x={overlayImageProps.x}
+                y={overlayImageProps.y}
+                width={overlayImageProps.width}
+                height={overlayImageProps.height}
                 opacity={overlayMode === "schematic" ? 1 : overlayOpacityPct / 100}
                 globalCompositeOperation={overlayBlend === "multiply" ? "multiply" : "source-over"}
                 listening={false}
@@ -947,6 +1026,39 @@ export function LaserBedWorkspace({
             {/* Tumbler wrap guides (FRONT, handle zone, seam) */}
             {twoSidedCrosshairNodes}
 
+            {/* Engravable safe zone highlight */}
+            {engravableZone && (
+              <Group listening={false}>
+                <Rect
+                  x={engravableZone.x * basePxPerMm}
+                  y={engravableZone.y * basePxPerMm}
+                  width={engravableZone.width * basePxPerMm}
+                  height={engravableZone.height * basePxPerMm}
+                  stroke="rgba(0, 200, 120, 0.45)"
+                  strokeWidth={1.5}
+                  dash={[6, 3]}
+                  cornerRadius={2}
+                  fill="rgba(0, 200, 120, 0.03)"
+                />
+                <Text
+                  x={engravableZone.x * basePxPerMm + 4}
+                  y={engravableZone.y * basePxPerMm + 3}
+                  text="ENGRAVABLE ZONE"
+                  fontSize={8}
+                  fontFamily="system-ui, sans-serif"
+                  fill="rgba(0, 200, 120, 0.5)"
+                />
+                <Text
+                  x={engravableZone.x * basePxPerMm + 4}
+                  y={(engravableZone.y + engravableZone.height) * basePxPerMm - 13}
+                  text={`${engravableZone.width.toFixed(0)} \u00D7 ${engravableZone.height.toFixed(0)} mm`}
+                  fontSize={8}
+                  fontFamily="system-ui, sans-serif"
+                  fill="rgba(0, 200, 120, 0.4)"
+                />
+              </Group>
+            )}
+
             {/* Coordinate labels */}
             {coordLabels}
 
@@ -961,7 +1073,7 @@ export function LaserBedWorkspace({
               />
             )}
 
-            {/* Placed SVG items */}
+            {/* Placed SVG items — hidden visually when curved preview is active */}
             {placedItems.map(item => {
               const img = imageCache.get(item.id);
               const ix = item.x * basePxPerMm;
@@ -976,6 +1088,7 @@ export function LaserBedWorkspace({
                   x={ix} y={iy}
                   width={iw} height={ih}
                   rotation={item.rotation ?? 0}
+                  opacity={curvedItemsCanvas ? 0 : 1}
                   draggable
                   onClick={(e) => { e.cancelBubble = true; onSelectItem(item.id); }}
                   onDragEnd={(e) => {
@@ -1010,6 +1123,18 @@ export function LaserBedWorkspace({
                 />
               );
             })}
+
+            {/* Curved perspective preview — cylindrical distortion of placed items */}
+            {curvedItemsCanvas && (
+              <KonvaImage
+                image={curvedItemsCanvas}
+                x={0}
+                y={0}
+                width={bedPxW}
+                height={bedPxH}
+                listening={false}
+              />
+            )}
 
             {/* Frame preview */}
             {framePreview && (

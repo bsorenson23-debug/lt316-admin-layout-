@@ -4,6 +4,7 @@ import React, { Suspense, useCallback, useRef, useState, useEffect, useMemo } fr
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, ContactShadows, Grid, Bounds, useBounds } from "@react-three/drei";
 import * as THREE from "three";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { PlacedItem, PlacedItemPatch } from "@/types/admin";
 import type { TumblerDimensions } from "./ModelViewer";
 import { YetiRambler40oz } from "./models/YetiRambler40oz";
@@ -17,7 +18,7 @@ import styles from "./TumblerPlacementView.module.css";
 
 const PX_PER_MM = 4;
 
-async function rasterizeItem(item: PlacedItem): Promise<HTMLCanvasElement> {
+async function rasterizeItem(item: PlacedItem, tintColor?: string): Promise<HTMLCanvasElement> {
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(item.width * PX_PER_MM);
   canvas.height = Math.ceil(item.height * PX_PER_MM);
@@ -31,6 +32,12 @@ async function rasterizeItem(item: PlacedItem): Promise<HTMLCanvasElement> {
     const img = new Image();
     img.onload = () => {
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      if (tintColor) {
+        ctx.globalCompositeOperation = "source-in";
+        ctx.fillStyle = tintColor;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = "source-over";
+      }
       URL.revokeObjectURL(blobUrl);
       resolve();
     };
@@ -72,7 +79,7 @@ function CameraController({
   onDone: () => void;
 }) {
   const { camera } = useThree();
-  const controlsRef = useRef<any>(null);
+  const controlsRef = useRef<OrbitControlsImpl | null>(null);
 
   useEffect(() => {
     if (!preset) return;
@@ -158,14 +165,30 @@ export function TumblerPlacementView({
   const wrapWidthMm = bedWidthMm;
   const handleArcDeg = dims?.handleArcDeg ?? 0;
   const glbPath = selectedTemplate?.glbPath || undefined;
+  const bodyTintColor = selectedTemplate?.dimensions.bodyColorHex ?? "#b0b8c4";
+  const rimTintColor = selectedTemplate?.dimensions.rimColorHex ?? "#d0d0d0";
   const tumblerMappingProp = selectedTemplate?.tumblerMapping;
+  const clampedTumblerMapping = useMemo(() => {
+    if (!tumblerMappingProp) return tumblerMappingProp;
+    const calXLimit = Math.max(15, Math.min(45, Math.round(wrapWidthMm * 0.12)));
+    const calYLimit = Math.max(10, Math.min(35, Math.round(printHeightMm * 0.2)));
+    const calRotLimit = 35;
+    const clampCal = (value: number, min: number, max: number) =>
+      Math.min(max, Math.max(min, value));
+    return {
+      ...tumblerMappingProp,
+      calibrationOffsetX: clampCal(tumblerMappingProp.calibrationOffsetX ?? 0, -calXLimit, calXLimit),
+      calibrationOffsetY: clampCal(tumblerMappingProp.calibrationOffsetY ?? 0, -calYLimit, calYLimit),
+      calibrationRotation: clampCal(tumblerMappingProp.calibrationRotation ?? 0, -calRotLimit, calRotLimit),
+    };
+  }, [tumblerMappingProp, wrapWidthMm, printHeightMm]);
   const H = tumblerDims.overallHeightMm;
 
   // Serialized position key — only re-rasterize when items actually change
   const itemPositionKey = useMemo(
     () => placedItems
       .filter((i) => i.visible !== false)
-      .map((i) => `${i.id}:${i.x}:${i.y}:${i.width}:${i.height}`)
+      .map((i) => `${i.id}:${i.x}:${i.y}:${i.width}:${i.height}:${i.rotation}:${i.visible !== false}`)
       .join("|"),
     [placedItems],
   );
@@ -180,7 +203,7 @@ export function TumblerPlacementView({
     let cancelled = false;
     Promise.all(
       visible.map(async (item) => {
-        const canvas = await rasterizeItem(item);
+        const canvas = await rasterizeItem(item, rimTintColor);
         return {
           id: item.id,
           canvas,
@@ -188,6 +211,7 @@ export function TumblerPlacementView({
           gridY: item.y,
           gridW: item.width,
           gridH: item.height,
+          gridRotationDeg: item.rotation ?? 0,
         } as DecalItem;
       }),
     ).then((items) => {
@@ -195,7 +219,7 @@ export function TumblerPlacementView({
     });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemPositionKey]);
+  }, [itemPositionKey, rimTintColor]);
 
   const handleCameraPreset = useCallback((p: CameraPreset) => {
     setActivePreset(p);
@@ -210,7 +234,7 @@ export function TumblerPlacementView({
   const alignFrontH = useCallback(() => {
     if (!selectedItemId || !selectedItem) return;
     onUpdateItem(selectedItemId, {
-      x: (wrapWidthMm / 2) - (selectedItem.width / 2),
+      x: (wrapWidthMm * 3 / 4) - (selectedItem.width / 2),
     });
   }, [selectedItemId, selectedItem, wrapWidthMm, onUpdateItem]);
 
@@ -224,7 +248,7 @@ export function TumblerPlacementView({
   const alignBoth = useCallback(() => {
     if (!selectedItemId || !selectedItem) return;
     onUpdateItem(selectedItemId, {
-      x: (wrapWidthMm / 2) - (selectedItem.width / 2),
+      x: (wrapWidthMm * 3 / 4) - (selectedItem.width / 2),
       y: (printHeightMm / 2) - (selectedItem.height / 2),
     });
   }, [selectedItemId, selectedItem, wrapWidthMm, printHeightMm, onUpdateItem]);
@@ -266,11 +290,16 @@ export function TumblerPlacementView({
             <YetiRambler40oz
               placedItems={decalItems}
               diameterMm={diameterMm}
+              topDiameterMm={tumblerDims.topDiameterMm}
+              overallHeightMm={tumblerDims.overallHeightMm}
               printHeightMm={printHeightMm}
+              printableTopOffsetMm={tumblerDims.printableTopOffsetMm ?? 0}
               wrapWidthMm={wrapWidthMm}
               handleArcDeg={handleArcDeg}
               glbPath={glbPath}
-              tumblerMapping={tumblerMappingProp}
+              tumblerMapping={clampedTumblerMapping}
+              bodyTintColor={bodyTintColor}
+              rimTintColor={rimTintColor}
             />
           </Suspense>
           <AutoFit />

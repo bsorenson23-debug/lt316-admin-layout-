@@ -16,6 +16,7 @@
 import React, { useState, lazy, Suspense } from "react";
 import {
   BedConfig,
+  EngravableZone,
   ItemAlignmentMode,
   PlacedItem,
   PlacedItemPatch,
@@ -35,6 +36,7 @@ interface Props {
   selectedItem: PlacedItem | null;
   bedConfig: BedConfig;
   statusNote: string | null;
+  engravableZone?: EngravableZone | null;
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
   onAlignItem: (id: string, mode: ItemAlignmentMode) => void;
   onCenterBetweenGuides: (id: string) => void;
@@ -47,6 +49,7 @@ export function SelectedItemInspector({
   selectedItem,
   bedConfig,
   statusNote,
+  engravableZone,
   onUpdateItem,
   onAlignItem,
   onCenterBetweenGuides,
@@ -261,6 +264,36 @@ export function SelectedItemInspector({
                 </span>
                 <span>Back Side</span>
               </button>
+              {engravableZone && (
+                <>
+                  <button
+                    className={styles.presetBtn}
+                    onClick={() => handleAlign("center-zone")}
+                    title="Center artwork within the engravable zone"
+                  >
+                    <span className={styles.presetIcon}>
+                      <svg viewBox="0 0 24 24" width="16" height="16">
+                        <rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="var(--success)" strokeWidth="1.5" strokeDasharray="3 2" />
+                        <circle cx="12" cy="12" r="3" fill="var(--accent)" />
+                      </svg>
+                    </span>
+                    <span>Center Zone</span>
+                  </button>
+                  <button
+                    className={styles.presetBtn}
+                    onClick={() => handleAlign("fit-zone")}
+                    title="Scale artwork to fit within the engravable zone"
+                  >
+                    <span className={styles.presetIcon}>
+                      <svg viewBox="0 0 24 24" width="16" height="16">
+                        <rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="var(--success)" strokeWidth="1.5" strokeDasharray="3 2" />
+                        <rect x="5" y="7" width="14" height="10" rx="1" fill="var(--accent)" opacity="0.4" />
+                      </svg>
+                    </span>
+                    <span>Fit Zone</span>
+                  </button>
+                </>
+              )}
             </div>
           </>
         )}

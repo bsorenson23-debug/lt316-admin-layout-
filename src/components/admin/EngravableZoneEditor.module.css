@@ -1,0 +1,268 @@
+/* ── Wrapper ───────────────────────────────────────────────────── */
+.wrapper {
+  padding: 12px 0;
+}
+
+.editorRow {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+/* ── Photo container (relative positioning root) ───────────────── */
+.photoContainer {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--bg-base);
+  border: 1px solid var(--border-normal);
+  cursor: default;
+  user-select: none;
+  display: flex;
+  justify-content: center;
+}
+
+.bodyFrame {
+  position: absolute;
+  top: 0;
+  border: 1px dashed rgba(80, 160, 220, 0.28);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0.015),
+    rgba(255, 255, 255, 0.03),
+    rgba(255, 255, 255, 0.015)
+  );
+  z-index: 0;
+  pointer-events: none;
+}
+
+.productPhoto {
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  z-index: 1;
+}
+
+/* ── Dead zones (non-engravable, red tint) ─────────────────────── */
+.deadZone {
+  position: absolute;
+  background: rgba(220, 60, 60, 0.18);
+  z-index: 2;
+  pointer-events: none;
+  border-left: 1px solid rgba(220, 60, 60, 0.12);
+  border-right: 1px solid rgba(220, 60, 60, 0.12);
+}
+
+/* ── Engravable zone highlight ─────────────────────────────────── */
+.engravableZone {
+  position: absolute;
+  border-top: 1px dashed rgba(80, 200, 120, 0.4);
+  border-bottom: 1px dashed rgba(80, 200, 120, 0.4);
+  background: rgba(80, 200, 120, 0.06);
+  z-index: 2;
+  pointer-events: none;
+  border-left: 1px solid rgba(80, 200, 120, 0.15);
+  border-right: 1px solid rgba(80, 200, 120, 0.15);
+}
+
+/* ── Drag lines ────────────────────────────────────────────────── */
+.dragLine {
+  position: absolute;
+  height: 3px;
+  background: var(--success);
+  z-index: 4;
+  cursor: ns-resize;
+  transform: translateY(-1px);
+  transition: background 100ms;
+}
+
+.dragLine::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -6px;
+  bottom: -6px;
+}
+
+.dragLine:hover,
+.dragLineActive {
+  background: var(--accent);
+}
+
+.dragLineBottom {
+  transform: translateY(-2px);
+}
+
+/* ── Drag line label ───────────────────────────────────────────── */
+.dragLineLabel {
+  position: absolute;
+  right: 4px;
+  top: -16px;
+  font-size: 9px;
+  font-family: monospace;
+  color: var(--success);
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 0 4px var(--bg-base), 0 0 8px var(--bg-base);
+}
+
+.dragLineBottom .dragLineLabel {
+  top: auto;
+  bottom: -16px;
+}
+
+.dragLineActive .dragLineLabel,
+.dragLine:hover .dragLineLabel {
+  color: var(--accent);
+}
+
+/* ── Readout panel ─────────────────────────────────────────────── */
+.readout {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 140px;
+}
+
+.readoutTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.readoutRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.readoutLabel {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.readoutValue {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--text-primary);
+}
+
+.readoutHighlight {
+  padding: 3px 6px;
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  border-radius: var(--radius-sm);
+}
+
+.readoutHighlight .readoutLabel {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.readoutHighlight .readoutValue {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.readoutHint {
+  font-size: 9px;
+  color: var(--text-dim);
+  font-style: italic;
+  margin-top: 4px;
+}
+
+.colorSwatchGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.colorSwatchRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.colorSwatchValue {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.colorSwatchChip {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.sliderGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sliderHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.anchorButtonRow {
+  display: flex;
+  gap: 6px;
+}
+
+.anchorButton {
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-normal);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.anchorButtonActive {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+  color: var(--text-primary);
+}
+
+.sliderInput {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.sliderReset {
+  align-self: flex-start;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-normal);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.sliderReset:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

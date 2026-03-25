@@ -38,6 +38,9 @@ interface Props {
   onFramePreviewChange?: (preview: FramePreview | null) => void;
   materialSettings?: LbrnMaterialSettings | null;
   onPreflightNav?: (target: PreflightNavTarget) => void;
+  /** Lifted taper warp state — synced with overlay controls */
+  taperWarpEnabled?: boolean;
+  onTaperWarpChange?: (enabled: boolean) => void;
 }
 
 function fmt(n: number) { return n.toFixed(2); }
@@ -81,14 +84,20 @@ function downloadJson(payload: unknown, filename: string): void {
 
 // ---------------------------------------------------------------------------
 
-export function TumblerExportPanel({ bedConfig, placedItems, onFramePreviewChange, materialSettings, onPreflightNav }: Props) {
+export function TumblerExportPanel({
+  bedConfig, placedItems, onFramePreviewChange, materialSettings, onPreflightNav,
+  taperWarpEnabled: taperWarpEnabledProp, onTaperWarpChange,
+}: Props) {
   const [rotaryEnabled,       setRotaryEnabled]       = React.useState(false);
   const [availablePresets,    setAvailablePresets]    = React.useState<RotaryPlacementPreset[]>(DEFAULT_ROTARY_PLACEMENT_PRESETS);
   const [selectedPresetId,    setSelectedPresetId]    = React.useState("");
   const [anchorMode,          setAnchorMode]          = React.useState<TopAnchorMode>("physical-top");
   const [topOffsetDraft,      setTopOffsetDraft]      = React.useState("");
   const [showNextSteps,       setShowNextSteps]       = React.useState(false);
-  const [taperWarpEnabled,    setTaperWarpEnabled]    = React.useState(true);
+  // Use lifted state if provided, otherwise local fallback
+  const [localTaperWarp,      setLocalTaperWarp]      = React.useState(true);
+  const taperWarpEnabled = taperWarpEnabledProp ?? localTaperWarp;
+  const setTaperWarpEnabled = onTaperWarpChange ?? setLocalTaperWarp;
 
   React.useEffect(() => { setAvailablePresets(getRotaryPresets()); }, []);
 

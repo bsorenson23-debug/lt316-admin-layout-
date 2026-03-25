@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { useRef, useMemo, useEffect } from "react";
-import { useGLTF, Decal } from "@react-three/drei";
+import { useGLTF } from "@react-three/drei";
 import type { GLTF } from "three-stdlib";
 import type { TumblerMapping } from "@/types/productTemplate";
 import { normalizeGeometry } from "@/lib/modelAxisCorrection";
@@ -11,7 +11,6 @@ type GLTFResult = GLTF & {
   materials: Record<string, never>;
 };
 
-/** Find the first usable Mesh node regardless of naming convention */
 function resolveBodyMesh(nodes: Record<string, THREE.Object3D>): THREE.Mesh {
   const candidate =
     nodes.body_mesh ??
@@ -19,75 +18,216 @@ function resolveBodyMesh(nodes: Record<string, THREE.Object3D>): THREE.Mesh {
     Object.values(nodes).find(
       (n): n is THREE.Mesh => (n as THREE.Mesh).isMesh === true,
     );
+
   if (!candidate || !(candidate as THREE.Mesh).isMesh) {
     throw new Error(
       "[YetiRambler40oz] No mesh found in GLB. Node names: " +
         Object.keys(nodes).join(", "),
     );
   }
+
   return candidate as THREE.Mesh;
+}
+
+function resolveBaseMaterial(
+  material: THREE.Material | THREE.Material[],
+): THREE.MeshStandardMaterial {
+  const candidates = Array.isArray(material) ? material : [material];
+  const standardCandidate = candidates.find(
+    (candidate): candidate is THREE.MeshStandardMaterial =>
+      candidate instanceof THREE.MeshStandardMaterial,
+  );
+
+  if (standardCandidate) {
+    return standardCandidate.clone();
+  }
+
+  return new THREE.MeshStandardMaterial({
+    color: "#7b7b7b",
+    metalness: 0.55,
+    roughness: 0.42,
+  });
 }
 
 export interface DecalItem {
   id: string;
   canvas: HTMLCanvasElement;
-  /** Left edge on bed grid (mm) */
   gridX: number;
-  /** Top edge on bed grid (mm) */
   gridY: number;
-  /** Width on bed grid (mm) */
   gridW: number;
-  /** Height on bed grid (mm) */
   gridH: number;
+  gridRotationDeg?: number;
 }
 
 interface Props {
   placedItems: DecalItem[];
   diameterMm: number;
+  topDiameterMm?: number;
+  overallHeightMm: number;
   printHeightMm: number;
+  printableTopOffsetMm: number;
   wrapWidthMm: number;
   handleArcDeg: number;
-  /** GLB path — passed from the template so it works with any filename */
   glbPath?: string;
-  /** Tumbler mapping from the wizard — orients the front face */
   tumblerMapping?: TumblerMapping;
+  bodyTintColor?: string;
+  rimTintColor?: string;
   onReady?: (obj: THREE.Object3D) => void;
 }
 
 const DEFAULT_GLB_PATH = "/models/templates/yeti-40oz-body.glb";
+const WRAP_TEXTURE_PX_PER_MM = 4;
+const BODY_RADIUS_TOLERANCE_WITH_HANDLE = 1.14;
+const BODY_RADIUS_TOLERANCE_DEFAULT = 1.03;
+
+const CYL_OVERLAY_VERTEX_SHADER = `
+  varying vec3 vLocalPos;
+
+  void main() {
+    vLocalPos = position;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const CYL_OVERLAY_FRAGMENT_SHADER = `
+  uniform sampler2D uWrapMap;
+  uniform float uPrintHeightMm;
+  uniform float uPrintTopOffsetMm;
+  uniform float uScaleFactorY;
+  uniform float uRimTopLocalY;
+  uniform float uFrontRotation;
+  uniform float uBodyRadiusLocal;
+  uniform float uBodyRadiusTolerance;
+  uniform float uCalY;
+  uniform float uCalRotation;
+  uniform float uCalAngle;
+  uniform float uAlpha;
+
+  varying vec3 vLocalPos;
+
+  const float TAU = 6.28318530718;
+
+  void main() {
+    float radialLen = length(vLocalPos.xz);
+    if (radialLen < 0.0001) {
+      discard;
+    }
+
+    if (radialLen > uBodyRadiusLocal * uBodyRadiusTolerance) {
+      discard;
+    }
+
+    float theta = atan(vLocalPos.x, vLocalPos.z);
+    float offset = uFrontRotation + uCalRotation + uCalAngle;
+    float u = fract(0.75 + ((theta - offset) / TAU));
+
+    float yFromTopMm = (uRimTopLocalY - vLocalPos.y) * uScaleFactorY;
+    float yMm = yFromTopMm - uPrintTopOffsetMm + uCalY;
+    float v = yMm / max(uPrintHeightMm, 0.0001);
+
+    if (v < 0.0 || v > 1.0) discard;
+
+    vec4 tex = texture2D(uWrapMap, vec2(u, v));
+    if (tex.a <= 0.001) discard;
+
+    gl_FragColor = vec4(tex.rgb, tex.a * uAlpha);
+  }
+`;
+
+function buildWrapTexture(
+  placedItems: DecalItem[],
+  wrapWidthMm: number,
+  printHeightMm: number,
+): THREE.CanvasTexture | null {
+  if (wrapWidthMm <= 0 || printHeightMm <= 0 || placedItems.length === 0) return null;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(wrapWidthMm * WRAP_TEXTURE_PX_PER_MM));
+  canvas.height = Math.max(1, Math.round(printHeightMm * WRAP_TEXTURE_PX_PER_MM));
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const drawAt = (
+    source: HTMLCanvasElement,
+    xPx: number,
+    yPx: number,
+    wPx: number,
+    hPx: number,
+    rotationDeg: number,
+  ) => {
+    ctx.save();
+    ctx.translate(xPx + wPx / 2, yPx + hPx / 2);
+    if (rotationDeg) {
+      ctx.rotate((rotationDeg * Math.PI) / 180);
+    }
+    ctx.drawImage(source, -wPx / 2, -hPx / 2, wPx, hPx);
+    ctx.restore();
+  };
+
+  placedItems.forEach((item) => {
+    if (!item.canvas || item.gridW <= 0 || item.gridH <= 0) return;
+
+    const wPx = Math.max(1, Math.round(item.gridW * WRAP_TEXTURE_PX_PER_MM));
+    const hPx = Math.max(1, Math.round(item.gridH * WRAP_TEXTURE_PX_PER_MM));
+    const xPx = Math.round(item.gridX * WRAP_TEXTURE_PX_PER_MM);
+    const yPx = Math.round(item.gridY * WRAP_TEXTURE_PX_PER_MM);
+    const rotationDeg = item.gridRotationDeg ?? 0;
+
+    drawAt(item.canvas, xPx, yPx, wPx, hPx, rotationDeg);
+
+    // Seam wrapping support for items crossing left/right edge.
+    if (xPx < 0) drawAt(item.canvas, xPx + canvas.width, yPx, wPx, hPx, rotationDeg);
+    if (xPx + wPx > canvas.width) drawAt(item.canvas, xPx - canvas.width, yPx, wPx, hPx, rotationDeg);
+  });
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  // Custom shader samples raw UVs; keep canvas top at v=0.
+  texture.flipY = false;
+  texture.needsUpdate = true;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+
+  return texture;
+}
 
 export function YetiRambler40oz({
   placedItems,
   diameterMm,
+  topDiameterMm,
+  overallHeightMm,
   printHeightMm,
+  printableTopOffsetMm,
   wrapWidthMm,
   handleArcDeg: _handleArcDeg,
   glbPath = DEFAULT_GLB_PATH,
   tumblerMapping,
+  bodyTintColor = "#1f2322",
+  rimTintColor = "#cfd2d0",
   onReady,
 }: Props) {
   const effectiveHandleArcDeg = tumblerMapping?.handleArcDeg ?? _handleArcDeg ?? 0;
-  const frontRotation = tumblerMapping?.frontFaceRotation ?? 0;
-  void effectiveHandleArcDeg; // available for future handle zone overlay
+  void effectiveHandleArcDeg;
 
   const { nodes } = useGLTF(glbPath) as unknown as GLTFResult;
   const bodyMesh = useMemo(() => resolveBodyMesh(nodes), [nodes]);
-  const meshRef = useRef<THREE.Mesh>(null);
   const groupRef = useRef<THREE.Group>(null);
 
-  // ── Normalize geometry: rotate to Y-up, bbox-center at origin ──
   const normalizedGeo = useMemo(
     () => normalizeGeometry(bodyMesh.geometry),
     [bodyMesh.geometry],
   );
 
-  // ── Analyze rim for true cylinder center and radius ──
   const rimAnalysis = useMemo(
     () => analyzeTumblerMesh(normalizedGeo),
     [normalizedGeo],
   );
 
-  // ── Re-center on rim axis (true cylinder center, not bbox center) ──
   const rimCenteredGeo = useMemo(() => {
     const clone = normalizedGeo.clone();
     clone.translate(-rimAnalysis.center.x, 0, -rimAnalysis.center.z);
@@ -96,128 +236,243 @@ export function YetiRambler40oz({
     return clone;
   }, [normalizedGeo, rimAnalysis]);
 
-  // ── Scale: group scale maps model units → mm ──
-  // Model is in cm-scale units (radius ~4.77, height ~25.53).
-  // scaleFactor ≈ 10.27 makes 1 visual unit = 1 mm in the scene.
-  const scaleFactor = useMemo(() => {
+  const horizontalBodyRadiusLocal = useMemo(() => {
+    rimCenteredGeo.computeBoundingBox();
+    const box = rimCenteredGeo.boundingBox;
+    if (!box) return Math.max(0.0001, rimAnalysis.radius);
+
+    const xHalf = (box.max.x - box.min.x) / 2;
+    const zHalf = (box.max.z - box.min.z) / 2;
+    return Math.max(0.0001, Math.min(xHalf, zHalf));
+  }, [rimCenteredGeo, rimAnalysis.radius]);
+
+  const computedWrapWidthMm = wrapWidthMm > 0
+    ? wrapWidthMm
+    : Math.PI * Math.max(diameterMm, 1);
+
+  const scaleFactorXz = useMemo(() => {
+    const scaleFromWrap =
+      computedWrapWidthMm > 0 && rimAnalysis.radius > 0
+        ? computedWrapWidthMm / (2 * Math.PI * rimAnalysis.radius)
+        : 0;
+
+    if (Number.isFinite(scaleFromWrap) && scaleFromWrap > 0) return scaleFromWrap;
+
     const rimDiameter = rimAnalysis.radius * 2;
-    if (rimDiameter <= 0) return 1;
-    return diameterMm / rimDiameter;
-  }, [rimAnalysis, diameterMm]);
+    if (rimDiameter > 0 && diameterMm > 0) return diameterMm / rimDiameter;
 
-  // Model-unit values for Decal positioning (used INSIDE the scale group)
-  const modelRadius = rimAnalysis.radius;         // ~4.77 model units
-  const modelBodyHeight = rimAnalysis.bodyHeight;  // ~25.53 model units
+    return 1;
+  }, [rimAnalysis.radius, computedWrapWidthMm, diameterMm]);
 
-  // ── Notify parent when ready ──
+  const scaleFactorY = useMemo(() => {
+    if (overallHeightMm > 0 && rimAnalysis.bodyHeight > 0) {
+      return overallHeightMm / rimAnalysis.bodyHeight;
+    }
+    return scaleFactorXz;
+  }, [overallHeightMm, rimAnalysis.bodyHeight, scaleFactorXz]);
+
+  const bodyRadiusLocal = useMemo(() => {
+    const targetTopDiameterMm = Math.max(0, topDiameterMm ?? diameterMm);
+    const targetTopRadiusLocal =
+      targetTopDiameterMm > 0 && scaleFactorXz > 0
+        ? (targetTopDiameterMm / 2) / scaleFactorXz
+        : 0;
+
+    return Math.max(
+      0.0001,
+      targetTopRadiusLocal,
+      horizontalBodyRadiusLocal,
+      rimAnalysis.radius,
+    );
+  }, [
+    topDiameterMm,
+    diameterMm,
+    scaleFactorXz,
+    horizontalBodyRadiusLocal,
+    rimAnalysis.radius,
+  ]);
+
+  const bodyRadiusTolerance = effectiveHandleArcDeg > 0
+    ? BODY_RADIUS_TOLERANCE_WITH_HANDLE
+    : BODY_RADIUS_TOLERANCE_DEFAULT;
+
+  const radiusMm = computedWrapWidthMm / (2 * Math.PI);
+  const maxCalX = computedWrapWidthMm * 0.12;
+  const maxCalY = printHeightMm * 0.2;
+  const maxCalRotationDeg = 35;
+
+  const frontRotation = tumblerMapping?.frontFaceRotation ?? 0;
+  const calX = THREE.MathUtils.clamp(
+    tumblerMapping?.calibrationOffsetX ?? 0,
+    -maxCalX,
+    maxCalX,
+  );
+  const calY = THREE.MathUtils.clamp(
+    tumblerMapping?.calibrationOffsetY ?? 0,
+    -maxCalY,
+    maxCalY,
+  );
+  const calRotation = THREE.MathUtils.degToRad(
+    THREE.MathUtils.clamp(
+      tumblerMapping?.calibrationRotation ?? 0,
+      -maxCalRotationDeg,
+      maxCalRotationDeg,
+    ),
+  );
+  const calAngle = radiusMm > 0 ? calX / radiusMm : 0;
+
+  const wrapTexture = useMemo(
+    () => buildWrapTexture(placedItems, computedWrapWidthMm, printHeightMm),
+    [placedItems, computedWrapWidthMm, printHeightMm],
+  );
+
+  useEffect(() => {
+    return () => {
+      wrapTexture?.dispose();
+    };
+  }, [wrapTexture]);
+
   useEffect(() => {
     if (groupRef.current) onReady?.(groupRef.current);
-  });
+  }, [onReady, rimCenteredGeo, scaleFactorXz, scaleFactorY]);
 
-  // ── Convert bed grid coordinates → 3D Decal position ──
-  //
-  // Coordinate spaces:
-  //   GRID:  mm values (gridX, gridY, gridW, gridH, wrapWidthMm, printHeightMm)
-  //   MODEL: cm-scale native units (modelRadius, modelBodyHeight)
-  //   SCENE: mm after <group scale={scaleFactor}> is applied
-  //
-  // Decals are children of the mesh INSIDE the scale group,
-  // so all positions and scales must be in MODEL UNITS.
-  //
-  // To convert mm → model units: divide by scaleFactor
-  function gridTo3D(item: DecalItem) {
-    // Angle computation uses mm (dimensionless result in radians)
-    const radiusMm = diameterMm / 2;
-    const frontX = wrapWidthMm / 2;
-    const artCX = item.gridX + item.gridW / 2;
-    const artCY = item.gridY + item.gridH / 2;
-    const baseAngle = (artCX - frontX) / radiusMm;
-
-    // Apply calibration offsets
-    const calX = tumblerMapping?.calibrationOffsetX ?? 0;
-    const calY = tumblerMapping?.calibrationOffsetY ?? 0;
-    const calRotation = ((tumblerMapping?.calibrationRotation ?? 0) * Math.PI) / 180;
-    const calAngle = (calX / scaleFactor) / modelRadius;
-    const angleRad = baseAngle + calRotation + calAngle;
-
-    // Position on cylinder surface in MODEL UNITS
-    const decalX = Math.sin(angleRad) * modelRadius;
-    const decalZ = Math.cos(angleRad) * modelRadius;
-
-    // Y: map grid Y (0=top, printHeight=bottom) to model Y
-    // Model top = +modelBodyHeight/2, bottom = -modelBodyHeight/2
-    const rawDecalY = (modelBodyHeight / 2) - (artCY / scaleFactor) + (calY / scaleFactor);
-
-    // Clamp so decal never extends past the engravable body zone
-    const decalHalfH = (item.gridH / scaleFactor) / 2;
-    const engravableTop = modelBodyHeight / 2;
-    const engravableBottom = -modelBodyHeight / 2;
-    const decalY = Math.max(
-      engravableBottom + decalHalfH,
-      Math.min(engravableTop - decalHalfH, rawDecalY),
-    );
-
+  const overlayUniforms = useMemo(() => {
+    if (!wrapTexture) return null;
     return {
-      position: [decalX, decalY, decalZ] as [number, number, number],
-      rotation: [0, -angleRad, 0] as [number, number, number],
-      scale: [
-        item.gridW / scaleFactor,
-        item.gridH / scaleFactor,
-        20 / scaleFactor,
-      ] as [number, number, number],
+      uWrapMap: { value: wrapTexture },
+      uPrintHeightMm: { value: Math.max(1, printHeightMm) },
+      uPrintTopOffsetMm: { value: Math.max(0, printableTopOffsetMm) },
+      uScaleFactorY: { value: scaleFactorY > 0 ? scaleFactorY : scaleFactorXz || 1 },
+      uRimTopLocalY: { value: rimAnalysis.topY },
+      uFrontRotation: { value: frontRotation },
+      uBodyRadiusLocal: { value: Math.max(0.0001, bodyRadiusLocal) },
+      uBodyRadiusTolerance: { value: bodyRadiusTolerance },
+      uCalY: { value: calY },
+      uCalRotation: { value: calRotation },
+      uCalAngle: { value: calAngle },
+      uAlpha: { value: 1.0 },
     };
-  }
+  }, [
+    wrapTexture,
+    printHeightMm,
+    printableTopOffsetMm,
+    scaleFactorY,
+    scaleFactorXz,
+    rimAnalysis.topY,
+    frontRotation,
+    bodyRadiusLocal,
+    bodyRadiusTolerance,
+    calY,
+    calRotation,
+    calAngle,
+  ]);
 
-  // ── Create Three.js textures from canvases ──
-  const textures = useMemo(() => {
-    return placedItems.map((item) => {
-      const tex = new THREE.CanvasTexture(item.canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.needsUpdate = true;
-      return { id: item.id, texture: tex };
-    });
-  }, [placedItems]);
+  const baseColorUniforms = useMemo(() => ({
+    uBodyColor: { value: new THREE.Color(bodyTintColor) },
+    uRimColor: { value: new THREE.Color(rimTintColor) },
+    uBodyStartMm: { value: Math.max(0, printableTopOffsetMm) },
+    uBodyEndMm: { value: Math.max(0, printableTopOffsetMm) + Math.max(0, printHeightMm) },
+    uBodyRadiusLocal: { value: Math.max(0.0001, bodyRadiusLocal) },
+    uBodyRadiusTolerance: { value: bodyRadiusTolerance },
+    uScaleFactorY: { value: scaleFactorY > 0 ? scaleFactorY : scaleFactorXz || 1 },
+    uRimTopLocalY: { value: rimAnalysis.topY },
+  }), [
+    bodyTintColor,
+    rimTintColor,
+    printableTopOffsetMm,
+    printHeightMm,
+    bodyRadiusLocal,
+    bodyRadiusTolerance,
+    scaleFactorY,
+    scaleFactorXz,
+    rimAnalysis.topY,
+  ]);
 
-  // Dispose textures on change/unmount
+  const baseBandMaterial = useMemo(() => {
+    const material = resolveBaseMaterial(bodyMesh.material);
+
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uBodyColor = baseColorUniforms.uBodyColor;
+      shader.uniforms.uRimColor = baseColorUniforms.uRimColor;
+      shader.uniforms.uBodyStartMm = baseColorUniforms.uBodyStartMm;
+      shader.uniforms.uBodyEndMm = baseColorUniforms.uBodyEndMm;
+      shader.uniforms.uBodyRadiusLocal = baseColorUniforms.uBodyRadiusLocal;
+      shader.uniforms.uBodyRadiusTolerance = baseColorUniforms.uBodyRadiusTolerance;
+      shader.uniforms.uScaleFactorY = baseColorUniforms.uScaleFactorY;
+      shader.uniforms.uRimTopLocalY = baseColorUniforms.uRimTopLocalY;
+
+      shader.vertexShader = `
+        varying vec3 vLocalPos;
+        varying float vLocalY;
+      ${shader.vertexShader}
+      `.replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+        vLocalPos = position;
+        vLocalY = position.y;`,
+      );
+
+      shader.fragmentShader = `
+        uniform vec3 uBodyColor;
+        uniform vec3 uRimColor;
+        uniform float uBodyStartMm;
+        uniform float uBodyEndMm;
+        uniform float uBodyRadiusLocal;
+        uniform float uBodyRadiusTolerance;
+        uniform float uScaleFactorY;
+        uniform float uRimTopLocalY;
+        varying vec3 vLocalPos;
+        varying float vLocalY;
+      ${shader.fragmentShader}
+      `.replace(
+        "vec4 diffuseColor = vec4( diffuse, opacity );",
+        `
+          float radialLen = length(vLocalPos.xz);
+          bool isCupBody = radialLen <= uBodyRadiusLocal * uBodyRadiusTolerance;
+          float yFromTopMm = (uRimTopLocalY - vLocalY) * uScaleFactorY;
+          vec3 bandColor = (yFromTopMm >= uBodyStartMm && yFromTopMm <= uBodyEndMm)
+            ? uBodyColor
+            : uRimColor;
+          vec3 finalColor = isCupBody ? bandColor : uBodyColor;
+          vec4 diffuseColor = vec4( finalColor, opacity );
+        `,
+      );
+    };
+
+    material.customProgramCacheKey = () => "yeti-hard-band-v4";
+    return material;
+  }, [baseColorUniforms, bodyMesh.material]);
+
   useEffect(() => {
-    return () => { textures.forEach((t) => t.texture.dispose()); };
-  }, [textures]);
+    return () => {
+      baseBandMaterial.dispose();
+    };
+  }, [baseBandMaterial]);
 
   return (
-    <group ref={groupRef} scale={scaleFactor}>
-      {/* Front face rotation from tumbler mapping */}
-      <group rotation={[0, -frontRotation, 0]}>
-        <mesh
-          ref={meshRef}
-          geometry={rimCenteredGeo}
-          material={bodyMesh.material}
-          castShadow
-          receiveShadow
-        >
-          {placedItems.map((item, idx) => {
-            const { position, rotation, scale } = gridTo3D(item);
-            const tex = textures[idx]?.texture;
-            if (!tex) return null;
-            return (
-              <Decal
-                key={item.id}
-                position={position}
-                rotation={rotation}
-                scale={scale}
-              >
-                <meshBasicMaterial
-                  map={tex}
-                  transparent
-                  polygonOffset
-                  polygonOffsetFactor={-10}
-                  depthTest
-                  depthWrite={false}
-                />
-              </Decal>
-            );
-          })}
+    <group ref={groupRef} scale={[scaleFactorXz, scaleFactorY, scaleFactorXz]}>
+      <mesh
+        geometry={rimCenteredGeo}
+        castShadow
+        receiveShadow
+        material={baseBandMaterial}
+      />
+
+      {overlayUniforms && (
+        <mesh geometry={rimCenteredGeo} renderOrder={2}>
+          <shaderMaterial
+            transparent
+            depthWrite={false}
+            polygonOffset
+            polygonOffsetFactor={-8}
+            polygonOffsetUnits={-1}
+            side={THREE.DoubleSide}
+            uniforms={overlayUniforms}
+            vertexShader={CYL_OVERLAY_VERTEX_SHADER}
+            fragmentShader={CYL_OVERLAY_FRAGMENT_SHADER}
+          />
         </mesh>
-      </group>
+      )}
     </group>
   );
 }

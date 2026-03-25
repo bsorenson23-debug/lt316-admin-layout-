@@ -10,7 +10,7 @@ import {
   Component,
   type ReactNode,
 } from "react";
-import { Canvas, useLoader } from "@react-three/fiber";
+import { Canvas, useLoader, useThree } from "@react-three/fiber";
 import {
   OrbitControls,
   Bounds,
@@ -57,6 +57,8 @@ export interface TumblerDimensions {
   bottomDiameterMm?: number;
   /** Height of the laser-engravable zone in mm */
   printableHeightMm: number;
+  /** Distance from mesh top to printable zone top in mm */
+  printableTopOffsetMm?: number;
 }
 
 /** Per-item rasterized texture for 3D Decal projection */
@@ -79,6 +81,8 @@ export interface ModelViewerProps {
   tumblerMapping?: import("@/types/productTemplate").TumblerMapping;
   /** Body tint hex color (e.g. "#b0b8c4" for stainless, "#1a1a2e" for matte black) */
   bodyTintColor?: string;
+  /** Rim / engraved artwork tint */
+  rimTintColor?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +94,20 @@ export interface ModelViewerProps {
 interface ModelTransform {
   scale: number;
   rotation: [number, number, number];
+}
+
+/**
+ * Decal projection depth needed to cover cylindrical curvature for a given arc width.
+ * With a shallow projector, wide artwork gets clipped near the sides.
+ */
+function computeDecalDepthMm(itemWidthMm: number, radiusMm: number): number {
+  if (!Number.isFinite(itemWidthMm) || itemWidthMm <= 0) return 24;
+  if (!Number.isFinite(radiusMm) || radiusMm <= 0) return Math.min(120, Math.max(24, itemWidthMm * 0.6));
+
+  const halfArc = THREE.MathUtils.clamp(itemWidthMm / (2 * radiusMm), 0, Math.PI * 0.99);
+  const sagittaMm = radiusMm * (1 - Math.cos(halfArc));
+  const inwardNeededMm = sagittaMm + Math.max(4, itemWidthMm * 0.04);
+  return THREE.MathUtils.clamp(inwardNeededMm * 1.8, 20, 110);
 }
 
 function computeModelTransform(
@@ -146,6 +164,7 @@ function LoadingIndicator() {
 
 function AutoFit({ url }: { url: string }) {
   const bounds = useBounds();
+  const camera = useThree((state) => state.camera);
   const lastUrl = useRef<string | null>(null);
   useEffect(() => {
     // Fit camera once per unique model URL — not on every render
@@ -153,9 +172,18 @@ function AutoFit({ url }: { url: string }) {
     lastUrl.current = url;
     const timer = setTimeout(() => {
       bounds.refresh().clip().fit();
-    }, 100);
+      const { center, distance } = bounds.getSize();
+      const direction = camera.position.clone().sub(center);
+      if (direction.lengthSq() < 1e-6) {
+        direction.set(0.35, 0.25, 1);
+      }
+      direction.normalize();
+      bounds
+        .moveTo(center.clone().addScaledVector(direction, distance * 1.28))
+        .lookAt({ target: center });
+    }, 140);
     return () => clearTimeout(timer);
-  }, [url, bounds]);
+  }, [url, bounds, camera]);
   return null;
 }
 
@@ -238,7 +266,9 @@ function StlMesh({
   }, [geometry, dims]);
 
   const ref = useRef<THREE.Group>(null);
-  useEffect(() => { if (ref.current) onReady?.(ref.current); });
+  useEffect(() => {
+    if (ref.current) onReady?.(ref.current);
+  }, [onReady, geometry]);
 
   return (
     <group ref={ref} scale={transform.scale} rotation={transform.rotation}>
@@ -262,7 +292,9 @@ function ObjMesh({
   }, [obj, dims]);
 
   const ref = useRef<THREE.Group>(null);
-  useEffect(() => { if (ref.current) onReady?.(ref.current); });
+  useEffect(() => {
+    if (ref.current) onReady?.(ref.current);
+  }, [onReady, obj]);
 
   return (
     <group ref={ref} scale={transform.scale} rotation={transform.rotation}>
@@ -273,7 +305,7 @@ function ObjMesh({
 
 
 function GltfMesh({
-  url, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, bodyTintColor, onReady,
+  url, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, rimTintColor, onReady,
 }: {
   url: string;
   dims?: TumblerDimensions | null;
@@ -282,10 +314,13 @@ function GltfMesh({
   itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number;
   bedHeightMm?: number;
+  tumblerMapping?: import("@/types/productTemplate").TumblerMapping;
   bodyTintColor?: string;
+  rimTintColor?: string;
   onReady?: OnReady;
 }) {
   const gltf = useLoader(GLTFLoader, url);
+  void rimTintColor;
 
   // ── Scale to physical mm ──
   const transform = useMemo(() => {
@@ -334,16 +369,17 @@ function GltfMesh({
   // Bed grid is an unwrapped cylinder:
   //   width  = wrapWidthMm = π × diameter
   //   height = printHeightMm
-  //   FRONT  = x center of grid (wrapWidthMm / 2)
+  //   FRONT  = x center of grid (wrapWidthMm * 3 / 4)
   // Decal position/scale are in native (pre-scale) units because
   // the parent <group> applies transform.scale uniformly.
   const decalConfigs = useMemo(() => {
     if (!dims || !placedItems?.length || !bedWidthMm || !bedHeightMm) return [];
 
-    const radius = (dims.diameterMm ?? 98) / 2;
+    const radius = bedWidthMm && bedWidthMm > 0 ? bedWidthMm / (2 * Math.PI) : ((dims.diameterMm ?? 98) / 2);
     const wrapWidth = bedWidthMm;
     const printHeight = bedHeightMm;
-    const frontX = wrapWidth / 2;
+    const frontX = wrapWidth * 3 / 4;
+    const frontRotation = tumblerMapping?.frontFaceRotation ?? 0;
     const s = transform.scale;
 
     return placedItems
@@ -351,23 +387,28 @@ function GltfMesh({
       .map((item) => {
         const artCenterX = (item.x + item.width / 2) - frontX;
         const artCenterY = (printHeight / 2) - (item.y + item.height / 2);
-        const angleRad = artCenterX / radius;
+        const angleRad = (artCenterX / radius) + frontRotation;
+        const depthMm = computeDecalDepthMm(item.width, radius);
+        const outwardMm = THREE.MathUtils.clamp(depthMm * 0.08, 2, 8);
+        const surfaceRadius = radius + outwardMm;
 
-        const posX = Math.sin(angleRad) * radius;
-        const posZ = Math.cos(angleRad) * radius;
+        const posX = Math.sin(angleRad) * surfaceRadius;
+        const posZ = Math.cos(angleRad) * surfaceRadius;
         const posY = artCenterY;
 
         return {
           itemId: item.id,
           position: [posX / s, posY / s, posZ / s] as [number, number, number],
           rotation: [0, -angleRad, 0] as [number, number, number],
-          scale: [item.width / s, item.height / s, 20 / s] as [number, number, number],
+          scale: [item.width / s, item.height / s, depthMm / s] as [number, number, number],
         };
       });
-  }, [dims, placedItems, bedWidthMm, bedHeightMm, transform.scale]);
+  }, [dims, placedItems, bedWidthMm, bedHeightMm, tumblerMapping?.frontFaceRotation, transform.scale]);
 
   const ref = useRef<THREE.Group>(null);
-  useEffect(() => { if (ref.current) onReady?.(ref.current); });
+  useEffect(() => {
+    if (ref.current) onReady?.(ref.current);
+  }, [onReady, gltf.scene]);
 
   return (
     <group ref={ref} scale={transform.scale} rotation={transform.rotation}>
@@ -428,30 +469,34 @@ function buildDecalItems(
       gridY: item.y,
       gridW: item.width,
       gridH: item.height,
+      gridRotationDeg: item.rotation ?? 0,
     }));
 }
 
 // Known model component registry — maps GLB path substrings to components
 const KNOWN_MODELS: { match: string; key: string }[] = [
   { match: "yeti-40oz-body", key: "yeti40oz" },
+  { match: "40oz-yeti", key: "yeti40oz" },
   { match: "yeti-40-0z", key: "yeti40oz" },
   { match: "yeti_40oz", key: "yeti40oz" },
 ];
 
 function ModelByExtension({
-  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, tumblerMapping, bodyTintColor, onReady,
+  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, rimTintColor, onReady,
 }: {
   url: string; ext: string; dims?: TumblerDimensions | null; handleArcDeg?: number;
   placedItems?: PlacedItem[]; itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number; bedHeightMm?: number; glbPath?: string | null;
-  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; onReady?: OnReady;
+  sourceName?: string;
+  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; rimTintColor?: string; onReady?: OnReady;
 }) {
   if (ext === "stl") return <StlMesh url={url} dims={dims} onReady={onReady} />;
   if (ext === "obj") return <ObjMesh url={url} dims={dims} onReady={onReady} />;
 
   if (ext === "glb" || ext === "gltf") {
     // Check if this is a known model with a dedicated component
-    const knownModel = glbPath ? KNOWN_MODELS.find((m) => glbPath.includes(m.match)) : null;
+    const modelHint = `${glbPath ?? ""} ${sourceName ?? ""}`.toLowerCase();
+    const knownModel = KNOWN_MODELS.find((m) => modelHint.includes(m.match));
 
     if (knownModel?.key === "yeti40oz" && dims) {
       const decalItems = buildDecalItems(placedItems, itemTextures);
@@ -460,11 +505,16 @@ function ModelByExtension({
           <YetiRambler40oz
             placedItems={decalItems}
             diameterMm={dims.diameterMm}
+            topDiameterMm={dims.topDiameterMm}
+            overallHeightMm={dims.overallHeightMm}
             printHeightMm={dims.printableHeightMm}
+            printableTopOffsetMm={dims.printableTopOffsetMm ?? 0}
             wrapWidthMm={bedWidthMm ?? Math.PI * dims.diameterMm}
             handleArcDeg={handleArcDeg ?? 0}
             glbPath={glbPath ?? undefined}
             tumblerMapping={tumblerMapping}
+            bodyTintColor={bodyTintColor}
+            rimTintColor={rimTintColor}
             onReady={onReady}
           />
         </Suspense>
@@ -476,7 +526,11 @@ function ModelByExtension({
       <Suspense fallback={null}>
         <GltfMesh url={url} dims={dims} handleArcDeg={handleArcDeg}
           placedItems={placedItems} itemTextures={itemTextures}
-          bedWidthMm={bedWidthMm} bedHeightMm={bedHeightMm} bodyTintColor={bodyTintColor} onReady={onReady} />
+          bedWidthMm={bedWidthMm} bedHeightMm={bedHeightMm}
+          tumblerMapping={tumblerMapping}
+          bodyTintColor={bodyTintColor}
+          rimTintColor={rimTintColor}
+          onReady={onReady} />
       </Suspense>
     );
   }
@@ -526,7 +580,7 @@ class CanvasErrorBoundary extends Component<
 // ---------------------------------------------------------------------------
 
 export default function ModelViewer({
-  file, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, bodyTintColor,
+  file, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, bodyTintColor, rimTintColor,
 }: ModelViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
@@ -552,6 +606,8 @@ export default function ModelViewer({
   // Create blob URL inside useEffect — safe for React Strict Mode
   useEffect(() => {
     const objectUrl = URL.createObjectURL(file);
+    // Syncing state to a new file load is intentional here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setUrl(objectUrl);
     setModelBounds(null);
     setIsAutoRotating(!!tumblerDims);
@@ -590,7 +646,7 @@ export default function ModelViewer({
     <CanvasErrorBoundary>
       <Canvas
         shadows={false}
-        frameloop="demand"
+        frameloop={hasItems ? "always" : "demand"}
         dpr={[1, 1.5]}
         camera={{ fov: 35, near: nearClip, far: farClip }}
         gl={{
@@ -605,7 +661,7 @@ export default function ModelViewer({
 
         <StudioLights />
 
-        <Bounds observe={false} margin={2.0}>
+        <Bounds observe={false} margin={3.4}>
           <Suspense fallback={<LoadingIndicator />}>
             <ModelByExtension
               url={url} ext={ext}
@@ -616,8 +672,10 @@ export default function ModelViewer({
               bedWidthMm={bedWidthMm}
               bedHeightMm={bedHeightMm}
               glbPath={glbPath}
+              sourceName={file.name}
               tumblerMapping={tumblerMapping}
               bodyTintColor={bodyTintColor}
+              rimTintColor={rimTintColor}
               onReady={handleModelReady}
             />
           </Suspense>
@@ -668,3 +726,5 @@ export default function ModelViewer({
     </CanvasErrorBoundary>
   );
 }
+
+

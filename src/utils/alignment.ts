@@ -1,4 +1,4 @@
-import { BedConfig, ItemAlignmentMode, PlacedItem, PlacedItemPatch, SvgBounds } from "@/types/admin";
+import { BedConfig, EngravableZone, ItemAlignmentMode, PlacedItem, PlacedItemPatch, SvgBounds } from "@/types/admin";
 
 function safeDiv(numerator: number, denominator: number): number {
   if (!Number.isFinite(denominator) || denominator === 0) return 1;
@@ -41,13 +41,18 @@ export function computeTopLeftForArtworkCenter(args: {
 export function computeAlignmentPatch(
   item: PlacedItem,
   bedConfig: Pick<BedConfig, "width" | "height">,
-  mode: ItemAlignmentMode
+  mode: ItemAlignmentMode,
+  engravableZone?: EngravableZone | null,
 ): PlacedItemPatch {
   const artwork = getPlacedArtworkBounds(item);
   let nextX = item.x;
   let nextY = item.y;
   let nextWidth = item.width;
   let nextHeight = item.height;
+
+  // Handle-centered layout: front face at 3/4 of bed width
+  const frontCenterX = bedConfig.width * 3 / 4;
+  const backCenterX = bedConfig.width / 4;
 
   if (mode === "fit-bed") {
     const fitX = safeDiv(bedConfig.width, artwork.width);
@@ -78,6 +83,43 @@ export function computeAlignmentPatch(
     };
   }
 
+  // ── Zone-aware modes ──────────────────────────────────────────────────────
+
+  if (mode === "center-zone" && engravableZone) {
+    const zoneCX = engravableZone.x + engravableZone.width / 2;
+    const zoneCY = engravableZone.y + engravableZone.height / 2;
+    const artworkCenterX = artwork.x + artwork.width / 2;
+    const artworkCenterY = artwork.y + artwork.height / 2;
+    nextX += zoneCX - artworkCenterX;
+    nextY += zoneCY - artworkCenterY;
+    return { x: nextX, y: nextY };
+  }
+
+  if (mode === "fit-zone" && engravableZone) {
+    const fitX = safeDiv(engravableZone.width, artwork.width);
+    const fitY = safeDiv(engravableZone.height, artwork.height);
+    const factor = Math.min(fitX, fitY);
+    if (Number.isFinite(factor) && factor > 0) {
+      nextWidth = item.width * factor;
+      nextHeight = item.height * factor;
+
+      const centered = computeTopLeftForArtworkCenter({
+        documentBounds: item.documentBounds,
+        artworkBounds: item.artworkBounds,
+        itemWidth: nextWidth,
+        itemHeight: nextHeight,
+        targetCenterX: engravableZone.x + engravableZone.width / 2,
+        targetCenterY: engravableZone.y + engravableZone.height / 2,
+      });
+
+      nextX = centered.x;
+      nextY = centered.y;
+    }
+    return { x: nextX, y: nextY, width: nextWidth, height: nextHeight };
+  }
+
+  // ── Standard modes ────────────────────────────────────────────────────────
+
   const artworkCenterX = artwork.x + artwork.width / 2;
   const artworkCenterY = artwork.y + artwork.height / 2;
 
@@ -88,46 +130,49 @@ export function computeAlignmentPatch(
     nextY += bedConfig.height / 2 - artworkCenterY;
   }
 
-  // Tumbler-wrap: shift artwork center to 180° opposite side (half circumference)
+  // Tumbler-wrap: place opposite logo (back face at w * 1/4), upper third
   if (mode === "opposite-logo") {
-    // Center on front face, upper third (avoids typical bottom-right logo zone)
-    nextX += bedConfig.width / 2 - artworkCenterX;
+    nextX += backCenterX - artworkCenterX;
     nextY += bedConfig.height * 0.35 - artworkCenterY;
   }
 
-  // Tumbler-wrap: center artwork horizontally on the FRONT marker (bed center)
+  // Tumbler-wrap: center artwork on the FRONT face (w * 3/4)
   if (mode === "center-on-front") {
-    nextX += bedConfig.width / 2 - artworkCenterX;
+    nextX += frontCenterX - artworkCenterX;
     nextY += bedConfig.height / 2 - artworkCenterY;
   }
 
-  // Tumbler-wrap: right of handle — faces the user when held in right hand
-  // Offset 15% of wrap width to the right of front center
+  // Tumbler-wrap: right of handle — 15% offset right of front center
   if (mode === "right-of-handle") {
-    nextX += (bedConfig.width / 2 + bedConfig.width * 0.15) - artworkCenterX;
+    nextX += (frontCenterX + bedConfig.width * 0.08) - artworkCenterX;
     nextY += bedConfig.height / 2 - artworkCenterY;
   }
 
-  // Tumbler-wrap: left of handle — faces the user when held in left hand
-  // Offset 15% of wrap width to the left of front center
+  // Tumbler-wrap: left of handle — 15% offset left of front center
   if (mode === "left-of-handle") {
-    nextX += (bedConfig.width / 2 - bedConfig.width * 0.15) - artworkCenterX;
+    nextX += (frontCenterX - bedConfig.width * 0.08) - artworkCenterX;
     nextY += bedConfig.height / 2 - artworkCenterY;
   }
 
-  // Tumbler-wrap: scale artwork to fill the full printable arc width
+  // Tumbler-wrap: fill engravable zone if available, otherwise full bed
   if (mode === "full-wrap") {
-    // Use the full bed (printable arc) — handle exclusion zone is not yet tracked here
-    nextWidth = bedConfig.width;
-    nextHeight = bedConfig.height;
-    nextX = 0;
-    nextY = 0;
+    if (engravableZone) {
+      nextX = engravableZone.x;
+      nextY = engravableZone.y;
+      nextWidth = engravableZone.width;
+      nextHeight = engravableZone.height;
+    } else {
+      nextX = 0;
+      nextY = 0;
+      nextWidth = bedConfig.width;
+      nextHeight = bedConfig.height;
+    }
     return { x: nextX, y: nextY, width: nextWidth, height: nextHeight };
   }
 
-  // Tumbler-wrap: back side — near grid origin (behind handle / seam area)
+  // Tumbler-wrap: back side — centered on back face (w / 4)
   if (mode === "back-side") {
-    nextX += 0 - artworkCenterX + artwork.width / 2;
+    nextX += backCenterX - artworkCenterX;
     nextY += bedConfig.height / 2 - artworkCenterY;
   }
 

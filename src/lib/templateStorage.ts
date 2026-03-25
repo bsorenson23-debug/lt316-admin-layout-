@@ -1,98 +1,196 @@
-import type { ProductTemplate } from "@/types/productTemplate";
+import type { ProductTemplate, ProductTemplateStore } from "@/types/productTemplate";
 import { BUILT_IN_TEMPLATES } from "@/data/builtInTemplates";
 
 const STORAGE_KEY = "lt316_product_templates";
 
-function readStore(): ProductTemplate[] {
+type InternalTemplateStore = ProductTemplateStore & {
+  deletedBuiltInIds: string[];
+  __needsWrite?: boolean;
+};
+
+const BUILT_IN_IDS = new Set(BUILT_IN_TEMPLATES.map((template) => template.id));
+
+function emptyStore(): InternalTemplateStore {
+  return {
+    templates: [],
+    lastUpdated: "",
+    deletedBuiltInIds: [],
+  };
+}
+
+function dedupeTemplates(templates: ProductTemplate[]): ProductTemplate[] {
+  const byId = new Map<string, ProductTemplate>();
+  templates.forEach((template) => byId.set(template.id, template));
+  return [...byId.values()];
+}
+
+function normalizeStore(store: Partial<InternalTemplateStore>): InternalTemplateStore {
+  const rawTemplates = Array.isArray(store.templates) ? dedupeTemplates(store.templates) : [];
+  const normalizedTemplates = rawTemplates
+    .filter((template) => !(BUILT_IN_IDS.has(template.id) && template.builtIn))
+    .map((template) => ({
+      ...template,
+      builtIn: false,
+    }));
+
+  return {
+    templates: normalizedTemplates,
+    lastUpdated: typeof store.lastUpdated === "string" ? store.lastUpdated : "",
+    deletedBuiltInIds: Array.isArray(store.deletedBuiltInIds)
+      ? [...new Set(store.deletedBuiltInIds.filter((id): id is string => typeof id === "string"))]
+      : [],
+    __needsWrite:
+      store.__needsWrite ||
+      normalizedTemplates.length !== rawTemplates.length ||
+      rawTemplates.some((template) => template.builtIn),
+  };
+}
+
+function mergeBuiltInTemplate(
+  source: ProductTemplate,
+  override: ProductTemplate,
+): ProductTemplate {
+  return {
+    ...source,
+    ...override,
+    dimensions: {
+      ...source.dimensions,
+      ...override.dimensions,
+    },
+    laserSettings: {
+      ...source.laserSettings,
+      ...override.laserSettings,
+    },
+    builtIn: true,
+  };
+}
+
+function readStore(): InternalTemplateStore {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as ProductTemplate[];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!raw) return emptyStore();
+
+    const parsed = JSON.parse(raw) as unknown;
+
+    if (Array.isArray(parsed)) {
+      return normalizeStore({
+        templates: parsed.filter((template): template is ProductTemplate => (
+          !!template &&
+          typeof template === "object" &&
+          typeof (template as ProductTemplate).id === "string"
+        )),
+        __needsWrite: true,
+      });
+    }
+
+    if (parsed && typeof parsed === "object" && Array.isArray((parsed as ProductTemplateStore).templates)) {
+      return normalizeStore(parsed as InternalTemplateStore);
+    }
+
+    return emptyStore();
   } catch {
-    return [];
+    return emptyStore();
   }
 }
 
-function writeStore(templates: ProductTemplate[]): void {
+function writeStore(store: InternalTemplateStore): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(templates));
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        templates: dedupeTemplates(store.templates),
+        lastUpdated: new Date().toISOString(),
+        deletedBuiltInIds: [...new Set(store.deletedBuiltInIds)],
+      } satisfies ProductTemplateStore),
+    );
   } catch {
-    // Fail silently — quota exceeded or unavailable
+    // Fail silently â€” quota exceeded or unavailable
   }
 }
 
 export function loadTemplates(): ProductTemplate[] {
-  const stored = readStore();
-  if (stored.length > 0) {
-    const builtInById = new Map(BUILT_IN_TEMPLATES.map((t) => [t.id, t]));
-    let changed = false;
+  const store = readStore();
+  const deletedBuiltInIds = new Set(store.deletedBuiltInIds);
+  const storedById = new Map(store.templates.map((template) => [template.id, template]));
 
-    // Refresh existing built-in templates with latest source values
-    const updated = stored.map((t) => {
-      const source = builtInById.get(t.id);
-      if (source && t.builtIn) {
-        // Overwrite built-in fields from source (user cannot edit built-ins)
-        changed = true;
-        return { ...source };
-      }
-      return t;
+  const builtIns = BUILT_IN_TEMPLATES
+    .filter((template) => !deletedBuiltInIds.has(template.id))
+    .map((template) => {
+      const override = storedById.get(template.id);
+      return override ? mergeBuiltInTemplate(template, override) : { ...template };
     });
 
-    // Add any new built-in templates not yet in storage
-    const storedIds = new Set(updated.map((t) => t.id));
-    const missing = BUILT_IN_TEMPLATES.filter((t) => !storedIds.has(t.id));
-    if (missing.length > 0) {
-      changed = true;
-      updated.unshift(...missing);
-    }
+  const customTemplates = store.templates.filter((template) => !BUILT_IN_IDS.has(template.id));
 
-    if (changed) writeStore(updated);
-    return updated;
+  if (store.__needsWrite) {
+    writeStore({
+      ...store,
+      templates: [...store.templates],
+      deletedBuiltInIds: [...store.deletedBuiltInIds],
+    });
   }
-  // First load — seed with built-in templates
-  writeStore(BUILT_IN_TEMPLATES);
-  return [...BUILT_IN_TEMPLATES];
+
+  return [...builtIns, ...customTemplates];
 }
 
-export function saveTemplate(t: ProductTemplate): void {
-  const templates = loadTemplates();
-  const idx = templates.findIndex((x) => x.id === t.id);
-  if (idx >= 0) {
-    templates[idx] = t;
-  } else {
-    templates.push(t);
-  }
-  writeStore(templates);
+export function saveTemplate(template: ProductTemplate): void {
+  const store = readStore();
+  const nextTemplates = store.templates.filter((existing) => existing.id !== template.id);
+
+  nextTemplates.push({
+    ...template,
+    builtIn: false,
+  });
+
+  writeStore({
+    ...store,
+    templates: nextTemplates,
+    deletedBuiltInIds: store.deletedBuiltInIds.filter((id) => id !== template.id),
+  });
 }
 
 export function deleteTemplate(id: string): void {
-  const templates = loadTemplates();
-  const target = templates.find((t) => t.id === id);
-  // Never delete built-in templates
-  if (target?.builtIn) return;
-  writeStore(templates.filter((t) => t.id !== id));
+  const store = readStore();
+
+  if (BUILT_IN_IDS.has(id)) {
+    writeStore({
+      ...store,
+      templates: store.templates.filter((template) => template.id !== id),
+      deletedBuiltInIds: [...new Set([...store.deletedBuiltInIds, id])],
+    });
+    return;
+  }
+
+  writeStore({
+    ...store,
+    templates: store.templates.filter((template) => template.id !== id),
+  });
 }
 
 export function getTemplate(id: string): ProductTemplate | null {
   const templates = loadTemplates();
-  return templates.find((t) => t.id === id) ?? null;
+  return templates.find((template) => template.id === id) ?? null;
 }
 
 export function updateTemplate(
   id: string,
-  patch: Partial<ProductTemplate>
+  patch: Partial<ProductTemplate>,
 ): void {
-  const templates = loadTemplates();
-  const idx = templates.findIndex((t) => t.id === id);
-  if (idx < 0) return;
-  // Editing a built-in template makes it user-owned so the
-  // built-in refresh logic in loadTemplates() won't overwrite it.
-  templates[idx] = {
-    ...templates[idx],
+  const current = getTemplate(id);
+  if (!current) return;
+
+  const next: ProductTemplate = {
+    ...current,
     ...patch,
+    dimensions: patch.dimensions
+      ? { ...current.dimensions, ...patch.dimensions }
+      : current.dimensions,
+    laserSettings: patch.laserSettings
+      ? { ...current.laserSettings, ...patch.laserSettings }
+      : current.laserSettings,
     updatedAt: new Date().toISOString(),
     builtIn: false,
   };
-  writeStore(templates);
+
+  saveTemplate(next);
 }
