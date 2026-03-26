@@ -761,6 +761,20 @@ function getAttrNum(tag: string, name: string, fallback = 0): number {
 type ToWorldFn = (x: number, y: number) => { x: number; y: number };
 
 /**
+ * Remove non-rendered container content that should never become output paths.
+ *
+ * We intentionally strip common definition blocks (<defs>, <clipPath>, <mask>,
+ * etc.) before shape extraction so helper geometry does not get exported as
+ * burnable artwork.
+ */
+function stripNonRenderableContainers(svgSource: string): string {
+  return svgSource.replace(
+    /<(defs|clippath|mask|pattern|marker|symbol|filter)\b[^>]*>[\s\S]*?<\/\1>/gi,
+    ''
+  );
+}
+
+/**
  * Apply a Mat2D transform (SVG group transform) and then toWorld mapping
  * to a point in SVG space.
  */
@@ -1197,34 +1211,6 @@ function buildBitmapShapeXml(
 }
 
 // ---------------------------------------------------------------------------
-// Non-rendering block stripper
-// ---------------------------------------------------------------------------
-
-/**
- * Remove SVG blocks that define reusable content but should NOT produce
- * visible shapes: <defs>, <clipPath>, <mask>, <symbol>, <marker>, <pattern>,
- * <filter>, <linearGradient>, <radialGradient>, <metadata>, <title>, <desc>.
- *
- * Without this, the regex-based shape extractor would extract shapes inside
- * these blocks as if they were visible artwork, producing duplicate/phantom
- * paths in the LightBurn output.
- */
-function stripNonRenderingBlocks(svgSource: string): string {
-  const tags = [
-    'defs', 'clipPath', 'mask', 'symbol', 'marker', 'pattern',
-    'filter', 'linearGradient', 'radialGradient', 'metadata', 'title', 'desc',
-  ];
-  let result = svgSource;
-  for (const tag of tags) {
-    // Remove self-closing: <tag ... />
-    result = result.replace(new RegExp(`<${tag}\\b[^>]*/>`, 'gi'), '');
-    // Remove block: <tag ...>...</tag> (non-greedy, case-insensitive)
-    result = result.replace(new RegExp(`<${tag}[\\s>][\\s\\S]*?</${tag}\\s*>`, 'gi'), '');
-  }
-  return result;
-}
-
-// ---------------------------------------------------------------------------
 // Rotation helper for world-space vertices
 // ---------------------------------------------------------------------------
 
@@ -1277,9 +1263,11 @@ export function extractLbrnShapesFromItem(
   const rotationDeg = item.rotationDeg ?? 0;
 
   // Strip XML namespace prefixes (e.g. <svg:path> → <path>) so regexes match
-  let svgText = item.svgText.replace(/<(\/?)[\w]+-/g, '<$1').replace(/<(\/?)([\w]+):/g, '<$1');
-  // Strip non-rendering blocks (<defs>, <clipPath>, <mask>, etc.)
-  svgText = stripNonRenderingBlocks(svgText);
+  const svgText = stripNonRenderableContainers(
+    item.svgText
+      .replace(/<(\/?)[\w]+-/g, '<$1')
+      .replace(/<(\/?)([\w]+):/g, '<$1')
+  );
 
   const xmlBlocks: string[] = [];
 
