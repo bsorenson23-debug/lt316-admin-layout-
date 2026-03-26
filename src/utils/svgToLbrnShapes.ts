@@ -626,6 +626,20 @@ function getAttrNum(tag: string, name: string, fallback = 0): number {
 type ToWorldFn = (x: number, y: number) => { x: number; y: number };
 
 /**
+ * Remove non-rendered container content that should never become output paths.
+ *
+ * We intentionally strip common definition blocks (<defs>, <clipPath>, <mask>,
+ * etc.) before shape extraction so helper geometry does not get exported as
+ * burnable artwork.
+ */
+function stripNonRenderableContainers(svgSource: string): string {
+  return svgSource.replace(
+    /<(defs|clippath|mask|pattern|marker|symbol|filter)\b[^>]*>[\s\S]*?<\/\1>/gi,
+    ''
+  );
+}
+
+/**
  * Apply a Mat2D transform (SVG group transform) and then toWorld mapping
  * to a point in SVG space.
  */
@@ -961,7 +975,11 @@ export function extractLbrnShapesFromItem(
 ): string[] {
   const { xMm, yMm, widthMm, heightMm } = item;
   // Strip XML namespace prefixes (e.g. <svg:path> → <path>) so regexes match
-  const svgText = item.svgText.replace(/<(\/?)[\w]+-/g, '<$1').replace(/<(\/?)([\w]+):/g, '<$1');
+  const svgText = stripNonRenderableContainers(
+    item.svgText
+      .replace(/<(\/?)[\w]+-/g, '<$1')
+      .replace(/<(\/?)([\w]+):/g, '<$1')
+  );
 
   // --- 1. Parse viewBox ---
   const vbMatch = /viewBox\s*=\s*["']([^"']+)["']/i.exec(svgText);
