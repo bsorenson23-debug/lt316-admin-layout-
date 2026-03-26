@@ -41,26 +41,30 @@ function buildRotarySetup(payload: LightBurnExportPayload): string {
   const cylinder = payload.cylinder;
   if (!cylinder?.objectDiameterMm) {
     // No cylinder data — include a disabled rotary block as placeholder
-    return `  <RotarySetup ChuckMode="0" RollerDiam="60" ObjectDiam="0" RollerSpacing="180" AxisYmm="0" Circum="0" StepLen="0.05" OnlyY="0" Active="0" Mode="0" />`;
+    return `  <RotarySetup Enable="0" ChuckMode="0" RollerDiam="60" ObjectDiam="0" RollerSpacing="180" AxisYmm="0" Circum="0" SplitObjWidth="0" StepLen="0.05" OnlyY="0" Active="0" Mode="0" MirrorAxis="0" />`;
   }
 
   const diam = cylinder.objectDiameterMm;
   const circum = Math.PI * diam;
+  const splitWidth = cylinder.splitWidthMm > 0 ? cylinder.splitWidthMm : circum;
   const isChuck = payload.rotary.chuckOrRoller === "chuck";
   const mode = isChuck ? 1 : 0;
 
   return [
     `  <RotarySetup`,
+    xmlAttr("Enable", "1"),
     xmlAttr("ChuckMode", mode),
     xmlAttr("RollerDiam", "60"),
     xmlAttr("ObjectDiam", mm(diam, 2)),
     xmlAttr("RollerSpacing", "180"),
     xmlAttr("AxisYmm", "0"),
     xmlAttr("Circum", mm(circum, 2)),
+    xmlAttr("SplitObjWidth", mm(splitWidth, 2)),
     xmlAttr("StepLen", "0.05"),
     xmlAttr("OnlyY", "0"),
     xmlAttr("Active", "1"),
     xmlAttr("Mode", mode),
+    xmlAttr("MirrorAxis", "0"),
     `  />`,
   ].join("");
 }

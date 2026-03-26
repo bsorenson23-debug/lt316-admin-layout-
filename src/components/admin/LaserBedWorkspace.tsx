@@ -34,6 +34,7 @@ import { hasDarkBackground, removeBlackBackground } from "@/lib/removeBlackBg";
 import { generateOverlayCanvas } from "@/lib/overlayGenerator";
 import { generateTumblerSchematic } from "@/lib/generateTumblerSchematic";
 import { renderCurvedItems } from "@/utils/curvedItemsRenderer";
+import { getTumblerWrapLayout, getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
 import styles from "./LaserBedWorkspace.module.css";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -411,8 +412,8 @@ export function LaserBedWorkspace({
     if (!curvedOverlay || !placedItems.length) return null;
     const bw = bedConfig.width * basePxPerMm;
     const bh = bedConfig.height * basePxPerMm;
-    return renderCurvedItems(placedItems, imageCache, bw, bh, basePxPerMm);
-  }, [curvedOverlay, placedItems, imageCache, bedConfig.width, bedConfig.height, basePxPerMm]);
+    return renderCurvedItems(placedItems, imageCache, bw, bh, basePxPerMm, handleArcDeg);
+  }, [curvedOverlay, placedItems, imageCache, bedConfig.width, bedConfig.height, basePxPerMm, handleArcDeg]);
 
   // Generate overlay canvas — schematic (dimension-based) or photo
   const overlayCanvas = useMemo(() => {
@@ -613,7 +614,7 @@ export function LaserBedWorkspace({
     let { x: xMm, y: yMm } = pointerToBedMm(pointer);
     if (showTwoSidedCrosshairs) {
       // Snap to FRONT (center) if click is within 20% of bed width
-      const frontX = bedConfig.width * 3 / 4;
+      const frontX = getWrapFrontCenter(bedConfig.width, handleArcDeg);
       const centerY = bedConfig.height / 2;
       const snapR = bedConfig.width * 0.20;
       if (Math.hypot(xMm - frontX, yMm - centerY) <= snapR) {
@@ -622,7 +623,7 @@ export function LaserBedWorkspace({
       }
     }
     onPlaceAsset(xMm, yMm);
-  }, [isPlacementArmed, placementAsset, pointerToBedMm, onPlaceAsset, onSelectItem, showTwoSidedCrosshairs, bedConfig]);
+  }, [isPlacementArmed, placementAsset, pointerToBedMm, onPlaceAsset, onSelectItem, showTwoSidedCrosshairs, bedConfig, handleArcDeg]);
 
   // ── Grid lines ────────────────────────────────────────────────────────────
   const gridLines = useMemo(() => {
@@ -749,15 +750,15 @@ export function LaserBedWorkspace({
   const twoSidedCrosshairNodes = useMemo(() => {
     if (!showTwoSidedCrosshairs) return null;
     const wrapW = bedConfig.width;
-    // Handle-centered layout: handle at center, front right, back left
-    const handleCenterXPx = (wrapW / 2) * basePxPerMm;
-    const frontXPx = (wrapW * 3 / 4) * basePxPerMm;
-    const backXPx = (wrapW / 4) * basePxPerMm;
+    const layout = getTumblerWrapLayout(handleArcDeg);
+    const handleCenterXPx = layout.handleCenterRatio == null ? null : (wrapW * layout.handleCenterRatio) * basePxPerMm;
+    const frontXPx = (wrapW * layout.frontCenterRatio) * basePxPerMm;
+    const backXPx = layout.backCenterRatio == null ? null : (wrapW * layout.backCenterRatio) * basePxPerMm;
 
     return (
       <Group listening={false}>
         {/* ── HANDLE CENTER LINE — orange dashed at grid center ── */}
-        {handleArcDeg > 0 && (
+        {handleCenterXPx != null && (
           <>
             <Line
               points={[handleCenterXPx, 0, handleCenterXPx, bedPxH]}
@@ -808,22 +809,26 @@ export function LaserBedWorkspace({
         />
 
         {/* ── BACK face center — left half ── */}
-        <Line
-          points={[backXPx, 0, backXPx, bedPxH]}
-          stroke="rgba(255,255,255,0.2)"
-          strokeWidth={1}
-          dash={[6, 4]}
-        />
-        <Text
-          x={backXPx - 22}
-          y={handleArcDeg > 0 ? 18 : 4}
-          text="BACK"
-          fontSize={9}
-          fontFamily="system-ui, sans-serif"
-          fill="rgba(255,255,255,0.3)"
-          width={44}
-          align="center"
-        />
+        {backXPx != null && (
+          <>
+            <Line
+              points={[backXPx, 0, backXPx, bedPxH]}
+              stroke="rgba(255,255,255,0.2)"
+              strokeWidth={1}
+              dash={[6, 4]}
+            />
+            <Text
+              x={backXPx - 22}
+              y={handleArcDeg > 0 ? 18 : 4}
+              text="BACK"
+              fontSize={9}
+              fontFamily="system-ui, sans-serif"
+              fill="rgba(255,255,255,0.3)"
+              width={44}
+              align="center"
+            />
+          </>
+        )}
 
         {/* ── Seam lines — both edges (wrap start/end) ── */}
         <Line

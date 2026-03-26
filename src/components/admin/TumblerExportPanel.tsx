@@ -41,6 +41,12 @@ interface Props {
   /** Lifted taper warp state — synced with overlay controls */
   taperWarpEnabled?: boolean;
   onTaperWarpChange?: (enabled: boolean) => void;
+  /** Configured LightBurn output folder (from path settings panel) */
+  outputFolderPath?: string;
+  /** Callback to update the tumbler diameter in the parent bed config */
+  onDiameterChange?: (diameterMm: number) => void;
+  /** Snap all placed items to full-wrap dimensions (circumference x printable height) */
+  onSnapFullWrap?: () => void;
 }
 
 function fmt(n: number) { return n.toFixed(2); }
@@ -86,7 +92,8 @@ function downloadJson(payload: unknown, filename: string): void {
 
 export function TumblerExportPanel({
   bedConfig, placedItems, onFramePreviewChange, materialSettings, onPreflightNav,
-  taperWarpEnabled: taperWarpEnabledProp, onTaperWarpChange,
+  taperWarpEnabled: taperWarpEnabledProp, onTaperWarpChange, outputFolderPath, onDiameterChange,
+  onSnapFullWrap,
 }: Props) {
   const [rotaryEnabled,       setRotaryEnabled]       = React.useState(false);
   const [availablePresets,    setAvailablePresets]    = React.useState<RotaryPlacementPreset[]>(DEFAULT_ROTARY_PLACEMENT_PRESETS);
@@ -94,12 +101,21 @@ export function TumblerExportPanel({
   const [anchorMode,          setAnchorMode]          = React.useState<TopAnchorMode>("physical-top");
   const [topOffsetDraft,      setTopOffsetDraft]      = React.useState("");
   const [showNextSteps,       setShowNextSteps]       = React.useState(false);
+  const [saving,              setSaving]              = React.useState(false);
+  const [saveResult,          setSaveResult]          = React.useState<{ ok: boolean; message: string } | null>(null);
+  const [diameterDraft,       setDiameterDraft]       = React.useState("");
   // Use lifted state if provided, otherwise local fallback
   const [localTaperWarp,      setLocalTaperWarp]      = React.useState(true);
   const taperWarpEnabled = taperWarpEnabledProp ?? localTaperWarp;
   const setTaperWarpEnabled = onTaperWarpChange ?? setLocalTaperWarp;
 
   React.useEffect(() => { setAvailablePresets(getRotaryPresets()); }, []);
+
+  // Sync diameter draft from bedConfig when it changes externally
+  const currentDiameterMm = bedConfig.tumblerOutsideDiameterMm ?? bedConfig.tumblerDiameterMm ?? 0;
+  React.useEffect(() => {
+    if (currentDiameterMm > 0) setDiameterDraft(String(currentDiameterMm));
+  }, [currentDiameterMm]);
 
   const isTumblerMode      = bedConfig.workspaceMode === "tumbler-wrap";
   const taperApplicable    = isTaperWarpApplicable(bedConfig);
@@ -149,6 +165,58 @@ export function TumblerExportPanel({
   });
 
   const warnings = exportArtifacts.artworkPayload.warnings;
+
+  const hasOutputFolder = Boolean(outputFolderPath?.trim());
+
+  const doExport = (mode: "download" | "save") => {
+    const name = `lt316-${Date.now()}`;
+    const mat = materialSettings ?? undefined;
+    const lbrnContent = buildLightBurnLbrn(exportArtifacts.artworkPayload, mat);
+
+    if (mode === "save" && outputFolderPath?.trim()) {
+      setSaving(true);
+      setSaveResult(null);
+      fetch("/api/admin/lightburn/save-export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          outputFolderPath: outputFolderPath.trim(),
+          filename: `${name}.lbrn2`,
+          content: lbrnContent,
+        }),
+      })
+        .then(async (res) => {
+          const data = (await res.json()) as { saved?: boolean; path?: string; error?: string };
+          if (res.ok && data.saved) {
+            setSaveResult({ ok: true, message: `Saved to ${data.path}` });
+          } else {
+            setSaveResult({ ok: false, message: data.error ?? "Save failed" });
+          }
+        })
+        .catch((err) => {
+          setSaveResult({ ok: false, message: err instanceof Error ? err.message : "Network error" });
+        })
+        .finally(() => setSaving(false));
+    } else {
+      downloadLbrnFile(lbrnContent, `${name}.lbrn2`);
+    }
+
+    setShowNextSteps(true);
+    appendExportHistory({
+      tumblerBrand: bedConfig.tumblerBrand,
+      tumblerModel: bedConfig.tumblerModel,
+      tumblerProfileId: bedConfig.tumblerProfileId,
+      rotaryPresetId: selectedPreset?.id,
+      rotaryPresetName: selectedPreset?.name,
+      materialLabel: mat?.label,
+      templateWidthMm: bedConfig.width,
+      templateHeightMm: bedConfig.height,
+      artworkFingerprint: fingerprintItems(placedItems),
+      itemsSnapshot: placedItems.map((p) => ({ name: p.name, x: p.x, y: p.y, width: p.width, height: p.height, rotation: p.rotation })),
+      exportOriginXmm: previewOrigin.xMm,
+      exportOriginYmm: previewOrigin.yMm,
+    });
+  };
 
   return (
     <section className={styles.panel}>
@@ -239,6 +307,52 @@ export function TumblerExportPanel({
           </div>
         </div>
 
+        {/* ── Cylinder Diameter ── */}
+        {isTumblerMode && (
+          <div className={styles.sectionCard}>
+            <div className={styles.sectionCardTitle}>Cylinder</div>
+            <div className={styles.sectionCardBody}>
+              <div className={styles.fieldRow}>
+                <span className={styles.fieldLabel}>Diameter</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <input
+                    id="cylinder-diameter-input"
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    className={styles.numInput}
+                    value={diameterDraft}
+                    placeholder="0"
+                    onChange={(e) => {
+                      setDiameterDraft(e.target.value);
+                      const val = Number(e.target.value);
+                      if (Number.isFinite(val) && val > 0 && onDiameterChange) {
+                        onDiameterChange(val);
+                      }
+                    }}
+                  />
+                  <span className={styles.numUnit}>mm</span>
+                </div>
+              </div>
+              {currentDiameterMm > 0 && (
+                <div className={styles.diameterMeta}>
+                  Circumference: {fmt(Math.PI * currentDiameterMm)} mm
+                </div>
+              )}
+              {placedItems.length > 0 && currentDiameterMm > 0 && bedConfig.height > 0 && onSnapFullWrap && (
+                <button
+                  type="button"
+                  className={styles.snapWrapBtn}
+                  onClick={onSnapFullWrap}
+                  title={`Resize all artwork to ${fmt(bedConfig.width)} × ${fmt(bedConfig.height)} mm and position at origin`}
+                >
+                  Snap Full Wrap
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── Origin ── */}
         <div className={styles.originBar}>
           <span className={styles.originLabel}>Origin</span>
@@ -281,31 +395,31 @@ export function TumblerExportPanel({
 
         {/* ── Export actions ── */}
         <div className={styles.exportBtnRow}>
-          <button
-            className={styles.primaryBtn}
-            onClick={() => {
-              const name = `lt316-${Date.now()}`;
-              const mat = materialSettings ?? undefined;
-              downloadLbrnFile(buildLightBurnLbrn(exportArtifacts.artworkPayload, mat), `${name}.lbrn2`);
-              setShowNextSteps(true);
-              appendExportHistory({
-                tumblerBrand: bedConfig.tumblerBrand,
-                tumblerModel: bedConfig.tumblerModel,
-                tumblerProfileId: bedConfig.tumblerProfileId,
-                rotaryPresetId: selectedPreset?.id,
-                rotaryPresetName: selectedPreset?.name,
-                materialLabel: mat?.label,
-                templateWidthMm: bedConfig.width,
-                templateHeightMm: bedConfig.height,
-                artworkFingerprint: fingerprintItems(placedItems),
-                itemsSnapshot: placedItems.map((p) => ({ name: p.name, x: p.x, y: p.y, width: p.width, height: p.height, rotation: p.rotation })),
-                exportOriginXmm: previewOrigin.xMm,
-                exportOriginYmm: previewOrigin.yMm,
-              });
-            }}
-          >
-            Export for LightBurn
-          </button>
+          {hasOutputFolder ? (
+            <button
+              className={styles.primaryBtn}
+              disabled={saving}
+              onClick={() => doExport("save")}
+            >
+              {saving ? "Saving..." : "Save to LightBurn"}
+            </button>
+          ) : (
+            <button
+              className={styles.primaryBtn}
+              onClick={() => doExport("download")}
+            >
+              Export for LightBurn
+            </button>
+          )}
+          {hasOutputFolder && (
+            <button
+              className={styles.secondaryBtn}
+              title="Download .lbrn2 file"
+              onClick={() => doExport("download")}
+            >
+              DL
+            </button>
+          )}
           <button
             className={styles.secondaryBtn}
             title="Download raw JSON"
@@ -314,6 +428,11 @@ export function TumblerExportPanel({
             JSON
           </button>
         </div>
+        {saveResult && (
+          <div className={saveResult.ok ? styles.saveSuccess : styles.warning}>
+            {saveResult.message}
+          </div>
+        )}
 
         {/* ── Post-export card ── */}
         {showNextSteps && (

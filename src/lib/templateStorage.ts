@@ -2,6 +2,9 @@ import type { ProductTemplate, ProductTemplateStore } from "@/types/productTempl
 import { BUILT_IN_TEMPLATES } from "@/data/builtInTemplates";
 
 const STORAGE_KEY = "lt316_product_templates";
+const REMOVED_GLB_PATHS = new Set([
+  "/models/templates/tumbler-30oz.glb",
+]);
 
 type InternalTemplateStore = ProductTemplateStore & {
   deletedBuiltInIds: string[];
@@ -26,12 +29,18 @@ function dedupeTemplates(templates: ProductTemplate[]): ProductTemplate[] {
 
 function normalizeStore(store: Partial<InternalTemplateStore>): InternalTemplateStore {
   const rawTemplates = Array.isArray(store.templates) ? dedupeTemplates(store.templates) : [];
+  let sanitizedRemovedGlbPath = false;
   const normalizedTemplates = rawTemplates
     .filter((template) => !(BUILT_IN_IDS.has(template.id) && template.builtIn))
-    .map((template) => ({
-      ...template,
-      builtIn: false,
-    }));
+    .map((template) => {
+      const removedGlbPath = template.glbPath && REMOVED_GLB_PATHS.has(template.glbPath);
+      if (removedGlbPath) sanitizedRemovedGlbPath = true;
+      return {
+        ...template,
+        builtIn: false,
+        glbPath: removedGlbPath ? "" : template.glbPath,
+      };
+    });
 
   return {
     templates: normalizedTemplates,
@@ -42,7 +51,8 @@ function normalizeStore(store: Partial<InternalTemplateStore>): InternalTemplate
     __needsWrite:
       store.__needsWrite ||
       normalizedTemplates.length !== rawTemplates.length ||
-      rawTemplates.some((template) => template.builtIn),
+      rawTemplates.some((template) => template.builtIn) ||
+      sanitizedRemovedGlbPath,
   };
 }
 

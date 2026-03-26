@@ -6,15 +6,57 @@ import {
 } from "@/data/tumblerProfiles";
 import type { TumblerSourceLink } from "@/types/tumblerAutoSize";
 import type {
+  TumblerItemLookupFitDebug,
   TumblerItemLookupDimensions,
   TumblerItemLookupResponse,
 } from "@/types/tumblerItemLookup";
+import { access } from "node:fs/promises";
+import path from "node:path";
+import { ensureGeneratedTumblerGlb } from "@/server/tumbler/generateTumblerModel";
 
 const IMAGE_META_NAMES = [
   "og:image",
   "og:image:url",
   "twitter:image",
   "twitter:image:src",
+];
+
+const PRODUCT_IMAGE_BAD_TOKENS = [
+  "logo",
+  "banner",
+  "icon",
+  "sprite",
+  "favicon",
+  "avatar",
+  "badge",
+  "app install",
+  "app store",
+  "google play",
+  "apple store",
+  "social",
+  "facebook",
+  "instagram",
+  "youtube",
+  "pinterest",
+  "twitter",
+  "tracking",
+  "placeholder",
+  "pixel",
+];
+
+const PRODUCT_IMAGE_GOOD_TOKENS = [
+  "product",
+  "products",
+  "gallery",
+  "hero",
+  "main",
+  "primary",
+  "default",
+  "zoom",
+  "pdp",
+  "item",
+  "front",
+  "detail",
 ];
 
 function round2(value: number): number {
@@ -32,12 +74,22 @@ function normalizeText(value: string | null | undefined): string {
 
 function decodeHtml(value: string | null | undefined): string {
   return (value ?? "")
+    .replace(/\\\//g, "/")
+    .replace(/\\"/g, "\"")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, "\"")
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
+}
+
+function safeDecodeUri(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function isLikelyUrl(input: string): boolean {
@@ -110,21 +162,144 @@ function resolveUrl(baseUrl: string, maybeUrl: string | null): string | null {
 
 function extractImageUrls(html: string, baseUrl: string): string[] {
   const urls = new Set<string>();
+  const addUrl = (value: string | null | undefined) => {
+    const resolved = resolveUrl(baseUrl, decodeHtml(value ?? ""));
+    if (!resolved) return;
+    if (!/\.(?:png|jpe?g|webp|avif)(?:[?#].*)?$/i.test(resolved)) return;
+    urls.add(resolved);
+  };
 
   for (const metaName of IMAGE_META_NAMES) {
-    const value = extractMetaContent(html, metaName);
-    const resolved = resolveUrl(baseUrl, value);
-    if (resolved) urls.add(resolved);
+    addUrl(extractMetaContent(html, metaName));
   }
 
-  const ldImagePattern = /"image"\s*:\s*(?:"([^"]+)"|\[\s*"([^"]+)")/gi;
+  const ldImagePattern = /"image"\s*:\s*(?:"([^"]+)"|\[([\s\S]*?)\])/gi;
   for (const match of html.matchAll(ldImagePattern)) {
-    const resolved = resolveUrl(baseUrl, decodeHtml(match[1] ?? match[2] ?? ""));
-    if (resolved) urls.add(resolved);
-    if (urls.size >= 6) break;
+    if (match[1]) {
+      addUrl(match[1]);
+      continue;
+    }
+    const arrayBody = match[2] ?? "";
+    for (const item of arrayBody.matchAll(/"([^"]+\.(?:png|jpe?g|webp|avif)(?:\?[^"]*)?)"/gi)) {
+      addUrl(item[1]);
+      if (urls.size >= 12) break;
+    }
+    if (urls.size >= 12) break;
+  }
+
+  for (const match of html.matchAll(/<(?:img|source)[^>]+(?:src|data-src|data-image|data-zoom-image)=["']([^"']+)["']/gi)) {
+    addUrl(match[1]);
+    if (urls.size >= 16) break;
+  }
+
+  for (const match of html.matchAll(/\b(?:https?:)?\\?\/\\?\/[^"'\\\s>]+?\.(?:png|jpe?g|webp|avif)(?:\?[^"'\\\s>]*)?/gi)) {
+    addUrl(match[0].replace(/^\/\//, "https://"));
+    if (urls.size >= 18) break;
   }
 
   return [...urls];
+}
+
+function tokenizeLookupText(text: string): string[] {
+  return [...new Set(
+    normalizeText(text)
+      .split(" ")
+      .filter((token) => token.length >= 3)
+  )];
+}
+
+function scoreImageCandidateUrl(url: string, lookupText: string): number {
+  const normalizedUrl = normalizeText(safeDecodeUri(url));
+  const lookupTokens = tokenizeLookupText(lookupText);
+  let score = 0;
+
+  for (const token of PRODUCT_IMAGE_BAD_TOKENS) {
+    if (normalizedUrl.includes(token)) score -= 6;
+  }
+
+  for (const token of PRODUCT_IMAGE_GOOD_TOKENS) {
+    if (normalizedUrl.includes(token)) score += 2.5;
+  }
+
+  for (const token of lookupTokens) {
+    if (normalizedUrl.includes(token)) score += 1.25;
+  }
+
+  if (/\.(?:jpe?g|png|webp|avif)(?:[?#].*)?$/i.test(url)) score += 0.5;
+  if (/cdn|images|image|media/i.test(url)) score += 0.75;
+
+  return score;
+}
+
+async function probeImageCandidate(url: string): Promise<{ width: number; height: number } | null> {
+  try {
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; lt316-admin/1.0)" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) return null;
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.startsWith("image/")) return null;
+
+    const sharp = (await import("sharp")).default;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const meta = await sharp(buffer, { failOn: "none", limitInputPixels: false }).metadata();
+    if (!meta.width || !meta.height) return null;
+
+    return { width: meta.width, height: meta.height };
+  } catch {
+    return null;
+  }
+}
+
+function scoreImageMetadata(meta: { width: number; height: number } | null): number {
+  if (!meta) return 0;
+
+  const aspect = meta.height / Math.max(1, meta.width);
+  let score = 0;
+
+  if (meta.width < 180 || meta.height < 220) score -= 8;
+  if (meta.width >= 450) score += 1.5;
+  if (meta.height >= 700) score += 2.5;
+
+  if (aspect < 1) score -= 10;
+  else if (aspect >= 1.2 && aspect < 1.8) score += 2;
+  else if (aspect >= 1.8 && aspect <= 4.6) score += 6;
+  else if (aspect > 4.6) score -= 2;
+
+  return score;
+}
+
+async function selectBestProductImage(args: {
+  imageUrls: string[];
+  lookupText: string;
+}): Promise<string | null> {
+  if (args.imageUrls.length === 0) return null;
+  if (args.imageUrls.length === 1) return args.imageUrls[0];
+
+  const lexicalRanked = args.imageUrls
+    .map((url) => ({
+      url,
+      lexicalScore: scoreImageCandidateUrl(url, args.lookupText),
+    }))
+    .sort((a, b) => b.lexicalScore - a.lexicalScore);
+
+  const probeCandidates = lexicalRanked.slice(0, 6);
+  let bestUrl = lexicalRanked[0]?.url ?? null;
+  let bestScore = lexicalRanked[0]?.lexicalScore ?? Number.NEGATIVE_INFINITY;
+
+  for (const candidate of probeCandidates) {
+    const meta = await probeImageCandidate(candidate.url);
+    const totalScore = candidate.lexicalScore + scoreImageMetadata(meta);
+    if (totalScore > bestScore) {
+      bestScore = totalScore;
+      bestUrl = candidate.url;
+    }
+  }
+
+  return bestUrl;
 }
 
 function parseTripletDimensionsMm(text: string): TumblerItemLookupDimensions | null {
@@ -190,27 +365,54 @@ function matchProfileFromText(lookupText: string) {
   return bestScore >= 0.42 ? bestProfile : null;
 }
 
-function pickFallbackGlbPath(args: {
+async function glbAssetExists(glbPath: string): Promise<boolean> {
+  if (!glbPath) return false;
+  const normalized = glbPath.replace(/^\/+/, "").replace(/\//g, path.sep);
+  const absolute = path.join(process.cwd(), "public", normalized);
+  try {
+    await access(absolute);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function pickFallbackGlbPath(args: {
   matchedProfileId: string | null;
   capacityOz: number | null;
   brand: string | null;
   model: string | null;
   hasHandle: boolean | null;
-}): string {
-  if (args.matchedProfileId === "yeti-rambler-40") {
-    return "/models/templates/yeti-40oz-body.glb";
+  imageUrl?: string | null;
+  imageUrls?: string[];
+}): Promise<{ glbPath: string; fitDebug: TumblerItemLookupFitDebug | null }> {
+  if (args.matchedProfileId === "stanley-iceflow-30") {
+    try {
+      const generated = await ensureGeneratedTumblerGlb(args.matchedProfileId, {
+        imageUrl: args.imageUrl,
+        imageUrls: args.imageUrls,
+      });
+      if (generated.glbPath && await glbAssetExists(generated.glbPath)) {
+        return generated;
+      }
+    } catch (error) {
+      console.warn("[lookupTumblerItem] generated Stanley model failed:", error);
+    }
   }
-  if (
-    args.brand === "Stanley" &&
-    /iceflow/i.test(args.model ?? "") &&
-    args.capacityOz === 30
-  ) {
-    return "/models/templates/tumbler-30oz.glb";
+
+  const candidates = [
+    args.matchedProfileId === "yeti-rambler-40"
+      ? "/models/templates/yeti-40oz-body.glb"
+      : null,
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
+    if (await glbAssetExists(candidate)) {
+      return { glbPath: candidate, fitDebug: null };
+    }
   }
-  if (args.capacityOz != null && args.capacityOz <= 20) {
-    return "/models/templates/tumbler-20oz-skinny.glb";
-  }
-  return "/models/templates/tumbler-30oz.glb";
+
+  return { glbPath: "", fitDebug: null };
 }
 
 function buildSources(url: string | null, kind: TumblerSourceLink["kind"], title: string | null): TumblerSourceLink[] {
@@ -250,6 +452,7 @@ export async function lookupTumblerItem(args: {
   let scrapedDims: TumblerItemLookupDimensions | null = null;
   const notes: string[] = [];
   let sourceKind: TumblerSourceLink["kind"] = "general";
+  let selectedImageUrl: string | null = null;
 
   let lookupText = lookupInput;
 
@@ -266,8 +469,15 @@ export async function lookupTumblerItem(args: {
 
     sources = buildSources(finalUrl, sourceKind, title);
     scrapedDims = parseTripletDimensionsMm(lookupText);
+    selectedImageUrl = await selectBestProductImage({
+      imageUrls,
+      lookupText,
+    });
     if (scrapedDims?.overallHeightMm) {
       notes.push("Parsed page dimensions from the product page text.");
+    }
+    if (selectedImageUrl && selectedImageUrl !== imageUrls[0]) {
+      notes.push("Selected the strongest product photo from the scraped page images.");
     }
   }
 
@@ -290,6 +500,16 @@ export async function lookupTumblerItem(args: {
       );
     }
 
+    const fallbackAsset = await pickFallbackGlbPath({
+      matchedProfileId: matchedProfile.id,
+      capacityOz: matchedProfile.capacityOz,
+      brand: matchedProfile.brand,
+      model: matchedProfile.model,
+      hasHandle: matchedProfile.hasHandle,
+      imageUrl: selectedImageUrl,
+      imageUrls,
+    });
+
     return {
       lookupInput,
       resolvedUrl,
@@ -298,15 +518,10 @@ export async function lookupTumblerItem(args: {
       model: matchedProfile.model,
       capacityOz: matchedProfile.capacityOz,
       matchedProfileId: matchedProfile.id,
-      glbPath: pickFallbackGlbPath({
-        matchedProfileId: matchedProfile.id,
-        capacityOz: matchedProfile.capacityOz,
-        brand: matchedProfile.brand,
-        model: matchedProfile.model,
-        hasHandle: matchedProfile.hasHandle,
-      }),
-      imageUrl: imageUrls[0] ?? null,
+      glbPath: fallbackAsset.glbPath,
+      imageUrl: selectedImageUrl,
       imageUrls,
+      fitDebug: fallbackAsset.fitDebug,
       dimensions: {
         overallHeightMm: matchedProfile.overallHeightMm,
         outsideDiameterMm: matchedProfile.outsideDiameterMm ?? null,
@@ -319,6 +534,7 @@ export async function lookupTumblerItem(args: {
         ...notes,
         `Top margin fallback: ${round2(topMarginMm)} mm. Bottom margin fallback: ${round2(bottomMarginMm)} mm.`,
         `Handle arc fallback: ${getProfileHandleArcDeg(matchedProfile)}°.`,
+        `GLB fallback: ${fallbackAsset.glbPath || "none available locally"}.`,
       ],
       sources,
     };
@@ -336,6 +552,16 @@ export async function lookupTumblerItem(args: {
     notes.push("No exact profile match or parseable product dimensions found. Using safe tumbler fallback values.");
   }
 
+  const fallbackAsset = await pickFallbackGlbPath({
+    matchedProfileId: null,
+    capacityOz,
+    brand,
+    model,
+    hasHandle: brand === "Stanley" ? true : null,
+    imageUrl: selectedImageUrl,
+    imageUrls,
+  });
+
   return {
     lookupInput,
     resolvedUrl,
@@ -344,15 +570,10 @@ export async function lookupTumblerItem(args: {
     model,
     capacityOz,
     matchedProfileId: null,
-    glbPath: pickFallbackGlbPath({
-      matchedProfileId: null,
-      capacityOz,
-      brand,
-      model,
-      hasHandle: brand === "Stanley" ? true : null,
-    }),
-    imageUrl: imageUrls[0] ?? null,
+    glbPath: fallbackAsset.glbPath,
+    imageUrl: selectedImageUrl,
     imageUrls,
+    fitDebug: fallbackAsset.fitDebug,
     dimensions: {
       overallHeightMm: safeDims.overallHeightMm,
       outsideDiameterMm: safeDims.outsideDiameterMm,
@@ -361,7 +582,10 @@ export async function lookupTumblerItem(args: {
       usableHeightMm: safeDims.usableHeightMm,
     },
     mode: scrapedDims ? "parsed-page" : "safe-fallback",
-    notes,
+    notes: [
+      ...notes,
+      `GLB fallback: ${fallbackAsset.glbPath || "none available locally"}.`,
+    ],
     sources,
   };
 }

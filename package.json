@@ -35,10 +35,12 @@
     "konva": "^10.2.3",
     "next": "^16.2.0",
     "paper": "^0.12.18",
+    "potrace": "^2.1.8",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-konva": "^19.2.3",
     "replicate": "^1.4.0",
+    "sharp": "^0.34.5",
     "three": "^0.183.2"
   },
   "devDependencies": {

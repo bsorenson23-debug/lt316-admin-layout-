@@ -44,9 +44,11 @@ import { BatchQueuePanel } from "./BatchQueuePanel";
 import { MachineProfilePanel } from "./MachineProfilePanel";
 import { ExportHistoryPanel } from "./ExportHistoryPanel";
 import { RotaryPresetSharePanel } from "./RotaryPresetSharePanel";
+import { LightBurnPathSettingsPanel } from "./LightBurnPathSettingsPanel";
 import { TextPersonalizationPanel } from "./TextPersonalizationPanel";
 import { CameraOverlayPanel } from "./CameraOverlayPanel";
 import { TextToolPanel } from "./TextToolPanel";
+import { RasterToSvgPanel } from "./RasterToSvgPanel";
 import { TestGridPanel } from "./TestGridPanel";
 import { FlatBedItemPanel } from "./FlatBedItemPanel";
 import { FlatBedAutoDetectPanel } from "./FlatBedAutoDetectPanel";
@@ -58,6 +60,7 @@ import { TemplateCreateForm } from "./TemplateCreateForm";
 import type { ProductTemplate } from "@/types/productTemplate";
 import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
+import { getTumblerWrapLayout, getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -100,6 +103,15 @@ export function AdminLayoutShell() {
   const [overlayBlend, setOverlayBlend] = useState<"normal" | "multiply">("normal");
   const [twoSidedMode, setTwoSidedMode] = useState(false);
   const [taperWarpEnabled, setTaperWarpEnabled] = useState(true);
+  const [lbOutputFolderPath, setLbOutputFolderPath] = useState<string | undefined>(() => {
+    if (typeof window === "undefined") return undefined;
+    try {
+      const raw = localStorage.getItem("lt316.integration.lightburn.paths");
+      if (!raw) return undefined;
+      const parsed = JSON.parse(raw) as { outputFolderPath?: string };
+      return parsed.outputFolderPath || undefined;
+    } catch { return undefined; }
+  });
   const [curvedOverlay, setCurvedOverlay] = useState(false);
   const [bgRemovalStatus, setBgRemovalStatus] = useState<"idle" | "running" | "done" | "failed">("idle");
 
@@ -177,6 +189,10 @@ export function AdminLayoutShell() {
   const selectedItem = placedItems.find((p) => p.id === selectedItemId) ?? null;
   const selectedTemplatePrintHeightMm =
     templateEngravableDims?.engravableHeightMm ?? selectedTemplate?.dimensions.printHeightMm ?? 0;
+  const activeHandleArcDeg =
+    selectedTemplate?.tumblerMapping?.handleArcDeg ??
+    selectedTemplate?.dimensions.handleArcDeg ??
+    0;
   const rimTintColor = selectedTemplate?.dimensions.rimColorHex ?? "#d0d0d0";
 
   React.useEffect(() => {
@@ -221,7 +237,10 @@ export function AdminLayoutShell() {
     }
 
     const fullWrapW = templateEngravableDims.circumferenceMm;
-    const frontCenterX = fullWrapW * 3 / 4;
+    const layout = getTumblerWrapLayout(activeHandleArcDeg);
+    const frontCenterX = fullWrapW * layout.frontCenterRatio;
+    const backCenterX = layout.backCenterRatio == null ? null : fullWrapW * layout.backCenterRatio;
+    const handleCenterX = layout.handleCenterRatio == null ? null : fullWrapW * layout.handleCenterRatio;
     let zoneW = Math.max(0, Math.min(templateEngravableDims.printableWidthMm, fullWrapW));
     if (zoneW <= 0) zoneW = fullWrapW;
     let zoneX = frontCenterX - zoneW / 2;
@@ -235,6 +254,8 @@ export function AdminLayoutShell() {
       width: zoneW,
       height: templateEngravableDims.engravableHeightMm,
       frontCenterX,
+      backCenterX,
+      handleCenterX,
     };
 
     setEngravableZone((prev) => {
@@ -244,13 +265,15 @@ export function AdminLayoutShell() {
         Math.abs(prev.y - nextZone.y) < 0.01 &&
         Math.abs(prev.width - nextZone.width) < 0.01 &&
         Math.abs(prev.height - nextZone.height) < 0.01 &&
-        Math.abs(prev.frontCenterX - nextZone.frontCenterX) < 0.01
+        Math.abs(prev.frontCenterX - nextZone.frontCenterX) < 0.01 &&
+        Math.abs((prev.backCenterX ?? -1) - (nextZone.backCenterX ?? -1)) < 0.01 &&
+        Math.abs((prev.handleCenterX ?? -1) - (nextZone.handleCenterX ?? -1)) < 0.01
       ) {
         return prev;
       }
       return nextZone;
     });
-  }, [isTumblerMode, selectedTemplate, templateEngravableDims]);
+  }, [isTumblerMode, selectedTemplate, templateEngravableDims, activeHandleArcDeg]);
 
   // -------------------------------------------------------------------------
   // Build a PlacedItem from an SvgAsset at a given center point (mm)
@@ -320,11 +343,14 @@ export function AdminLayoutShell() {
       setSvgAssets((prev) => [...prev, ...accepted]);
       if (!selectedAssetId) setSelectedAssetId(accepted[0].id);
 
-      // Auto-place each uploaded SVG centered on the bed (skip the old "Place on Bed" step)
-      const placementCenterX =
-        bedConfig.workspaceMode === "tumbler-wrap"
-          ? bedConfig.width * 3 / 4
-          : bedConfig.width / 2;
+        // Auto-place each uploaded SVG centered on the bed (skip the old "Place on Bed" step)
+        const placementCenterX =
+          bedConfig.workspaceMode === "tumbler-wrap"
+            ? getWrapFrontCenter(
+              bedConfig.width,
+              activeHandleArcDeg,
+            )
+            : bedConfig.width / 2;
       const newItems: PlacedItem[] = accepted.map((asset) =>
         buildPlacedItem(asset, placementCenterX, bedConfig.height / 2),
       );
@@ -340,7 +366,7 @@ export function AdminLayoutShell() {
       const preview = rejected.slice(0, 2).join(" | ") + (rejected.length > 2 ? " | ..." : "");
       setUploadError(`Skipped ${rejected.length} file(s): ${preview}`);
     } else { setUploadError(null); }
-  }, [selectedAssetId, buildPlacedItem, bedConfig]);
+  }, [selectedAssetId, buildPlacedItem, bedConfig, activeHandleArcDeg]);
 
   const handleRemoveAsset = useCallback((assetId: string) => {
     setSvgAssets((prev) => {
@@ -382,19 +408,26 @@ export function AdminLayoutShell() {
   const handlePlaceSelectedAssetOnBed = useCallback(() => {
     if (!selectedAssetId) return;
     // In tumbler mode, auto-place at front-center immediately
-    if (isTumblerMode) {
-      const asset = svgAssets.find((a) => a.id === selectedAssetId);
-      if (asset) {
-        const item = buildPlacedItem(asset, bedConfig.width * 3 / 4, bedConfig.height / 2);
-        setPlacedItems((prev) => [...prev, item]);
-        setSelectedItemId(item.id);
-        setInspectorNote(null);
-        return;
+      if (isTumblerMode) {
+        const asset = svgAssets.find((a) => a.id === selectedAssetId);
+        if (asset) {
+          const item = buildPlacedItem(
+            asset,
+            getWrapFrontCenter(
+              bedConfig.width,
+              activeHandleArcDeg,
+            ),
+            bedConfig.height / 2,
+          );
+          setPlacedItems((prev) => [...prev, item]);
+          setSelectedItemId(item.id);
+          setInspectorNote(null);
+          return;
+        }
       }
-    }
     setPlacementAssetId(selectedAssetId);
     setInspectorNote(null);
-  }, [selectedAssetId, isTumblerMode, svgAssets, buildPlacedItem, bedConfig]);
+    }, [selectedAssetId, isTumblerMode, svgAssets, buildPlacedItem, bedConfig, activeHandleArcDeg]);
 
   const handleSelectItem = useCallback((id: string | null) => {
     setSelectedItemId(id);
@@ -531,7 +564,7 @@ export function AdminLayoutShell() {
     }
   }, [scrollAndPulse, router]);
 
-  const handleAddTextAsset = useCallback((svgContent: string, fileName: string) => {
+  const handleAddGeneratedSvgAsset = useCallback((svgContent: string, fileName: string) => {
     const id = `asset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     try {
       const parsed = parseSvgAsset(id, fileName, svgContent);
@@ -543,7 +576,11 @@ export function AdminLayoutShell() {
           naturalWidth: norm.documentBounds.width, naturalHeight: norm.documentBounds.height,
           documentBounds: norm.documentBounds, artworkBounds: norm.artworkBounds,
         }]);
-      } catch { setSvgAssets((prev) => [...prev, parsed]); }
+        setSelectedAssetId(id);
+      } catch {
+        setSvgAssets((prev) => [...prev, parsed]);
+        setSelectedAssetId(id);
+      }
     } catch { /* noop */ }
   }, []);
 
@@ -643,27 +680,29 @@ export function AdminLayoutShell() {
     setShowCreateForm(false);
     setBgRemovalStatus("idle");
 
-    // Compute engravable safe zone for rotary products
-    if (isRotary) {
-      // Handle-centered layout: front face at w*3/4 of full wrap
-      const fullWrapW = dims?.circumferenceMm ?? template.dimensions.templateWidthMm;
-      const frontCenterX = fullWrapW * 3 / 4;
-      // Engravable zone width: front face area (≈ diameter), clamped to printable arc
-      let zoneW = Math.max(0, Math.min(dims?.printableWidthMm ?? fullWrapW, fullWrapW));
-      if (zoneW <= 0) zoneW = fullWrapW;
-      let zoneX = frontCenterX - zoneW / 2;
-      if (zoneX < 0 || zoneX + zoneW > fullWrapW) {
+      // Compute engravable safe zone for rotary products
+      if (isRotary) {
+        const fullWrapW = dims?.circumferenceMm ?? template.dimensions.templateWidthMm;
+        const layout = getTumblerWrapLayout(template.dimensions.handleArcDeg);
+        const frontCenterX = fullWrapW * layout.frontCenterRatio;
+        const backCenterX = layout.backCenterRatio == null ? null : fullWrapW * layout.backCenterRatio;
+        const handleCenterX = layout.handleCenterRatio == null ? null : fullWrapW * layout.handleCenterRatio;
+        // Engravable zone width: front face area (≈ diameter), clamped to printable arc
+        let zoneW = Math.max(0, Math.min(dims?.printableWidthMm ?? fullWrapW, fullWrapW));
+        if (zoneW <= 0) zoneW = fullWrapW;
+        let zoneX = frontCenterX - zoneW / 2;
+        if (zoneX < 0 || zoneX + zoneW > fullWrapW) {
         zoneX = 0;
         zoneW = fullWrapW;
       }
-      // Vertical: bed is already sized to printHeightMm (the engravable area),
-      // so zone fills the bed. Y=0 = bed top = printable area top.
-      const zoneY = 0;
-      const zoneH = Math.min(dims?.engravableHeightMm ?? template.dimensions.printHeightMm, template.dimensions.printHeightMm);
-      setEngravableZone({ x: zoneX, y: zoneY, width: zoneW, height: zoneH, frontCenterX });
-    } else {
-      setEngravableZone(null);
-    }
+        // Vertical: bed is already sized to printHeightMm (the engravable area),
+        // so zone fills the bed. Y=0 = bed top = printable area top.
+        const zoneY = 0;
+        const zoneH = Math.min(dims?.engravableHeightMm ?? template.dimensions.printHeightMm, template.dimensions.printHeightMm);
+        setEngravableZone({ x: zoneX, y: zoneY, width: zoneW, height: zoneH, frontCenterX, backCenterX, handleCenterX });
+      } else {
+        setEngravableZone(null);
+      }
 
     // Show toast
     setToastMessage(`${template.name} loaded \u2014 place your artwork`);
@@ -1208,7 +1247,7 @@ export function AdminLayoutShell() {
               bedHeightMm={bedConfig.height}
               workspaceMode={bedConfig.workspaceMode}
               tumblerDims={tumblerDims}
-              handleArcDeg={selectedTemplate?.tumblerMapping?.handleArcDeg ?? selectedTemplate?.dimensions?.handleArcDeg ?? 0}
+                handleArcDeg={activeHandleArcDeg}
               modelPathOverride={selectedTemplate?.glbPath ?? null}
               tumblerMapping={selectedTemplate?.tumblerMapping}
               onUpdateCalibration={handleUpdateCalibration}
@@ -1258,7 +1297,7 @@ export function AdminLayoutShell() {
             showTwoSidedCrosshairs={isTumblerMode}
             mockupConfig={mockupConfig}
             flatBedItemOverlay={flatBedItemOverlay}
-            handleArcDeg={selectedTemplate?.tumblerMapping?.handleArcDeg ?? selectedTemplate?.dimensions?.handleArcDeg ?? 0}
+              handleArcDeg={activeHandleArcDeg}
             onWorkspaceModeChange={handleWorkspaceModeChange}
             tumblerViewMode={tumblerViewMode}
             onTumblerViewModeChange={setTumblerViewMode}
@@ -1269,7 +1308,7 @@ export function AdminLayoutShell() {
             onDeleteItem={handleDeleteItem}
             onClearWorkspace={handleClearWorkspace}
             productName={selectedTemplate?.name}
-            templateOverlayUrl={selectedTemplate?.productPhotoFullUrl ?? selectedTemplate?.frontPhotoDataUrl ?? selectedTemplate?.thumbnailDataUrl ?? null}
+              templateOverlayUrl={selectedTemplate?.frontPhotoDataUrl ?? selectedTemplate?.productPhotoFullUrl ?? selectedTemplate?.thumbnailDataUrl ?? null}
             backOverlayUrl={selectedTemplate?.backPhotoDataUrl ?? null}
             tumblerOverallHeightMm={templateEngravableDims?.totalHeightMm ?? bedConfig.tumblerOverallHeightMm}
             tumblerTopMarginMm={templateEngravableDims?.topMarginMm}
@@ -1419,6 +1458,24 @@ export function AdminLayoutShell() {
                 onPreflightNav={handlePreflightNav}
                 taperWarpEnabled={taperWarpEnabled}
                 onTaperWarpChange={setTaperWarpEnabled}
+                outputFolderPath={lbOutputFolderPath}
+                onDiameterChange={(d) => setBedConfig((prev) => normalizeBedConfig({
+                  ...prev,
+                  tumblerDiameterMm: d,
+                  tumblerOutsideDiameterMm: d,
+                }))}
+                onSnapFullWrap={() => {
+                  const w = bedConfig.width;
+                  const h = bedConfig.height;
+                  if (w <= 0 || h <= 0) return;
+                  setPlacedItems((prev) => prev.map((p) => ({
+                    ...p,
+                    x: 0,
+                    y: 0,
+                    width: w,
+                    height: h,
+                  })));
+                }}
               />
             </div>
           </>
@@ -1433,7 +1490,8 @@ export function AdminLayoutShell() {
               activeAssetContent={svgAssets.find(a => a.id === selectedAssetId)?.content}
             />
             <FlatBedItemPanel />
-            <TextToolPanel onAddAsset={handleAddTextAsset} />
+            <TextToolPanel onAddAsset={handleAddGeneratedSvgAsset} />
+            <RasterToSvgPanel onAddAsset={handleAddGeneratedSvgAsset} />
             <TextPersonalizationPanel />
             <CameraOverlayPanel onCaptureOverlay={handleCameraCapture} />
             <TestGridPanel bedWidthMm={bedConfig.width} bedHeightMm={bedConfig.height} />
@@ -1443,6 +1501,9 @@ export function AdminLayoutShell() {
         {rightTab === "setup" && (
           <div className={styles.tabPane}>
             <MachineProfilePanel />
+            <LightBurnPathSettingsPanel
+              onPathSettingsChange={(s) => setLbOutputFolderPath(s.outputFolderPath)}
+            />
             <FiberColorCalibrationPanel />
             <SprCalibrationPanel bedConfig={bedConfig} />
             <RotaryPresetSharePanel />
@@ -1528,4 +1589,3 @@ export function AdminLayoutShell() {
     </div>
   );
 }
-

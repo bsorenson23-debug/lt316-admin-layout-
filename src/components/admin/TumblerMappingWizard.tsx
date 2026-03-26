@@ -6,7 +6,7 @@ import { OrbitControls, useGLTF, Html } from "@react-three/drei";
 import * as THREE from "three";
 import type { GLTF } from "three-stdlib";
 import type { TumblerMapping } from "@/types/productTemplate";
-import { normalizeGeometry } from "@/lib/modelAxisCorrection";
+import { detectAxisCorrection } from "@/lib/modelAxisCorrection";
 import { analyzeTumblerMesh } from "@/lib/analyzeTumblerMesh";
 import styles from "./TumblerMappingWizard.module.css";
 
@@ -29,8 +29,6 @@ interface Props {
 }
 
 type WizardStep = 1 | 2 | 3;
-
-const STEP_LABELS = ["Set front", "Verify handle", "Confirm"];
 
 /** Camera shared across all steps: eye-level, pulled back enough to see full tumbler */
 const WIZARD_CAMERA = { position: [0, 0, 600] as [number, number, number], fov: 30 };
@@ -71,6 +69,45 @@ function resolveBodyMesh(nodes: Record<string, THREE.Object3D>): THREE.Mesh {
   return candidate as THREE.Mesh;
 }
 
+function resolveNamedMesh(
+  nodes: Record<string, THREE.Object3D>,
+  name: string,
+): THREE.Mesh | null {
+  const candidate = nodes[name];
+  return candidate && (candidate as THREE.Mesh).isMesh ? (candidate as THREE.Mesh) : null;
+}
+
+function applyAxisRotation(
+  geometry: THREE.BufferGeometry,
+  rotation: [number, number, number],
+) {
+  const [rx, ry, rz] = rotation;
+  if (rx !== 0) geometry.rotateX(rx);
+  if (ry !== 0) geometry.rotateY(ry);
+  if (rz !== 0) geometry.rotateZ(rz);
+}
+
+function cloneAdjustedMaterial(
+  material: THREE.Material | THREE.Material[] | null,
+  overrides?: Partial<THREE.MeshStandardMaterialParameters>,
+): THREE.Material | THREE.Material[] {
+  const fix = (base: THREE.Material) => {
+    const cloned = base.clone();
+    if (cloned instanceof THREE.MeshStandardMaterial || cloned instanceof THREE.MeshPhysicalMaterial) {
+      cloned.metalness = overrides?.metalness ?? Math.min(cloned.metalness, 0.45);
+      cloned.roughness = overrides?.roughness ?? Math.max(cloned.roughness, 0.55);
+      if (overrides?.color) cloned.color = new THREE.Color(overrides.color);
+      cloned.needsUpdate = true;
+    }
+    return cloned;
+  };
+
+  if (Array.isArray(material)) {
+    return material.map(fix);
+  }
+  return fix(material ?? new THREE.MeshStandardMaterial({ color: "#8a8f92" }));
+}
+
 /** Sets camera position imperatively — works inside R3F Canvas */
 function SetCameraPosition({ position }: { position: [number, number, number] }) {
   const { camera, invalidate } = useThree();
@@ -106,72 +143,85 @@ function WizardLights() {
  *   - The cylinder axis sits at the origin (rim-centered)
  */
 function useWizardModel(glbPath: string, diameterMm: number) {
-  const { nodes } = useGLTF(glbPath) as unknown as GLTFResult;
+  const { nodes, scene } = useGLTF(glbPath) as unknown as GLTFResult;
   const bodyMesh = useMemo(() => resolveBodyMesh(nodes), [nodes]);
+  const rimMesh = useMemo(() => resolveNamedMesh(nodes, "rim_mesh"), [nodes]);
 
-  // Step 1: Normalize — rotate to Y-up and bbox-center at origin
-  const normalizedGeo = useMemo(
-    () => normalizeGeometry(bodyMesh.geometry),
-    [bodyMesh.geometry],
-  );
+  const transformed = useMemo(() => {
+    scene.updateMatrixWorld(true);
 
-  // Step 2: Analyze rim to find true cylinder center and radius
-  const rimAnalysis = useMemo(
-    () => analyzeTumblerMesh(normalizedGeo),
-    [normalizedGeo],
-  );
+    const bodyGeometry = bodyMesh.geometry.clone();
+    bodyGeometry.applyMatrix4(bodyMesh.matrixWorld);
+    bodyGeometry.computeBoundingBox();
 
-  // Step 3: Re-center on the rim axis (true cylinder center, not bbox center)
-  const rimCenteredGeo = useMemo(() => {
-    const clone = normalizedGeo.clone();
-    clone.translate(-rimAnalysis.center.x, 0, -rimAnalysis.center.z);
-    clone.computeBoundingBox();
-    clone.computeVertexNormals();
-    return clone;
-  }, [normalizedGeo, rimAnalysis]);
+    const box = bodyGeometry.boundingBox!;
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const rotation = detectAxisCorrection(size.x, size.y, size.z);
+    applyAxisRotation(bodyGeometry, rotation);
+    bodyGeometry.computeBoundingBox();
+    bodyGeometry.computeVertexNormals();
 
-  // Step 4: Compute scale factor: group scale maps model units → mm
+    const rimAnalysis = analyzeTumblerMesh(bodyGeometry);
+
+    const centeredBody = bodyGeometry.clone();
+    centeredBody.translate(-rimAnalysis.center.x, 0, -rimAnalysis.center.z);
+    centeredBody.computeBoundingBox();
+    centeredBody.computeVertexNormals();
+
+    let centeredRim: THREE.BufferGeometry | null = null;
+    if (rimMesh) {
+      centeredRim = rimMesh.geometry.clone();
+      centeredRim.applyMatrix4(rimMesh.matrixWorld);
+      applyAxisRotation(centeredRim, rotation);
+      centeredRim.translate(-rimAnalysis.center.x, 0, -rimAnalysis.center.z);
+      centeredRim.computeBoundingBox();
+      centeredRim.computeVertexNormals();
+    }
+
+    return {
+      rimAnalysis,
+      bodyGeometry: centeredBody,
+      rimGeometry: centeredRim,
+    };
+  }, [scene, bodyMesh, rimMesh]);
+
   const scaleFactor = useMemo(() => {
-    const rimDiameter = rimAnalysis.radius * 2;
+    const rimDiameter = transformed.rimAnalysis.radius * 2;
     if (rimDiameter <= 0) return 1;
     return diameterMm / rimDiameter;
-  }, [rimAnalysis, diameterMm]);
+  }, [transformed.rimAnalysis.radius, diameterMm]);
 
-  // Model-unit values for overlays and decals (used INSIDE the scale group)
-  const modelRadius = rimAnalysis.radius;       // e.g. ~4.77 for cm-scale GLB
-  const modelBodyHeight = rimAnalysis.bodyHeight; // e.g. ~25.53
+  const bodyMaterial = useMemo(
+    () => cloneAdjustedMaterial(bodyMesh.material, { metalness: 0.25, roughness: 0.65 }),
+    [bodyMesh.material],
+  );
+  const rimMaterial = useMemo(
+    () => (rimMesh ? cloneAdjustedMaterial(rimMesh.material, { metalness: 0.75, roughness: 0.35 }) : undefined),
+    [rimMesh],
+  );
 
-  // Tone down metallic materials so they aren't black without an env map
-  const adjustedMaterial = useMemo(() => {
-    const mat = bodyMesh.material;
-    const fixMat = (m: THREE.Material) => {
-      if (m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshPhysicalMaterial) {
-        m.metalness = Math.min(m.metalness, 0.4);
-        m.roughness = Math.max(m.roughness, 0.6);
-        m.needsUpdate = true;
-      }
-    };
-    if (Array.isArray(mat)) {
-      mat.forEach(fixMat);
-    } else {
-      fixMat(mat);
-    }
-    return mat;
-  }, [bodyMesh.material]);
-
-  // Compute overlay Y from the ACTUAL rendered geometry's bounding box.
-  // normalizeGeometry → center() should make this ~0, but Draco decompression
-  // or rotation imprecision can shift it. Reading from the actual bbox is robust.
   const { modelCenterY, geoTopY, geoBottomY } = useMemo(() => {
-    const bb = rimCenteredGeo.boundingBox!;
+    const bb = transformed.bodyGeometry.boundingBox!;
     return {
       modelCenterY: (bb.max.y + bb.min.y) / 2,
       geoTopY: bb.max.y,
       geoBottomY: bb.min.y,
     };
-  }, [rimCenteredGeo]);
+  }, [transformed.bodyGeometry]);
 
-  return { rimCenteredGeo, scaleFactor, modelRadius, modelBodyHeight, modelCenterY, geoTopY, geoBottomY, adjustedMaterial };
+  return {
+    bodyGeometry: transformed.bodyGeometry,
+    rimGeometry: transformed.rimGeometry,
+    bodyMaterial,
+    rimMaterial,
+    scaleFactor,
+    modelRadius: transformed.rimAnalysis.radius,
+    modelBodyHeight: transformed.rimAnalysis.bodyHeight,
+    modelCenterY,
+    geoTopY,
+    geoBottomY,
+  };
 }
 
 // ─── 3D Scene (Step 1: interactive orbit) ───────────────────────────────────
@@ -185,7 +235,7 @@ function TumblerScene({
   diameterMm: number;
   onControlsRef: (ref: React.RefObject<typeof OrbitControls | null>) => void;
 }) {
-  const { rimCenteredGeo, scaleFactor, adjustedMaterial } = useWizardModel(glbPath, diameterMm);
+  const { bodyGeometry, rimGeometry, bodyMaterial, rimMaterial, scaleFactor } = useWizardModel(glbPath, diameterMm);
   const controlsRef = useRef<typeof OrbitControls>(null);
 
   useEffect(() => {
@@ -198,11 +248,14 @@ function TumblerScene({
 
       <group scale={scaleFactor}>
         <mesh
-          geometry={rimCenteredGeo}
-          material={adjustedMaterial}
+          geometry={bodyGeometry}
+          material={bodyMaterial}
           castShadow
           receiveShadow
         />
+        {rimGeometry && (
+          <mesh geometry={rimGeometry} material={rimMaterial} castShadow receiveShadow />
+        )}
       </group>
 
       <OrbitControls
@@ -230,7 +283,7 @@ function HandleVerifyScene({
   frontFaceRotation: number;
   handleArcDeg: number;
 }) {
-  const { rimCenteredGeo, scaleFactor, modelRadius, modelBodyHeight, modelCenterY, adjustedMaterial } =
+  const { bodyGeometry, rimGeometry, bodyMaterial, rimMaterial, scaleFactor, modelRadius, modelBodyHeight, modelCenterY } =
     useWizardModel(glbPath, diameterMm);
 
   // Overlay in MODEL UNITS — lives inside the scale group with the mesh
@@ -253,11 +306,14 @@ function HandleVerifyScene({
 
       <group scale={scaleFactor}>
         <mesh
-          geometry={rimCenteredGeo}
-          material={adjustedMaterial}
+          geometry={bodyGeometry}
+          material={bodyMaterial}
           castShadow
           receiveShadow
         />
+        {rimGeometry && (
+          <mesh geometry={rimGeometry} material={rimMaterial} castShadow receiveShadow />
+        )}
 
         {/* Overlay at geometry center Y — model units */}
         {handleZoneMesh && (
@@ -433,7 +489,7 @@ function PrintableAreaScene({
   frontFaceRotation: number;
   handleArcDeg: number;
 }) {
-  const { rimCenteredGeo, scaleFactor, modelRadius, modelBodyHeight, modelCenterY, geoTopY, geoBottomY, adjustedMaterial } =
+  const { bodyGeometry, rimGeometry, bodyMaterial, rimMaterial, scaleFactor, modelRadius, modelBodyHeight, modelCenterY, geoTopY, geoBottomY } =
     useWizardModel(glbPath, diameterMm);
 
   // All overlay geometry in MODEL UNITS — inside the scale group
@@ -467,11 +523,14 @@ function PrintableAreaScene({
 
       <group scale={scaleFactor}>
         <mesh
-          geometry={rimCenteredGeo}
-          material={adjustedMaterial}
+          geometry={bodyGeometry}
+          material={bodyMaterial}
           castShadow
           receiveShadow
         />
+        {rimGeometry && (
+          <mesh geometry={rimGeometry} material={rimMaterial} castShadow receiveShadow />
+        )}
 
         {/* Overlays at geometry center Y — model units */}
         <mesh geometry={printableZoneMesh} position={[0, modelCenterY, 0]}>
@@ -554,7 +613,7 @@ export function TumblerMappingWizard({
   glbPath,
   diameterMm,
   printHeightMm,
-  productType,
+  productType: _productType,
   existingMapping,
   handleArcDeg: initialHandleArcDeg,
   onSave,
@@ -564,19 +623,33 @@ export function TumblerMappingWizard({
   const [frontFaceRotation, setFrontFaceRotation] = useState(
     existingMapping?.frontFaceRotation ?? 0,
   );
-  // Priority: existing mapping > template dimensions > default for product type
   const [handleArcDeg, setHandleArcDeg] = useState<number>(() => {
-    if (existingMapping?.handleArcDeg != null && existingMapping.handleArcDeg > 0) {
+    if (existingMapping?.handleArcDeg != null) {
       return existingMapping.handleArcDeg;
     }
-    if (initialHandleArcDeg > 0) return initialHandleArcDeg;
-    return productType === "tumbler" ? 90 : 0;
+    if (initialHandleArcDeg >= 0) return initialHandleArcDeg;
+    return 0;
   });
   const [topMargin, setTopMargin] = useState(existingMapping?.printableTopY ?? 0);
   const [bottomMargin, setBottomMargin] = useState(existingMapping?.printableBottomY ?? 0);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showSaveToast, setShowSaveToast] = useState(false);
   const controlsRefHolder = useRef<React.RefObject<typeof OrbitControls | null> | null>(null);
+  const hasHandleStep = (existingMapping?.handleArcDeg ?? initialHandleArcDeg ?? 0) > 0;
+  const stepLabels = useMemo(
+    () =>
+      hasHandleStep
+        ? [
+            { step: 1 as WizardStep, label: "Set front" },
+            { step: 2 as WizardStep, label: "Verify handle" },
+            { step: 3 as WizardStep, label: "Confirm" },
+          ]
+        : [
+            { step: 1 as WizardStep, label: "Set front" },
+            { step: 3 as WizardStep, label: "Confirm" },
+          ],
+    [hasHandleStep],
+  );
 
   const handleControlsRef = useCallback(
     (ref: React.RefObject<typeof OrbitControls | null>) => {
@@ -602,9 +675,9 @@ export function TumblerMappingWizard({
     setShowConfirmation(true);
     setTimeout(() => {
       setShowConfirmation(false);
-      setStep(2);
+      setStep(hasHandleStep ? 2 : 3);
     }, 1200);
-  }, []);
+  }, [hasHandleStep]);
 
   // ── Step 2: Confirm handle ──
   const handleConfirmHandle = useCallback(() => {
@@ -637,8 +710,7 @@ export function TumblerMappingWizard({
       <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
         {/* ── Step pills ── */}
         <div className={styles.stepRow}>
-          {STEP_LABELS.map((label, i) => {
-            const stepNum = (i + 1) as WizardStep;
+          {stepLabels.map(({ step: stepNum, label }) => {
             const isDone = step > stepNum;
             const isCurrent = step === stepNum;
             return (
@@ -722,7 +794,7 @@ export function TumblerMappingWizard({
               </>
             )}
 
-            {step === 2 && (
+            {hasHandleStep && step === 2 && (
               <>
                 <h3 className={styles.stepTitle}>Verify the handle position</h3>
                 <p className={styles.stepDesc}>
@@ -803,10 +875,12 @@ export function TumblerMappingWizard({
                       {((frontFaceRotation * 180) / Math.PI).toFixed(1)}&deg;
                     </span>
                   </div>
-                  <div className={styles.summaryRow}>
-                    <span className={styles.summaryLabel}>Handle width</span>
-                    <span className={styles.summaryValue}>{handleArcDeg}&deg;</span>
-                  </div>
+                  {hasHandleStep && (
+                    <div className={styles.summaryRow}>
+                      <span className={styles.summaryLabel}>Handle width</span>
+                      <span className={styles.summaryValue}>{handleArcDeg}&deg;</span>
+                    </div>
+                  )}
                   <div className={styles.summaryRow}>
                     <span className={styles.summaryLabel}>Printable arc</span>
                     <span className={styles.summaryValue}>{printableArc}&deg;</span>
@@ -860,7 +934,7 @@ export function TumblerMappingWizard({
                 <button
                   type="button"
                   className={styles.secondaryBtn}
-                  onClick={() => setStep(2)}
+                  onClick={() => setStep(hasHandleStep ? 2 : 1)}
                 >
                   Go back
                 </button>

@@ -28,6 +28,7 @@ import * as THREE from "three";
 import type { PlacedItem } from "@/types/admin";
 import { YetiRambler40oz } from "./models/YetiRambler40oz";
 import type { DecalItem } from "./models/YetiRambler40oz";
+import { getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
 
 // ---------------------------------------------------------------------------
 // Suppress noisy Three.js deprecation warnings
@@ -179,9 +180,9 @@ function AutoFit({ url }: { url: string }) {
       }
       direction.normalize();
       bounds
-        .moveTo(center.clone().addScaledVector(direction, distance * 1.28))
+        .moveTo(center.clone().addScaledVector(direction, distance * 1.58))
         .lookAt({ target: center });
-    }, 140);
+    }, 180);
     return () => clearTimeout(timer);
   }, [url, bounds, camera]);
   return null;
@@ -305,11 +306,10 @@ function ObjMesh({
 
 
 function GltfMesh({
-  url, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, rimTintColor, onReady,
+  url, dims, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, rimTintColor, onReady,
 }: {
   url: string;
   dims?: TumblerDimensions | null;
-  handleArcDeg?: number;
   placedItems?: PlacedItem[];
   itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number;
@@ -322,35 +322,39 @@ function GltfMesh({
   const gltf = useLoader(GLTFLoader, url);
   void rimTintColor;
 
-  // ── Scale to physical mm ──
-  const transform = useMemo(() => {
-    const box = new THREE.Box3().setFromObject(gltf.scene);
-    const rawSize = box.getSize(new THREE.Vector3());
-    return computeModelTransform(rawSize, dims);
-  }, [gltf.scene, dims]);
-
   // ── Extract body mesh geometry + material from the GLB scene ──
   // We render the mesh explicitly (not via <primitive>) so Decals can be children.
   const bodyMeshData = useMemo(() => {
     let foundGeometry: THREE.BufferGeometry | null = null;
     let foundMaterial: THREE.Material | THREE.Material[] | null = null;
+    let foundMesh: THREE.Mesh | null = null;
     const otherObjects: THREE.Object3D[] = [];
 
     gltf.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !foundGeometry) {
         foundGeometry = obj.geometry;
         foundMaterial = obj.material;
+        foundMesh = obj;
       }
     });
 
     // Collect non-body children for rendering separately
     gltf.scene.children.forEach((child) => {
-      if (child instanceof THREE.Mesh && child.geometry === foundGeometry) return;
+      if (child === foundMesh) return;
       otherObjects.push(child);
     });
 
-    return { geometry: foundGeometry, material: foundMaterial, otherObjects };
+    return { geometry: foundGeometry, material: foundMaterial, bodyMesh: foundMesh, otherObjects };
   }, [gltf.scene]);
+
+  // ── Scale to physical mm ──
+  const transform = useMemo(() => {
+    const scaleReference = bodyMeshData.bodyMesh ?? gltf.scene;
+    scaleReference.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(scaleReference);
+    const rawSize = box.getSize(new THREE.Vector3());
+    return computeModelTransform(rawSize, dims);
+  }, [bodyMeshData.bodyMesh, gltf.scene, dims]);
 
   // ── Per-item Three.js textures (keyed by item ID) ──
   const threeTextures = useMemo(() => {
@@ -365,11 +369,17 @@ function GltfMesh({
     return map;
   }, [itemTextures]);
 
+  useEffect(() => {
+    return () => {
+      threeTextures.forEach((texture) => texture.dispose());
+    };
+  }, [threeTextures]);
+
   // ── Compute per-item Decal configs ──
   // Bed grid is an unwrapped cylinder:
   //   width  = wrapWidthMm = π × diameter
   //   height = printHeightMm
-  //   FRONT  = x center of grid (wrapWidthMm * 3 / 4)
+  //   FRONT  = x center of grid from tumblerWrapLayout
   // Decal position/scale are in native (pre-scale) units because
   // the parent <group> applies transform.scale uniformly.
   const decalConfigs = useMemo(() => {
@@ -378,7 +388,7 @@ function GltfMesh({
     const radius = bedWidthMm && bedWidthMm > 0 ? bedWidthMm / (2 * Math.PI) : ((dims.diameterMm ?? 98) / 2);
     const wrapWidth = bedWidthMm;
     const printHeight = bedHeightMm;
-    const frontX = wrapWidth * 3 / 4;
+    const frontX = getWrapFrontCenter(wrapWidth, tumblerMapping?.handleArcDeg);
     const frontRotation = tumblerMapping?.frontFaceRotation ?? 0;
     const s = transform.scale;
 
@@ -403,7 +413,7 @@ function GltfMesh({
           scale: [item.width / s, item.height / s, depthMm / s] as [number, number, number],
         };
       });
-  }, [dims, placedItems, bedWidthMm, bedHeightMm, tumblerMapping?.frontFaceRotation, transform.scale]);
+  }, [dims, placedItems, bedWidthMm, bedHeightMm, tumblerMapping?.frontFaceRotation, tumblerMapping?.handleArcDeg, transform.scale]);
 
   const ref = useRef<THREE.Group>(null);
   useEffect(() => {
@@ -524,7 +534,7 @@ function ModelByExtension({
     // Fallback: generic GLB loader
     return (
       <Suspense fallback={null}>
-        <GltfMesh url={url} dims={dims} handleArcDeg={handleArcDeg}
+        <GltfMesh url={url} dims={dims}
           placedItems={placedItems} itemTextures={itemTextures}
           bedWidthMm={bedWidthMm} bedHeightMm={bedHeightMm}
           tumblerMapping={tumblerMapping}
@@ -647,10 +657,12 @@ export default function ModelViewer({
       <Canvas
         shadows={false}
         frameloop={hasItems ? "always" : "demand"}
-        dpr={[1, 1.5]}
+        dpr={[1, 1.25]}
         camera={{ fov: 35, near: nearClip, far: farClip }}
         gl={{
           antialias: true,
+          powerPreference: "low-power",
+          stencil: false,
           toneMapping: THREE.NeutralToneMapping,
           toneMappingExposure: 1.0,
           alpha: false,
@@ -661,7 +673,7 @@ export default function ModelViewer({
 
         <StudioLights />
 
-        <Bounds observe={false} margin={3.4}>
+        <Bounds observe={false} margin={4.4}>
           <Suspense fallback={<LoadingIndicator />}>
             <ModelByExtension
               url={url} ext={ext}

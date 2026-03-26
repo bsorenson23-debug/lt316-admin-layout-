@@ -1,0 +1,133 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: var(--radius);
+  background: rgba(56, 189, 248, 0.05);
+}
+
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.hint {
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.scorePill {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  background: rgba(56, 189, 248, 0.12);
+  color: var(--info);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.metricRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+}
+
+.cardTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.preview {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: #0f1120;
+}
+
+.caption {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.boundsRect {
+  fill: rgba(56, 189, 248, 0.1);
+  stroke: rgba(56, 189, 248, 0.9);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.centerLine {
+  stroke: rgba(34, 197, 94, 0.9);
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
+  vector-effect: non-scaling-stroke;
+}
+
+.rimBand {
+  fill: rgba(125, 211, 252, 0.18);
+}
+
+.bodyBand {
+  fill: rgba(34, 197, 94, 0.12);
+}
+
+.rimLine {
+  stroke: rgba(125, 211, 252, 0.95);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.bodyLine {
+  stroke: rgba(34, 197, 94, 0.95);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.fadedImage {
+  opacity: 0.55;
+}
+
+.profileLine {
+  fill: none;
+  stroke: rgba(248, 113, 113, 0.95);
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.profilePoint {
+  fill: rgba(248, 113, 113, 0.95);
+}

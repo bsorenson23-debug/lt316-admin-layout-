@@ -131,27 +131,162 @@ function fmt(n: number): string {
   return n.toFixed(4);
 }
 
+function isCurvedSegment(start: LbrnVertex, end: LbrnVertex): boolean {
+  const eps = 1e-9;
+  return (
+    Math.abs(start.c1x) > eps ||
+    Math.abs(start.c1y) > eps ||
+    Math.abs(end.c0x) > eps ||
+    Math.abs(end.c0y) > eps
+  );
+}
+
+function buildVertToken(v: LbrnVertex): string {
+  let token = `V${fmt(v.x)} ${fmt(v.y)}`;
+
+  // Control handles are absolute coordinates in .lbrn2.
+  // For straight segments (zero offset), set handle = vertex position
+  // so the bezier degenerates to a straight line.
+  const c0x = Math.abs(v.c0x) > 1e-9 ? v.x + v.c0x : v.x;
+  const c0y = Math.abs(v.c0y) > 1e-9 ? v.y + v.c0y : v.y;
+  token += `c0x${fmt(c0x)}c0y${fmt(c0y)}`;
+
+  const c1x = Math.abs(v.c1x) > 1e-9 ? v.x + v.c1x : v.x;
+  const c1y = Math.abs(v.c1y) > 1e-9 ? v.y + v.c1y : v.y;
+  token += `c1x${fmt(c1x)}c1y${fmt(c1y)}`;
+
+  return token;
+}
+
+function buildPrimToken(
+  startIndex: number,
+  endIndex: number,
+  _start: LbrnVertex,
+  _end: LbrnVertex
+): string {
+  return `L${startIndex} ${endIndex}`;
+}
+
+function cubicPoint(
+  p0: { x: number; y: number },
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+  p3: { x: number; y: number },
+  t: number
+): { x: number; y: number } {
+  const mt = 1 - t;
+  const mt2 = mt * mt;
+  const t2 = t * t;
+  const a = mt2 * mt;
+  const b = 3 * mt2 * t;
+  const c = 3 * mt * t2;
+  const d = t * t2;
+  return {
+    x: a * p0.x + b * p1.x + c * p2.x + d * p3.x,
+    y: a * p0.y + b * p1.y + c * p2.y + d * p3.y,
+  };
+}
+
+function segmentSampleCount(start: LbrnVertex, end: LbrnVertex): number {
+  if (!isCurvedSegment(start, end)) return 1;
+
+  const p0 = { x: start.x, y: start.y };
+  const p1 = { x: start.x + start.c1x, y: start.y + start.c1y };
+  const p2 = { x: end.x + end.c0x, y: end.y + end.c0y };
+  const p3 = { x: end.x, y: end.y };
+
+  const netLength =
+    Math.hypot(p1.x - p0.x, p1.y - p0.y) +
+    Math.hypot(p2.x - p1.x, p2.y - p1.y) +
+    Math.hypot(p3.x - p2.x, p3.y - p2.y);
+  const chordLength = Math.hypot(p3.x - p0.x, p3.y - p0.y);
+  const curvature = Math.max(0, netLength - chordLength);
+  const score = Math.max(netLength, chordLength + curvature * 2);
+
+  return Math.max(6, Math.min(48, Math.ceil(score / 3)));
+}
+
+function flattenVertices(vertices: LbrnVertex[], closed: boolean): LbrnVertex[] {
+  if (vertices.length < 2) return vertices.map((v) => straightVertex(v.x, v.y));
+
+  const flat: LbrnVertex[] = [straightVertex(vertices[0].x, vertices[0].y)];
+
+  function appendSegment(start: LbrnVertex, end: LbrnVertex, includeEnd: boolean) {
+    if (!isCurvedSegment(start, end)) {
+      if (includeEnd) flat.push(straightVertex(end.x, end.y));
+      return;
+    }
+
+    const p0 = { x: start.x, y: start.y };
+    const p1 = { x: start.x + start.c1x, y: start.y + start.c1y };
+    const p2 = { x: end.x + end.c0x, y: end.y + end.c0y };
+    const p3 = { x: end.x, y: end.y };
+    const steps = segmentSampleCount(start, end);
+    const maxStep = includeEnd ? steps : steps - 1;
+
+    for (let step = 1; step <= maxStep; step++) {
+      const pt = cubicPoint(p0, p1, p2, p3, step / steps);
+      flat.push(straightVertex(pt.x, pt.y));
+    }
+  }
+
+  for (let i = 0; i < vertices.length - 1; i++) {
+    appendSegment(vertices[i], vertices[i + 1], true);
+  }
+
+  if (closed) {
+    appendSegment(vertices[vertices.length - 1], vertices[0], false);
+  }
+
+  return flat;
+}
+
+/**
+ * Build a LightBurn <Shape Type="Path"> using native bezier curves.
+ *
+ * Uses B (Bezier) primitives for curved segments and L (Line) for straight
+ * segments.  Closed paths get an explicit closing segment instead of the
+ * LineClosed shorthand.  PrimID = actual primitive count.
+ */
 function buildPathXml(
   vertices: LbrnVertex[],
   closed: boolean,
   cutIndex: number
-): string {
-  if (vertices.length === 0) return '';
+): string[] {
+  if (vertices.length < 2) return [];
 
-  const vLines = vertices
-    .map(
-      (v) =>
-        `  <V vx="${fmt(v.x)}" vy="${fmt(v.y)}" c0x="${fmt(v.c0x)}" c0y="${fmt(v.c0y)}" c1x="${fmt(v.c1x)}" c1y="${fmt(v.c1y)}" />`
-    )
-    .join('\n');
+  const vertList = vertices.map(buildVertToken).join("");
 
-  return (
-    `<Shape Type="Path" Closed="${closed ? 1 : 0}" CutIndex="${cutIndex}">\n` +
-    `  <XForm>1 0 0 1 0 0</XForm>\n` +
-    `  <CutIndex Value="${cutIndex}" />\n` +
-    vLines +
-    `\n</Shape>`
-  );
+  // Build primitives — B for bezier, L for straight
+  const prims: string[] = [];
+  for (let i = 0; i < vertices.length - 1; i++) {
+    if (isCurvedSegment(vertices[i], vertices[i + 1])) {
+      prims.push(`B${i} ${i + 1}`);
+    } else {
+      prims.push(`L${i} ${i + 1}`);
+    }
+  }
+  // Explicit closing segment for closed paths
+  if (closed && vertices.length > 1) {
+    const last = vertices.length - 1;
+    if (isCurvedSegment(vertices[last], vertices[0])) {
+      prims.push(`B${last} 0`);
+    } else {
+      prims.push(`L${last} 0`);
+    }
+  }
+
+  if (prims.length === 0) return [];
+
+  const xml = [
+    `<Shape Type="Path" CutIndex="${cutIndex}" VertID="${vertices.length}" PrimID="${prims.length}">`,
+    `  <XForm>1 0 0 1 0 0</XForm>`,
+    `  <VertList>${vertList}</VertList>`,
+    `  <PrimList>${prims.join("")}</PrimList>`,
+    `</Shape>`,
+  ].join("\n");
+
+  return [xml];
 }
 
 // ---------------------------------------------------------------------------
@@ -743,11 +878,17 @@ function extractShapesFromSvg(
           // Find matching </g>
           const content = extractGroupContent(source, gTagEnd + 1);
           if (content !== null) {
-            const transformAttr = getAttr(gTag, 'transform') ?? '';
-            const localMat = transformAttr ? parseTransform(transformAttr) : IDENTITY;
-            const newMat = matMul(mat, localMat);
-            processBlock(content.inner, newMat);
-            i = content.after;
+            // Skip hidden groups
+            const gDisplay = getAttr(gTag, 'display');
+            if (gDisplay === 'none') {
+              i = content.after;
+            } else {
+              const transformAttr = getAttr(gTag, 'transform') ?? '';
+              const localMat = transformAttr ? parseTransform(transformAttr) : IDENTITY;
+              const newMat = matMul(mat, localMat);
+              processBlock(content.inner, newMat);
+              i = content.after;
+            }
           } else {
             i = gTagEnd + 1;
           }
@@ -768,6 +909,12 @@ function extractShapesFromSvg(
     // -----------------------------------------------------------------------
 
     function processLeafElement(name: string, tag: string, localMat: Mat2D) {
+      // Skip hidden elements
+      const display = getAttr(tag, 'display');
+      if (display === 'none') return;
+      const visibility = getAttr(tag, 'visibility');
+      if (visibility === 'hidden') return;
+
       const effectiveMat = matMul(mat, localMat); // mat is the outer, localMat from element
       // For leaf elements we don't have their own transform to add (handled at call site for <g>)
       // But some elements may have transform attr directly — handle that:
@@ -829,8 +976,8 @@ function extractShapesFromSvg(
         const rh = getAttrNum(tag, 'height');
         if (rw <= 0 || rh <= 0) return;
 
-        let effectiveRx = rx2 >= 0 ? rx2 : (ry2 >= 0 ? ry2 : 0);
-        let effectiveRy = ry2 >= 0 ? ry2 : (rx2 >= 0 ? rx2 : 0);
+        const effectiveRx = rx2 >= 0 ? rx2 : (ry2 >= 0 ? ry2 : 0);
+        const effectiveRy = ry2 >= 0 ? ry2 : (rx2 >= 0 ? rx2 : 0);
 
         if (effectiveRx > 0 || effectiveRy > 0) {
           const verts = roundedRectVertices(effectiveRx, effectiveRy, rx3, ry3, rw, rh);
@@ -949,54 +1096,252 @@ function extractGroupContent(
 // Main exported function
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Parse SVG viewBox, falling back to width/height attributes on <svg>
+// ---------------------------------------------------------------------------
+
+function parseSvgViewBox(
+  svgText: string
+): { vbX: number; vbY: number; vbW: number; vbH: number } | null {
+  // Try viewBox first
+  const vbMatch = /viewBox\s*=\s*["']([^"']+)["']/i.exec(svgText);
+  if (vbMatch) {
+    const parts = vbMatch[1].trim().split(/[\s,]+/).map(Number);
+    if (parts.length >= 4 && parts[2] > 0 && parts[3] > 0) {
+      return { vbX: parts[0], vbY: parts[1], vbW: parts[2], vbH: parts[3] };
+    }
+  }
+
+  // Fallback: extract width/height from the root <svg> element
+  const svgTagMatch = /<svg[^>]*>/i.exec(svgText);
+  if (!svgTagMatch) return null;
+  const svgTag = svgTagMatch[0];
+
+  const wRaw = getAttr(svgTag, "width");
+  const hRaw = getAttr(svgTag, "height");
+  if (!wRaw || !hRaw) return null;
+
+  // Strip unit suffixes (px, pt, mm, etc) — treat bare numbers as unitless
+  const w = parseFloat(wRaw);
+  const h = parseFloat(hRaw);
+  if (!isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) return null;
+
+  return { vbX: 0, vbY: 0, vbW: w, vbH: h };
+}
+
+// ---------------------------------------------------------------------------
+// Raster <image> → LightBurn Bitmap shape
+// ---------------------------------------------------------------------------
+
+function extractImageDataUrl(svgText: string): string | null {
+  // Match <image ... href="data:..." /> or xlink:href="data:..."
+  const imgRe = /<image[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = imgRe.exec(svgText)) !== null) {
+    const tag = m[0];
+    const href =
+      getAttr(tag, "href") ??
+      getAttr(tag, "xlink:href") ??
+      // After namespace stripping, xlink:href becomes href — try the raw source too
+      (/href\s*=\s*["']([^"']+)["']/i.exec(tag))?.[1];
+    if (href && href.startsWith("data:image/")) return href;
+  }
+  return null;
+}
+
+function parsePngDimensions(base64: string): { w: number; h: number } | null {
+  try {
+    // PNG header: bytes 16–19 = width, 20–23 = height (big-endian)
+    const raw = atob(base64.slice(0, 44)); // 44 base64 chars ≈ 33 bytes
+    if (raw.charCodeAt(0) !== 137 || raw.charCodeAt(1) !== 80) return null; // not PNG
+    const w =
+      (raw.charCodeAt(16) << 24) |
+      (raw.charCodeAt(17) << 16) |
+      (raw.charCodeAt(18) << 8) |
+      raw.charCodeAt(19);
+    const h =
+      (raw.charCodeAt(20) << 24) |
+      (raw.charCodeAt(21) << 16) |
+      (raw.charCodeAt(22) << 8) |
+      raw.charCodeAt(23);
+    return w > 0 && h > 0 ? { w, h } : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildBitmapShapeXml(
+  base64Data: string,
+  pixelW: number,
+  pixelH: number,
+  xMm: number,
+  yMm: number,
+  widthMm: number,
+  heightMm: number,
+  cutIndex: number
+): string {
+  const scaleX = widthMm / pixelW;
+  const scaleY = heightMm / pixelH;
+  const cx = xMm + widthMm / 2;
+  const cy = yMm + heightMm / 2;
+
+  // Approximate byte count for the Length attribute (decoded bytes ≈ base64 * 3/4)
+  const byteLen = Math.ceil((base64Data.length * 3) / 4);
+
+  return [
+    `<Shape Type="Bitmap" CutIndex="${cutIndex}" W="${pixelW}" H="${pixelH}">`,
+    `  <XForm>${scaleX.toFixed(6)} 0 0 ${scaleY.toFixed(6)} ${cx.toFixed(4)} ${cy.toFixed(4)}</XForm>`,
+    `  <Data Length="${byteLen}">${base64Data}</Data>`,
+    `</Shape>`,
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Non-rendering block stripper
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove SVG blocks that define reusable content but should NOT produce
+ * visible shapes: <defs>, <clipPath>, <mask>, <symbol>, <marker>, <pattern>,
+ * <filter>, <linearGradient>, <radialGradient>, <metadata>, <title>, <desc>.
+ *
+ * Without this, the regex-based shape extractor would extract shapes inside
+ * these blocks as if they were visible artwork, producing duplicate/phantom
+ * paths in the LightBurn output.
+ */
+function stripNonRenderingBlocks(svgSource: string): string {
+  const tags = [
+    'defs', 'clipPath', 'mask', 'symbol', 'marker', 'pattern',
+    'filter', 'linearGradient', 'radialGradient', 'metadata', 'title', 'desc',
+  ];
+  let result = svgSource;
+  for (const tag of tags) {
+    // Remove self-closing: <tag ... />
+    result = result.replace(new RegExp(`<${tag}\\b[^>]*/>`, 'gi'), '');
+    // Remove block: <tag ...>...</tag> (non-greedy, case-insensitive)
+    result = result.replace(new RegExp(`<${tag}[\\s>][\\s\\S]*?</${tag}\\s*>`, 'gi'), '');
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Rotation helper for world-space vertices
+// ---------------------------------------------------------------------------
+
+/**
+ * Rotate world-space vertices (and their bezier handle offsets) around a
+ * center point.  Used to apply PlacedItem rotation that isn't baked into
+ * the SVG content itself.
+ */
+function rotateWorldVertices(
+  vertices: LbrnVertex[],
+  rotationDeg: number,
+  cx: number,
+  cy: number,
+): LbrnVertex[] {
+  if (Math.abs(rotationDeg) < 0.001) return vertices;
+  const rad = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return vertices.map((v) => {
+    const dx = v.x - cx;
+    const dy = v.y - cy;
+    return {
+      x: cx + dx * cos - dy * sin,
+      y: cy + dx * sin + dy * cos,
+      // Handle offsets are direction vectors — rotate without translation
+      c0x: v.c0x * cos - v.c0y * sin,
+      c0y: v.c0x * sin + v.c0y * cos,
+      c1x: v.c1x * cos - v.c1y * sin,
+      c1y: v.c1x * sin + v.c1y * cos,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Main exported function
+// ---------------------------------------------------------------------------
+
 export function extractLbrnShapesFromItem(
   item: {
     xMm: number;
     yMm: number;
     widthMm: number;
     heightMm: number;
+    rotationDeg?: number;
     svgText: string;
   },
   cutIndex: number
 ): string[] {
   const { xMm, yMm, widthMm, heightMm } = item;
+  const rotationDeg = item.rotationDeg ?? 0;
+
   // Strip XML namespace prefixes (e.g. <svg:path> → <path>) so regexes match
-  const svgText = item.svgText.replace(/<(\/?)[\w]+-/g, '<$1').replace(/<(\/?)([\w]+):/g, '<$1');
+  let svgText = item.svgText.replace(/<(\/?)[\w]+-/g, '<$1').replace(/<(\/?)([\w]+):/g, '<$1');
+  // Strip non-rendering blocks (<defs>, <clipPath>, <mask>, etc.)
+  svgText = stripNonRenderingBlocks(svgText);
 
-  // --- 1. Parse viewBox ---
-  const vbMatch = /viewBox\s*=\s*["']([^"']+)["']/i.exec(svgText);
-  if (!vbMatch) return [];
-
-  const vbParts = vbMatch[1].trim().split(/[\s,]+/).map(Number);
-  if (vbParts.length < 4) return [];
-  const [vbX, vbY, vbW, vbH] = vbParts;
-  if (vbW === 0 || vbH === 0) return [];
-
-  // --- 2. Compute scale ---
-  const sx = widthMm / vbW;
-  const sy = heightMm / vbH;
-
-  // --- 3. toWorld mapping ---
-  function toWorld(svgX: number, svgY: number): { x: number; y: number } {
-    return {
-      x: xMm + (svgX - vbX) * sx,
-      y: yMm + (svgY - vbY) * sy,
-    };
-  }
-
-  const wt: WorldTransform = { mat: IDENTITY, sx, sy, toWorld };
-
-  // --- 4. Extract shapes ---
-  const shapes = extractShapesFromSvg(svgText, wt, IDENTITY);
-
-  // --- 5. Convert to LightBurn XML ---
   const xmlBlocks: string[] = [];
 
-  for (const shape of shapes) {
-    const { worldVerts, closed } = shape;
-    if (worldVerts.length < 2) continue;
-    const xml = buildPathXml(worldVerts, closed, cutIndex);
-    if (xml) xmlBlocks.push(xml);
+  // --- 1. Parse viewBox (with width/height fallback) ---
+  const vb = parseSvgViewBox(svgText);
+
+  if (vb) {
+    const { vbX, vbY, vbW, vbH } = vb;
+
+    // --- 2. Compute scale ---
+    const sx = widthMm / vbW;
+    const sy = heightMm / vbH;
+
+    // --- 3. toWorld mapping ---
+    function toWorld(svgX: number, svgY: number): { x: number; y: number } {
+      return {
+        x: xMm + (svgX - vbX) * sx,
+        y: yMm + (svgY - vbY) * sy,
+      };
+    }
+
+    const wt: WorldTransform = { mat: IDENTITY, sx, sy, toWorld };
+
+    // --- 4. Extract vector shapes ---
+    const shapes = extractShapesFromSvg(svgText, wt, IDENTITY);
+
+    // --- 4b. Apply item rotation (around item center in world space) ---
+    const rotateCx = xMm + widthMm / 2;
+    const rotateCy = yMm + heightMm / 2;
+
+    for (const shape of shapes) {
+      let { worldVerts, closed } = shape;
+      if (worldVerts.length < 2) continue;
+      if (Math.abs(rotationDeg) > 0.001) {
+        worldVerts = rotateWorldVertices(worldVerts, rotationDeg, rotateCx, rotateCy);
+      }
+      const xml = buildPathXml(worldVerts, closed, cutIndex);
+      if (xml.length > 0) xmlBlocks.push(...xml);
+    }
+  }
+
+  // --- 5. Extract raster <image> elements as LightBurn Bitmap shapes ---
+  if (xmlBlocks.length === 0) {
+    const dataUrl = extractImageDataUrl(svgText);
+    if (dataUrl) {
+      // Strip "data:image/...;base64," prefix to get raw base64
+      const commaIdx = dataUrl.indexOf(",");
+      if (commaIdx >= 0) {
+        const base64 = dataUrl.slice(commaIdx + 1);
+        // Try to get real pixel dimensions from the image header
+        const pngDims = parsePngDimensions(base64);
+        // Fall back to 300 DPI estimate from mm dimensions
+        const pixelW = pngDims?.w ?? Math.round(widthMm / 25.4 * 300);
+        const pixelH = pngDims?.h ?? Math.round(heightMm / 25.4 * 300);
+
+        if (pixelW > 0 && pixelH > 0) {
+          xmlBlocks.push(
+            buildBitmapShapeXml(base64, pixelW, pixelH, xMm, yMm, widthMm, heightMm, cutIndex)
+          );
+        }
+      }
+    }
   }
 
   return xmlBlocks;

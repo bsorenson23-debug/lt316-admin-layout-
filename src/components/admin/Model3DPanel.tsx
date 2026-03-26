@@ -231,6 +231,8 @@ export function Model3DPanel({
       .catch((err) => {
         console.warn("[Model3DPanel] auto-load failed:", err);
         const msg = err instanceof Error ? err.message : "Unknown error";
+        setModelFile(null);
+        setViewerOpen(false);
         setTemplateError(`Auto-load failed for ${modelPathOverride}: ${msg}`);
       });
   }, [modelPathOverride, accept]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -262,25 +264,6 @@ export function Model3DPanel({
       calibrationRotation: clampValue(base.calibrationRotation ?? 0, -calRotLimit, calRotLimit),
     };
   }, [tumblerMapping, showCalibration, calX, calY, calRot, calXLimit, calYLimit]);
-
-  const viewerRefreshKey = React.useMemo(() => {
-    const mapKey = effectiveMapping
-      ? [
-          effectiveMapping.frontFaceRotation ?? 0,
-          effectiveMapping.handleArcDeg ?? 0,
-          effectiveMapping.calibrationOffsetX ?? 0,
-          effectiveMapping.calibrationOffsetY ?? 0,
-          effectiveMapping.calibrationRotation ?? 0,
-        ].join(":")
-      : "nomap";
-    return [
-      modelFile?.name ?? "nomodel",
-      bedWidthMm,
-      bedHeightMm,
-      itemPositionKey,
-      mapKey,
-    ].join("|");
-  }, [modelFile?.name, bedWidthMm, bedHeightMm, itemPositionKey, effectiveMapping]);
 
   // Auto-rasterize each placed item into its own canvas texture
   // Runs whenever items change — no manual "Snap" button needed
@@ -381,7 +364,6 @@ export function Model3DPanel({
           <>
             <div className={styles.viewerWrap}>
               <ModelViewer
-                key={viewerRefreshKey}
                 file={modelFile}
                 placedItems={placedItems}
                 itemTextures={itemTextures}

@@ -5,6 +5,7 @@ import type { GLTF } from "three-stdlib";
 import type { TumblerMapping } from "@/types/productTemplate";
 import { normalizeGeometry } from "@/lib/modelAxisCorrection";
 import { analyzeTumblerMesh } from "@/lib/analyzeTumblerMesh";
+import { getTumblerWrapLayout } from "@/utils/tumblerWrapLayout";
 
 type GLTFResult = GLTF & {
   nodes: Record<string, THREE.Object3D>;
@@ -101,6 +102,7 @@ const CYL_OVERLAY_FRAGMENT_SHADER = `
   uniform float uCalY;
   uniform float uCalRotation;
   uniform float uCalAngle;
+  uniform float uFrontAnchorU;
   uniform float uAlpha;
 
   varying vec3 vLocalPos;
@@ -119,7 +121,7 @@ const CYL_OVERLAY_FRAGMENT_SHADER = `
 
     float theta = atan(vLocalPos.x, vLocalPos.z);
     float offset = uFrontRotation + uCalRotation + uCalAngle;
-    float u = fract(0.75 + ((theta - offset) / TAU));
+    float u = fract(uFrontAnchorU + ((theta - offset) / TAU));
 
     float yFromTopMm = (uRimTopLocalY - vLocalPos.y) * uScaleFactorY;
     float yMm = yFromTopMm - uPrintTopOffsetMm + uCalY;
@@ -212,7 +214,10 @@ export function YetiRambler40oz({
   onReady,
 }: Props) {
   const effectiveHandleArcDeg = tumblerMapping?.handleArcDeg ?? _handleArcDeg ?? 0;
-  void effectiveHandleArcDeg;
+  const wrapLayout = useMemo(
+    () => getTumblerWrapLayout(effectiveHandleArcDeg),
+    [effectiveHandleArcDeg],
+  );
 
   const { nodes } = useGLTF(glbPath) as unknown as GLTFResult;
   const bodyMesh = useMemo(() => resolveBodyMesh(nodes), [nodes]);
@@ -350,6 +355,7 @@ export function YetiRambler40oz({
       uCalY: { value: calY },
       uCalRotation: { value: calRotation },
       uCalAngle: { value: calAngle },
+      uFrontAnchorU: { value: wrapLayout.frontAnchorU },
       uAlpha: { value: 1.0 },
     };
   }, [
@@ -365,6 +371,7 @@ export function YetiRambler40oz({
     calY,
     calRotation,
     calAngle,
+    wrapLayout.frontAnchorU,
   ]);
 
   const baseColorUniforms = useMemo(() => ({

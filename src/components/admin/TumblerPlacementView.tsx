@@ -10,6 +10,7 @@ import type { TumblerDimensions } from "./ModelViewer";
 import { YetiRambler40oz } from "./models/YetiRambler40oz";
 import type { DecalItem } from "./models/YetiRambler40oz";
 import type { ProductTemplate } from "@/types/productTemplate";
+import { getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
 import styles from "./TumblerPlacementView.module.css";
 
 // ---------------------------------------------------------------------------
@@ -234,9 +235,9 @@ export function TumblerPlacementView({
   const alignFrontH = useCallback(() => {
     if (!selectedItemId || !selectedItem) return;
     onUpdateItem(selectedItemId, {
-      x: (wrapWidthMm * 3 / 4) - (selectedItem.width / 2),
+      x: getWrapFrontCenter(wrapWidthMm, handleArcDeg) - (selectedItem.width / 2),
     });
-  }, [selectedItemId, selectedItem, wrapWidthMm, onUpdateItem]);
+  }, [selectedItemId, selectedItem, wrapWidthMm, handleArcDeg, onUpdateItem]);
 
   const alignCenterV = useCallback(() => {
     if (!selectedItemId || !selectedItem) return;
@@ -248,10 +249,10 @@ export function TumblerPlacementView({
   const alignBoth = useCallback(() => {
     if (!selectedItemId || !selectedItem) return;
     onUpdateItem(selectedItemId, {
-      x: (wrapWidthMm * 3 / 4) - (selectedItem.width / 2),
+      x: getWrapFrontCenter(wrapWidthMm, handleArcDeg) - (selectedItem.width / 2),
       y: (printHeightMm / 2) - (selectedItem.height / 2),
     });
-  }, [selectedItemId, selectedItem, wrapWidthMm, printHeightMm, onUpdateItem]);
+  }, [selectedItemId, selectedItem, wrapWidthMm, printHeightMm, handleArcDeg, onUpdateItem]);
 
   // ── Scene scale ──
   const nearClip = 1;

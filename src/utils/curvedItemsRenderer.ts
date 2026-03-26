@@ -15,6 +15,7 @@
  */
 
 import type { PlacedItem } from "@/types/admin";
+import { getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
 
 // ── Tuning constants ─────────────────────────────────────────────────────────
 
@@ -191,8 +192,9 @@ export function renderCurvedItems(
   bedPxW: number,
   bedPxH: number,
   pxPerMm: number,
+  handleArcDeg?: number,
 ): HTMLCanvasElement | null {
   const flat = rasterizePlacedItems(placedItems, imageCache, bedPxW, bedPxH, pxPerMm);
   if (!flat) return null;
-  return applyCylindricalProjection(flat);
+  return applyCylindricalProjection(flat, getWrapFrontCenter(bedPxW, handleArcDeg));
 }

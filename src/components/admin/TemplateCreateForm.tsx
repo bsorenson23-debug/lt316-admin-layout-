@@ -16,6 +16,7 @@ import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
 import { EngravableZoneEditor } from "./EngravableZoneEditor";
+import { TumblerLookupDebugPanel } from "./TumblerLookupDebugPanel";
 import styles from "./TemplateCreateForm.module.css";
 
 interface Props {
@@ -80,6 +81,42 @@ function mapProductType(aiType: string): "tumbler" | "mug" | "bottle" | "flat" {
   return "tumbler";
 }
 
+function getLookupModeLabel(mode: TumblerItemLookupResponse["mode"]): string {
+  switch (mode) {
+    case "matched-profile":
+      return "Matched profile";
+    case "parsed-page":
+      return "Page dimensions";
+    case "safe-fallback":
+      return "Safe fallback";
+    default:
+      return "Lookup";
+  }
+}
+
+function getLookupSourceLabel(result: TumblerItemLookupResponse): string | null {
+  const sourceUrl = result.resolvedUrl ?? result.sources[0]?.url ?? null;
+  if (!sourceUrl) return null;
+  try {
+    const host = new URL(sourceUrl).hostname.replace(/^www\./i, "");
+    const [label] = host.split(".");
+    return label ? label.charAt(0).toUpperCase() + label.slice(1) : null;
+  } catch {
+    return null;
+  }
+}
+
+function getLookupPhotoLabel(result: TumblerItemLookupResponse): string {
+  const source = getLookupSourceLabel(result);
+  return source ? `${source} product photo` : "Lookup product photo";
+}
+
+function formatLookupMeasurement(value: number | null | undefined): string | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? `${round2(value)} mm`
+    : null;
+}
+
 export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props) {
   const isEdit = Boolean(editingTemplate);
   const derivedEditingDims = React.useMemo(
@@ -107,7 +144,11 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [glbFileName, setGlbFileName] = React.useState<string | null>(null);
   const [glbUploading, setGlbUploading] = React.useState(false);
   const [glbUploadError, setGlbUploadError] = React.useState<string | null>(null);
+  const [checkingGlbPath, setCheckingGlbPath] = React.useState(false);
   const [productImageFile, setProductImageFile] = React.useState<File | null>(null);
+  const [productImageLabel, setProductImageLabel] = React.useState<string | null>(
+    editingTemplate?.productPhotoFullUrl ? "Saved product photo" : null,
+  );
   const [productPhotoFullUrl, setProductPhotoFullUrl] = React.useState(editingTemplate?.productPhotoFullUrl ?? "");
 
   // ── Auto-detect ──────────────────────────────────────────────────
@@ -118,6 +159,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [lookingUpItem, setLookingUpItem] = React.useState(false);
   const [lookupResult, setLookupResult] = React.useState<TumblerItemLookupResponse | null>(null);
   const [lookupError, setLookupError] = React.useState<string | null>(null);
+  const [lookupDebugImageUrl, setLookupDebugImageUrl] = React.useState("");
 
   // ── Dimensions ───────────────────────────────────────────────────
   const [diameterMm, setDiameterMm] = React.useState(editingTemplate?.dimensions.diameterMm ?? 0);
@@ -130,10 +172,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   );
   const [handleArcDeg, setHandleArcDeg] = React.useState(() => {
     const saved = editingTemplate?.dimensions.handleArcDeg;
-    if (saved != null && saved > 0) return saved;
-    // Default: 90° for tumblers (standard handle), 0 for flat/mug/bottle
-    const pt = editingTemplate?.productType ?? "tumbler";
-    return pt === "tumbler" ? 90 : 0;
+    if (saved != null) return saved;
+    return 0;
   });
   const [taperCorrection, setTaperCorrection] = React.useState<"none" | "top-narrow" | "bottom-narrow">(
     editingTemplate?.dimensions.taperCorrection ?? "none"
@@ -198,6 +238,66 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     setRimColorHex((prev) => (prev === nextRim ? prev : nextRim));
   }, []);
 
+  const validateGlbPath = React.useCallback(async (candidate: string) => {
+    const trimmed = candidate.trim();
+    if (!trimmed) return false;
+    try {
+      const res = await fetch(trimmed, { method: "HEAD" });
+      return res.ok || res.status === 405;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const clearMissingGlbPath = React.useCallback((candidate: string) => {
+    setGlbFileName(null);
+    setGlbPath("");
+    setShowMappingWizard(false);
+    setGlbUploadError(`Model file not found: ${candidate}`);
+  }, []);
+
+  const verifyCurrentGlbPath = React.useCallback(async (options?: { clearOnMissing?: boolean }) => {
+    const trimmed = glbPath.trim();
+    if (!trimmed) return false;
+
+    setCheckingGlbPath(true);
+    const ok = await validateGlbPath(trimmed);
+    setCheckingGlbPath(false);
+
+    if (ok) {
+      setGlbUploadError((prev) => (
+        prev && prev.startsWith("Model file not found:") ? null : prev
+      ));
+      return true;
+    }
+
+    if (options?.clearOnMissing !== false) {
+      clearMissingGlbPath(trimmed);
+    } else {
+      setGlbUploadError(`Model file not found: ${trimmed}`);
+    }
+    return false;
+  }, [clearMissingGlbPath, glbPath, validateGlbPath]);
+
+  React.useEffect(() => {
+    if (!editingTemplate?.glbPath) return;
+    let cancelled = false;
+    setCheckingGlbPath(true);
+    validateGlbPath(editingTemplate.glbPath)
+      .then((ok) => {
+        if (cancelled) return;
+        if (!ok && glbPath.trim() === editingTemplate.glbPath.trim()) {
+          clearMissingGlbPath(editingTemplate.glbPath);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingGlbPath(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [clearMissingGlbPath, editingTemplate?.glbPath, glbPath, validateGlbPath]);
+
   // ── Front / Back face photos ──────────────────────────────────
   const [frontPhotoDataUrl, setFrontPhotoDataUrl] = React.useState(editingTemplate?.frontPhotoDataUrl ?? "");
   const [backPhotoDataUrl, setBackPhotoDataUrl] = React.useState(editingTemplate?.backPhotoDataUrl ?? "");
@@ -230,10 +330,9 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   /** Handle product image selection — store file for auto-detect, generate thumbnail + full-res */
   const handleProductImage = async (file: File) => {
     setProductImageFile(file);
+    setProductImageLabel(file.name);
     setDetectResult(null);
     setDetectError(null);
-    setLookupResult(null);
-    setLookupError(null);
     // Thumbnail: 120x120 cropped (for gallery cards)
     const thumb = await generateThumbnail(file);
     setThumbDataUrl(thumb);
@@ -241,6 +340,15 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     const full = await fileToFacePhotoDataUrl(file, 1024);
     if (full) setProductPhotoFullUrl(full);
   };
+
+  const clearProductImage = React.useCallback(() => {
+    setProductImageFile(null);
+    setProductImageLabel(null);
+    setThumbDataUrl("");
+    setProductPhotoFullUrl("");
+    setDetectResult(null);
+    setDetectError(null);
+  }, []);
 
   const applyProfileOrDimensions = React.useCallback((args: {
     brand: string | null | undefined;
@@ -274,10 +382,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     }
 
     const profileArc = getProfileHandleArcDeg(matchedProfile);
-    if (profileArc > 0) {
-      setHandleArcDeg(profileArc);
-    }
-
+    setHandleArcDeg(profileArc);
     if (matchedProfile) {
       const oh = matchedProfile.overallHeightMm;
       setOverallHeightMm(round2(oh));
@@ -318,6 +423,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     setLookupError(null);
     setLookupResult(null);
     setDetectError(null);
+    setLookupDebugImageUrl("");
 
     try {
       const result = await lookupTumblerItem(raw);
@@ -331,7 +437,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       if (result.brand) setBrand(result.brand);
       if (result.capacityOz) setCapacity(`${result.capacityOz}oz`);
       setProductType("tumbler");
-      if (result.glbPath) setGlbPath(result.glbPath);
+      setGlbPath(result.glbPath || "");
 
       applyProfileOrDimensions({
         brand: result.brand,
@@ -361,10 +467,12 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           const fileName = result.imageUrl.split("/").pop() ?? "lookup-image.jpg";
           const file = new File([blob], fileName, { type: mimeType });
           setProductImageFile(file);
+          setProductImageLabel(getLookupPhotoLabel(result));
           const thumb = await generateThumbnail(file);
           setThumbDataUrl(thumb);
           const full = await fileToFacePhotoDataUrl(file, 1024);
           if (full) {
+            setLookupDebugImageUrl(full);
             setProductPhotoFullUrl(full);
             setFrontOriginalUrl(full);
             setFrontPhotoDataUrl((prev) => prev || full);
@@ -386,8 +494,6 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     setDetecting(true);
     setDetectError(null);
     setDetectResult(null);
-    setLookupError(null);
-    setLookupResult(null);
     try {
       const result = await detectTumblerFromImage(productImageFile);
       setDetectResult(result);
@@ -414,10 +520,12 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       });
       const matchedProfile = profileId ? getTumblerProfileById(profileId) : null;
       const profileArc = getProfileHandleArcDeg(matchedProfile);
-      if (profileArc > 0) {
+      if (matchedProfile) {
         setHandleArcDeg(profileArc);
       } else if (sug.hasHandle) {
         setHandleArcDeg(90);
+      } else {
+        setHandleArcDeg(0);
       }
       // Product type
       setProductType(mapProductType(sug.productType));
@@ -506,11 +614,15 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const errs: string[] = [];
     if (!name.trim()) errs.push("Product name is required.");
     if (productType !== "flat" && diameterMm <= 0) errs.push("Diameter must be > 0 for non-flat products.");
     if (printHeightMm <= 0) errs.push("Print height must be > 0.");
+    if (glbPath.trim()) {
+      const glbOk = await verifyCurrentGlbPath({ clearOnMissing: false });
+      if (!glbOk) errs.push("3D model path is missing or invalid.");
+    }
     if (errs.length > 0) {
       setErrors(errs);
       return;
@@ -640,10 +752,28 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
         {productType !== "flat" && (
           <div className={styles.lookupBlock}>
-            <div className={styles.lookupTitle}>Item lookup</div>
-            <div className={styles.lookupHint}>
-              Paste a product URL or exact tumbler name. The lookup will try the page first,
-              then fall back to an internal profile and safe GLB.
+            <div className={styles.lookupHeader}>
+              <div>
+                <div className={styles.lookupTitle}>Item lookup</div>
+                <div className={styles.lookupHint}>
+                  Paste a product URL or exact tumbler name. Lookup should resolve the item,
+                  assign the best profile, and pull a usable product photo.
+                </div>
+              </div>
+              {lookupResult && (
+                <button
+                  type="button"
+                  className={styles.lookupResetBtn}
+                  onClick={() => {
+                    setLookupResult(null);
+                    setLookupError(null);
+                    setLookupInput("");
+                    setLookupDebugImageUrl("");
+                  }}
+                >
+                  Clear lookup
+                </button>
+              )}
             </div>
             <div className={styles.lookupRow}>
               <input
@@ -659,20 +789,55 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                 onClick={() => void handleItemLookup()}
                 disabled={lookingUpItem || !lookupInput.trim()}
               >
-                {lookingUpItem ? "Looking up…" : "Item lookup"}
+                {lookingUpItem ? "Looking up..." : "Run lookup"}
               </button>
             </div>
 
             {lookupResult && (
-              <div className={styles.lookupBanner}>
-                <span className={styles.detectBannerText}>
-                  Lookup applied: <strong>{lookupResult.title || name || "Resolved item"}</strong>
-                  {" "}({lookupResult.mode})
-                </span>
+              <div className={styles.lookupSummary}>
+                <div className={styles.lookupSummaryHeader}>
+                  <div className={styles.lookupSummaryTitle}>
+                    {lookupResult.title || name || "Resolved item"}
+                  </div>
+                  <div className={styles.lookupBadgeRow}>
+                    <span className={styles.lookupBadgePrimary}>
+                      {getLookupModeLabel(lookupResult.mode)}
+                    </span>
+                    {getLookupSourceLabel(lookupResult) && (
+                      <span className={styles.lookupBadgeMuted}>
+                        {getLookupSourceLabel(lookupResult)}
+                      </span>
+                    )}
+                    {lookupResult.imageUrl && productImageLabel && thumbDataUrl && (
+                      <span className={styles.lookupBadgeMuted}>Photo applied</span>
+                    )}
+                  </div>
+                </div>
+                <div className={styles.lookupSummaryLine}>
+                  {[lookupResult.brand, lookupResult.capacityOz ? `${lookupResult.capacityOz}oz` : null]
+                    .filter(Boolean)
+                    .join(" / ")}
+                </div>
+                <div className={styles.lookupMetrics}>
+                  {formatLookupMeasurement(lookupResult.dimensions.outsideDiameterMm) && (
+                    <span>Dia {formatLookupMeasurement(lookupResult.dimensions.outsideDiameterMm)}</span>
+                  )}
+                  {formatLookupMeasurement(lookupResult.dimensions.usableHeightMm) && (
+                    <span>Print {formatLookupMeasurement(lookupResult.dimensions.usableHeightMm)}</span>
+                  )}
+                  {lookupResult.glbPath && <span>3D ready</span>}
+                </div>
               </div>
             )}
 
             {lookupError && <div className={styles.detectErrorBanner}>{lookupError}</div>}
+
+            {lookupResult?.fitDebug && lookupDebugImageUrl && (
+              <TumblerLookupDebugPanel
+                debug={lookupResult.fitDebug}
+                imageUrl={lookupDebugImageUrl}
+              />
+            )}
           </div>
         )}
 
@@ -682,27 +847,28 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
             <div className={styles.thumbDropZone}>
               <FileDropZone
                 accept="image/*"
-                fileName={productImageFile?.name ?? null}
+                fileName={productImageLabel}
                 onFileSelected={(f) => void handleProductImage(f)}
-                onClear={() => {
-                  setProductImageFile(null);
-                  setDetectResult(null);
-                  setDetectError(null);
-                }}
+                onClear={clearProductImage}
               />
             </div>
             {thumbDataUrl && (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                src={thumbDataUrl}
-                alt="Thumbnail preview"
-                className={styles.thumbPreview}
-              />
+              <div className={styles.productPhotoPreview}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={thumbDataUrl}
+                  alt="Thumbnail preview"
+                  className={styles.thumbPreview}
+                />
+                {lookupResult?.imageUrl && productImageLabel && (
+                  <span className={styles.productPhotoMeta}>{productImageLabel}</span>
+                )}
+              </div>
             )}
           </div>
         </div>
 
-        {productImageFile && !detectResult && (
+        {productImageFile && !detectResult && !lookupResult && (
           <button
             type="button"
             className={styles.detectBtn}
@@ -713,7 +879,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           </button>
         )}
 
-        {detectResult && (
+        {detectResult && !lookupResult && (
           <div className={styles.detectBanner}>
             <span className={styles.detectBannerText}>
               Detected: <strong>{name || "Unknown product"}</strong> — review and confirm
@@ -729,7 +895,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           </div>
         )}
 
-        {detectError && (
+        {detectError && !lookupResult && (
           <div className={styles.detectErrorBanner}>
             {detectError} — fill in manually below.
           </div>
@@ -987,7 +1153,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               className={styles.textInput}
               type="text"
               value={glbPath}
-              onChange={(e) => setGlbPath(e.target.value)}
+              onChange={(e) => {
+                setGlbPath(e.target.value);
+                setGlbUploadError(null);
+              }}
+              onBlur={() => {
+                if (glbPath.trim()) void verifyCurrentGlbPath();
+              }}
               placeholder="/models/templates/my-model.glb"
             />
           </div>
@@ -1000,9 +1172,19 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               <button
                 type="button"
                 className={styles.detectBtn}
-                onClick={() => setShowMappingWizard(true)}
+                disabled={checkingGlbPath}
+                onClick={() => {
+                  void (async () => {
+                    const ok = await verifyCurrentGlbPath();
+                    if (ok) setShowMappingWizard(true);
+                  })();
+                }}
               >
-                {tumblerMapping?.isMapped ? "Re-map orientation" : "Map tumbler orientation"}
+                {checkingGlbPath
+                  ? "Checking model\u2026"
+                  : tumblerMapping?.isMapped
+                    ? "Re-map orientation"
+                    : "Map tumbler orientation"}
               </button>
               {tumblerMapping?.isMapped && (
                 <span className={styles.glbPathConfirm}>
@@ -1231,3 +1413,5 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     </div>
   );
 }
+
+

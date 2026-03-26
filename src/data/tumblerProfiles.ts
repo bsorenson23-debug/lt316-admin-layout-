@@ -231,20 +231,20 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     model: "IceFlow Flip Straw 30oz",
     capacityOz: 30,
     shapeType: "tapered",
-    topDiameterMm: 96,              // 3.78"
-    bottomDiameterMm: 76,           // 2.99"
-    overallHeightMm: 248,           // 9.76"
-    usableHeightMm: 190,            // ~7.5"
-    hasHandle: true,
-    handleArcDeg: 90,
+    topDiameterMm: 88.9,            // Stanley official depth: 3.5"
+    bottomDiameterMm: 76.2,         // estimated base diameter: 3.0"
+    overallHeightMm: 218.4,         // Stanley official height: 8.6"
+    usableHeightMm: 150,            // conservative printable band on the main body
+    hasHandle: false,
+    handleArcDeg: 0,
     chuckRecommended: true,
     guideBand: {
       id: "stanley-iceflow-30-band",
       label: "Safe Print Zone",
       upperGrooveYmm: 25,
-      lowerGrooveYmm: 165,
+      lowerGrooveYmm: 175,
     },
-    notes: "Moderate taper. Handle requires chuck. Straw lid area adds ~25mm to top margin.",
+    notes: "Body-only Stanley IceFlow profile. The top carry handle and lid are ignored for GLB generation and mapping; the silver rim band is used as the body split.",
   },
 
   // ── RTIC — straight, no handle (similar profile to YETI) ─────────────────

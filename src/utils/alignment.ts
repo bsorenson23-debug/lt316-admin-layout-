@@ -1,4 +1,5 @@
 import { BedConfig, EngravableZone, ItemAlignmentMode, PlacedItem, PlacedItemPatch, SvgBounds } from "@/types/admin";
+import { getWrapBackCenter, getWrapFrontCenter, getWrapHandleCenter } from "@/utils/tumblerWrapLayout";
 
 function safeDiv(numerator: number, denominator: number): number {
   if (!Number.isFinite(denominator) || denominator === 0) return 1;
@@ -50,9 +51,17 @@ export function computeAlignmentPatch(
   let nextWidth = item.width;
   let nextHeight = item.height;
 
-  // Handle-centered layout: front face at 3/4 of bed width
-  const frontCenterX = bedConfig.width * 3 / 4;
-  const backCenterX = bedConfig.width / 4;
+  const frontCenterX =
+    engravableZone?.frontCenterX ??
+    getWrapFrontCenter(bedConfig.width);
+  const backCenterX =
+    engravableZone?.backCenterX ??
+    getWrapBackCenter(bedConfig.width) ??
+    bedConfig.width / 4;
+  const handleCenterX =
+    engravableZone?.handleCenterX ??
+    getWrapHandleCenter(bedConfig.width) ??
+    (bedConfig.width / 2);
 
   if (mode === "fit-bed") {
     const fitX = safeDiv(bedConfig.width, artwork.width);
@@ -142,17 +151,17 @@ export function computeAlignmentPatch(
     nextY += bedConfig.height / 2 - artworkCenterY;
   }
 
-  // Tumbler-wrap: right of handle — 15% offset right of front center
-  if (mode === "right-of-handle") {
-    nextX += (frontCenterX + bedConfig.width * 0.08) - artworkCenterX;
-    nextY += bedConfig.height / 2 - artworkCenterY;
-  }
+    // Tumbler-wrap: right of handle — 15% offset right of handle center
+    if (mode === "right-of-handle") {
+    nextX += (handleCenterX + bedConfig.width * 0.08) - artworkCenterX;
+      nextY += bedConfig.height / 2 - artworkCenterY;
+    }
 
-  // Tumbler-wrap: left of handle — 15% offset left of front center
-  if (mode === "left-of-handle") {
-    nextX += (frontCenterX - bedConfig.width * 0.08) - artworkCenterX;
-    nextY += bedConfig.height / 2 - artworkCenterY;
-  }
+    // Tumbler-wrap: left of handle — 15% offset left of handle center
+    if (mode === "left-of-handle") {
+    nextX += (handleCenterX - bedConfig.width * 0.08) - artworkCenterX;
+      nextY += bedConfig.height / 2 - artworkCenterY;
+    }
 
   // Tumbler-wrap: fill engravable zone if available, otherwise full bed
   if (mode === "full-wrap") {

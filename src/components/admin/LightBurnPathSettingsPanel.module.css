@@ -1,0 +1,41 @@
+.panel { border-bottom: 1px solid var(--border-subtle); background: var(--bg-panel); }
+.toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 9px 14px; background: none; border: none; cursor: pointer; border-bottom: 1px solid var(--border-subtle); text-align: left; }
+.toggle:hover { background: var(--bg-card); }
+.toggleLabel { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+.chevron { font-size: 11px; color: var(--text-dim); }
+
+.body { padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+
+/* ── Path field ── */
+.fieldGroup { display: flex; flex-direction: column; gap: 3px; }
+.fieldLabelRow { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.fieldLabel { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.fieldHint { font-size: 10px; color: var(--text-dim); }
+
+.pathInput { width: 100%; box-sizing: border-box; background: var(--bg-input); border: 1px solid var(--border-normal); border-radius: 4px; color: var(--text-primary); font-size: 11px; font-family: monospace; padding: 5px 8px; }
+.pathInput:focus { outline: none; border-color: var(--accent); }
+.pathInput::placeholder { color: var(--text-dim); }
+
+/* ── Validation status ── */
+.statusRow { display: flex; align-items: center; gap: 5px; font-size: 10px; min-height: 16px; }
+.statusDot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.statusValid .statusDot { background: var(--success); }
+.statusMissing .statusDot { background: var(--text-dim); }
+.statusError .statusDot { background: var(--error); }
+.statusValid { color: var(--success); }
+.statusMissing { color: var(--text-dim); }
+.statusError { color: var(--error); }
+
+/* ── Buttons ── */
+.btnRow { display: flex; gap: 5px; margin-top: 2px; }
+.validateBtn { flex: 1; font-size: 11px; font-weight: 600; padding: 6px 10px; border-radius: 4px; cursor: pointer; background: var(--bg-elevated); border: 1px solid var(--border-normal); color: var(--text-secondary); transition: background 100ms; }
+.validateBtn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.validateBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.resetBtn { font-size: 11px; padding: 6px 10px; border-radius: 4px; cursor: pointer; background: none; border: 1px solid var(--border-subtle); color: var(--text-dim); transition: background 100ms; }
+.resetBtn:hover { background: var(--bg-hover); color: var(--text-secondary); }
+
+.savedMsg { font-size: 10px; color: var(--success); }
+.errorMsg { font-size: 10px; color: var(--error); }
+
+.divider { height: 1px; background: var(--border-subtle); margin: 2px 0; }

@@ -280,5 +280,9 @@ export interface EngravableZone {
   height: number;
   /** Front face center X in mm (for centering artwork) */
   frontCenterX: number;
+  /** Back face center X in mm when the layout has a distinct back side */
+  backCenterX?: number | null;
+  /** Handle center X in mm when the layout has a side handle */
+  handleCenterX?: number | null;
 }
 
