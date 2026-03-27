@@ -104,6 +104,8 @@ export interface LightBurnExportPayload {
     presetName: string | null;
     bedOrigin: BedOrigin | null;
     chuckOrRoller: RotaryDriveType | null;
+    stepsPerRotation: number | null;
+    sprCorrectionFactor: number | null;
     anchorMode: TopAnchorMode;
     rotaryCenterXmm: number | null;
     rotaryTopYmm: number | null;
@@ -130,6 +132,7 @@ export interface Lt316LightBurnSetupSidecar {
     presetId?: string | null;
     presetName?: string | null;
     mode: RotaryDriveType | "unknown";
+    stepsPerRotation?: number;
     rotaryCenterXmm?: number;
     rotaryTopYmm?: number;
     anchorMode: TopAnchorMode;

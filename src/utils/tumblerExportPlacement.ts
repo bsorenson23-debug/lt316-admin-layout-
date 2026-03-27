@@ -245,6 +245,12 @@ export function buildLightBurnExportPayload(args: {
           return applyTaperWarpToExportItem(exportItem, templateYcenter, args.bedConfig);
         })
       : rawItems;
+  const presetStepsPerRotation = isFiniteNumber(args.rotary.preset?.stepsPerRotation)
+    ? args.rotary.preset.stepsPerRotation
+    : null;
+  const presetSprCorrectionFactor = isFiniteNumber(args.rotary.preset?.sprCorrectionFactor)
+    ? args.rotary.preset.sprCorrectionFactor
+    : null;
 
   return {
     kind: "lt316-lightburn-export",
@@ -260,6 +266,8 @@ export function buildLightBurnExportPayload(args: {
       presetName: args.rotary.preset?.name ?? null,
       bedOrigin: args.rotary.preset?.bedOrigin ?? null,
       chuckOrRoller: args.rotary.preset?.chuckOrRoller ?? null,
+      stepsPerRotation: presetStepsPerRotation,
+      sprCorrectionFactor: presetSprCorrectionFactor,
       anchorMode: args.rotary.anchorMode,
       rotaryCenterXmm: args.rotary.preset?.rotaryCenterXmm ?? null,
       rotaryTopYmm: args.rotary.preset?.rotaryTopYmm ?? null,
@@ -399,6 +407,9 @@ export function buildLt316Sidecar(args: {
       presetId: args.rotary.preset?.id ?? null,
       presetName: args.rotary.preset?.name ?? null,
       mode: args.rotary.preset?.chuckOrRoller ?? "unknown",
+      stepsPerRotation: isFiniteNumber(args.rotary.preset?.stepsPerRotation)
+        ? toRounded2(args.rotary.preset.stepsPerRotation)
+        : undefined,
       rotaryCenterXmm: args.rotary.preset
         ? toRounded2(args.rotary.preset.rotaryCenterXmm)
         : undefined,
@@ -447,6 +458,7 @@ export function buildLightBurnSetupSummary(
   return [
     `Rotary preset: ${sidecar.rotary.presetName ?? "none"}`,
     `Rotary mode: ${sidecar.rotary.mode}`,
+    `SPR: ${sidecar.rotary.stepsPerRotation !== undefined ? sidecar.rotary.stepsPerRotation.toFixed(2) : "n/a"}`,
     `Object diameter: ${objectDiameter}`,
     `Wrap width: ${circumference}`,
     `Origin X: ${originX}`,
