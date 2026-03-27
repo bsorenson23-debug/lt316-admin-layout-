@@ -142,29 +142,24 @@ function isCurvedSegment(start: LbrnVertex, end: LbrnVertex): boolean {
 }
 
 function buildVertToken(v: LbrnVertex): string {
-  let token = `V${fmt(v.x)} ${fmt(v.y)}`;
+  const token = `V${fmt(v.x)} ${fmt(v.y)}`;
 
-  // Control handles are absolute coordinates in .lbrn2.
-  // For straight segments (zero offset), set handle = vertex position
-  // so the bezier degenerates to a straight line.
-  const c0x = Math.abs(v.c0x) > 1e-9 ? v.x + v.c0x : v.x;
-  const c0y = Math.abs(v.c0y) > 1e-9 ? v.y + v.c0y : v.y;
-  token += `c0x${fmt(c0x)}c0y${fmt(c0y)}`;
+  // Only emit control handles when the vertex has actual bezier curves.
+  // Straight-line vertices (c0/c1 offsets ≈ 0) omit handles entirely —
+  // LightBurn treats a bare "Vx y" as a straight corner.
+  const hasCurve =
+    Math.abs(v.c0x) > 1e-9 ||
+    Math.abs(v.c0y) > 1e-9 ||
+    Math.abs(v.c1x) > 1e-9 ||
+    Math.abs(v.c1y) > 1e-9;
+  if (!hasCurve) return token;
 
-  const c1x = Math.abs(v.c1x) > 1e-9 ? v.x + v.c1x : v.x;
-  const c1y = Math.abs(v.c1y) > 1e-9 ? v.y + v.c1y : v.y;
-  token += `c1x${fmt(c1x)}c1y${fmt(c1y)}`;
-
-  return token;
-}
-
-function buildPrimToken(
-  startIndex: number,
-  endIndex: number,
-  _start: LbrnVertex,
-  _end: LbrnVertex
-): string {
-  return `L${startIndex} ${endIndex}`;
+  // Absolute control handle positions for curved segments
+  const c0x = v.x + v.c0x;
+  const c0y = v.y + v.c0y;
+  const c1x = v.x + v.c1x;
+  const c1y = v.y + v.c1y;
+  return `${token}c0x${fmt(c0x)}c0y${fmt(c0y)}c1x${fmt(c1x)}c1y${fmt(c1y)}`;
 }
 
 function cubicPoint(
@@ -279,8 +274,9 @@ function buildPathXml(
   if (prims.length === 0) return [];
 
   const xml = [
-    `<Shape Type="Path" CutIndex="${cutIndex}" VertID="${vertices.length}" PrimID="${prims.length}">`,
+    `<Shape Type="Path" VertID="${vertices.length}" PrimID="${prims.length}">`,
     `  <XForm>1 0 0 1 0 0</XForm>`,
+    `  <CutIndex Value="${cutIndex}" />`,
     `  <VertList>${vertList}</VertList>`,
     `  <PrimList>${prims.join("")}</PrimList>`,
     `</Shape>`,
@@ -477,6 +473,22 @@ function parseSvgPath(d: string): SubPath[] {
 
   function finishSubPath() {
     if (verts.length > 0) {
+      // For closed paths: if the last vertex coincides with the first (common
+      // in potrace output where the final curve ends exactly at the start),
+      // merge them.  This eliminates a zero-length closing segment that can
+      // cause rendering artifacts in LightBurn.
+      if (closed && verts.length > 2) {
+        const first = verts[0];
+        const last = verts[verts.length - 1];
+        const dist = Math.hypot(last.x - first.x, last.y - first.y);
+        if (dist < 0.01) {
+          // Transfer the incoming handle from the duplicate end vertex
+          // to the first vertex so the closing curve arrives correctly.
+          first.c0x = last.c0x;
+          first.c0y = last.c0y;
+          verts.pop();
+        }
+      }
       subPaths.push({ vertices: verts, closed });
       verts = [];
       closed = false;
@@ -772,6 +784,73 @@ function stripNonRenderableContainers(svgSource: string): string {
     /<(defs|clippath|mask|pattern|marker|symbol|filter)\b[^>]*>[\s\S]*?<\/\1>/gi,
     ''
   );
+}
+
+function buildDefsLeafMap(svgSource: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const defsRe = /<defs\b[^>]*>([\s\S]*?)<\/defs>/gi;
+  let defsMatch: RegExpExecArray | null;
+
+  while ((defsMatch = defsRe.exec(svgSource)) !== null) {
+    const defsInner = defsMatch[1];
+    const leafRe = /<(path|circle|ellipse|rect|line|polyline|polygon)\b[^>]*>/gi;
+    let leafMatch: RegExpExecArray | null;
+    while ((leafMatch = leafRe.exec(defsInner)) !== null) {
+      const leafTag = leafMatch[0];
+      const id = getAttr(leafTag, "id");
+      if (!id) continue;
+      map.set(id, leafTag);
+    }
+  }
+
+  return map;
+}
+
+function removeAttribute(tag: string, attrName: string): string {
+  const re = new RegExp(`\\s+${attrName}\\s*=\\s*(?:"[^"]*"|'[^']*')`, "gi");
+  return tag.replace(re, "");
+}
+
+function canonicalizeSvgForLbrn(svgSource: string): string {
+  const defsLeafMap = buildDefsLeafMap(svgSource);
+  if (defsLeafMap.size === 0) return svgSource;
+
+  return svgSource.replace(/<use\b[^>]*\/?\s*>/gi, (useTag) => {
+    const href = getAttr(useTag, "href") ?? getAttr(useTag, "xlink:href");
+    if (!href || !href.startsWith("#")) return "";
+
+    const target = defsLeafMap.get(href.slice(1));
+    if (!target) return "";
+
+    const tx = getAttrNum(useTag, "x", 0);
+    const ty = getAttrNum(useTag, "y", 0);
+    const useTransform = getAttr(useTag, "transform") ?? "";
+    const transformParts: string[] = [];
+    if (Math.abs(tx) > 1e-12 || Math.abs(ty) > 1e-12) {
+      transformParts.push(`translate(${tx} ${ty})`);
+    }
+    if (useTransform.trim()) {
+      transformParts.push(useTransform.trim());
+    }
+
+    const style = getAttr(useTag, "style");
+    const className = getAttr(useTag, "class");
+    const display = getAttr(useTag, "display");
+    const visibility = getAttr(useTag, "visibility");
+
+    const targetNoId = removeAttribute(target, "id");
+    const wrapperAttrs: string[] = [];
+    if (transformParts.length > 0) {
+      wrapperAttrs.push(`transform=\"${transformParts.join(" ")}\"`);
+    }
+    if (style) wrapperAttrs.push(`style=\"${style}\"`);
+    if (className) wrapperAttrs.push(`class=\"${className}\"`);
+    if (display) wrapperAttrs.push(`display=\"${display}\"`);
+    if (visibility) wrapperAttrs.push(`visibility=\"${visibility}\"`);
+
+    const attrsText = wrapperAttrs.length > 0 ? ` ${wrapperAttrs.join(" ")}` : "";
+    return `<g${attrsText}>${targetNoId}</g>`;
+  });
 }
 
 /**
@@ -1259,54 +1338,15 @@ export function extractLbrnShapesFromItem(
   },
   cutIndex: number
 ): string[] {
-  const { xMm, yMm, widthMm, heightMm } = item;
-  const rotationDeg = item.rotationDeg ?? 0;
-
-  // Strip XML namespace prefixes (e.g. <svg:path> → <path>) so regexes match
-  const svgText = stripNonRenderableContainers(
-    item.svgText
-      .replace(/<(\/?)[\w]+-/g, '<$1')
-      .replace(/<(\/?)([\w]+):/g, '<$1')
-  );
+  const { xMm, yMm, widthMm, heightMm, svgText } = item;
 
   const xmlBlocks: string[] = [];
 
-  // --- 1. Parse viewBox (with width/height fallback) ---
-  const vb = parseSvgViewBox(svgText);
-
-  if (vb) {
-    const { vbX, vbY, vbW, vbH } = vb;
-
-    // --- 2. Compute scale ---
-    const sx = widthMm / vbW;
-    const sy = heightMm / vbH;
-
-    // --- 3. toWorld mapping ---
-    function toWorld(svgX: number, svgY: number): { x: number; y: number } {
-      return {
-        x: xMm + (svgX - vbX) * sx,
-        y: yMm + (svgY - vbY) * sy,
-      };
-    }
-
-    const wt: WorldTransform = { mat: IDENTITY, sx, sy, toWorld };
-
-    // --- 4. Extract vector shapes ---
-    const shapes = extractShapesFromSvg(svgText, wt, IDENTITY);
-
-    // --- 4b. Apply item rotation (around item center in world space) ---
-    const rotateCx = xMm + widthMm / 2;
-    const rotateCy = yMm + heightMm / 2;
-
-    for (const shape of shapes) {
-      let { worldVerts, closed } = shape;
-      if (worldVerts.length < 2) continue;
-      if (Math.abs(rotationDeg) > 0.001) {
-        worldVerts = rotateWorldVertices(worldVerts, rotationDeg, rotateCx, rotateCy);
-      }
-      const xml = buildPathXml(worldVerts, closed, cutIndex);
-      if (xml.length > 0) xmlBlocks.push(...xml);
-    }
+  for (const shape of extractWorldShapesFromItem(item)) {
+    const canonicalVerts = shape.worldVerts
+      .filter((v) => isFinite(v.x) && isFinite(v.y));
+    const xml = buildPathXml(canonicalVerts, shape.closed, cutIndex);
+    if (xml.length > 0) xmlBlocks.push(...xml);
   }
 
   // --- 5. Extract raster <image> elements as LightBurn Bitmap shapes ---
@@ -1333,4 +1373,84 @@ export function extractLbrnShapesFromItem(
   }
 
   return xmlBlocks;
+}
+
+function prepareSvgForVectorExtraction(svgText: string): string {
+  return stripNonRenderableContainers(
+    canonicalizeSvgForLbrn(
+      svgText
+        .replace(/<(\/?)[\w]+-/g, '<$1')
+        .replace(/<(\/?)([\w]+):/g, '<$1')
+    )
+  );
+}
+
+function extractWorldShapesFromItem(item: {
+  xMm: number;
+  yMm: number;
+  widthMm: number;
+  heightMm: number;
+  rotationDeg?: number;
+  svgText: string;
+}): Array<{ worldVerts: LbrnVertex[]; closed: boolean }> {
+  const { xMm, yMm, widthMm, heightMm } = item;
+  const rotationDeg = item.rotationDeg ?? 0;
+  const svgText = prepareSvgForVectorExtraction(item.svgText);
+  const vb = parseSvgViewBox(svgText);
+  if (!vb) return [];
+
+  const { vbX, vbY, vbW, vbH } = vb;
+  const sx = widthMm / vbW;
+  const sy = heightMm / vbH;
+  const toWorld = (svgX: number, svgY: number): { x: number; y: number } => ({
+    x: xMm + (svgX - vbX) * sx,
+    y: yMm + (svgY - vbY) * sy,
+  });
+  const wt: WorldTransform = { mat: IDENTITY, sx, sy, toWorld };
+  const rotateCx = xMm + widthMm / 2;
+  const rotateCy = yMm + heightMm / 2;
+
+  return extractShapesFromSvg(svgText, wt, IDENTITY)
+    .map((shape) => {
+      const worldVerts =
+        Math.abs(rotationDeg) > 0.001
+          ? rotateWorldVertices(shape.worldVerts, rotationDeg, rotateCx, rotateCy)
+          : shape.worldVerts;
+      return {
+        closed: shape.closed,
+        worldVerts: worldVerts.filter((vertex) => isFinite(vertex.x) && isFinite(vertex.y)),
+      };
+    })
+    .filter((shape) => shape.worldVerts.length >= 2);
+}
+
+function buildFlattenedSvgPathData(vertices: LbrnVertex[], closed: boolean): string | null {
+  const flatVerts = flattenVertices(vertices, closed)
+    .filter((vertex) => isFinite(vertex.x) && isFinite(vertex.y));
+  if (flatVerts.length < 2) return null;
+
+  const commands = [
+    `M${fmt(flatVerts[0].x)} ${fmt(flatVerts[0].y)}`,
+    ...flatVerts.slice(1).map((vertex) => `L${fmt(vertex.x)} ${fmt(vertex.y)}`),
+  ];
+  if (closed) {
+    commands.push("Z");
+  }
+  return commands.join(" ");
+}
+
+export function extractFlattenedSvgPathsFromItem(item: {
+  xMm: number;
+  yMm: number;
+  widthMm: number;
+  heightMm: number;
+  rotationDeg?: number;
+  svgText: string;
+}): Array<{ d: string; closed: boolean }> {
+  return extractWorldShapesFromItem(item)
+    .map((shape) => {
+      const d = buildFlattenedSvgPathData(shape.worldVerts, shape.closed);
+      return d ? { d, closed: shape.closed } : null;
+    })
+    .filter((shape): shape is { d: string; closed: boolean } => shape !== null);
 }

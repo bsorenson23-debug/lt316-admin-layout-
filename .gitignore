@@ -49,3 +49,10 @@ next-env.d.ts
 
 # temp
 /tmp/
+/.tools/
+/inkscape-extract/
+/inkscape-*.log
+/tmp-export-latest.svg
+/.tmp-diag.ts
+/-
+/dummy

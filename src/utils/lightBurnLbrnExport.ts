@@ -1,29 +1,25 @@
 /**
- * Generates a LightBurn .lbrn2 project file from a LightBurnExportPayload.
+ * Generates a LightBurn project file (.lbrn2 XML) from a LightBurnExportPayload.
  *
  * The file pre-configures:
- *   - RotarySetup: ObjectDiam, Mode (chuck/roller), Active state, Circumference
- *   - A bounding rectangle on a zero-power layer showing the exact template area
- *   - A T0 tool layer with key setup values as text notes
+ * - RotarySetup: object diameter, mode, active state, circumference
+ * - A bounding rectangle on a zero-power layer showing the exact template area
+ * - A T0 tool layer with key setup values as text notes
  *
  * Workflow:
- *   1. Open this .lbrn2 in LightBurn  → rotary is pre-configured
- *   2. File → Import the matching .svg → artwork lands at absolute coordinates
- *   3. Frame to verify, then burn
+ * 1. Open this .lbrn2 file in LightBurn so rotary is pre-configured
+ * 2. Verify Start From -> Absolute Coords
+ * 3. Frame to verify, then burn
  *
- * LightBurn .lbrn2 format notes:
- *   - Units: mm, Y increasing downward, top-left origin
- *   - XForm: "a b c d tx ty" (matrix) — translation is center of shape
- *   - RotarySetup Mode: 0 = roller, 1 = chuck
- *   - Tool layers (T0–T9) use CutSetting index 30–39
+ * LightBurn project format notes:
+ * - Units: mm, Y increasing downward, top-left origin
+ * - XForm: "a b c d tx ty" matrix, translation is center of shape
+ * - RotarySetup Mode: 0 = roller, 1 = chuck
+ * - Tool layers (T0-T9) use CutSetting index 30-39
  */
 
 import type { LightBurnExportPayload } from "@/types/export";
-import { extractLbrnShapesFromItem } from "./svgToLbrnShapes";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+import { extractLbrnShapesFromItem } from "./svgToLbrnShapes.ts";
 
 function mm(n: number, dp = 4): string {
   return n.toFixed(dp);
@@ -33,14 +29,9 @@ function xmlAttr(name: string, value: string | number): string {
   return ` ${name}="${String(value)}"`;
 }
 
-// ---------------------------------------------------------------------------
-// RotarySetup block
-// ---------------------------------------------------------------------------
-
 function buildRotarySetup(payload: LightBurnExportPayload): string {
   const cylinder = payload.cylinder;
   if (!cylinder?.objectDiameterMm) {
-    // No cylinder data — include a disabled rotary block as placeholder
     return `  <RotarySetup Enable="0" ChuckMode="0" RollerDiam="60" ObjectDiam="0" RollerSpacing="180" AxisYmm="0" Circum="0" SplitObjWidth="0" StepLen="0.05" OnlyY="0" Active="0" Mode="0" MirrorAxis="0" />`;
   }
 
@@ -69,36 +60,47 @@ function buildRotarySetup(payload: LightBurnExportPayload): string {
   ].join("");
 }
 
-// ---------------------------------------------------------------------------
-// Cut settings
-// ---------------------------------------------------------------------------
-
-const ARTWORK_CUT_INDEX = 0; // C00 — artwork layer
-const BOUNDS_CUT_INDEX = 1;  // C01 — zero power bounding box, visual only
-const NOTES_CUT_INDEX = 30;  // T0  — tool layer, does not output
+const ARTWORK_CUT_INDEX = 0;
+const BOUNDS_CUT_INDEX = 1;
+const NOTES_CUT_INDEX = 30;
+const LIGHTBURN_LAYER_MODE_LINE = 0;
+const LIGHTBURN_LAYER_MODE_FILL = 1;
 
 export interface LbrnMaterialSettings {
   label: string;
   powerPct: number;
   maxPowerPct: number;
-  /** mm/s */
   speedMmS: number;
-  /** Lines per inch — converted to mm interval for LightBurn */
   lpi: number;
   passes: number;
 }
 
-function buildCutSettings(material?: LbrnMaterialSettings): string {
-  const power    = material ? material.powerPct    : 100;
-  const maxPower = material ? material.maxPowerPct : 100;
-  const speed    = material ? material.speedMmS    : 100;
-  const passes   = material ? material.passes      : 1;
-  // LightBurn stores scan interval in mm; interval = 25.4 / lpi
-  const interval = material ? +(25.4 / material.lpi).toFixed(4) : 0.0941; // 0.0941mm ≈ 270 LPI
-  const layerName = material ? `Artwork — ${material.label}` : "Artwork";
+export interface LbrnArtworkBitmap {
+  base64Data: string;
+  pixelWidth: number;
+  pixelHeight: number;
+  xMm: number;
+  yMm: number;
+  widthMm: number;
+  heightMm: number;
+}
 
-  return [
-    // C00 — artwork layer
+export interface BuildLightBurnLbrnOptions {
+  mode?: "full" | "minimal";
+}
+
+function buildCutSettings(material: LbrnMaterialSettings | undefined, mode: "full" | "minimal"): string {
+  const power = material ? material.powerPct : 100;
+  const maxPower = material ? material.maxPowerPct : 100;
+  const speed = material ? material.speedMmS : 100;
+  const passes = material ? material.passes : 1;
+  const interval = material ? +(25.4 / material.lpi).toFixed(4) : 0.0941;
+  const layerName =
+    mode === "minimal"
+      ? "Artwork"
+      : material ? `Artwork - ${material.label}` : "Artwork";
+
+  const artworkSetting = [
     `  <CutSetting type="Cut">`,
     `    <index Value="${ARTWORK_CUT_INDEX}" />`,
     `    <name Value="${layerName}" />`,
@@ -107,7 +109,7 @@ function buildCutSettings(material?: LbrnMaterialSettings): string {
     `    <power Value="${power}" />`,
     `    <maxPower Value="${maxPower}" />`,
     `    <speed Value="${speed}" />`,
-    `    <layerMode Value="0" />`,
+    `    <layerMode Value="${LIGHTBURN_LAYER_MODE_FILL}" />`,
     `    <PPI Value="500" />`,
     `    <interval Value="${interval}" />`,
     `    <passCnt Value="${passes}" />`,
@@ -118,8 +120,14 @@ function buildCutSettings(material?: LbrnMaterialSettings): string {
     `    <pauseOnLayer Value="0" />`,
     `    <penIndex Value="-1" />`,
     `  </CutSetting>`,
+  ];
 
-    // C01 — bounds rectangle (0% power, won't fire)
+  if (mode === "minimal") {
+    return artworkSetting.join("\n");
+  }
+
+  return [
+    ...artworkSetting,
     `  <CutSetting type="Cut">`,
     `    <index Value="${BOUNDS_CUT_INDEX}" />`,
     `    <name Value="Template Bounds" />`,
@@ -128,7 +136,7 @@ function buildCutSettings(material?: LbrnMaterialSettings): string {
     `    <power Value="0" />`,
     `    <maxPower Value="0" />`,
     `    <speed Value="100" />`,
-    `    <layerMode Value="0" />`,
+    `    <layerMode Value="${LIGHTBURN_LAYER_MODE_LINE}" />`,
     `    <PPI Value="500" />`,
     `    <passCnt Value="1" />`,
     `    <zOffset Value="0" />`,
@@ -139,7 +147,6 @@ function buildCutSettings(material?: LbrnMaterialSettings): string {
     `    <penIndex Value="-1" />`,
     `  </CutSetting>`,
 
-    // T0 — tool layer for notes
     `  <CutSetting type="Tool">`,
     `    <index Value="${NOTES_CUT_INDEX}" />`,
     `    <name Value="T0" />`,
@@ -150,101 +157,112 @@ function buildCutSettings(material?: LbrnMaterialSettings): string {
   ].join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Template bounding rectangle
-// ---------------------------------------------------------------------------
-
 function buildBoundsRect(payload: LightBurnExportPayload): string {
-  const W = payload.templateWidthMm;
-  const H = payload.templateHeightMm;
-  const ox = payload.rotary.exportOriginXmm ?? 0;
-  const oy = payload.rotary.exportOriginYmm ?? 0;
+  const widthMm = payload.templateWidthMm;
+  const heightMm = payload.templateHeightMm;
+  const originXmm = payload.rotary.exportOriginXmm ?? 0;
+  const originYmm = payload.rotary.exportOriginYmm ?? 0;
 
-  // LightBurn Rect XForm translation is the center of the shape
-  const cx = ox + W / 2;
-  const cy = oy + H / 2;
+  const centerX = originXmm + widthMm / 2;
+  const centerY = originYmm + heightMm / 2;
 
   return [
-    `  <!-- Template area bounding box — 0% power, visual only -->`,
-    `  <Shape Type="Rect"${xmlAttr("W", mm(W))}${xmlAttr("H", mm(H))} Cr="0">`,
-    `    <XForm>1 0 0 1 ${mm(cx)} ${mm(cy)}</XForm>`,
-    `    <CutIndex Value="${BOUNDS_CUT_INDEX}" />`,  // C01
+    `  <!-- Template area bounding box: 0 percent power, visual only -->`,
+    `  <Shape Type="Rect">`,
+    `    <XForm>1 0 0 1 ${mm(centerX)} ${mm(centerY)}</XForm>`,
+    `    <CutIndex Value="${BOUNDS_CUT_INDEX}" />`,
+    `    <W Value="${mm(widthMm)}" />`,
+    `    <H Value="${mm(heightMm)}" />`,
+    `    <Cr Value="0" />`,
     `  </Shape>`,
   ].join("\n");
 }
-
-// ---------------------------------------------------------------------------
-// Notes text (T0 layer)
-// ---------------------------------------------------------------------------
 
 function buildNotesText(payload: LightBurnExportPayload, material?: LbrnMaterialSettings): string {
   const cylinder = payload.cylinder;
   const diam = cylinder?.objectDiameterMm;
   const circum = diam != null ? Math.PI * diam : null;
-  const ox = payload.rotary.exportOriginXmm ?? 0;
-  const oy = payload.rotary.exportOriginYmm ?? 0;
+  const originXmm = payload.rotary.exportOriginXmm ?? 0;
+  const originYmm = payload.rotary.exportOriginYmm ?? 0;
 
   const parts: string[] = [
     `LT316 Export`,
     diam != null ? `Object Diameter: ${diam.toFixed(2)} mm` : null,
     circum != null ? `Circumference: ${circum.toFixed(2)} mm` : null,
     `Template: ${payload.templateWidthMm.toFixed(2)} x ${payload.templateHeightMm.toFixed(2)} mm`,
-    `Export Origin: X ${ox.toFixed(2)} mm  Y ${oy.toFixed(2)} mm`,
+    `Export Origin: X ${originXmm.toFixed(2)} mm  Y ${originYmm.toFixed(2)} mm`,
     payload.rotary.presetName ? `Preset: ${payload.rotary.presetName}` : null,
-    material ? `Material: ${material.label} | ${material.powerPct}% pwr · ${material.speedMmS}mm/s · ${material.lpi}LPI · ${material.passes}p` : null,
+    material
+      ? `Material: ${material.label} | ${material.powerPct}% pwr | ${material.speedMmS}mm/s | ${material.lpi}LPI | ${material.passes}p`
+      : null,
     `Start From: Absolute Coords`,
-  ].filter((s): s is string => s !== null);
+  ].filter((value): value is string => value !== null);
 
   const notesStr = parts.join("&#10;");
-
-  const textX = mm((payload.rotary.exportOriginXmm ?? 0) + payload.templateWidthMm + 4);
-  const textY = mm((payload.rotary.exportOriginYmm ?? 0) + 6);
+  const textX = mm(originXmm + payload.templateWidthMm + 4);
+  const textY = mm(originYmm + 6);
 
   return [
-    `  <!-- Setup notes — T0 tool layer, does not output -->`,
-    `  <Shape Type="Text"${xmlAttr("CutIndex", NOTES_CUT_INDEX)} Font="Arial" H="4" Bold="0" Italic="0"${xmlAttr("Str", notesStr)}>`,
+    `  <!-- Setup notes: T0 tool layer, does not output -->`,
+    `  <Shape Type="Text" Font="Arial" H="4" Bold="0" Italic="0"${xmlAttr("Str", notesStr)}>`,
     `    <XForm>1 0 0 1 ${textX} ${textY}</XForm>`,
+    `    <CutIndex Value="${NOTES_CUT_INDEX}" />`,
     `  </Shape>`,
   ].join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
+function buildBitmapShape(bitmap: LbrnArtworkBitmap, cutIndex: number): string {
+  const scaleX = bitmap.widthMm / bitmap.pixelWidth;
+  const scaleY = bitmap.heightMm / bitmap.pixelHeight;
+  const centerX = bitmap.xMm + bitmap.widthMm / 2;
+  const centerY = bitmap.yMm + bitmap.heightMm / 2;
+  const byteLen = Math.ceil((bitmap.base64Data.length * 3) / 4);
 
-/**
- * Build a LightBurn .lbrn2 project XML string from a LightBurnExportPayload.
- *
- * Embeds artwork as vector shapes (paths, circles, rects) on C00,
- * the rotary settings on RotarySetup, a bounding box on C01,
- * and setup notes on T0.  Open directly in LightBurn — no separate SVG import needed.
- */
+  return [
+    `<Shape Type="Bitmap" CutIndex="${cutIndex}" W="${bitmap.pixelWidth}" H="${bitmap.pixelHeight}">`,
+    `  <XForm>${scaleX.toFixed(6)} 0 0 ${scaleY.toFixed(6)} ${mm(centerX)} ${mm(centerY)}</XForm>`,
+    `  <Data Length="${byteLen}">${bitmap.base64Data}</Data>`,
+    `</Shape>`,
+  ].join("\n");
+}
+
 export function buildLightBurnLbrn(
   payload: LightBurnExportPayload,
   material?: LbrnMaterialSettings,
+  artworkBitmap?: LbrnArtworkBitmap,
+  options?: BuildLightBurnLbrnOptions,
 ): string {
+  const mode = options?.mode ?? "full";
   const generatedAt = new Date().toISOString();
-  const rotarySetup = buildRotarySetup(payload);
-  const cutSettings = buildCutSettings(material);
-  const boundsRect = buildBoundsRect(payload);
-  const notesText = buildNotesText(payload, material);
+  const rotarySetup = mode === "full" ? buildRotarySetup(payload) : null;
+  const cutSettings = buildCutSettings(material, mode);
+  const boundsRect = mode === "full" ? buildBoundsRect(payload) : null;
+  const notesText = mode === "full" ? buildNotesText(payload, material) : null;
 
-  // Extract artwork shapes from each placed item's SVG content
-  const artworkShapes = payload.items.flatMap((item) =>
-    extractLbrnShapesFromItem(item, ARTWORK_CUT_INDEX)
-  );
+  const artworkBlock = (() => {
+    if (artworkBitmap) {
+      return [
+        `  <!-- Artwork embedded as a flattened bitmap to preserve exact SVG appearance -->`,
+        `  ${buildBitmapShape(artworkBitmap, ARTWORK_CUT_INDEX)}`,
+      ].join("\n");
+    }
 
-  const artworkBlock =
-    artworkShapes.length > 0
-      ? `  <!-- Artwork (${artworkShapes.length} shape(s)) — set power on C00 before running -->\n` +
-        artworkShapes.map((s) => `  ${s}`).join("\n")
-      : `  <!-- No artwork shapes extracted — check that items contain SVG path data -->`;
+    const artworkShapes = payload.items.flatMap((item) =>
+      extractLbrnShapesFromItem(item, ARTWORK_CUT_INDEX),
+    );
+
+    return artworkShapes.length > 0
+      ? `  <!-- Artwork (${artworkShapes.length} shape(s)) - set power on C00 before running -->\n${artworkShapes.map((shape) => `  ${shape}`).join("\n")}`
+      : `  <!-- No artwork shapes extracted - check that items contain SVG path data -->`;
+  })();
 
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
-    `<!-- LT316 LightBurn Project — generated ${generatedAt} -->`,
-    `<!-- Artwork on C00 · Template bounds on C01 (0% power) · Rotary pre-configured -->`,
-    `<!-- Set power on C00, verify Start From → Absolute Coords, Frame, then run     -->`,
+    `<!-- LT316 LightBurn Project generated ${generatedAt} -->`,
+    mode === "minimal"
+      ? `<!-- Minimal artwork-only export: geometry debugging mode -->`
+      : `<!-- Artwork on C00 | Template bounds on C01 (0 percent power) | Rotary pre-configured -->`,
+    `<!-- Verify Start From -> Absolute Coords, Frame, then run -->`,
     `<LightBurnProject AppVersion="1.7.00" FormatVersion="1" MaterialHeight="0" MirrorX="False" MirrorY="False">`,
     ``,
     `  <VariableText>`,
@@ -255,29 +273,23 @@ export function buildLightBurnLbrn(
     ``,
     `  <UIPrefs Optimize="1" OpType="0" OpOrder="0" OpCloseOpt="1" OpInnerOuter="1" OpCrossOpt="0" OpByLayer="1" Reverse="0" />`,
     ``,
-    rotarySetup,
-    ``,
+    ...(rotarySetup ? [rotarySetup, ``] : []),
     cutSettings,
     ``,
     artworkBlock,
     ``,
-    boundsRect,
-    ``,
-    notesText,
-    ``,
+    ...(boundsRect ? [boundsRect, ``] : []),
+    ...(notesText ? [notesText, ``] : []),
     `</LightBurnProject>`,
   ].join("\n");
 }
 
-/**
- * Trigger a browser download for the .lbrn2 file.
- */
 export function downloadLbrnFile(content: string, filename: string): void {
   const blob = new Blob([content], { type: "application/xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
   URL.revokeObjectURL(url);
 }

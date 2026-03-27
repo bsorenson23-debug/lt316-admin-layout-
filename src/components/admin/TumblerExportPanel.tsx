@@ -1,8 +1,10 @@
 "use client";
 
 import React from "react";
+import JSZip from "jszip";
 import type { BedConfig, PlacedItem } from "@/types/admin";
 import type {
+  LightBurnExportPayload,
   RotaryPlacementPreset,
   TopAnchorMode,
   TumblerPlacementProfile,
@@ -14,6 +16,7 @@ import {
   getLightBurnExportOrigin,
 } from "@/utils/tumblerExportPlacement";
 import { buildLightBurnLbrn, downloadLbrnFile } from "@/utils/lightBurnLbrnExport";
+import { buildLightBurnExportSvg } from "@/utils/lightBurnSvgExport";
 import { isTaperWarpApplicable } from "@/utils/taperWarp";
 import type { LbrnMaterialSettings } from "@/utils/lightBurnLbrnExport";
 import { appendExportHistory, fingerprintItems } from "./ExportHistoryPanel";
@@ -88,6 +91,93 @@ function downloadJson(payload: unknown, filename: string): void {
   document.body.removeChild(a); URL.revokeObjectURL(href);
 }
 
+async function downloadLightBurnBundle(args: {
+  baseName: string;
+  lbrnContent: string;
+  svgContent: string;
+  jsonContent: string;
+}): Promise<void> {
+  const zip = new JSZip();
+  zip.file(`${args.baseName}.lbrn2`, args.lbrnContent);
+  zip.file(`${args.baseName}.svg`, args.svgContent);
+  zip.file(`${args.baseName}.lightburn.json`, args.jsonContent);
+  zip.file(
+    "README.txt",
+    [
+      "Open the .lbrn2 file in LightBurn for the minimal artwork-only project.",
+      "This temporary export mode excludes rotary setup, bounds, notes, and advanced LT316 settings so geometry can be debugged first.",
+      "Import or inspect the .svg only if you need the raw artwork export.",
+      "The .lightburn.json file is LT316 metadata and is not meant to be opened by LightBurn.",
+    ].join("\r\n"),
+  );
+
+  const blob = await zip.generateAsync({ type: "blob" });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = `${args.baseName}.zip`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(href);
+}
+
+async function preprocessPayloadForLbrn(
+  payload: LightBurnExportPayload,
+): Promise<{
+  payload: LightBurnExportPayload;
+  usedInkscape: boolean;
+  messages: string[];
+}> {
+  try {
+    const response = await fetch("/api/admin/lightburn/preprocess-svg", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: payload.items.map((item) => ({
+          id: item.id,
+          svgText: item.svgText,
+        })),
+      }),
+    });
+
+    if (!response.ok) {
+      return { payload, usedInkscape: false, messages: [] };
+    }
+
+    const data = (await response.json()) as {
+      usedInkscape?: boolean;
+      items?: Array<{
+        id: string;
+        svgText: string;
+        message?: string | null;
+      }>;
+    };
+
+    const byId = new Map(
+      (data.items ?? []).map((item) => [item.id, item]),
+    );
+
+    return {
+      payload: {
+        ...payload,
+        items: payload.items.map((item) => {
+          const preprocessed = byId.get(item.id);
+          return preprocessed?.svgText
+            ? { ...item, svgText: preprocessed.svgText }
+            : item;
+        }),
+      },
+      usedInkscape: Boolean(data.usedInkscape),
+      messages: (data.items ?? [])
+        .map((item) => item.message)
+        .filter((message): message is string => Boolean(message)),
+    };
+  } catch {
+    return { payload, usedInkscape: false, messages: [] };
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 export function TumblerExportPanel({
@@ -154,7 +244,7 @@ export function TumblerExportPanel({
       selectedPreset, bedConfig, anchorMode, topOffsetDraft]);
 
   const exportArtifacts = buildLightBurnExportArtifacts({
-    includeLightBurnSetup: false,
+    includeLightBurnSetup: isTumblerMode,
     bedConfig,
     workspaceMode: bedConfig.workspaceMode,
     templateWidthMm: bedConfig.width,
@@ -168,37 +258,76 @@ export function TumblerExportPanel({
 
   const hasOutputFolder = Boolean(outputFolderPath?.trim());
 
-  const doExport = (mode: "download" | "save") => {
+  const doExport = async (mode: "download" | "save") => {
     const name = `lt316-${Date.now()}`;
-    const mat = materialSettings ?? undefined;
-    const lbrnContent = buildLightBurnLbrn(exportArtifacts.artworkPayload, mat);
+    const material = materialSettings ?? undefined;
+    const preprocessedForLbrn = await preprocessPayloadForLbrn(exportArtifacts.artworkPayload);
+    const sidecarPayload = {
+      artwork: exportArtifacts.artworkPayload,
+      setup: exportArtifacts.sidecar,
+      setupSummary: exportArtifacts.setupSummary,
+      materialSettings: materialSettings ?? null,
+      lbrnPreprocess: {
+        usedInkscape: preprocessedForLbrn.usedInkscape,
+        messages: preprocessedForLbrn.messages,
+      },
+    };
+    const svgContent = buildLightBurnExportSvg(exportArtifacts.artworkPayload);
+    const lbrnContent = buildLightBurnLbrn(
+      preprocessedForLbrn.payload,
+      materialSettings ?? undefined,
+      undefined,
+      { mode: "minimal" },
+    );
+    const sidecarContent = JSON.stringify(sidecarPayload, null, 2);
 
     if (mode === "save" && outputFolderPath?.trim()) {
       setSaving(true);
       setSaveResult(null);
-      fetch("/api/admin/lightburn/save-export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          outputFolderPath: outputFolderPath.trim(),
-          filename: `${name}.lbrn2`,
-          content: lbrnContent,
-        }),
-      })
-        .then(async (res) => {
-          const data = (await res.json()) as { saved?: boolean; path?: string; error?: string };
-          if (res.ok && data.saved) {
-            setSaveResult({ ok: true, message: `Saved to ${data.path}` });
-          } else {
-            setSaveResult({ ok: false, message: data.error ?? "Save failed" });
-          }
-        })
-        .catch((err) => {
-          setSaveResult({ ok: false, message: err instanceof Error ? err.message : "Network error" });
-        })
-        .finally(() => setSaving(false));
+      const saveFile = async (filename: string, content: string) => {
+        const res = await fetch("/api/admin/lightburn/save-export", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            outputFolderPath: outputFolderPath.trim(),
+            filename,
+            content,
+          }),
+        });
+        const data = (await res.json()) as { saved?: boolean; path?: string; error?: string };
+        if (!res.ok || !data.saved || !data.path) {
+          throw new Error(data.error ?? `Failed to save ${filename}`);
+        }
+        return data.path;
+      };
+
+      try {
+        const [lbrnPath, svgPath, jsonPath] = await Promise.all([
+        saveFile(`${name}.lbrn2`, lbrnContent),
+        saveFile(`${name}.svg`, svgContent),
+        saveFile(`${name}.lightburn.json`, sidecarContent),
+        ]);
+        setSaveResult({
+          ok: true,
+          message: `Saved ${lbrnPath}, ${svgPath}, and ${jsonPath}${preprocessedForLbrn.usedInkscape ? " (Inkscape preprocessed .lbrn2 artwork)" : ""}`,
+        });
+      } catch (err) {
+        setSaveResult({
+          ok: false,
+          message: err instanceof Error ? err.message : "Network error",
+        });
+        setSaving(false);
+        return;
+      } finally {
+        setSaving(false);
+      }
     } else {
-      downloadLbrnFile(lbrnContent, `${name}.lbrn2`);
+      void downloadLightBurnBundle({
+        baseName: name,
+        lbrnContent,
+        svgContent,
+        jsonContent: sidecarContent,
+      });
     }
 
     setShowNextSteps(true);
@@ -208,7 +337,7 @@ export function TumblerExportPanel({
       tumblerProfileId: bedConfig.tumblerProfileId,
       rotaryPresetId: selectedPreset?.id,
       rotaryPresetName: selectedPreset?.name,
-      materialLabel: mat?.label,
+      materialLabel: material?.label,
       templateWidthMm: bedConfig.width,
       templateHeightMm: bedConfig.height,
       artworkFingerprint: fingerprintItems(placedItems),
@@ -216,6 +345,17 @@ export function TumblerExportPanel({
       exportOriginXmm: previewOrigin.xMm,
       exportOriginYmm: previewOrigin.yMm,
     });
+  };
+
+  const handleDownloadLbrn = async () => {
+    const preprocessedForLbrn = await preprocessPayloadForLbrn(exportArtifacts.artworkPayload);
+    const lbrnContent = buildLightBurnLbrn(
+      preprocessedForLbrn.payload,
+      materialSettings ?? undefined,
+      undefined,
+      { mode: "minimal" },
+    );
+    downloadLbrnFile(lbrnContent, `lt316-${Date.now()}.lbrn2`);
   };
 
   return (
@@ -401,20 +541,20 @@ export function TumblerExportPanel({
               disabled={saving}
               onClick={() => doExport("save")}
             >
-              {saving ? "Saving..." : "Save to LightBurn"}
+              {saving ? "Saving..." : "Save LightBurn Files"}
             </button>
           ) : (
             <button
               className={styles.primaryBtn}
               onClick={() => doExport("download")}
             >
-              Export for LightBurn
+              Export Minimal LightBurn Bundle
             </button>
           )}
           {hasOutputFolder && (
             <button
               className={styles.secondaryBtn}
-              title="Download .lbrn2 file"
+              title="Download minimal LightBurn bundle (.zip with artwork-only .lbrn2, .svg, and metadata)"
               onClick={() => doExport("download")}
             >
               DL
@@ -422,8 +562,15 @@ export function TumblerExportPanel({
           )}
           <button
             className={styles.secondaryBtn}
-            title="Download raw JSON"
-            onClick={() => downloadJson({ ...exportArtifacts.artworkPayload, materialSettings: materialSettings ?? null }, `lt316-${Date.now()}.json`)}
+            title="Download minimal artwork-only .lbrn2 project"
+            onClick={handleDownloadLbrn}
+          >
+            LBRN
+          </button>
+          <button
+            className={styles.secondaryBtn}
+            title="Download raw export payload JSON (not for LightBurn)"
+            onClick={() => downloadJson({ ...exportArtifacts.artworkPayload, materialSettings: materialSettings ?? null }, `lt316-${Date.now()}-payload.json`)}
           >
             JSON
           </button>
@@ -576,13 +723,14 @@ function LightBurnValuesCard({
       <div className={styles.lbDivider} />
 
       <ol className={styles.lbStepsList}>
-        <li><strong>File → Open</strong> the <strong>.lbrn2</strong> — artwork + rotary pre-configured</li>
+        <li><strong>File → Open</strong> the <strong>.lbrn2</strong> — artwork only, minimal debug mode</li>
         <li><strong>Device Settings</strong> → Origin: <strong>Top-Left</strong></li>
         <li>Set <strong>Start From → Absolute Coords</strong></li>
         {hasMaterialProfile
-          ? <li>Power/speed pre-set on <strong>C00</strong> from material profile — verify before running</li>
+          ? <li>Set or verify power/speed on <strong>C00</strong> manually while geometry is being debugged</li>
           : <li>Set power on <strong>C00</strong> for your material</li>
         }
+        <li>Enter rotary settings manually for now if needed</li>
         <li><strong>Frame</strong> to verify, then run</li>
       </ol>
     </div>

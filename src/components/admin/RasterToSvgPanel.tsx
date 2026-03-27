@@ -27,9 +27,9 @@ export function RasterToSvgPanel({ onAddAsset }: Props) {
   const [invert, setInvert] = React.useState(false);
   const [trimWhitespace, setTrimWhitespace] = React.useState(true);
   const [normalizeLevels, setNormalizeLevels] = React.useState(true);
-  const [turdSize, setTurdSize] = React.useState(2);
-  const [alphaMax, setAlphaMax] = React.useState(1);
-  const [optTolerance, setOptTolerance] = React.useState(0.2);
+  const [turdSize, setTurdSize] = React.useState(0);
+  const [alphaMax, setAlphaMax] = React.useState(0.35);
+  const [optTolerance, setOptTolerance] = React.useState(0.05);
   const [posterizeSteps, setPosterizeSteps] = React.useState(4);
   const [outputColor, setOutputColor] = React.useState("#000000");
   const [bgStatus, setBgStatus] = React.useState<Status>("idle");
@@ -126,7 +126,7 @@ export function RasterToSvgPanel({ onAddAsset }: Props) {
       formData.set("optTolerance", String(optTolerance));
       formData.set("posterizeSteps", String(posterizeSteps));
       formData.set("outputColor", outputColor);
-      formData.set("maxDimension", "2200");
+      formData.set("maxDimension", "4096");
 
       const response = await fetch("/api/admin/image/vectorize", {
         method: "POST",
@@ -167,6 +167,9 @@ export function RasterToSvgPanel({ onAddAsset }: Props) {
         <div className={styles.body}>
           <p className={styles.note}>
             High-quality PNG/JPEG tracing for logos, line art, and cleaned product graphics. Best results come from clean images or a quick cutout first.
+          </p>
+          <p className={styles.note}>
+            Small text will not survive a low-resolution trace cleanly. If lettering matters, start from the original vector or a much higher-resolution raster.
           </p>
 
           <div className={styles.dropWrap}>

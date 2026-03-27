@@ -55,6 +55,15 @@ export function checkSvgQuality(svgText: string): SvgQualityResult {
 
   // 4. Very high path complexity (likely a fine-detail raster trace)
   const pathCount = (svgText.match(/<path\b/gi) ?? []).length;
+  const isPotraceTrace = /Created by potrace/i.test(svgText);
+  if (isPotraceTrace) {
+    issues.push({
+      code: "POTRACE_TRACE",
+      severity: "warn",
+      message: "Appears to be a raster-traced SVG (Potrace) — tiny lettering and fine detail may already be degraded before export.",
+      fix: "Use the original vector artwork, or retrace from a higher-resolution raster if you need clean small text.",
+    });
+  }
   if (pathCount > 500) {
     issues.push({
       code: "HIGH_PATH_COUNT",

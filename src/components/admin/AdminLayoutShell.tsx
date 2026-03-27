@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -103,15 +103,7 @@ export function AdminLayoutShell() {
   const [overlayBlend, setOverlayBlend] = useState<"normal" | "multiply">("normal");
   const [twoSidedMode, setTwoSidedMode] = useState(false);
   const [taperWarpEnabled, setTaperWarpEnabled] = useState(true);
-  const [lbOutputFolderPath, setLbOutputFolderPath] = useState<string | undefined>(() => {
-    if (typeof window === "undefined") return undefined;
-    try {
-      const raw = localStorage.getItem("lt316.integration.lightburn.paths");
-      if (!raw) return undefined;
-      const parsed = JSON.parse(raw) as { outputFolderPath?: string };
-      return parsed.outputFolderPath || undefined;
-    } catch { return undefined; }
-  });
+  const [lbOutputFolderPath, setLbOutputFolderPath] = useState<string | undefined>(undefined);
   const [curvedOverlay, setCurvedOverlay] = useState(false);
   const [bgRemovalStatus, setBgRemovalStatus] = useState<"idle" | "running" | "done" | "failed">("idle");
 
@@ -137,7 +129,7 @@ export function AdminLayoutShell() {
   const [bodyTintColor, setBodyTintColor] = useState<string>("#b0b8c4");
 
   // -- Color laser layers ---------------------------------------------------
-  const [laserLayers, setLaserLayers] = useState<LaserLayer[]>(() => buildDefaultLayers());
+  const [laserLayers, setLaserLayers] = useState<LaserLayer[]>(buildDefaultLayers);
 
   // -- Product template system -----------------------------------------------
   const [selectedTemplate, setSelectedTemplate] = useState<ProductTemplate | null>(null);
@@ -146,10 +138,66 @@ export function AdminLayoutShell() {
   const [editingTemplate, setEditingTemplate] = useState<ProductTemplate | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [, setTemplateRefreshNonce] = useState(0);
+  const [didRestorePersistedState, setDidRestorePersistedState] = useState(false);
 
   const handleUpdateLayer = useCallback((layer: LaserLayer) => {
     setLaserLayers(prev => prev.map(l => l.id === layer.id ? layer : l));
   }, []);
+
+  useEffect(() => {
+    try {
+      const rawBedConfig = localStorage.getItem("lt316_bed_config");
+      if (rawBedConfig) {
+        setBedConfig(normalizeBedConfig(JSON.parse(rawBedConfig) as BedConfig));
+      }
+
+      const rawAssets = localStorage.getItem("lt316_svg_assets");
+      if (rawAssets) {
+        setSvgAssets(JSON.parse(rawAssets) as SvgAsset[]);
+      }
+
+      const rawPlacedItems = localStorage.getItem("lt316_placed_items");
+      if (rawPlacedItems) {
+        setPlacedItems(JSON.parse(rawPlacedItems) as PlacedItem[]);
+      }
+
+      const rawLayers = localStorage.getItem("lt316_laser_layers");
+      if (rawLayers) {
+        setLaserLayers(JSON.parse(rawLayers) as LaserLayer[]);
+      }
+
+      const rawLightBurnPaths = localStorage.getItem("lt316.integration.lightburn.paths");
+      if (rawLightBurnPaths) {
+        const parsed = JSON.parse(rawLightBurnPaths) as { outputFolderPath?: string };
+        setLbOutputFolderPath(parsed.outputFolderPath || undefined);
+      }
+    } catch {
+      // Ignore malformed persisted state and fall back to defaults.
+    } finally {
+      setDidRestorePersistedState(true);
+    }
+  }, []);
+
+  // -- Persist workspace state to localStorage --------------------------------
+  useEffect(() => {
+    if (!didRestorePersistedState) return;
+    try { localStorage.setItem("lt316_bed_config", JSON.stringify(bedConfig)); } catch { /* quota exceeded */ }
+  }, [bedConfig, didRestorePersistedState]);
+
+  useEffect(() => {
+    if (!didRestorePersistedState) return;
+    try { localStorage.setItem("lt316_svg_assets", JSON.stringify(svgAssets)); } catch { /* quota exceeded */ }
+  }, [svgAssets, didRestorePersistedState]);
+
+  useEffect(() => {
+    if (!didRestorePersistedState) return;
+    try { localStorage.setItem("lt316_placed_items", JSON.stringify(placedItems)); } catch { /* quota exceeded */ }
+  }, [placedItems, didRestorePersistedState]);
+
+  useEffect(() => {
+    if (!didRestorePersistedState) return;
+    try { localStorage.setItem("lt316_laser_layers", JSON.stringify(laserLayers)); } catch { /* quota exceeded */ }
+  }, [laserLayers, didRestorePersistedState]);
 
   // -- Derived --------------------------------------------------------------
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
