@@ -77,7 +77,53 @@ test("extractLbrnShapesFromItem preserves cubic curves as bezier primitives", ()
 
   assert.equal(shapes.length, 1);
   assert.match(shapes[0], /Type="Path"/);
-  assert.match(shapes[0], /<PrimList>B0 1<\/PrimList>/);
-  assert.match(shapes[0], /c1x30\.0000c1y10\.0000/);
-  assert.match(shapes[0], /c0x70\.0000c0y90\.0000/);
+  assert.match(shapes[0], /<PrimList>B0 1L1 0<\/PrimList>/);
+  assert.match(shapes[0], /V10\.0000 50\.0000c0x30\.0000c0y10\.0000/);
+  assert.match(shapes[0], /V90\.0000 50\.0000[\s\S]*c1x70\.0000c1y90\.0000/);
+});
+
+test("extractLbrnShapesFromItem force-closes filled open paths to match SVG rendering", () => {
+  const svgText = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path style="stroke:none;fill:#000" d="M10 10 L90 10 L90 90 L10 90" />
+    </svg>
+  `;
+
+  const shapes = extractLbrnShapesFromItem(
+    {
+      xMm: 0,
+      yMm: 0,
+      widthMm: 100,
+      heightMm: 100,
+      svgText,
+    },
+    0
+  );
+
+  assert.equal(shapes.length, 1);
+  assert.match(shapes[0], /<PrimList>L0 1L1 2L2 3L3 0<\/PrimList>/);
+});
+
+test("extractLbrnShapesFromItem assigns unique running VertID and PrimID values", () => {
+  const svgText = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path d="M0 0 L10 0 L10 10 Z" />
+      <path d="M20 20 L30 20 L30 30 Z" />
+    </svg>
+  `;
+
+  const shapes = extractLbrnShapesFromItem(
+    {
+      xMm: 0,
+      yMm: 0,
+      widthMm: 100,
+      heightMm: 100,
+      svgText,
+    },
+    0
+  );
+
+  assert.equal(shapes.length, 2);
+  assert.match(shapes[0], /VertID="0" PrimID="0"/);
+  assert.match(shapes[1], /VertID="3" PrimID="3"/);
 });

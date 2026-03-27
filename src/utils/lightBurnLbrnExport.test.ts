@@ -55,10 +55,13 @@ test("buildLightBurnLbrn minimal mode emits artwork-only project", () => {
     { mode: "minimal" },
   );
 
-  assert.match(xml, /Minimal artwork-only export: geometry debugging mode/);
+  assert.match(xml, /Minimal artwork-only export/);
   assert.match(xml, /<CutSetting type="Cut">/);
   assert.doesNotMatch(xml, /<RotarySetup\b/);
   assert.doesNotMatch(xml, /Template Bounds/);
   assert.doesNotMatch(xml, /<Shape Type="Text"/);
+  assert.match(xml, /<Shape Type="Group" CutIndex="0">/);
+  assert.match(xml, /<XForm>1 0 0 1 5\.0000 107\.0000<\/XForm>/);
   assert.match(xml, /<Shape Type="Path"/);
+  assert.match(xml, /<VertList>V10\.0000 -20\.0000V90\.0000 -60\.0000<\/VertList>/);
 });

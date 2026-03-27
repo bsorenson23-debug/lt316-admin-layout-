@@ -105,7 +105,7 @@ async function downloadLightBurnBundle(args: {
     "README.txt",
     [
       "Open the .lbrn2 file in LightBurn for the minimal artwork-only project.",
-      "This temporary export mode excludes rotary setup, bounds, notes, and advanced LT316 settings so geometry can be debugged first.",
+      "This export excludes rotary setup, bounds, notes, and advanced LT316 settings.",
       "Import or inspect the .svg only if you need the raw artwork export.",
       "The .lightburn.json file is LT316 metadata and is not meant to be opened by LightBurn.",
     ].join("\r\n"),
@@ -723,11 +723,11 @@ function LightBurnValuesCard({
       <div className={styles.lbDivider} />
 
       <ol className={styles.lbStepsList}>
-        <li><strong>File → Open</strong> the <strong>.lbrn2</strong> — artwork only, minimal debug mode</li>
+        <li><strong>File → Open</strong> the <strong>.lbrn2</strong> — minimal artwork-only project</li>
         <li><strong>Device Settings</strong> → Origin: <strong>Top-Left</strong></li>
         <li>Set <strong>Start From → Absolute Coords</strong></li>
         {hasMaterialProfile
-          ? <li>Set or verify power/speed on <strong>C00</strong> manually while geometry is being debugged</li>
+          ? <li>Set or verify power/speed on <strong>C00</strong> manually</li>
           : <li>Set power on <strong>C00</strong> for your material</li>
         }
         <li>Enter rotary settings manually for now if needed</li>

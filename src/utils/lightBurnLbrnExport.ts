@@ -19,7 +19,7 @@
  */
 
 import type { LightBurnExportPayload } from "@/types/export";
-import { extractLbrnShapesFromItem } from "./svgToLbrnShapes.ts";
+import { extractLbrnLocalShapesFromItem } from "./svgToLbrnShapes.ts";
 
 function mm(n: number, dp = 4): string {
   return n.toFixed(dp);
@@ -226,6 +226,29 @@ function buildBitmapShape(bitmap: LbrnArtworkBitmap, cutIndex: number): string {
   ].join("\n");
 }
 
+function buildArtworkGroup(payload: LightBurnExportPayload): string {
+  const groupX = payload.rotary.exportOriginXmm ?? 0;
+  const groupY = (payload.rotary.exportOriginYmm ?? 0) + payload.templateHeightMm;
+  const pathIds = { nextVertId: 0, nextPrimId: 0 };
+  const artworkShapes = payload.items.flatMap((item) =>
+    extractLbrnLocalShapesFromItem(item, ARTWORK_CUT_INDEX, pathIds),
+  );
+
+  if (artworkShapes.length === 0) {
+    return `  <!-- No artwork shapes extracted - check that items contain SVG path data -->`;
+  }
+
+  return [
+    `  <!-- Artwork (${artworkShapes.length} shape(s)) - set power on C00 before running -->`,
+    `  <Shape Type="Group" CutIndex="${ARTWORK_CUT_INDEX}">`,
+    `    <XForm>1 0 0 1 ${mm(groupX)} ${mm(groupY)}</XForm>`,
+    `    <Children>`,
+    ...artworkShapes.map((shape) => `      ${shape}`),
+    `    </Children>`,
+    `  </Shape>`,
+  ].join("\n");
+}
+
 export function buildLightBurnLbrn(
   payload: LightBurnExportPayload,
   material?: LbrnMaterialSettings,
@@ -247,20 +270,14 @@ export function buildLightBurnLbrn(
       ].join("\n");
     }
 
-    const artworkShapes = payload.items.flatMap((item) =>
-      extractLbrnShapesFromItem(item, ARTWORK_CUT_INDEX),
-    );
-
-    return artworkShapes.length > 0
-      ? `  <!-- Artwork (${artworkShapes.length} shape(s)) - set power on C00 before running -->\n${artworkShapes.map((shape) => `  ${shape}`).join("\n")}`
-      : `  <!-- No artwork shapes extracted - check that items contain SVG path data -->`;
+    return buildArtworkGroup(payload);
   })();
 
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<!-- LT316 LightBurn Project generated ${generatedAt} -->`,
     mode === "minimal"
-      ? `<!-- Minimal artwork-only export: geometry debugging mode -->`
+      ? `<!-- Minimal artwork-only export -->`
       : `<!-- Artwork on C00 | Template bounds on C01 (0 percent power) | Rotary pre-configured -->`,
     `<!-- Verify Start From -> Absolute Coords, Frame, then run -->`,
     `<LightBurnProject AppVersion="1.7.00" FormatVersion="1" MaterialHeight="0" MirrorX="False" MirrorY="False">`,

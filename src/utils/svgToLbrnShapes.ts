@@ -119,6 +119,11 @@ interface LbrnVertex {
   c1y: number;
 }
 
+interface PathIdState {
+  nextVertId: number;
+  nextPrimId: number;
+}
+
 function straightVertex(x: number, y: number): LbrnVertex {
   return { x, y, c0x: 0, c0y: 0, c1x: 0, c1y: 0 };
 }
@@ -154,11 +159,21 @@ function buildVertToken(v: LbrnVertex): string {
     Math.abs(v.c1y) > 1e-9;
   if (!hasCurve) return token;
 
-  // Absolute control handle positions for curved segments
-  const c0x = v.x + v.c0x;
-  const c0y = v.y + v.c0y;
-  const c1x = v.x + v.c1x;
-  const c1y = v.y + v.c1y;
+  // Our internal vertex model follows the SVG convention:
+  // - c0 = incoming handle offset
+  // - c1 = outgoing handle offset
+  //
+  // LightBurn's VertList uses the opposite labels on disk:
+  // - c0 = outgoing handle for the segment leaving this vertex
+  // - c1 = incoming handle for the segment entering this vertex
+  //
+  // Swap them here so the serialized .lbrn2 matches native LightBurn files
+  // without forcing the rest of the SVG parser to use LightBurn-specific
+  // naming semantics internally.
+  const c0x = v.x + v.c1x;
+  const c0y = v.y + v.c1y;
+  const c1x = v.x + v.c0x;
+  const c1y = v.y + v.c0y;
   return `${token}c0x${fmt(c0x)}c0y${fmt(c0y)}c1x${fmt(c1x)}c1y${fmt(c1y)}`;
 }
 
@@ -246,7 +261,8 @@ function flattenVertices(vertices: LbrnVertex[], closed: boolean): LbrnVertex[] 
 function buildPathXml(
   vertices: LbrnVertex[],
   closed: boolean,
-  cutIndex: number
+  cutIndex: number,
+  ids: PathIdState
 ): string[] {
   if (vertices.length < 2) return [];
 
@@ -273,8 +289,13 @@ function buildPathXml(
 
   if (prims.length === 0) return [];
 
+  const vertId = ids.nextVertId;
+  const primId = ids.nextPrimId;
+  ids.nextVertId += vertices.length;
+  ids.nextPrimId += prims.length;
+
   const xml = [
-    `<Shape Type="Path" VertID="${vertices.length}" PrimID="${prims.length}">`,
+    `<Shape Type="Path" VertID="${vertId}" PrimID="${primId}">`,
     `  <XForm>1 0 0 1 0 0</XForm>`,
     `  <CutIndex Value="${cutIndex}" />`,
     `  <VertList>${vertList}</VertList>`,
@@ -764,6 +785,33 @@ function getAttrNum(tag: string, name: string, fallback = 0): number {
   return isNaN(n) ? fallback : n;
 }
 
+function getStyleProp(tag: string, propName: string): string | undefined {
+  const style = getAttr(tag, "style");
+  if (!style) return undefined;
+  const parts = style.split(";");
+  for (const part of parts) {
+    const idx = part.indexOf(":");
+    if (idx < 0) continue;
+    const key = part.slice(0, idx).trim().toLowerCase();
+    if (key !== propName.toLowerCase()) continue;
+    return part.slice(idx + 1).trim();
+  }
+  return undefined;
+}
+
+function getPresentationAttr(tag: string, name: string): string | undefined {
+  return getAttr(tag, name) ?? getStyleProp(tag, name);
+}
+
+function hasVisibleFill(tag: string): boolean {
+  const fill = getPresentationAttr(tag, "fill");
+  if (fill == null) {
+    // SVG defaults fill to black when unspecified.
+    return true;
+  }
+  return fill.trim().toLowerCase() !== "none";
+}
+
 // ---------------------------------------------------------------------------
 // SVG element extractor
 // Walks the SVG source string, extracts top-level shape element tags and <g>
@@ -1037,11 +1085,12 @@ function extractShapesFromSvg(
         const d = getAttr(tag, 'd') ?? '';
         if (!d) return;
         const subpaths = parseSvgPath(d);
+        const forceClosed = hasVisibleFill(tag);
         for (const sp of subpaths) {
           if (sp.vertices.length < 2) continue;
           results.push({
             vertices: sp.vertices,
-            closed: sp.closed,
+            closed: sp.closed || forceClosed,
             worldVerts: sp.vertices.map(toWorldVert),
           });
         }
@@ -1336,7 +1385,8 @@ export function extractLbrnShapesFromItem(
     rotationDeg?: number;
     svgText: string;
   },
-  cutIndex: number
+  cutIndex: number,
+  ids: PathIdState = { nextVertId: 0, nextPrimId: 0 }
 ): string[] {
   const { xMm, yMm, widthMm, heightMm, svgText } = item;
 
@@ -1345,7 +1395,7 @@ export function extractLbrnShapesFromItem(
   for (const shape of extractWorldShapesFromItem(item)) {
     const canonicalVerts = shape.worldVerts
       .filter((v) => isFinite(v.x) && isFinite(v.y));
-    const xml = buildPathXml(canonicalVerts, shape.closed, cutIndex);
+    const xml = buildPathXml(canonicalVerts, shape.closed, cutIndex, ids);
     if (xml.length > 0) xmlBlocks.push(...xml);
   }
 
@@ -1370,6 +1420,41 @@ export function extractLbrnShapesFromItem(
         }
       }
     }
+  }
+
+  return xmlBlocks;
+}
+
+function flipVertsForLightBurnLocalSpace(vertices: LbrnVertex[]): LbrnVertex[] {
+  return vertices.map((vertex) => ({
+    x: vertex.x,
+    y: -vertex.y,
+    c0x: vertex.c0x,
+    c0y: -vertex.c0y,
+    c1x: vertex.c1x,
+    c1y: -vertex.c1y,
+  }));
+}
+
+export function extractLbrnLocalShapesFromItem(
+  item: {
+    xMm: number;
+    yMm: number;
+    widthMm: number;
+    heightMm: number;
+    rotationDeg?: number;
+    svgText: string;
+  },
+  cutIndex: number,
+  ids: PathIdState = { nextVertId: 0, nextPrimId: 0 }
+): string[] {
+  const xmlBlocks: string[] = [];
+
+  for (const shape of extractWorldShapesFromItem(item)) {
+    const localVerts = flipVertsForLightBurnLocalSpace(shape.worldVerts)
+      .filter((vertex) => isFinite(vertex.x) && isFinite(vertex.y));
+    const xml = buildPathXml(localVerts, shape.closed, cutIndex, ids);
+    if (xml.length > 0) xmlBlocks.push(...xml);
   }
 
   return xmlBlocks;
