@@ -505,7 +505,6 @@ export function renderHomePage(): string {
         state.pastedFile = file;
         el.rawImage.value = '';
         updateSelectedImageLabel();
-        setStatus('Clipboard image ready to upload.', 'success');
       }
 
       function clearPastedFile() {
@@ -513,9 +512,29 @@ export function renderHomePage(): string {
         updateSelectedImageLabel();
       }
 
-      function readClipboardImage(event) {
+      async function handlePastedFile(file) {
+        setPastedFile(file);
+
+        if (!state.jobId) {
+          setStatus('Clipboard image captured. Create a job, then upload it.', 'success');
+          return true;
+        }
+
+        setStatus('Clipboard image captured. Uploading raw image...', '');
+
+        try {
+          await uploadRaw();
+          setStatus('Clipboard image uploaded.', 'success');
+          return true;
+        } catch (error) {
+          setStatus(error.message || 'Clipboard upload failed.', 'error');
+          return false;
+        }
+      }
+
+      function getClipboardImageFile(event) {
         const items = event.clipboardData && event.clipboardData.items;
-        if (!items) return false;
+        if (!items) return null;
 
         for (const item of items) {
           if (!item.type || !item.type.startsWith('image/')) continue;
@@ -523,14 +542,12 @@ export function renderHomePage(): string {
           if (!blob) continue;
 
           const extension = extensionForMimeType(blob.type);
-          const file = new File([blob], 'clipboard-image' + extension, {
+          return new File([blob], 'clipboard-image' + extension, {
             type: blob.type || 'image/png',
           });
-          setPastedFile(file);
-          return true;
         }
 
-        return false;
+        return null;
       }
 
       function fileUrl(storagePath) {
@@ -682,9 +699,15 @@ export function renderHomePage(): string {
       });
 
       el.pasteZone.addEventListener('paste', (event) => {
-        if (readClipboardImage(event)) {
-          event.preventDefault();
+        const file = getClipboardImageFile(event);
+        if (!file) {
+          return;
         }
+
+        event.preventDefault();
+        handlePastedFile(file).catch((error) => {
+          setStatus(error.message || 'Clipboard upload failed.', 'error');
+        });
       });
 
       window.addEventListener('paste', (event) => {
@@ -693,9 +716,15 @@ export function renderHomePage(): string {
           return;
         }
 
-        if (readClipboardImage(event)) {
-          event.preventDefault();
+        const file = getClipboardImageFile(event);
+        if (!file) {
+          return;
         }
+
+        event.preventDefault();
+        handlePastedFile(file).catch((error) => {
+          setStatus(error.message || 'Clipboard upload failed.', 'error');
+        });
       });
 
       el.uploadRaw.addEventListener('click', () => {
