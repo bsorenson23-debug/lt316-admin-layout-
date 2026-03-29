@@ -352,6 +352,8 @@ export function renderHomePage(): string {
       const state = {
         jobId: null,
         pastedFile: null,
+        hasRawImage: false,
+        rerunTimer: null,
       };
 
       const el = {
@@ -558,6 +560,7 @@ export function renderHomePage(): string {
       function renderArtifacts(manifest) {
         const clean = manifest?.images?.clean || {};
         const raw = manifest?.images?.raw || [];
+        state.hasRawImage = Boolean(raw[0]);
 
         el.rawPath.textContent = raw[0] || 'None';
         el.vectorPath.textContent = clean.vectorInput || 'Not generated';
@@ -666,6 +669,7 @@ export function renderHomePage(): string {
 
       async function runDoctor() {
         if (!state.jobId) throw new Error('Create a job first.');
+        if (!state.hasRawImage) throw new Error('Upload or paste a raw image first.');
 
         setStatus('Running image-doctor...', '');
         const response = await fetch('/jobs/' + encodeURIComponent(state.jobId) + '/image-doctor', {
@@ -687,6 +691,24 @@ export function renderHomePage(): string {
         renderArtifacts(json.manifest);
         await refreshJob();
         setStatus('Image-doctor completed.', 'success');
+      }
+
+      function scheduleDoctorRun(reason) {
+        if (!state.jobId || !state.hasRawImage) {
+          return;
+        }
+
+        if (state.rerunTimer) {
+          window.clearTimeout(state.rerunTimer);
+        }
+
+        setStatus(reason || 'Settings changed. Re-running image-doctor...', '');
+        state.rerunTimer = window.setTimeout(() => {
+          state.rerunTimer = null;
+          runDoctor().catch((error) => {
+            setStatus(error.message || 'Image-doctor failed.', 'error');
+          });
+        }, 250);
       }
 
       el.createJob.addEventListener('click', () => {
@@ -743,18 +765,26 @@ export function renderHomePage(): string {
 
       el.detailPreset.addEventListener('change', () => {
         applyPreset(el.detailPreset.value);
+        scheduleDoctorRun('Detail preset changed. Re-running image-doctor...');
       });
 
       el.silhouettePreset.addEventListener('change', () => {
         applySilhouettePreset(el.silhouettePreset.value);
+        scheduleDoctorRun('Silhouette preset changed. Re-running image-doctor...');
       });
 
       [el.threshold, el.contrast, el.brightnessOffset, el.sharpenSigma].forEach((input) => {
-        input.addEventListener('input', syncVectorControlLabels);
+        input.addEventListener('input', () => {
+          syncVectorControlLabels();
+          scheduleDoctorRun('Vector settings changed. Re-running image-doctor...');
+        });
       });
 
       [el.silhouetteThreshold, el.silhouetteGrow, el.silhouetteBlur].forEach((input) => {
-        input.addEventListener('input', syncSilhouetteControlLabels);
+        input.addEventListener('input', () => {
+          syncSilhouetteControlLabels();
+          scheduleDoctorRun('Silhouette settings changed. Re-running image-doctor...');
+        });
       });
 
       applyPreset(el.detailPreset.value);
