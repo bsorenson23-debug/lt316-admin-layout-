@@ -56,3 +56,9 @@ next-env.d.ts
 /.tmp-diag.ts
 /-
 /dummy
+
+# local pipeline artifacts
+/services/asset-pipeline/node_modules/
+/services/asset-pipeline/dist/
+/storage/pipeline-jobs/*
+!/storage/pipeline-jobs/.gitkeep
