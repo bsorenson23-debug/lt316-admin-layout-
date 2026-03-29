@@ -91,8 +91,13 @@ export async function ensureStorageRoot(): Promise<void> {
 }
 
 export async function createJobDirectories(jobId: string): Promise<void> {
-  await mkdir(getJobDir(jobId), { recursive: true });
-  await mkdir(getDebugDir(jobId), { recursive: true });
+  await ensureDirectories([
+    getJobDir(jobId),
+    getImagesDir(jobId),
+    getRawImagesDir(jobId),
+    getCleanImagesDir(jobId),
+    getDebugDir(jobId),
+  ]);
 }
 
 export async function ensureDirectories(paths: string[]): Promise<void> {

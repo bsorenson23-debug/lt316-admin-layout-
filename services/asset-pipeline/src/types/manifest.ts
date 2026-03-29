@@ -28,8 +28,36 @@ export interface CreateJobRequestBody {
   categoryHint?: ProductCategoryHint;
 }
 
+export interface ImageDoctorVectorSettings {
+  detailPreset?: "soft" | "balanced" | "fine";
+  threshold?: number;
+  contrast?: number;
+  brightnessOffset?: number;
+  sharpenSigma?: number;
+}
+
+export interface ImageDoctorSilhouetteSettings {
+  detailPreset?: "tight" | "balanced" | "bold";
+  alphaThreshold?: number;
+  edgeGrow?: number;
+  blurSigma?: number;
+}
+
+export interface ImageDoctorRequestBody {
+  vectorSettings?: ImageDoctorVectorSettings;
+  silhouetteSettings?: ImageDoctorSilhouetteSettings;
+}
+
 export interface LookupProductPayload extends ProductManifestRecord {
   imageCandidates: string[];
+}
+
+export interface CleanImageArtifacts {
+  subjectTransparent: string;
+  subjectClean: string;
+  vectorInput: string;
+  silhouetteMask: string;
+  preview: string;
 }
 
 export interface ImageDoctorResultPayload {
@@ -41,7 +69,7 @@ export interface ImageDoctorResultPayload {
     debug: string;
   };
   views: JobImageViews;
-  clean: Record<string, string>;
+  clean: CleanImageArtifacts;
   note: string;
 }
 
@@ -52,7 +80,7 @@ export interface JobManifest {
   images: {
     raw: string[];
     views: JobImageViews;
-    clean: Record<string, string>;
+    clean: Partial<CleanImageArtifacts>;
   };
   svg: {
     logo: string | null;

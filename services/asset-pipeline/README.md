@@ -5,23 +5,30 @@ It is intentionally separate from the main app so pipeline jobs, storage, and ru
 
 ## Current Scope
 
-Scaffold-only stage pipeline:
+Stage pipeline:
 1. lookup
 2. image-doctor
 3. vectorize
 4. mesh
 
-No real image processing is implemented yet.
+- `lookup` remains scaffold-oriented
+- `image-doctor` now performs real local raster cleanup with `sharp`
+- `vectorize` and `mesh` remain scaffold stages
 
 ## Routes
 
+- GET /
 - GET /health
 - POST /jobs
 - GET /jobs/:id
+- PUT /jobs/:id/raw-image
 - POST /jobs/:id/lookup
 - POST /jobs/:id/image-doctor
 - POST /jobs/:id/vectorize
 - POST /jobs/:id/mesh
+- GET /storage/:jobId/*
+
+`GET /` serves a small internal browser test UI for the pipeline service. It lets you create a job, upload one raw image, run image-doctor, and preview the generated artifacts without using the main app. The page also accepts pasted clipboard images, so you do not have to save a file locally first.
 
 ### POST /jobs request body
 
@@ -54,7 +61,11 @@ Per-job layout:
 - {JOB_STORAGE_ROOT}/{jobId}/product.json
 - {JOB_STORAGE_ROOT}/{jobId}/images/raw/
 - {JOB_STORAGE_ROOT}/{jobId}/images/clean/
-- {JOB_STORAGE_ROOT}/{jobId}/images/clean/doctor-result.json
+- {JOB_STORAGE_ROOT}/{jobId}/images/clean/subject-transparent.png
+- {JOB_STORAGE_ROOT}/{jobId}/images/clean/subject-clean.png
+- {JOB_STORAGE_ROOT}/{jobId}/images/clean/vector-input.png
+- {JOB_STORAGE_ROOT}/{jobId}/images/clean/silhouette-mask.png
+- {JOB_STORAGE_ROOT}/{jobId}/images/clean/preview.jpg
 - {JOB_STORAGE_ROOT}/{jobId}/debug/lookup.json
 - {JOB_STORAGE_ROOT}/{jobId}/debug/doctor.json
 - {JOB_STORAGE_ROOT}/{jobId}/debug/vectorize.json
@@ -69,15 +80,59 @@ Section B writes the following inspectable files:
   - returns `{ manifest, product }`
 
 - `POST /jobs/:id/image-doctor`
-  - updates `manifest.status` to `image-doctor`
-  - ensures `images/raw`, `images/clean`, and `debug` exist
-  - writes `{jobId}/images/clean/doctor-result.json`
-  - writes `{jobId}/debug/doctor.json`
-  - updates `manifest.images.clean` and `manifest.images.views` with simple placeholder outputs
+  - reads the first supported raster from `{jobId}/images/raw`
+  - supports `.png`, `.jpg`, `.jpeg`, and `.webp`
+  - auto-rotates from metadata, trims visible content, adds consistent padding, and writes real clean artifacts
+  - accepts optional `vectorSettings` and `silhouetteSettings` in the JSON body for tuning `vector-input.png` and `silhouette-mask.png` independently
+  - writes:
+    - `{jobId}/images/clean/subject-transparent.png`
+    - `{jobId}/images/clean/subject-clean.png`
+    - `{jobId}/images/clean/vector-input.png`
+    - `{jobId}/images/clean/silhouette-mask.png`
+    - `{jobId}/images/clean/preview.jpg`
+    - `{jobId}/debug/doctor.json`
+  - updates `manifest.images.clean` with explicit artifact paths
   - returns `{ manifest, doctor }`
+
+- `PUT /jobs/:id/raw-image`
+  - accepts one raw request body upload from the browser test UI
+  - requires a `filename` query parameter or `x-filename` header
+  - replaces previous supported raw images for deterministic v1 behavior
+
+- `GET /storage/:jobId/*`
+  - serves raw, clean, and debug artifacts for browser inspection
+
+### Supplying a raw image
+
+1. Create a job with `POST /jobs`
+2. Place one source image into:
+   - `{JOB_STORAGE_ROOT}/{jobId}/images/raw`
+3. Call `POST /jobs/:id/image-doctor`
+
+For v1, image-doctor processes the first supported file found in `images/raw`.
+
+### Image-doctor outputs
+
+- `subject-transparent.png`
+  - trimmed subject with transparency and padding
+- `subject-clean.png`
+  - the same subject flattened onto white
+- `vector-input.png`
+  - high-contrast raster intended to feed the future vectorize stage
+- `silhouette-mask.png`
+  - silhouette-style mask output
+- `preview.jpg`
+  - smaller preview for human inspection
+
+`vector-input.png` is the output intended for the future vectorize stage.
+The browser test UI exposes separate tuning controls for `vector-input.png` and `silhouette-mask.png`, so you can keep a cleaner silhouette while pushing more or less detail into the vector prep image without re-uploading the raw source.
+
+Background cleanup in v1 is optimized for clean white or near-white backgrounds.
+Busy or dark backgrounds may skip cleanup and preserve more of the original image.
 
 Route error behavior:
 - malformed job id or out-of-scope path attempt -> 400
+- missing or unsupported raw image for image-doctor -> 400
 - missing job manifest -> 404
 - other service failures -> 500
 
