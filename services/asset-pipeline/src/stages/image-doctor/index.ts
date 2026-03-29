@@ -25,8 +25,9 @@ const HARD_DISTANCE_THRESHOLD = 30;
 const SOFT_DISTANCE_THRESHOLD = 64;
 const SOFT_LUMA_THRESHOLD = 230;
 const TRIM_ALPHA_THRESHOLD = 12;
-const MASK_THRESHOLD = 24;
 const PREVIEW_MAX_EDGE = 640;
+const VECTOR_PREP_MAX_EDGE = 1800;
+const VECTOR_ALPHA_THRESHOLD = 8;
 const DEFAULT_VECTOR_SETTINGS = {
   detailPreset: "balanced",
   threshold: 176,
@@ -77,6 +78,15 @@ interface TrimBounds {
   height: number;
 }
 
+interface VectorPrepProfile {
+  medianSize: number;
+  backgroundBlurSigma: number;
+  smoothingBlurSigma: number;
+  openingRadius: number;
+  closingRadius: number;
+  maxEdge: number;
+}
+
 interface BackgroundSample {
   r: number;
   g: number;
@@ -118,9 +128,19 @@ interface ImageDoctorDebugPayload {
   };
   morphologySettings: {
     silhouetteEdgeGrow: number;
+    vectorOpeningRadius: number;
+    vectorClosingRadius: number;
   };
   vectorSettings: ResolvedVectorSettings;
   silhouetteSettings: ResolvedSilhouetteSettings;
+  tracePrep: {
+    scaleFactor: number;
+    scaledWidth: number;
+    scaledHeight: number;
+    medianSize: number;
+    backgroundBlurSigma: number;
+    smoothingBlurSigma: number;
+  };
   backgroundCleanupApplied: boolean;
   warnings: string[];
 }
@@ -444,6 +464,40 @@ function computeTrimBounds(image: RgbaImage, alphaThreshold: number): TrimBounds
   };
 }
 
+function getVectorPrepProfile(
+  preset: ResolvedVectorSettings["detailPreset"],
+): VectorPrepProfile {
+  switch (preset) {
+    case "soft":
+      return {
+        medianSize: 5,
+        backgroundBlurSigma: 10,
+        smoothingBlurSigma: 0.9,
+        openingRadius: 1,
+        closingRadius: 2,
+        maxEdge: VECTOR_PREP_MAX_EDGE,
+      };
+    case "fine":
+      return {
+        medianSize: 3,
+        backgroundBlurSigma: 5,
+        smoothingBlurSigma: 0.35,
+        openingRadius: 0,
+        closingRadius: 1,
+        maxEdge: 2200,
+      };
+    default:
+      return {
+        medianSize: 3,
+        backgroundBlurSigma: 7,
+        smoothingBlurSigma: 0.6,
+        openingRadius: 1,
+        closingRadius: 1,
+        maxEdge: VECTOR_PREP_MAX_EDGE,
+      };
+  }
+}
+
 function buildSilhouettePixels(
   image: RgbaImage,
   alphaThreshold: number,
@@ -461,29 +515,135 @@ function buildSilhouettePixels(
   return mask;
 }
 
-async function buildPreparedVectorGrayscale(
-  subjectTransparentBuffer: Buffer,
-  vectorSettings: ResolvedVectorSettings,
-): Promise<GrayscaleImage> {
-  let pipeline = sharp(subjectTransparentBuffer)
-    .flatten({ background: "#ffffff" })
-    .grayscale()
-    .normalise();
-
-  if (vectorSettings.sharpenSigma > 0) {
-    pipeline = pipeline.sharpen({ sigma: vectorSettings.sharpenSigma });
-  }
-
-  const { data, info } = await pipeline
-    .linear(vectorSettings.contrast, vectorSettings.brightnessOffset)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+async function loadSingleChannelImage(pipeline: sharp.Sharp): Promise<GrayscaleImage> {
+  const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
 
   return {
     pixels: new Uint8ClampedArray(data),
     width: info.width,
     height: info.height,
     channels: 1,
+  };
+}
+
+async function buildPreparedVectorGrayscale(
+  subjectTransparentBuffer: Buffer,
+  vectorSettings: ResolvedVectorSettings,
+): Promise<{
+  image: GrayscaleImage;
+  alphaMask: Uint8Array;
+  profile: VectorPrepProfile;
+  scaleFactor: number;
+}> {
+  const metadata = await sharp(subjectTransparentBuffer).metadata();
+  const sourceWidth = metadata.width ?? 0;
+  const sourceHeight = metadata.height ?? 0;
+  const profile = getVectorPrepProfile(vectorSettings.detailPreset);
+  const maxEdge = Math.max(sourceWidth, sourceHeight, 1);
+  const scaleFactor = clamp(profile.maxEdge / maxEdge, 1, 2);
+  const scaledWidth = Math.max(1, Math.round(sourceWidth * scaleFactor));
+  const scaledHeight = Math.max(1, Math.round(sourceHeight * scaleFactor));
+
+  let basePipeline = sharp(subjectTransparentBuffer)
+    .flatten({ background: "#ffffff" })
+    .grayscale()
+    .normalise()
+    .median(profile.medianSize)
+    .resize({
+      width: scaledWidth,
+      height: scaledHeight,
+      fit: "fill",
+      kernel: sharp.kernel.lanczos3,
+    });
+
+  if (vectorSettings.sharpenSigma > 0) {
+    basePipeline = basePipeline.sharpen({ sigma: vectorSettings.sharpenSigma });
+  }
+
+  const [baseImage, blurredImage, alphaImage] = await Promise.all([
+    loadSingleChannelImage(basePipeline.clone()),
+    loadSingleChannelImage(
+      sharp(subjectTransparentBuffer)
+        .flatten({ background: "#ffffff" })
+        .grayscale()
+        .resize({
+          width: scaledWidth,
+          height: scaledHeight,
+          fit: "fill",
+          kernel: sharp.kernel.lanczos3,
+        })
+        .blur(profile.backgroundBlurSigma),
+    ),
+    loadSingleChannelImage(
+      sharp(subjectTransparentBuffer)
+        .ensureAlpha()
+        .extractChannel(3)
+        .resize({
+          width: scaledWidth,
+          height: scaledHeight,
+          fit: "fill",
+          kernel: sharp.kernel.nearest,
+        }),
+    ),
+  ]);
+
+  let minPixel = 255;
+  let maxPixel = 0;
+  const compensated = new Uint8ClampedArray(baseImage.pixels.length);
+
+  for (let index = 0; index < compensated.length; index += 1) {
+    if (alphaImage.pixels[index] < VECTOR_ALPHA_THRESHOLD) {
+      compensated[index] = 255;
+      continue;
+    }
+
+    const localBackground = blurredImage.pixels[index];
+    const localValue = baseImage.pixels[index];
+    const backgroundCompensated = clamp(localValue - localBackground + 255, 0, 255);
+    const contrastAdjusted = clamp(
+      (backgroundCompensated - 128) * vectorSettings.contrast + 128 + vectorSettings.brightnessOffset,
+      0,
+      255,
+    );
+    const blended = clamp(
+      contrastAdjusted * 0.8 + localValue * 0.2,
+      0,
+      255,
+    );
+
+    const rounded = Math.round(blended);
+    compensated[index] = rounded;
+    if (rounded < minPixel) minPixel = rounded;
+    if (rounded > maxPixel) maxPixel = rounded;
+  }
+
+  const normalized = new Uint8ClampedArray(compensated.length);
+  const range = Math.max(1, maxPixel - minPixel);
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    if (alphaImage.pixels[index] < VECTOR_ALPHA_THRESHOLD) {
+      normalized[index] = 255;
+      continue;
+    }
+
+    normalized[index] = Math.round(
+      clamp(((compensated[index] - minPixel) * 255) / range, 0, 255),
+    );
+  }
+
+  return {
+    image: {
+      pixels: normalized,
+      width: baseImage.width,
+      height: baseImage.height,
+      channels: 1,
+    },
+    alphaMask: Uint8Array.from(
+      alphaImage.pixels,
+      (value) => (value >= VECTOR_ALPHA_THRESHOLD ? 1 : 0),
+    ),
+    profile,
+    scaleFactor: Number(scaleFactor.toFixed(2)),
   };
 }
 
@@ -500,45 +660,18 @@ function buildAlphaMask(image: RgbaImage, alphaThreshold: number): Uint8Array {
   return mask;
 }
 
-function sampleGray(image: GrayscaleImage, x: number, y: number): number {
-  const clampedX = clamp(x, 0, image.width - 1);
-  const clampedY = clamp(y, 0, image.height - 1);
-  return image.pixels[clampedY * image.width + clampedX];
-}
-
-function isMaskContour(mask: Uint8Array, width: number, height: number, x: number, y: number): boolean {
-  if (mask[y * width + x] === 0) {
-    return false;
-  }
-
-  for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
-    for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-      if (offsetX === 0 && offsetY === 0) {
-        continue;
-      }
-
-      const nextX = x + offsetX;
-      const nextY = y + offsetY;
-      if (nextX < 0 || nextY < 0 || nextX >= width || nextY >= height) {
-        return true;
-      }
-
-      if (mask[nextY * width + nextX] === 0) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
 function buildVectorInputPixels(
   image: GrayscaleImage,
   alphaMask: Uint8Array,
   vectorSettings: ResolvedVectorSettings,
 ): Buffer {
   const output = Buffer.alloc(image.width * image.height, 255);
-  const edgeThreshold = clampInteger(vectorSettings.threshold, DEFAULT_VECTOR_SETTINGS.threshold, 24, 255);
+  const darknessThreshold = clampInteger(
+    vectorSettings.threshold,
+    DEFAULT_VECTOR_SETTINGS.threshold,
+    24,
+    255,
+  );
 
   for (let y = 0; y < image.height; y += 1) {
     for (let x = 0; x < image.width; x += 1) {
@@ -548,41 +681,7 @@ function buildVectorInputPixels(
         continue;
       }
 
-      const contourPixel = isMaskContour(alphaMask, image.width, image.height, x, y);
-      const gx =
-        -sampleGray(image, x - 1, y - 1) +
-        sampleGray(image, x + 1, y - 1) +
-        -2 * sampleGray(image, x - 1, y) +
-        2 * sampleGray(image, x + 1, y) +
-        -sampleGray(image, x - 1, y + 1) +
-        sampleGray(image, x + 1, y + 1);
-      const gy =
-        -sampleGray(image, x - 1, y - 1) +
-        -2 * sampleGray(image, x, y - 1) +
-        -sampleGray(image, x + 1, y - 1) +
-        sampleGray(image, x - 1, y + 1) +
-        2 * sampleGray(image, x, y + 1) +
-        sampleGray(image, x + 1, y + 1);
-      const edgeStrength = Math.min(255, Math.round(Math.sqrt(gx * gx + gy * gy) / 4));
-      const localAverage = Math.round(
-        (
-          sampleGray(image, x - 1, y - 1) +
-          sampleGray(image, x, y - 1) +
-          sampleGray(image, x + 1, y - 1) +
-          sampleGray(image, x - 1, y) +
-          sampleGray(image, x + 1, y) +
-          sampleGray(image, x - 1, y + 1) +
-          sampleGray(image, x, y + 1) +
-          sampleGray(image, x + 1, y + 1)
-        ) / 8,
-      );
-      const localContrast = Math.min(255, Math.abs(image.pixels[index] - localAverage) * 2);
-      const detailStrength = Math.min(
-        255,
-        Math.round(edgeStrength * 0.75 + localContrast * 0.65),
-      );
-
-      output[index] = contourPixel || detailStrength >= edgeThreshold ? 0 : 255;
+      output[index] = image.pixels[index] <= darknessThreshold ? 0 : 255;
     }
   }
 
@@ -694,17 +793,31 @@ export async function runImageDoctorStage(
   await sharp(subjectCleanBuffer).png().toFile(subjectCleanPath);
 
   const silhouetteSource = await loadRgbaImage(subjectTransparentPath);
-  const vectorSource = await buildPreparedVectorGrayscale(subjectTransparentBuffer, vectorSettings);
+  const preparedVector = await buildPreparedVectorGrayscale(subjectTransparentBuffer, vectorSettings);
   const vectorAlphaMask = buildAlphaMask(silhouetteSource, silhouetteSettings.alphaThreshold);
-  await sharp(buildVectorInputPixels(vectorSource, vectorAlphaMask, vectorSettings), {
+  let vectorPipeline = sharp(buildVectorInputPixels(preparedVector.image, preparedVector.alphaMask, vectorSettings), {
     raw: {
-      width: vectorSource.width,
-      height: vectorSource.height,
+      width: preparedVector.image.width,
+      height: preparedVector.image.height,
       channels: 1,
     },
-  })
-    .png()
-    .toFile(vectorInputPath);
+  });
+
+  if (preparedVector.profile.smoothingBlurSigma > 0) {
+    vectorPipeline = vectorPipeline.blur(preparedVector.profile.smoothingBlurSigma).threshold(128);
+  }
+
+  if (preparedVector.profile.openingRadius > 0) {
+    const kernelSize = preparedVector.profile.openingRadius * 2 + 1;
+    vectorPipeline = vectorPipeline.erode(kernelSize).dilate(kernelSize);
+  }
+
+  if (preparedVector.profile.closingRadius > 0) {
+    const kernelSize = preparedVector.profile.closingRadius * 2 + 1;
+    vectorPipeline = vectorPipeline.dilate(kernelSize).erode(kernelSize);
+  }
+
+  await vectorPipeline.png().toFile(vectorInputPath);
 
   let silhouettePipeline = sharp(buildSilhouettePixels(silhouetteSource, silhouetteSettings.alphaThreshold), {
     raw: {
@@ -791,9 +904,19 @@ export async function runImageDoctorStage(
     },
     morphologySettings: {
       silhouetteEdgeGrow: silhouetteSettings.edgeGrow,
+      vectorOpeningRadius: preparedVector.profile.openingRadius,
+      vectorClosingRadius: preparedVector.profile.closingRadius,
     },
     vectorSettings,
     silhouetteSettings,
+    tracePrep: {
+      scaleFactor: preparedVector.scaleFactor,
+      scaledWidth: preparedVector.image.width,
+      scaledHeight: preparedVector.image.height,
+      medianSize: preparedVector.profile.medianSize,
+      backgroundBlurSigma: preparedVector.profile.backgroundBlurSigma,
+      smoothingBlurSigma: preparedVector.profile.smoothingBlurSigma,
+    },
     backgroundCleanupApplied,
     warnings,
   };
