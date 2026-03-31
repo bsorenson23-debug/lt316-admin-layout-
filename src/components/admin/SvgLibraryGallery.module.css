@@ -1,0 +1,639 @@
+.gallery {
+  display: flex;
+  flex-direction: column;
+  height: min(68vh, 760px);
+  min-height: 520px;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.filterRow {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.filterPill {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border: 1px solid var(--border-normal);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 150ms, background 150ms, color 150ms;
+}
+
+.filterPill:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.filterPillActive {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.managePill {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border: 1px solid var(--border-normal);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 150ms, background 150ms, color 150ms;
+}
+
+.managePill:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.managePillActive {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.searchRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.countLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.manageBanner {
+  padding: 6px 12px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  color: var(--warning);
+  font-size: 11px;
+  text-align: center;
+}
+
+.reviewBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--info-border);
+  background: var(--info-bg);
+  color: var(--info);
+  font-size: 11px;
+}
+
+.reviewBannerBtn {
+  padding: 5px 10px;
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--info);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.reviewBannerBtn:hover {
+  background: rgba(96, 165, 250, 0.14);
+}
+
+.errorBanner {
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+  color: var(--error);
+  font-size: 11px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  padding-right: 4px;
+}
+
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1.5px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 150ms, background 150ms;
+}
+
+.card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.cardSelected {
+  border-color: var(--accent);
+  background: var(--accent-dark);
+}
+
+.cardConfirming {
+  border-color: var(--error-border);
+}
+
+.thumbWrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.04) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.04) 75%, rgba(255, 255, 255, 0.04)),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.04) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.04) 75%, rgba(255, 255, 255, 0.04)),
+    var(--bg-base);
+  background-position: 0 0, 8px 8px, 0 0;
+  background-size: 16px 16px, 16px 16px, auto;
+}
+
+.thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  padding: 16px;
+}
+
+.checkOverlay {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--success);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--bg-base);
+  line-height: 1;
+  pointer-events: none;
+}
+
+.thumbPlaced {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--info-bg);
+  border: 1px solid var(--info-border);
+  color: var(--info);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.actionRow {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: none;
+  gap: 4px;
+  z-index: 2;
+}
+
+.card:hover .actionRow {
+  display: flex;
+}
+
+.actionRowVisible {
+  display: flex;
+}
+
+.editBtn,
+.deleteBtn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 100ms, color 100ms;
+}
+
+.editBtn {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+.editBtn:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.deleteBtn {
+  background: var(--error-bg);
+  color: var(--error);
+  font-size: 14px;
+}
+
+.deleteBtn:hover {
+  background: var(--error);
+  color: var(--bg-base);
+}
+
+.confirmOverlay {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  z-index: 3;
+}
+
+.confirmText {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.4;
+}
+
+.confirmBtns {
+  display: flex;
+  gap: 6px;
+}
+
+.confirmCancelBtn {
+  padding: 5px 12px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.confirmCancelBtn:hover {
+  background: var(--bg-hover);
+}
+
+.confirmDeleteBtn {
+  padding: 5px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--error);
+  color: var(--bg-base);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.confirmDeleteBtn:hover {
+  opacity: 0.85;
+}
+
+.cardBody {
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cardName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cardMeta {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badgeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.libraryChipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.readyBadge,
+.attentionBadge,
+.placedBadge,
+.statsBadge,
+.reviewBadge,
+.businessChip,
+.itemChip {
+  display: inline-flex;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.readyBadge {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.attentionBadge {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.placedBadge {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.reviewBadge {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.statsBadge {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.businessChip {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.itemChip {
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+.renameWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.renameInput {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.renameInput:focus {
+  outline: none;
+}
+
+.renameActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.renameCancelBtn,
+.renameSaveBtn {
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.renameCancelBtn {
+  border: 1px solid var(--border-normal);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.renameSaveBtn {
+  border: none;
+  background: var(--accent);
+  color: var(--text-primary);
+}
+
+.emptyState {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  gap: 6px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 16px;
+  border: 1px dashed var(--border-normal);
+  border-radius: var(--radius);
+}
+
+.emptyIcon {
+  font-size: 32px;
+  color: var(--text-dim);
+}
+
+.emptyHint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.fileInput {
+  display: none;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid var(--border-normal);
+}
+
+@media (max-width: 900px) {
+  .gallery {
+    height: min(72vh, 760px);
+    min-height: 440px;
+  }
+}
+
+.footerSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.footerTitle {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.footerName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.footerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.clearLibraryBtn,
+.uploadLibraryBtn,
+.folderLibraryBtn,
+.placeLibraryBtn,
+.clearCancelBtn,
+.clearConfirmBtn {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.clearLibraryBtn,
+.clearCancelBtn {
+  border: 1px solid var(--border-normal);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.clearLibraryBtn:hover,
+.clearCancelBtn:hover {
+  background: var(--bg-hover);
+}
+
+.uploadLibraryBtn {
+  border: 1px solid var(--border-normal);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+}
+
+.uploadLibraryBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.folderLibraryBtn {
+  border: 1px solid var(--border-normal);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+}
+
+.folderLibraryBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.placeLibraryBtn {
+  border: none;
+  background: var(--accent);
+  color: var(--text-primary);
+}
+
+.placeLibraryBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.clearConfirmBtn {
+  border: none;
+  background: var(--error);
+  color: var(--bg-base);
+}

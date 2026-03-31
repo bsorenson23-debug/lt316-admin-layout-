@@ -75,7 +75,7 @@ body {
   background: var(--bg-base);
   color: var(--text-primary);
   font-family: 'Inter', 'Segoe UI', Arial, Helvetica, sans-serif;
-  font-size: 13px;
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

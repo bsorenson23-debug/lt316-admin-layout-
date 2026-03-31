@@ -1,6 +1,6 @@
-import type { TumblerGuideBand } from "../types/admin";
-import type { BedConfig } from "../types/admin";
-import { normalizeBedConfig } from "../types/admin";
+import type { TumblerGuideBand } from "../types/admin.ts";
+import type { BedConfig } from "../types/admin.ts";
+import { normalizeBedConfig } from "../types/admin.ts";
 
 // ---------------------------------------------------------------------------
 // Profile interface

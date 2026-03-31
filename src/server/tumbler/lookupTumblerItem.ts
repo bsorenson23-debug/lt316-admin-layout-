@@ -59,6 +59,48 @@ const PRODUCT_IMAGE_GOOD_TOKENS = [
   "detail",
 ];
 
+const PRODUCT_IMAGE_BACK_TOKENS = [
+  "back",
+  "rear",
+  "reverse",
+  "opposite",
+  "alt",
+  "alternate",
+  "secondary",
+  "other-side",
+  "backside",
+];
+
+type HandleOrientation = "left" | "right" | "none" | "unknown";
+
+interface ProductImageCandidateAnalysis {
+  url: string;
+  lexicalScore: number;
+  metadataScore: number;
+  totalScore: number;
+  width: number;
+  height: number;
+  orientation: HandleOrientation;
+  orientationStrength: number;
+  bodyMarkScore: number;
+}
+
+interface ProductImagePairSelection {
+  primaryImageUrl: string | null;
+  backImageUrl: string | null;
+}
+
+interface ForegroundGeometry {
+  rowBounds: Array<{ left: number; right: number } | null>;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  bboxWidth: number;
+  bboxHeight: number;
+  isForeground: (x: number, y: number) => boolean;
+}
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -94,6 +136,23 @@ function safeDecodeUri(value: string): string {
 
 function isLikelyUrl(input: string): boolean {
   return /^https?:\/\//i.test(input.trim());
+}
+
+function buildLookupTextFromUrl(input: string): string {
+  try {
+    const url = new URL(input);
+    const slug = safeDecodeUri(url.pathname)
+      .split("/")
+      .filter(Boolean)
+      .at(-1)
+      ?.replace(/\.[a-z0-9]+$/i, "")
+      ?.replace(/[-_]+/g, " ")
+      ?.replace(/\s+/g, " ")
+      ?.trim();
+    return slug || url.hostname.replace(/^www\./i, "");
+  } catch {
+    return input;
+  }
 }
 
 function parseCapacityOz(text: string): number | null {
@@ -208,6 +267,10 @@ function tokenizeLookupText(text: string): string[] {
   )];
 }
 
+function clamp(value: number, min = 0, max = 1): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 function scoreImageCandidateUrl(url: string, lookupText: string): number {
   const normalizedUrl = normalizeText(safeDecodeUri(url));
   const lookupTokens = tokenizeLookupText(lookupText);
@@ -231,7 +294,245 @@ function scoreImageCandidateUrl(url: string, lookupText: string): number {
   return score;
 }
 
-async function probeImageCandidate(url: string): Promise<{ width: number; height: number } | null> {
+function scoreBackImageCandidateUrl(url: string): number {
+  const normalizedUrl = normalizeText(safeDecodeUri(url));
+  let score = 0;
+
+  for (const token of PRODUCT_IMAGE_BACK_TOKENS) {
+    if (normalizedUrl.includes(token)) score += 2.5;
+  }
+
+  if (/\bside\b/.test(normalizedUrl)) score += 1.25;
+  return score;
+}
+
+function sampleRgba(data: Buffer, width: number, x: number, y: number) {
+  const index = (y * width + x) * 4;
+  return {
+    r: data[index] ?? 0,
+    g: data[index + 1] ?? 0,
+    b: data[index + 2] ?? 0,
+    a: data[index + 3] ?? 0,
+  };
+}
+
+function rgbaDistance(
+  left: { r: number; g: number; b: number; a: number },
+  right: { r: number; g: number; b: number; a: number },
+): number {
+  return Math.hypot(
+    left.r - right.r,
+    left.g - right.g,
+    left.b - right.b,
+    (left.a - right.a) * 0.75,
+  );
+}
+
+function buildBackgroundSamples(data: Buffer, width: number, height: number) {
+  const points = [
+    [0, 0],
+    [Math.max(0, width - 1), 0],
+    [0, Math.max(0, height - 1)],
+    [Math.max(0, width - 1), Math.max(0, height - 1)],
+    [Math.floor(width / 2), 0],
+    [Math.floor(width / 2), Math.max(0, height - 1)],
+    [0, Math.floor(height / 2)],
+    [Math.max(0, width - 1), Math.floor(height / 2)],
+  ];
+
+  return points.map(([x, y]) => sampleRgba(data, width, x, y));
+}
+
+function buildForegroundDetector(data: Buffer, width: number, height: number) {
+  const backgroundSamples = buildBackgroundSamples(data, width, height);
+  const hasTransparentBackground = backgroundSamples.some((sample) => sample.a <= 20);
+
+  return (x: number, y: number) => {
+    const pixel = sampleRgba(data, width, x, y);
+    if (pixel.a <= 20) return false;
+    if (hasTransparentBackground && pixel.a >= 140) return true;
+
+    let minDistance = Number.POSITIVE_INFINITY;
+    for (const background of backgroundSamples) {
+      minDistance = Math.min(minDistance, rgbaDistance(pixel, background));
+    }
+
+    return minDistance >= 24;
+  };
+}
+
+function measureForegroundGeometry(
+  data: Buffer,
+  width: number,
+  height: number,
+): ForegroundGeometry | null {
+  if (width < 24 || height < 48) {
+    return null;
+  }
+
+  const isForeground = buildForegroundDetector(data, width, height);
+  let minX = width;
+  let maxX = -1;
+  let minY = height;
+  let maxY = -1;
+
+  const rowBounds: Array<{ left: number; right: number } | null> = Array.from({ length: height }, () => null);
+
+  for (let y = 0; y < height; y += 1) {
+    let left = -1;
+    let right = -1;
+    for (let x = 0; x < width; x += 1) {
+      if (!isForeground(x, y)) continue;
+      if (left === -1) left = x;
+      right = x;
+    }
+    if (left === -1 || right === -1) continue;
+
+    rowBounds[y] = { left, right };
+    minX = Math.min(minX, left);
+    maxX = Math.max(maxX, right);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+
+  if (maxX <= minX || maxY <= minY) {
+    return null;
+  }
+
+  return {
+    rowBounds,
+    minX,
+    maxX,
+    minY,
+    maxY,
+    bboxWidth: maxX - minX + 1,
+    bboxHeight: maxY - minY + 1,
+    isForeground,
+  };
+}
+
+function averageEdgesForGeometry(
+  geometry: ForegroundGeometry,
+  startPct: number,
+  endPct: number,
+) {
+  const minRowWidth = Math.max(6, geometry.bboxWidth * 0.22);
+  const start = geometry.minY + Math.floor(geometry.bboxHeight * startPct);
+  const end = geometry.minY + Math.floor(geometry.bboxHeight * endPct);
+  let leftSum = 0;
+  let rightSum = 0;
+  let count = 0;
+
+  for (let y = start; y <= end && y < geometry.rowBounds.length; y += 1) {
+    const bounds = geometry.rowBounds[y];
+    if (!bounds) continue;
+    if ((bounds.right - bounds.left + 1) < minRowWidth) continue;
+    leftSum += bounds.left;
+    rightSum += bounds.right;
+    count += 1;
+  }
+
+  if (count === 0) return null;
+  return {
+    left: leftSum / count,
+    right: rightSum / count,
+    count,
+  };
+}
+
+function detectHandleOrientationFromGeometry(
+  geometry: ForegroundGeometry,
+): { orientation: HandleOrientation; strength: number } {
+  const handleEdges = averageEdgesForGeometry(geometry, 0.18, 0.58);
+  const bodyEdges = averageEdgesForGeometry(geometry, 0.62, 0.92);
+  if (!handleEdges || !bodyEdges) {
+    return { orientation: "unknown", strength: 0 };
+  }
+
+  const leftProtrusion = bodyEdges.left - handleEdges.left;
+  const rightProtrusion = handleEdges.right - bodyEdges.right;
+  const threshold = Math.max(5, geometry.bboxWidth * 0.045);
+  const delta = Math.abs(leftProtrusion - rightProtrusion);
+  const maxProtrusion = Math.max(leftProtrusion, rightProtrusion);
+
+  if (maxProtrusion < threshold) {
+    return { orientation: "none", strength: clamp(maxProtrusion / Math.max(1, geometry.bboxWidth * 0.12)) };
+  }
+
+  if (delta < threshold * 0.45) {
+    return { orientation: "unknown", strength: clamp(delta / Math.max(1, geometry.bboxWidth * 0.12)) };
+  }
+
+  return {
+    orientation: rightProtrusion > leftProtrusion ? "right" : "left",
+    strength: clamp(delta / Math.max(1, geometry.bboxWidth * 0.18)),
+  };
+}
+
+function scoreBodyMarkPresence(
+  data: Buffer,
+  width: number,
+  geometry: ForegroundGeometry,
+): number {
+  const upperBodyEdges = averageEdgesForGeometry(geometry, 0.12, 0.46);
+  if (!upperBodyEdges) return 0;
+
+  const bodyWidth = upperBodyEdges.right - upperBodyEdges.left + 1;
+  const centerX = (upperBodyEdges.left + upperBodyEdges.right) / 2;
+  const sampleHalfWidth = Math.max(10, bodyWidth * 0.2);
+  const sampleLeft = Math.max(0, Math.floor(centerX - sampleHalfWidth));
+  const sampleRight = Math.min(width - 2, Math.ceil(centerX + sampleHalfWidth));
+  const sampleTop = Math.max(0, Math.floor(geometry.minY + geometry.bboxHeight * 0.12));
+  const sampleBottom = Math.min(
+    geometry.rowBounds.length - 2,
+    Math.ceil(geometry.minY + geometry.bboxHeight * 0.4),
+  );
+
+  let comparisons = 0;
+  let edgeHits = 0;
+  let luminanceSum = 0;
+  let luminanceSqSum = 0;
+  let sampleCount = 0;
+
+  for (let y = sampleTop; y <= sampleBottom; y += 1) {
+    for (let x = sampleLeft; x <= sampleRight; x += 1) {
+      if (!geometry.isForeground(x, y)) continue;
+
+      const pixel = sampleRgba(data, width, x, y);
+      const luminance = pixel.r * 0.2126 + pixel.g * 0.7152 + pixel.b * 0.0722;
+      luminanceSum += luminance;
+      luminanceSqSum += luminance * luminance;
+      sampleCount += 1;
+
+      if (x + 1 <= sampleRight && geometry.isForeground(x + 1, y)) {
+        const neighbor = sampleRgba(data, width, x + 1, y);
+        const diff = Math.abs(luminance - (neighbor.r * 0.2126 + neighbor.g * 0.7152 + neighbor.b * 0.0722));
+        comparisons += 1;
+        if (diff >= 18) edgeHits += 1;
+      }
+      if (y + 1 <= sampleBottom && geometry.isForeground(x, y + 1)) {
+        const neighbor = sampleRgba(data, width, x, y + 1);
+        const diff = Math.abs(luminance - (neighbor.r * 0.2126 + neighbor.g * 0.7152 + neighbor.b * 0.0722));
+        comparisons += 1;
+        if (diff >= 18) edgeHits += 1;
+      }
+    }
+  }
+
+  if (sampleCount < 40 || comparisons === 0) return 0;
+
+  const mean = luminanceSum / sampleCount;
+  const variance = Math.max(0, luminanceSqSum / sampleCount - mean * mean);
+  const stddev = Math.sqrt(variance);
+  const edgeDensity = edgeHits / comparisons;
+
+  return clamp(edgeDensity * 14 + stddev / 34, 0, 1.2);
+}
+
+async function analyzeProductImageCandidate(
+  url: string,
+  lookupText: string,
+): Promise<ProductImageCandidateAnalysis | null> {
   try {
     const response = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; lt316-admin/1.0)" },
@@ -245,10 +546,41 @@ async function probeImageCandidate(url: string): Promise<{ width: number; height
 
     const sharp = (await import("sharp")).default;
     const buffer = Buffer.from(await response.arrayBuffer());
-    const meta = await sharp(buffer, { failOn: "none", limitInputPixels: false }).metadata();
+    const image = sharp(buffer, { failOn: "none", limitInputPixels: false }).rotate().ensureAlpha();
+    const meta = await image.metadata();
     if (!meta.width || !meta.height) return null;
 
-    return { width: meta.width, height: meta.height };
+    const rendered = await image
+      .clone()
+      .resize({ width: 320, height: 480, fit: "inside", withoutEnlargement: true })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const geometry = measureForegroundGeometry(
+      rendered.data,
+      rendered.info.width,
+      rendered.info.height,
+    );
+    const orientation = geometry
+      ? detectHandleOrientationFromGeometry(geometry)
+      : { orientation: "unknown" as HandleOrientation, strength: 0 };
+    const bodyMarkScore = geometry
+      ? scoreBodyMarkPresence(rendered.data, rendered.info.width, geometry)
+      : 0;
+    const lexicalScore = scoreImageCandidateUrl(url, lookupText);
+    const metadataScore = scoreImageMetadata({ width: meta.width, height: meta.height });
+
+    return {
+      url,
+      lexicalScore,
+      metadataScore,
+      totalScore: lexicalScore + metadataScore + (orientation.strength * 1.35) + (bodyMarkScore * 0.75),
+      width: meta.width,
+      height: meta.height,
+      orientation: orientation.orientation,
+      orientationStrength: orientation.strength,
+      bodyMarkScore,
+    };
   } catch {
     return null;
   }
@@ -272,34 +604,110 @@ function scoreImageMetadata(meta: { width: number; height: number } | null): num
   return score;
 }
 
-async function selectBestProductImage(args: {
+function getOppositeOrientation(orientation: HandleOrientation): HandleOrientation {
+  if (orientation === "left") return "right";
+  if (orientation === "right") return "left";
+  return "unknown";
+}
+
+function chooseBackImageCandidate(
+  primary: ProductImageCandidateAnalysis,
+  candidates: ProductImageCandidateAnalysis[],
+): string | null {
+  const oppositeOrientation = getOppositeOrientation(primary.orientation);
+
+  const ranked = candidates
+    .filter((candidate) => candidate.url !== primary.url)
+    .map((candidate) => {
+      const score = candidate.totalScore;
+      const backTokenScore = scoreBackImageCandidateUrl(candidate.url);
+      let evidenceScore = backTokenScore;
+      const logoDrop = primary.bodyMarkScore - candidate.bodyMarkScore;
+
+      if (
+        (oppositeOrientation === "left" || oppositeOrientation === "right") &&
+        candidate.orientation === oppositeOrientation
+      ) {
+        evidenceScore += 5 + candidate.orientationStrength * 4;
+      } else if (
+        (primary.orientation === "left" || primary.orientation === "right") &&
+        candidate.orientation === primary.orientation
+      ) {
+        evidenceScore -= 2.5;
+      } else if (candidate.orientation === "left" || candidate.orientation === "right") {
+        evidenceScore += 1 + candidate.orientationStrength * 2;
+      }
+
+      if (Math.abs(candidate.width - primary.width) <= primary.width * 0.45) {
+        evidenceScore += 0.6;
+      }
+
+      if (logoDrop >= 0.08) {
+        evidenceScore += 2 + logoDrop * 6;
+      } else if (logoDrop <= -0.06) {
+        evidenceScore -= 2 + Math.abs(logoDrop) * 4;
+      }
+
+      return {
+        url: candidate.url,
+        score: score + evidenceScore,
+        backTokenScore,
+        evidenceScore,
+        logoDrop,
+        hasOppositeOrientation:
+          (oppositeOrientation === "left" || oppositeOrientation === "right") &&
+          candidate.orientation === oppositeOrientation,
+      };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  const best = ranked[0];
+  if (!best) return null;
+
+  const hasStrongEvidence =
+    best.hasOppositeOrientation ||
+    best.backTokenScore >= 2.5 ||
+    best.evidenceScore >= 3.4 ||
+    best.logoDrop >= 0.12;
+
+  return hasStrongEvidence ? best.url : null;
+}
+
+async function selectProductImagePair(args: {
   imageUrls: string[];
   lookupText: string;
-}): Promise<string | null> {
-  if (args.imageUrls.length === 0) return null;
-  if (args.imageUrls.length === 1) return args.imageUrls[0];
+}): Promise<ProductImagePairSelection> {
+  if (args.imageUrls.length === 0) {
+    return { primaryImageUrl: null, backImageUrl: null };
+  }
 
   const lexicalRanked = args.imageUrls
     .map((url) => ({
       url,
       lexicalScore: scoreImageCandidateUrl(url, args.lookupText),
     }))
-    .sort((a, b) => b.lexicalScore - a.lexicalScore);
+    .sort((left, right) => right.lexicalScore - left.lexicalScore);
 
   const probeCandidates = lexicalRanked.slice(0, 6);
-  let bestUrl = lexicalRanked[0]?.url ?? null;
-  let bestScore = lexicalRanked[0]?.lexicalScore ?? Number.NEGATIVE_INFINITY;
+  const analyses = (
+    await Promise.all(
+      probeCandidates.map((candidate) => analyzeProductImageCandidate(candidate.url, args.lookupText)),
+    )
+  ).filter((candidate): candidate is ProductImageCandidateAnalysis => Boolean(candidate))
+    .sort((left, right) => right.totalScore - left.totalScore);
 
-  for (const candidate of probeCandidates) {
-    const meta = await probeImageCandidate(candidate.url);
-    const totalScore = candidate.lexicalScore + scoreImageMetadata(meta);
-    if (totalScore > bestScore) {
-      bestScore = totalScore;
-      bestUrl = candidate.url;
-    }
+  if (analyses.length === 0) {
+    return {
+      primaryImageUrl: lexicalRanked[0]?.url ?? null,
+      backImageUrl: null,
+    };
   }
 
-  return bestUrl;
+  const primary = analyses[0];
+  return {
+    primaryImageUrl: primary.url,
+    backImageUrl: chooseBackImageCandidate(primary, analyses),
+  };
 }
 
 function parseTripletDimensionsMm(text: string): TumblerItemLookupDimensions | null {
@@ -453,31 +861,49 @@ export async function lookupTumblerItem(args: {
   const notes: string[] = [];
   let sourceKind: TumblerSourceLink["kind"] = "general";
   let selectedImageUrl: string | null = null;
+  let selectedBackImageUrl: string | null = null;
 
   let lookupText = lookupInput;
 
   if (isLikelyUrl(lookupInput)) {
-    const { html, finalUrl } = await fetchPage(lookupInput);
-    resolvedUrl = finalUrl;
-    title = extractTitle(html);
-    imageUrls = extractImageUrls(html, finalUrl);
-    lookupText = [lookupInput, title, html.slice(0, 12_000)].filter(Boolean).join(" ");
+    try {
+      const { html, finalUrl } = await fetchPage(lookupInput);
+      resolvedUrl = finalUrl;
+      title = extractTitle(html);
+      imageUrls = extractImageUrls(html, finalUrl);
+      lookupText = [lookupInput, title, html.slice(0, 12_000)].filter(Boolean).join(" ");
 
-    if (/stanley1913\.com/i.test(finalUrl)) sourceKind = "official";
-    else if (/academy\.com/i.test(finalUrl)) sourceKind = "retailer";
-    else if (/amazon\.com|walmart\.com|dickssportinggoods\.com/i.test(finalUrl)) sourceKind = "retailer";
+      if (/stanley1913\.com/i.test(finalUrl)) sourceKind = "official";
+      else if (/academy\.com/i.test(finalUrl)) sourceKind = "retailer";
+      else if (/amazon\.com|walmart\.com|dickssportinggoods\.com/i.test(finalUrl)) sourceKind = "retailer";
 
-    sources = buildSources(finalUrl, sourceKind, title);
-    scrapedDims = parseTripletDimensionsMm(lookupText);
-    selectedImageUrl = await selectBestProductImage({
-      imageUrls,
-      lookupText,
-    });
-    if (scrapedDims?.overallHeightMm) {
-      notes.push("Parsed page dimensions from the product page text.");
-    }
-    if (selectedImageUrl && selectedImageUrl !== imageUrls[0]) {
-      notes.push("Selected the strongest product photo from the scraped page images.");
+      sources = buildSources(finalUrl, sourceKind, title);
+      scrapedDims = parseTripletDimensionsMm(lookupText);
+      const selectedImages = await selectProductImagePair({
+        imageUrls,
+        lookupText,
+      });
+      selectedImageUrl = selectedImages.primaryImageUrl;
+      selectedBackImageUrl = selectedImages.backImageUrl;
+      if (scrapedDims?.overallHeightMm) {
+        notes.push("Parsed page dimensions from the product page text.");
+      }
+      if (selectedImageUrl && selectedImageUrl !== imageUrls[0]) {
+        notes.push("Selected the strongest product photo from the scraped page images.");
+      }
+      if (selectedBackImageUrl) {
+        notes.push("Detected an opposite-side product photo from the scraped gallery.");
+      }
+    } catch (error) {
+      resolvedUrl = lookupInput;
+      title = buildLookupTextFromUrl(lookupInput);
+      lookupText = [lookupInput, title].filter(Boolean).join(" ");
+      sources = buildSources(lookupInput, "general", title);
+      notes.push(
+        error instanceof Error
+          ? `${error.message}. Falling back to URL text only.`
+          : "Lookup fetch failed. Falling back to URL text only.",
+      );
     }
   }
 
@@ -520,6 +946,7 @@ export async function lookupTumblerItem(args: {
       matchedProfileId: matchedProfile.id,
       glbPath: fallbackAsset.glbPath,
       imageUrl: selectedImageUrl,
+      backImageUrl: selectedBackImageUrl,
       imageUrls,
       fitDebug: fallbackAsset.fitDebug,
       dimensions: {
@@ -572,6 +999,7 @@ export async function lookupTumblerItem(args: {
     matchedProfileId: null,
     glbPath: fallbackAsset.glbPath,
     imageUrl: selectedImageUrl,
+    backImageUrl: selectedBackImageUrl,
     imageUrls,
     fitDebug: fallbackAsset.fitDebug,
     dimensions: {

@@ -347,6 +347,23 @@
   margin-top: 1px;
 }
 
+.matchActionBtn {
+  margin-top: 3px;
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 9px;
+  font-family: monospace;
+  background: var(--bg-input);
+  border: 1px solid var(--border-normal);
+  color: var(--accent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.matchActionBtn:hover {
+  background: var(--bg-hover);
+}
+
 /* ── MOPA section ── */
 .mopaSection {
   border-top: 1px solid var(--border-subtle);
@@ -571,4 +588,17 @@
   border-radius: 2px;
   border: 1px solid rgba(255,255,255,0.15);
   vertical-align: middle;
+}
+
+.tableOutcomeChip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border-normal);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 8px;
+  line-height: 1.2;
 }

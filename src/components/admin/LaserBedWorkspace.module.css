@@ -26,6 +26,13 @@
   min-width: 0;
 }
 
+.toolbarJobSummary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
 .toolbarBrand {
   font-size: 11px;
   font-weight: 700;
@@ -36,6 +43,23 @@
 }
 
 .toolbarProduct {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbarJobCustomer {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbarJobProduct {
   font-size: 11px;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -88,6 +112,134 @@
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.shortcutHelpWrap {
+  position: relative;
+}
+
+.shortcutHelpBtn {
+  padding: 4px 9px;
+  border: 1px solid var(--border-normal);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+}
+
+.shortcutHelpBtn:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.shortcutHelpPanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.28);
+  z-index: 20;
+}
+
+.shortcutRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shortcutKey {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.shortcutText {
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: right;
+}
+
+.queueChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-normal);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.queueChipBtn {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.queueChipBtn:hover .queueChip {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.toolbarActionBtn {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-normal);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition), opacity var(--transition);
+  white-space: nowrap;
+}
+
+.toolbarActionBtn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.toolbarActionBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.toolbarSecondaryBtn {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-normal);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+  white-space: nowrap;
+}
+
+.toolbarSecondaryBtn:hover {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+  background: var(--bg-hover);
 }
 
 .clearLink {
@@ -217,5 +369,3 @@
   pointer-events: none;
   user-select: none;
 }
-
-

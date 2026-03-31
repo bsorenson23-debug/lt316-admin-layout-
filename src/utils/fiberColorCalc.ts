@@ -6,6 +6,7 @@
 // power or speed. This is what distinguishes MOPA from Q-switch for color work.
 
 import { FIBER_COLOR_SPECTRUM, getSpectrumMidpoint } from "../data/fiberColorSpectrum.ts";
+import { normalizeFiberCalibrationProfile } from "../features/color-profiles/calibration.ts";
 import type {
   FiberColorEntry,
   FiberBaseParams,
@@ -235,14 +236,19 @@ export function loadFiberProfiles(): FiberMachineProfile[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(FIBER_PROFILES_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as FiberMachineProfile[]) : [];
+    return raw
+      ? (JSON.parse(raw) as FiberMachineProfile[]).map(normalizeFiberCalibrationProfile)
+      : [];
   } catch {
     return [];
   }
 }
 
 export function saveFiberProfiles(profiles: FiberMachineProfile[]): void {
-  localStorage.setItem(FIBER_PROFILES_STORAGE_KEY, JSON.stringify(profiles));
+  localStorage.setItem(
+    FIBER_PROFILES_STORAGE_KEY,
+    JSON.stringify(profiles.map(normalizeFiberCalibrationProfile)),
+  );
 }
 
 export function getActiveFiberProfileId(): string | null {

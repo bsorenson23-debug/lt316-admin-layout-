@@ -61,6 +61,12 @@ function formatMm(value: number): string {
     : value.toFixed(2).replace(/\.?0+$/, "");
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
 // ─── Material palette ─────────────────────────────────────────────────────────
 
 function getMaterialPalette(material: string): { fill: string; stroke: string; sheen: string } {
@@ -137,6 +143,8 @@ export interface FlatBedItemOverlay {
   label: string;
   category: string;
   material?: string;
+  materialLabel?: string;
+  productHint?: string;
   imageSrc?: string;
   imageNaturalWidth?: number;
   imageNaturalHeight?: number;
@@ -147,6 +155,16 @@ interface Props {
   placedItems: PlacedItem[];
   selectedItemId: string | null;
   placementAsset: SvgAsset | null;
+  svgDoctorPreview?: {
+    sourceFileName: string | null;
+    previewSvgText: string | null;
+    previewFile: File | null;
+    status: "idle" | "running" | "done" | "error";
+    previewImageUrl?: string | null;
+    previewLabel?: string | null;
+    previewBackground?: "light" | "dark" | "checker";
+    previewTarget?: string | null;
+  } | null;
   isPlacementArmed: boolean;
   framePreview?: FramePreviewProp | null;
   onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
@@ -189,6 +207,14 @@ interface Props {
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
   onNudgeSelected: (dxMm: number, dyMm: number) => void;
   onDeleteItem?: (id: string) => void;
+  currentJobLabel?: string | null;
+  currentJobProduct?: string | null;
+  onLoadNextJob?: () => void;
+  onDoneAndNextJob?: () => void;
+  onReopenCurrentJob?: () => void;
+  onViewAllJobs?: () => void;
+  hasQueuedJobs?: boolean;
+  queuedJobCount?: number;
   onClearWorkspace: () => void;
 }
 
@@ -296,8 +322,16 @@ function buildFlatBedItemSvg(
 function useLoadImage(src: string | null | undefined): HTMLImageElement | null {
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   useEffect(() => {
-    if (!src) { setImg(null); return; }
     let cancelled = false;
+    if (!src) {
+      const frameId = window.requestAnimationFrame(() => {
+        if (!cancelled) setImg(null);
+      });
+      return () => {
+        cancelled = true;
+        window.cancelAnimationFrame(frameId);
+      };
+    }
     const el = new window.Image();
     el.onload = () => { if (!cancelled) setImg(el); };
     el.onerror = () => { if (!cancelled) setImg(null); };
@@ -313,12 +347,20 @@ function useLoadOverlayImage(src: string | null | undefined): HTMLImageElement |
   const [processed, setProcessed] = useState<HTMLImageElement | null>(null);
 
   useEffect(() => {
-    if (!raw) { setProcessed(null); return; }
+    let cancelled = false;
+    if (!raw) {
+      const frameId = window.requestAnimationFrame(() => {
+        if (!cancelled) setProcessed(null);
+      });
+      return () => {
+        cancelled = true;
+        window.cancelAnimationFrame(frameId);
+      };
+    }
     // Check if the image has a dark background
     if (hasDarkBackground(raw)) {
       const cleanUrl = removeBlackBackground(raw);
       if (cleanUrl) {
-        let cancelled = false;
         const el = new window.Image();
         el.onload = () => { if (!cancelled) setProcessed(el); };
         el.onerror = () => { if (!cancelled) setProcessed(raw); }; // fallback to original
@@ -327,10 +369,32 @@ function useLoadOverlayImage(src: string | null | undefined): HTMLImageElement |
       }
     }
     // No dark background or removal failed — use as-is
-    setProcessed(raw);
+    const frameId = window.requestAnimationFrame(() => {
+      if (!cancelled) setProcessed(raw);
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frameId);
+    };
   }, [raw]);
 
   return processed;
+}
+
+function createCheckerCanvas(): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 24;
+  canvas.height = 24;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+
+  context.fillStyle = "#f3f4f6";
+  context.fillRect(0, 0, 24, 24);
+  context.fillStyle = "#d9dde3";
+  context.fillRect(0, 0, 12, 12);
+  context.fillRect(12, 12, 12, 12);
+  return canvas;
 }
 
 
@@ -341,6 +405,7 @@ export function LaserBedWorkspace({
   placedItems,
   selectedItemId,
   placementAsset,
+  svgDoctorPreview = null,
   isPlacementArmed,
   framePreview,
   onWorkspaceModeChange,
@@ -368,6 +433,14 @@ export function LaserBedWorkspace({
   onUpdateItem,
   onNudgeSelected,
   onDeleteItem,
+  currentJobLabel,
+  currentJobProduct,
+  onLoadNextJob,
+  onDoneAndNextJob,
+  onReopenCurrentJob,
+  onViewAllJobs,
+  hasQueuedJobs = false,
+  queuedJobCount = 0,
   onClearWorkspace,
 }: Props) {
   const containerRef   = useRef<HTMLDivElement>(null);
@@ -385,10 +458,12 @@ export function LaserBedWorkspace({
   const [zoom, setZoom]                   = useState(1);
   const [pan, setPan]                     = useState({ x: 0, y: 0 });
   const [clearConfirm, setClearConfirm]   = useState(false);
+  const [showShortcutHelp, setShowShortcutHelp] = useState(false);
 
   // Image caches
   const [imageCache, setImageCache] = useState<Map<string, HTMLImageElement>>(new Map());
   const mockupImg = useLoadImage(mockupConfig?.src ?? null);
+  const [svgDoctorRasterSrc, setSvgDoctorRasterSrc] = useState<string | null>(null);
 
   // Template product overlay — auto-strips dark backgrounds (photo mode only)
   const templatePhotoImg = useLoadOverlayImage(overlayMode === "photo" ? (templateOverlayUrl ?? null) : null);
@@ -484,6 +559,27 @@ export function LaserBedWorkspace({
     return svgToDataUrl(buildFlatBedItemSvg(flatBedItemOverlay, bedPxW, bedPxH, basePxPerMm));
   }, [flatBedItemOverlay, bedPxW, bedPxH, basePxPerMm]);
   const flatBedImg = useLoadImage(flatBedSvgSrc);
+  const svgDoctorVectorSrc = useMemo(
+    () => (svgDoctorPreview?.previewSvgText ? svgToDataUrl(svgDoctorPreview.previewSvgText) : null),
+    [svgDoctorPreview],
+  );
+  const svgDoctorExternalPreviewImg = useLoadImage(svgDoctorPreview?.previewImageUrl ?? null);
+  const svgDoctorVectorImg = useLoadImage(svgDoctorVectorSrc);
+  const svgDoctorRasterImg = useLoadImage(svgDoctorRasterSrc);
+  const svgDoctorCheckerCanvas = useMemo(() => createCheckerCanvas(), []);
+
+  useEffect(() => {
+    if (!svgDoctorPreview?.previewFile) {
+      const frameId = window.requestAnimationFrame(() => setSvgDoctorRasterSrc(null));
+      return () => window.cancelAnimationFrame(frameId);
+    }
+    const url = URL.createObjectURL(svgDoctorPreview.previewFile);
+    const frameId = window.requestAnimationFrame(() => setSvgDoctorRasterSrc(url));
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      URL.revokeObjectURL(url);
+    };
+  }, [svgDoctorPreview]);
 
   // ── ResizeObserver ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -502,8 +598,11 @@ export function LaserBedWorkspace({
 
   // ── Reset view when bed changes ───────────────────────────────────────────
   useEffect(() => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
+    const frameId = window.requestAnimationFrame(() => {
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+    });
+    return () => window.cancelAnimationFrame(frameId);
   }, [bedConfig.width, bedConfig.height]);
 
   // ── Load placed item images ───────────────────────────────────────────────
@@ -516,13 +615,16 @@ export function LaserBedWorkspace({
       img.src = svgToDataUrl(item.svgText);
     });
     // Prune removed items
-    setImageCache(prev => {
-      let changed = false;
-      const next = new Map(prev);
-      for (const k of next.keys()) { if (!ids.has(k)) { next.delete(k); changed = true; } }
-      return changed ? next : prev;
+    const frameId = window.requestAnimationFrame(() => {
+      setImageCache(prev => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const k of next.keys()) { if (!ids.has(k)) { next.delete(k); changed = true; } }
+        return changed ? next : prev;
+      });
     });
-  }, [placedItems]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => window.cancelAnimationFrame(frameId);
+  }, [imageCache, placedItems]);
 
   // ── Sync Transformer to selection ────────────────────────────────────────
   useEffect(() => {
@@ -539,18 +641,49 @@ export function LaserBedWorkspace({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!selectedItemId || !onDeleteItem) return;
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (isEditableTarget(e.target)) return;
       if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); onDeleteItem(selectedItemId); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [selectedItemId, onDeleteItem]);
 
+  // ── Keyboard: Arrow-key nudge ────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!selectedItemId || isEditableTarget(e.target)) return;
+
+      const step = bedConfig.snapToGrid ? bedConfig.gridSpacing : 1;
+      switch (e.key) {
+        case "ArrowUp":
+          e.preventDefault();
+          onNudgeSelected(0, -step);
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          onNudgeSelected(0, step);
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          onNudgeSelected(-step, 0);
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          onNudgeSelected(step, 0);
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [bedConfig.gridSpacing, bedConfig.snapToGrid, onNudgeSelected, selectedItemId]);
+
   // ── Keyboard: Space for pan mode ──────────────────────────────────────────
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !["INPUT","TEXTAREA","SELECT"].includes((e.target as HTMLElement).tagName)) {
+      if (e.code === "Space" && !isEditableTarget(e.target)) {
         e.preventDefault(); spaceDownRef.current = true;
       }
     };
@@ -879,7 +1012,25 @@ export function LaserBedWorkspace({
   const selectedItem = placedItems.find(i => i.id === selectedItemId) ?? null;
 
   // ── Empty bed placeholder text ────────────────────────────────────────────
-  const showPlaceholder = placedItems.length === 0 && !flatBedItemOverlay && !mockupConfig;
+  const svgDoctorPreviewImg = svgDoctorExternalPreviewImg ?? svgDoctorVectorImg ?? svgDoctorRasterImg;
+  const svgDoctorPreviewLayout = useMemo(() => {
+    if (!svgDoctorPreviewImg) return null;
+    const maxW = bedPxW * 0.62;
+    const maxH = bedPxH * 0.62;
+    const naturalW = Math.max(1, svgDoctorPreviewImg.naturalWidth || svgDoctorPreviewImg.width || 1);
+    const naturalH = Math.max(1, svgDoctorPreviewImg.naturalHeight || svgDoctorPreviewImg.height || 1);
+    const scale = Math.min(maxW / naturalW, maxH / naturalH);
+    const width = naturalW * scale;
+    const height = naturalH * scale;
+    return {
+      x: (bedPxW - width) / 2,
+      y: (bedPxH - height) / 2,
+      width,
+      height,
+    };
+  }, [bedPxH, bedPxW, svgDoctorPreviewImg]);
+
+  const showPlaceholder = placedItems.length === 0 && !flatBedItemOverlay && !mockupConfig && !svgDoctorPreviewLayout;
 
   // ── Zoom reset ────────────────────────────────────────────────────────────
   const resetView = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, []);
@@ -896,7 +1047,14 @@ export function LaserBedWorkspace({
         {/* LEFT: Product name */}
         <div className={styles.toolbarLeft}>
           <span className={styles.toolbarBrand}>LT316</span>
-          {productName ? (
+          {currentJobLabel ? (
+            <div className={styles.toolbarJobSummary}>
+              <span className={styles.toolbarJobCustomer}>{currentJobLabel}</span>
+              <span className={styles.toolbarJobProduct}>
+                {currentJobProduct || productName || "Current Job"}
+              </span>
+            </div>
+          ) : productName ? (
             <span className={styles.toolbarProduct}>{" \u2014 "}{productName}</span>
           ) : (
             <span className={styles.toolbarProductEmpty}>{" \u2014 Select a product"}</span>
@@ -944,6 +1102,90 @@ export function LaserBedWorkspace({
 
         {/* RIGHT: Clear workspace */}
         <div className={styles.toolbarRight}>
+          <div className={styles.shortcutHelpWrap}>
+            <button
+              className={styles.shortcutHelpBtn}
+              onClick={() => setShowShortcutHelp((previous) => !previous)}
+              type="button"
+              aria-expanded={showShortcutHelp}
+              aria-controls="workspace-shortcut-help"
+            >
+              Keys
+            </button>
+            {showShortcutHelp && (
+              <div id="workspace-shortcut-help" className={styles.shortcutHelpPanel} role="note">
+                <div className={styles.shortcutRow}>
+                  <span className={styles.shortcutKey}>Arrow keys</span>
+                  <span className={styles.shortcutText}>Nudge selected artwork</span>
+                </div>
+                <div className={styles.shortcutRow}>
+                  <span className={styles.shortcutKey}>Delete</span>
+                  <span className={styles.shortcutText}>Remove selected artwork</span>
+                </div>
+                <div className={styles.shortcutRow}>
+                  <span className={styles.shortcutKey}>Space + drag</span>
+                  <span className={styles.shortcutText}>Pan the bed</span>
+                </div>
+                <div className={styles.shortcutRow}>
+                  <span className={styles.shortcutKey}>Wheel</span>
+                  <span className={styles.shortcutText}>Zoom around cursor</span>
+                </div>
+              </div>
+            )}
+          </div>
+          {onViewAllJobs ? (
+            <button
+              className={styles.queueChipBtn}
+              onClick={onViewAllJobs}
+              type="button"
+              title="Open the job board"
+            >
+              <span className={styles.queueChip}>
+                {queuedJobCount} queued
+              </span>
+            </button>
+          ) : (
+            <span className={styles.queueChip}>
+              {queuedJobCount} queued
+            </span>
+          )}
+          {onViewAllJobs && (
+            <button
+              className={styles.toolbarSecondaryBtn}
+              onClick={onViewAllJobs}
+              type="button"
+            >
+              View All Jobs
+            </button>
+          )}
+          {onLoadNextJob && (
+            <button
+              className={styles.toolbarActionBtn}
+              onClick={onLoadNextJob}
+              type="button"
+              title={hasQueuedJobs ? "Load the next queued job into the workspace" : "No runnable jobs found"}
+            >
+              Load Next Job
+            </button>
+          )}
+          {onDoneAndNextJob && (
+            <button
+              className={styles.toolbarActionBtn}
+              onClick={onDoneAndNextJob}
+              type="button"
+            >
+              Done + Next
+            </button>
+          )}
+          {onReopenCurrentJob && (
+            <button
+              className={styles.toolbarSecondaryBtn}
+              onClick={onReopenCurrentJob}
+              type="button"
+            >
+              Reopen current-job
+            </button>
+          )}
           {placedItems.length > 0 && (
             clearConfirm ? (
               <>
@@ -1019,6 +1261,98 @@ export function LaserBedWorkspace({
               />
             )}
 
+            {svgDoctorPreviewLayout && svgDoctorPreviewImg && (
+              <Group listening={false}>
+                <Rect
+                  x={svgDoctorPreviewLayout.x - 16}
+                  y={svgDoctorPreviewLayout.y - 34}
+                  width={svgDoctorPreviewLayout.width + 32}
+                  height={svgDoctorPreviewLayout.height + 52}
+                  cornerRadius={10}
+                  fill="rgba(10, 14, 18, 0.72)"
+                  stroke="rgba(255, 255, 255, 0.22)"
+                  strokeWidth={1}
+                />
+                <Rect
+                  x={svgDoctorPreviewLayout.x}
+                  y={svgDoctorPreviewLayout.y}
+                  width={svgDoctorPreviewLayout.width}
+                  height={svgDoctorPreviewLayout.height}
+                  cornerRadius={6}
+                  fill={
+                    svgDoctorPreview?.previewBackground === "dark"
+                      ? "rgba(24, 28, 33, 0.96)"
+                      : svgDoctorPreview?.previewBackground === "checker"
+                        ? "rgba(255, 255, 255, 0.94)"
+                        : "rgba(248, 250, 252, 0.96)"
+                  }
+                  stroke="rgba(255, 255, 255, 0.34)"
+                  strokeWidth={1}
+                />
+                <Rect
+                  x={svgDoctorPreviewLayout.x + 10}
+                  y={svgDoctorPreviewLayout.y + 10}
+                  width={svgDoctorPreviewLayout.width - 20}
+                  height={svgDoctorPreviewLayout.height - 20}
+                  cornerRadius={4}
+                  fill={
+                    svgDoctorPreview?.previewBackground === "dark"
+                      ? "rgba(12, 16, 20, 0.9)"
+                      : svgDoctorPreview?.previewBackground === "checker"
+                        ? "rgba(255, 255, 255, 0)"
+                        : "rgba(229, 231, 235, 0.65)"
+                  }
+                />
+                {svgDoctorPreview?.previewBackground === "checker" && svgDoctorCheckerCanvas ? (
+                  <KonvaImage
+                    image={svgDoctorCheckerCanvas}
+                    x={svgDoctorPreviewLayout.x + 10}
+                    y={svgDoctorPreviewLayout.y + 10}
+                    width={svgDoctorPreviewLayout.width - 20}
+                    height={svgDoctorPreviewLayout.height - 20}
+                    opacity={0.98}
+                  />
+                ) : null}
+                <Text
+                  x={svgDoctorPreviewLayout.x}
+                  y={svgDoctorPreviewLayout.y - 22}
+                  width={svgDoctorPreviewLayout.width}
+                  align="center"
+                  text={
+                    `${svgDoctorPreview?.previewLabel ?? (svgDoctorPreview?.previewSvgText ? "SVG Doctor Preview" : "Raster Review")} • ${svgDoctorPreview?.sourceFileName ?? "trace"}`
+                  }
+                  fontSize={11}
+                  fontStyle="bold"
+                  fontFamily="system-ui, sans-serif"
+                  fill="rgba(255,255,255,0.78)"
+                />
+                <KonvaImage
+                  image={svgDoctorPreviewImg}
+                  x={svgDoctorPreviewLayout.x}
+                  y={svgDoctorPreviewLayout.y}
+                  width={svgDoctorPreviewLayout.width}
+                  height={svgDoctorPreviewLayout.height}
+                  opacity={1}
+                />
+                <Text
+                  x={svgDoctorPreviewLayout.x}
+                  y={svgDoctorPreviewLayout.y + svgDoctorPreviewLayout.height + 8}
+                  width={svgDoctorPreviewLayout.width}
+                  align="center"
+                  text={
+                    svgDoctorPreview?.status === "running"
+                      ? "Tracing in progress"
+                      : svgDoctorPreview?.previewTarget === "result"
+                        ? "Trace complete • review directly on the bed"
+                        : "Inspecting the selected source or branch on the bed"
+                  }
+                  fontSize={10}
+                  fontFamily="system-ui, sans-serif"
+                  fill="rgba(255,255,255,0.58)"
+                />
+              </Group>
+            )}
+
             {/* Grid */}
             {gridLines}
 
@@ -1085,47 +1419,75 @@ export function LaserBedWorkspace({
               const iy = item.y * basePxPerMm;
               const iw = item.width  * basePxPerMm;
               const ih = item.height * basePxPerMm;
+              const isSelected = item.id === selectedItemId;
+              const labelText = item.name.replace(/\.svg$/i, "");
               return (
-                <KonvaImage
-                  key={item.id}
-                  id={`ki_${item.id}`}
-                  image={img}
-                  x={ix} y={iy}
-                  width={iw} height={ih}
-                  rotation={item.rotation ?? 0}
-                  opacity={curvedItemsCanvas ? 0 : 1}
-                  draggable
-                  onClick={(e) => { e.cancelBubble = true; onSelectItem(item.id); }}
-                  onDragEnd={(e) => {
-                    const node = e.target;
-                    let nx = node.x() / basePxPerMm;
-                    let ny = node.y() / basePxPerMm;
-                    if (bedConfig.snapToGrid) { nx = snapToStep(nx, bedConfig.gridSpacing); ny = snapToStep(ny, bedConfig.gridSpacing); }
-                    nx = clamp(nx, 0, bedConfig.width  - item.width);
-                    ny = clamp(ny, 0, bedConfig.height - item.height);
-                    onUpdateItem(item.id, { x: +nx.toFixed(3), y: +ny.toFixed(3) });
-                    node.x(nx * basePxPerMm);
-                    node.y(ny * basePxPerMm);
-                  }}
-                  onTransformEnd={(e) => {
-                    const node = e.target;
-                    const scX = node.scaleX();
-                    const scY = node.scaleY();
-                    const newW = Math.max(1, (item.width  * scX));
-                    const newH = Math.max(1, (item.height * scY));
-                    const nx = clamp(node.x() / basePxPerMm, 0, bedConfig.width  - newW);
-                    const ny = clamp(node.y() / basePxPerMm, 0, bedConfig.height - newH);
-                    node.scaleX(1); node.scaleY(1);
-                    node.x(nx * basePxPerMm); node.y(ny * basePxPerMm);
-                    node.width(newW  * basePxPerMm);
-                    node.height(newH * basePxPerMm);
-                    onUpdateItem(item.id, {
-                      x: +nx.toFixed(3), y: +ny.toFixed(3),
-                      width: +newW.toFixed(3), height: +newH.toFixed(3),
-                      rotation: node.rotation(),
-                    });
-                  }}
-                />
+                <Group key={item.id}>
+                  {isSelected && (
+                    <>
+                      <Rect
+                        x={ix - 8}
+                        y={iy - 8}
+                        width={iw + 16}
+                        height={ih + 16}
+                        cornerRadius={8}
+                        fill="rgba(248, 250, 252, 0.08)"
+                        stroke="rgba(255, 255, 255, 0.14)"
+                        strokeWidth={1}
+                        listening={false}
+                      />
+                      <Text
+                        x={ix}
+                        y={Math.max(6, iy - 18)}
+                        text={`Imported SVG: ${labelText}`}
+                        fontSize={10}
+                        fontStyle="bold"
+                        fontFamily="system-ui, sans-serif"
+                        fill="rgba(255,255,255,0.72)"
+                        listening={false}
+                      />
+                    </>
+                  )}
+                  <KonvaImage
+                    id={`ki_${item.id}`}
+                    image={img}
+                    x={ix} y={iy}
+                    width={iw} height={ih}
+                    rotation={item.rotation ?? 0}
+                    opacity={curvedItemsCanvas ? 0 : 1}
+                    draggable
+                    onClick={(e) => { e.cancelBubble = true; onSelectItem(item.id); }}
+                    onDragEnd={(e) => {
+                      const node = e.target;
+                      let nx = node.x() / basePxPerMm;
+                      let ny = node.y() / basePxPerMm;
+                      if (bedConfig.snapToGrid) { nx = snapToStep(nx, bedConfig.gridSpacing); ny = snapToStep(ny, bedConfig.gridSpacing); }
+                      nx = clamp(nx, 0, bedConfig.width  - item.width);
+                      ny = clamp(ny, 0, bedConfig.height - item.height);
+                      onUpdateItem(item.id, { x: +nx.toFixed(3), y: +ny.toFixed(3) });
+                      node.x(nx * basePxPerMm);
+                      node.y(ny * basePxPerMm);
+                    }}
+                    onTransformEnd={(e) => {
+                      const node = e.target;
+                      const scX = node.scaleX();
+                      const scY = node.scaleY();
+                      const newW = Math.max(1, (item.width  * scX));
+                      const newH = Math.max(1, (item.height * scY));
+                      const nx = clamp(node.x() / basePxPerMm, 0, bedConfig.width  - newW);
+                      const ny = clamp(node.y() / basePxPerMm, 0, bedConfig.height - newH);
+                      node.scaleX(1); node.scaleY(1);
+                      node.x(nx * basePxPerMm); node.y(ny * basePxPerMm);
+                      node.width(newW  * basePxPerMm);
+                      node.height(newH * basePxPerMm);
+                      onUpdateItem(item.id, {
+                        x: +nx.toFixed(3), y: +ny.toFixed(3),
+                        width: +newW.toFixed(3), height: +newH.toFixed(3),
+                        rotation: node.rotation(),
+                      });
+                    }}
+                  />
+                </Group>
               );
             })}
 

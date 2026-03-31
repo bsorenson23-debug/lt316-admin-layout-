@@ -1,23 +1,38 @@
 "use client";
 
 import React from "react";
+import dynamic from "next/dynamic";
 import type { ProductTemplate, TumblerMapping } from "@/types/productTemplate";
 import type { AutoDetectResult } from "@/lib/autoDetect";
+import type { FlatItemLookupResponse } from "@/types/flatItemLookup";
+import type { SmartTemplateLookupResponse } from "@/types/smartTemplateLookup";
 import type { TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
+import { lookupFlatItem as lookupFlatItemRequest } from "@/lib/flatItemLookup";
 import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
+import { FLAT_BED_ITEMS, type FlatBedItem } from "@/data/flatBedItems";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
+import { getMaterialProfileById } from "@/data/materialProfiles";
 import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "@/data/rotaryPlacementPresets";
 import { saveTemplate, updateTemplate } from "@/lib/templateStorage";
 import { generateThumbnail } from "@/lib/generateThumbnail";
 import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHandleArcDeg } from "@/data/tumblerProfiles";
 import { getDefaultLaserSettings } from "@/lib/scopedDefaults";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
+import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
 import { EngravableZoneEditor } from "./EngravableZoneEditor";
 import { TumblerLookupDebugPanel } from "./TumblerLookupDebugPanel";
+import { FlatItemLookupDebugPanel } from "./FlatItemLookupDebugPanel";
+import { SmartTemplateLookupPanel } from "./SmartTemplateLookupPanel";
+import type { FlatPreviewDimensions, ModelViewerProps, TumblerDimensions } from "./ModelViewer";
 import styles from "./TemplateCreateForm.module.css";
+
+const ModelViewer = dynamic<ModelViewerProps>(
+  () => import("./ModelViewer"),
+  { ssr: false },
+);
 
 interface Props {
   onSave: (template: ProductTemplate) => void;
@@ -117,7 +132,302 @@ function formatLookupMeasurement(value: number | null | undefined): string | nul
     : null;
 }
 
+function normalizeLookupText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/[^a-z0-9.\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractLookupText(input: string): string {
+  const trimmed = input.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return trimmed;
+  try {
+    const url = new URL(trimmed);
+    return decodeURIComponent(url.pathname)
+      .split("/")
+      .filter(Boolean)
+      .at(-1)
+      ?.replace(/\.[a-z0-9]+$/i, "")
+      ?.replace(/[-_]+/g, " ")
+      ?.trim() || trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+function tokenizeLookupText(value: string): string[] {
+  return normalizeLookupText(value)
+    .split(" ")
+    .filter((token) => token.length >= 2);
+}
+
+const FLAT_LOOKUP_STOPWORDS = new Set([
+  "com",
+  "www",
+  "http",
+  "https",
+  "item",
+  "items",
+  "product",
+  "products",
+  "warehouse",
+  "shop",
+  "store",
+  "sale",
+  "buy",
+  "pack",
+  "black",
+  "fde",
+  "odg",
+  "gen",
+  "m2",
+  "moe",
+  "round",
+]);
+
+const FLAT_LOOKUP_ALIASES: Record<string, string[]> = {
+  "ss-plate-10in": ["plate", "dish", "dinner plate", "steel plate"],
+  "ss-tray-12x8": ["tray", "serving tray", "steel tray"],
+  "cutting-board-bamboo-12x8": ["cutting board", "board", "bamboo board", "charcuterie board"],
+  "wood-charcuterie-14x10": ["charcuterie board", "serving board", "wood board"],
+  "slate-coaster-4in": ["coaster", "round coaster", "slate coaster"],
+  "slate-coaster-4in-square": ["square coaster", "slate square coaster"],
+  "ceramic-tile-4x4": ["tile", "ceramic tile", "4x4 tile"],
+  "dog-tag-ss": ["dog tag", "military tag", "tag"],
+  "anodized-keychain": ["keychain", "key tag", "tag blank"],
+  "business-card-aluminum": ["business card", "metal card", "wallet insert"],
+  "business-card-ss": ["stainless business card", "metal business card", "wallet insert"],
+  "phone-case-flat": ["phone case", "case", "iphone case", "galaxy case"],
+  "ss-card-wallet": ["wallet insert", "metal wallet card", "card wallet"],
+};
+
+const FLAT_LOOKUP_FALLBACKS: Array<FlatBedItem & { lookupAliases: string[] }> = [
+  {
+    id: "fallback-polymer-rifle-magazine",
+    label: "Polymer Rifle Magazine",
+    category: "other",
+    widthMm: 66,
+    heightMm: 178,
+    thicknessMm: 28,
+    material: "plastic-abs",
+    materialLabel: "Plastic - ABS",
+    productHint: "magazine",
+    notes: "Heuristic flat-item lookup. Verify physical dimensions before saving.",
+    lookupAliases: ["pmag", "magpul", "magazine", "rifle magazine", "ar15 magazine", "stanag", "223", "556"],
+  },
+  {
+    id: "fallback-pistol-magazine",
+    label: "Pistol Magazine",
+    category: "other",
+    widthMm: 38,
+    heightMm: 130,
+    thicknessMm: 20,
+    material: "plastic-abs",
+    materialLabel: "Plastic - ABS",
+    productHint: "magazine",
+    notes: "Heuristic flat-item lookup. Verify physical dimensions before saving.",
+    lookupAliases: ["pistol magazine", "glock magazine", "handgun mag", "9mm magazine", "magazine"],
+  },
+  {
+    id: "fallback-knife-handle",
+    label: "Knife Handle / Blade Blank",
+    category: "other",
+    widthMm: 32,
+    heightMm: 118,
+    thicknessMm: 6,
+    material: "stainless-steel",
+    materialLabel: "Stainless Steel",
+    productHint: "knife",
+    notes: "Heuristic flat-item lookup. Verify physical dimensions before saving.",
+    lookupAliases: ["knife", "blade", "pocket knife", "folder", "edc knife"],
+  },
+];
+
+function buildFlatLookupHaystack(item: FlatBedItem): string {
+  const aliases = FLAT_LOOKUP_ALIASES[item.id] ?? [];
+  return normalizeLookupText(
+    `${item.label} ${item.materialLabel} ${item.material} ${item.category} ${item.productHint ?? ""} ${item.id} ${aliases.join(" ")}`,
+  );
+}
+
+function scoreFlatLookupTokens(tokens: string[], haystack: string): number {
+  if (tokens.length === 0) return 0;
+
+  let score = 0;
+  for (const token of tokens) {
+    if (FLAT_LOOKUP_STOPWORDS.has(token)) continue;
+    if (!haystack.includes(token)) continue;
+    score += token.length >= 4 ? 1.4 : 0.7;
+  }
+
+  return score / Math.max(1, tokens.filter((token) => !FLAT_LOOKUP_STOPWORDS.has(token)).length);
+}
+
+function findFlatItemLookupMatch(input: string): FlatBedItem | null {
+  const lookupTokens = tokenizeLookupText(extractLookupText(input));
+  if (lookupTokens.length === 0) return null;
+
+  let bestMatch: FlatBedItem | null = null;
+  let bestScore = 0;
+
+  for (const item of FLAT_BED_ITEMS) {
+    const haystack = buildFlatLookupHaystack(item);
+    const score = scoreFlatLookupTokens(lookupTokens, haystack);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = item;
+    }
+  }
+
+  if (bestScore >= 0.72) return bestMatch;
+
+  let bestFallback: FlatBedItem | null = null;
+  let bestFallbackScore = 0;
+  for (const fallback of FLAT_LOOKUP_FALLBACKS) {
+    const haystack = normalizeLookupText(
+      `${fallback.label} ${fallback.materialLabel} ${fallback.material} ${fallback.category} ${fallback.productHint ?? ""} ${fallback.lookupAliases.join(" ")}`,
+    );
+    const score = scoreFlatLookupTokens(lookupTokens, haystack);
+    if (score > bestFallbackScore) {
+      bestFallbackScore = score;
+      bestFallback = fallback;
+    }
+  }
+
+  return bestFallbackScore >= 0.6 ? bestFallback : null;
+}
+
+function inferLookupProductType(
+  lookupText: string,
+  result: TumblerItemLookupResponse,
+): "tumbler" | "mug" | "bottle" | "flat" {
+  const lower = lookupText.toLowerCase();
+  if (/\bmug\b/.test(lower)) return "mug";
+  if (/\bbottle\b|\bflask\b|\bcanteen\b/.test(lower)) return "bottle";
+  if (
+    result.matchedProfileId ||
+    result.dimensions.outsideDiameterMm ||
+    result.dimensions.topDiameterMm ||
+    result.dimensions.bottomDiameterMm ||
+    /\btumbler\b|\bquencher\b|\brambler\b|\biceflow\b|\btravel cup\b/.test(lower)
+  ) {
+    return "tumbler";
+  }
+  return "flat";
+}
+
+function getFlatModelStrategyLabel(strategy: FlatItemLookupResponse["modelStrategy"]): string {
+  switch (strategy) {
+    case "page-model":
+      return "Source model";
+    case "image-trace":
+      return "Traced silhouette";
+    case "family-generated":
+    default:
+      return "Proxy family shape";
+  }
+}
+
+function getFlatLookupModeLabel(mode: FlatItemLookupResponse["mode"]): string {
+  switch (mode) {
+    case "catalog-match":
+      return "Catalog match";
+    case "family-fallback":
+      return "Family fallback";
+    case "metadata-fallback":
+      return "Metadata match";
+    case "safe-fallback":
+    default:
+      return "Safe fallback";
+  }
+}
+
+function formatFlatTraceQuality(score: number | null | undefined): string | null {
+  if (typeof score !== "number" || !Number.isFinite(score) || score <= 0) return null;
+  const normalized = Math.max(0, Math.min(100, Math.round((score / 1.4) * 100)));
+  return `${normalized}% trace quality`;
+}
+
+function getFlatLookupNotice(result: FlatItemLookupResponse): string | null {
+  if (result.isProxy) {
+    return "Proxy family shape only. Use it for rough preview and dimensions, then replace it with a real source model or a cleaner product photo before production.";
+  }
+  if (result.modelStrategy === "image-trace") {
+    const quality = formatFlatTraceQuality(result.traceScore);
+    return quality
+      ? `Traced from a pulled product image. Review the outline before treating this model as final (${quality}).`
+      : "Traced from a pulled product image. Review the outline before treating this model as final.";
+  }
+  return null;
+}
+
+function getFlatGlbStatusLabel(result: FlatItemLookupResponse | null): string | null {
+  if (!result) return null;
+  if (result.isProxy) return "Proxy model";
+  if (result.requiresReview) return "Review model";
+  return null;
+}
+
+function inferTemplateMaterial(
+  editingTemplate: ProductTemplate | undefined,
+  flatLookupMatch: FlatBedItem | null,
+  flatLookupResult: FlatItemLookupResponse | null,
+  materialProfileId: string,
+): Pick<ProductTemplate, "materialSlug" | "materialLabel"> {
+  if (flatLookupMatch) {
+    return {
+      materialSlug: flatLookupMatch.material,
+      materialLabel: flatLookupMatch.materialLabel,
+    };
+  }
+
+  if (flatLookupResult?.material) {
+    return {
+      materialSlug: flatLookupResult.material,
+      materialLabel: flatLookupResult.materialLabel,
+    };
+  }
+
+  const materialProfile = getMaterialProfileById(materialProfileId);
+  if (materialProfile) {
+    switch (materialProfile.finishType) {
+      case "powder-coat":
+        return { materialSlug: "powder-coat", materialLabel: "Powder Coat" };
+      case "raw-stainless":
+        return { materialSlug: "stainless-steel", materialLabel: "Stainless Steel" };
+      case "painted":
+        return { materialSlug: "painted-metal", materialLabel: "Painted Metal" };
+      case "anodized":
+        return { materialSlug: "anodized-aluminum", materialLabel: "Anodized Aluminum" };
+      case "chrome-plated":
+        return { materialSlug: "painted-metal", materialLabel: "Chrome-Plated Metal" };
+      case "matte-finish":
+        return { materialSlug: "painted-metal", materialLabel: "Matte Finish Metal" };
+      default:
+        break;
+    }
+  }
+
+  return {
+    materialSlug: editingTemplate?.materialSlug,
+    materialLabel: editingTemplate?.materialLabel,
+  };
+}
+
+function parseCapacityOzValue(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const match = value.match(/([0-9]+(?:\.[0-9]+)?)\s*oz/i);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props) {
+  type TemplateLaserType = ProductTemplate["laserType"] | "";
+  type TemplateProductType = ProductTemplate["productType"] | "";
   const isEdit = Boolean(editingTemplate);
   const derivedEditingDims = React.useMemo(
     () => (editingTemplate ? getEngravableDimensions(editingTemplate) : null),
@@ -131,11 +441,11 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [name, setName] = React.useState(editingTemplate?.name ?? "");
   const [brand, setBrand] = React.useState(editingTemplate?.brand ?? "");
   const [capacity, setCapacity] = React.useState(editingTemplate?.capacity ?? "");
-  const [laserType, setLaserType] = React.useState<"fiber" | "co2" | "diode">(
-    editingTemplate?.laserType ?? "fiber"
+  const [laserType, setLaserType] = React.useState<TemplateLaserType>(
+    editingTemplate?.laserType ?? ""
   );
-  const [productType, setProductType] = React.useState<"tumbler" | "mug" | "bottle" | "flat">(
-    editingTemplate?.productType ?? "tumbler"
+  const [productType, setProductType] = React.useState<TemplateProductType>(
+    editingTemplate?.productType ?? ""
   );
 
   // ── Files ────────────────────────────────────────────────────────
@@ -145,6 +455,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [glbUploading, setGlbUploading] = React.useState(false);
   const [glbUploadError, setGlbUploadError] = React.useState<string | null>(null);
   const [checkingGlbPath, setCheckingGlbPath] = React.useState(false);
+  const [previewModelFile, setPreviewModelFile] = React.useState<File | null>(null);
+  const [previewLoadError, setPreviewLoadError] = React.useState<string | null>(null);
   const [productImageFile, setProductImageFile] = React.useState<File | null>(null);
   const [productImageLabel, setProductImageLabel] = React.useState<string | null>(
     editingTemplate?.productPhotoFullUrl ? "Saved product photo" : null,
@@ -158,11 +470,42 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [lookupInput, setLookupInput] = React.useState("");
   const [lookingUpItem, setLookingUpItem] = React.useState(false);
   const [lookupResult, setLookupResult] = React.useState<TumblerItemLookupResponse | null>(null);
+  const [flatLookupResult, setFlatLookupResult] = React.useState<FlatItemLookupResponse | null>(null);
+  const [flatLookupMatch, setFlatLookupMatch] = React.useState<FlatBedItem | null>(null);
   const [lookupError, setLookupError] = React.useState<string | null>(null);
   const [lookupDebugImageUrl, setLookupDebugImageUrl] = React.useState("");
+  const [smartLookupApplied, setSmartLookupApplied] = React.useState(false);
+  const clearLookupState = React.useCallback((options?: { keepInput?: boolean; clearFamilyKey?: boolean }) => {
+    setLookupResult(null);
+    setFlatLookupResult(null);
+    setFlatLookupMatch(null);
+    setLookupError(null);
+    setLookupDebugImageUrl("");
+    if (options?.clearFamilyKey) {
+      setFlatFamilyKey("");
+    }
+    if (!options?.keepInput) {
+      setLookupInput("");
+    }
+  }, []);
 
   // ── Dimensions ───────────────────────────────────────────────────
   const [diameterMm, setDiameterMm] = React.useState(editingTemplate?.dimensions.diameterMm ?? 0);
+  const [flatWidthMm, setFlatWidthMm] = React.useState(
+    editingTemplate?.productType === "flat" ? editingTemplate.dimensions.templateWidthMm : 0,
+  );
+  const [flatThicknessMm, setFlatThicknessMm] = React.useState(
+    editingTemplate?.productType === "flat" ? (editingTemplate.dimensions.flatThicknessMm ?? 0) : 0,
+  );
+  const [flatFamilyKey, setFlatFamilyKey] = React.useState(
+    editingTemplate?.productType === "flat"
+      ? inferFlatFamilyKey({
+          familyKey: editingTemplate.dimensions.flatFamilyKey,
+          glbPath: editingTemplate.glbPath,
+          label: editingTemplate.name,
+        })
+      : "",
+  );
   const [printHeightMm, setPrintHeightMm] = React.useState(
     editingTemplate
       ? (!editingHasExplicitMargins && derivedEditingDims
@@ -187,14 +530,27 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [bottomMarginMm, setBottomMarginMm] = React.useState(
     editingTemplate?.dimensions.bottomMarginMm ?? derivedEditingDims?.bottomMarginMm ?? 0,
   );
+  const activeFlatLookupModel = React.useMemo(() => {
+    if (productType !== "flat" || !flatLookupResult) return null;
+    const trimmedLookupPath = flatLookupResult.glbPath.trim();
+    const trimmedActivePath = glbPath.trim();
+    if (!trimmedLookupPath || trimmedLookupPath !== trimmedActivePath) return null;
+    return flatLookupResult;
+  }, [flatLookupResult, glbPath, productType]);
   const [referencePhotoScalePct, setReferencePhotoScalePct] = React.useState(
     editingTemplate?.dimensions.referencePhotoScalePct ?? 100,
+  );
+  const [referencePhotoOffsetXPct, setReferencePhotoOffsetXPct] = React.useState(
+    editingTemplate?.dimensions.referencePhotoOffsetXPct ?? 0,
   );
   const [referencePhotoOffsetYPct, setReferencePhotoOffsetYPct] = React.useState(
     editingTemplate?.dimensions.referencePhotoOffsetYPct ?? 0,
   );
   const [referencePhotoAnchorY, setReferencePhotoAnchorY] = React.useState<"center" | "bottom">(
     editingTemplate?.dimensions.referencePhotoAnchorY ?? "center",
+  );
+  const [referencePhotoCenterMode, setReferencePhotoCenterMode] = React.useState<"body" | "photo">(
+    editingTemplate?.dimensions.referencePhotoCenterMode ?? "body",
   );
   const [bodyColorHex, setBodyColorHex] = React.useState(
     editingTemplate?.dimensions.bodyColorHex ?? "#b0b8c4",
@@ -203,11 +559,47 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     editingTemplate?.dimensions.rimColorHex ?? "#d0d0d0",
   );
 
-  const templateWidthMm = diameterMm > 0 ? round2(Math.PI * diameterMm) : 0;
+  const templateWidthMm = productType === "flat"
+    ? round2(flatWidthMm)
+    : diameterMm > 0
+      ? round2(Math.PI * diameterMm)
+      : 0;
+  const liveFlatPreview = React.useMemo<FlatPreviewDimensions | null>(() => {
+    if (productType !== "flat" || flatWidthMm <= 0 || printHeightMm <= 0) return null;
+    return {
+      widthMm: round2(flatWidthMm),
+      heightMm: round2(printHeightMm),
+      thicknessMm: round2(flatThicknessMm > 0 ? flatThicknessMm : 4),
+      familyKey: inferFlatFamilyKey({
+        familyKey: flatFamilyKey,
+        glbPath,
+        label: name.trim(),
+      }),
+      label: name.trim() || "Flat item",
+      material: flatLookupResult?.material ?? flatLookupMatch?.material ?? "",
+    };
+  }, [productType, flatWidthMm, printHeightMm, flatThicknessMm, flatFamilyKey, glbPath, name, flatLookupResult?.material, flatLookupMatch?.material]);
+  const liveTumblerDims = React.useMemo<TumblerDimensions | null>(() => {
+    if (!productType || productType === "flat" || diameterMm <= 0 || printHeightMm <= 0) return null;
+    return {
+      overallHeightMm: overallHeightMm > 0 ? round2(overallHeightMm) : round2(printHeightMm),
+      diameterMm: round2(diameterMm),
+      printableHeightMm: round2(printHeightMm),
+      printableTopOffsetMm: topMarginMm > 0 ? round2(topMarginMm) : undefined,
+    };
+  }, [productType, diameterMm, printHeightMm, overallHeightMm, topMarginMm]);
+  const preferGeneratedFlatPreview =
+    productType === "flat" &&
+    Boolean(glbPath.trim()) &&
+    glbPath.startsWith("/models/generated/");
 
   // ── Laser settings (scoped defaults based on product/laser type) ──
   const scopedDefaults = React.useMemo(
-    () => getDefaultLaserSettings(productType, laserType),
+    () => (
+      productType && laserType
+        ? getDefaultLaserSettings(productType, laserType)
+        : { power: 50, speed: 300, frequency: 30, lineInterval: 0.06 }
+    ),
     [productType, laserType],
   );
   const [power, setPower] = React.useState(editingTemplate?.laserSettings.power ?? scopedDefaults.power);
@@ -220,7 +612,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   // When product type or laser type changes, update laser settings to new scoped defaults
   // (only for new templates — edits keep their values)
   React.useEffect(() => {
-    if (isEdit) return;
+    if (isEdit || !productType || !laserType) return;
     const defaults = getDefaultLaserSettings(productType, laserType);
     setPower(defaults.power);
     setSpeed(defaults.speed);
@@ -298,6 +690,38 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     };
   }, [clearMissingGlbPath, editingTemplate?.glbPath, glbPath, validateGlbPath]);
 
+  React.useEffect(() => {
+    const trimmed = glbPath.trim();
+    if (!trimmed || !/\.(glb|gltf)$/i.test(trimmed)) {
+      setPreviewModelFile(null);
+      setPreviewLoadError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setPreviewLoadError(null);
+
+    fetch(trimmed)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Preview could not load ${trimmed}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        const filename = trimmed.split("/").pop() ?? "model.glb";
+        setPreviewModelFile(new File([blob], filename, { type: blob.type || "model/gltf-binary" }));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setPreviewModelFile(null);
+        setPreviewLoadError(err instanceof Error ? err.message : "Preview could not load model.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [glbPath]);
+
   // ── Front / Back face photos ──────────────────────────────────
   const [frontPhotoDataUrl, setFrontPhotoDataUrl] = React.useState(editingTemplate?.frontPhotoDataUrl ?? "");
   const [backPhotoDataUrl, setBackPhotoDataUrl] = React.useState(editingTemplate?.backPhotoDataUrl ?? "");
@@ -328,7 +752,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [errors, setErrors] = React.useState<string[]>([]);
 
   /** Handle product image selection — store file for auto-detect, generate thumbnail + full-res */
-  const handleProductImage = async (file: File) => {
+  const handleProductImage = React.useCallback(async (file: File) => {
     setProductImageFile(file);
     setProductImageLabel(file.name);
     setDetectResult(null);
@@ -339,7 +763,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     // Full-res: max 1024px (for grid overlay)
     const full = await fileToFacePhotoDataUrl(file, 1024);
     if (full) setProductPhotoFullUrl(full);
-  };
+  }, []);
 
   const clearProductImage = React.useCallback(() => {
     setProductImageFile(null);
@@ -349,6 +773,69 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     setDetectResult(null);
     setDetectError(null);
   }, []);
+
+  const applyFacePhotoFile = React.useCallback(async (
+    file: File,
+    side: "front" | "back",
+  ) => {
+    const original = await fileToFacePhotoDataUrl(file);
+    if (!original) return;
+
+    if (side === "front") {
+      setFrontOriginalUrl(original);
+      setFrontCleanUrl("");
+      setFrontPhotoDataUrl(original);
+      setFrontUseOriginal(false);
+      setFrontBgStatus("idle");
+      return;
+    }
+
+    setBackOriginalUrl(original);
+    setBackCleanUrl("");
+    setBackPhotoDataUrl(original);
+    setBackUseOriginal(false);
+    setBackBgStatus("idle");
+  }, []);
+
+  const resolveLookupPhotoUrl = React.useCallback(async (
+    photoUrl: string,
+  ): Promise<{ file: File; dataUrl: string }> => {
+    const imageRes = await fetch("/api/admin/flatbed/fetch-url", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ url: photoUrl }),
+    });
+    const imagePayload = await imageRes.json();
+    if (!imageRes.ok || !imagePayload.dataUrl) {
+      throw new Error(
+        typeof imagePayload?.error === "string"
+          ? imagePayload.error
+          : "Product photo could not be pulled from the lookup result.",
+      );
+    }
+
+    const dataUrl = imagePayload.dataUrl as string;
+    const imgFetch = await fetch(dataUrl);
+    const blob = await imgFetch.blob();
+    const mimeType = imagePayload.mimeType ?? blob.type ?? "image/jpeg";
+    const fileName = photoUrl.split("/").pop() ?? "lookup-product-image.jpg";
+    const file = new File([blob], fileName, { type: mimeType });
+
+    return { file, dataUrl };
+  }, []);
+
+  const applyResolvedProductPhotoUrl = React.useCallback(async (
+    photoUrl: string,
+    label: string | null,
+  ): Promise<{ file: File; dataUrl: string }> => {
+    const { file, dataUrl } = await resolveLookupPhotoUrl(photoUrl);
+    await handleProductImage(file);
+    setProductImageLabel(label ?? "Lookup product photo");
+    setLookupDebugImageUrl(dataUrl);
+    return { file, dataUrl };
+  }, [handleProductImage, resolveLookupPhotoUrl]);
 
   const applyProfileOrDimensions = React.useCallback((args: {
     brand: string | null | undefined;
@@ -415,17 +902,221 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     }
   }, []);
 
+  const applySmartLookupResult = React.useCallback(async (
+    result: SmartTemplateLookupResponse,
+    files: {
+      analysisImageFile: File | null;
+      frontPhotoFile: File | null;
+      backPhotoFile: File | null;
+    },
+  ) => {
+    const draft = result.templateDraft;
+    const draftDims = draft.dimensions;
+    const matchedFlatItem = result.matchedFlatItemId
+      ? (FLAT_BED_ITEMS.find((item) => item.id === result.matchedFlatItemId) ?? null)
+      : null;
+    const primaryProductImageFile = files.frontPhotoFile ?? files.analysisImageFile;
+
+    setErrors([]);
+    setDetectError(null);
+    setDetectResult(null);
+    setLookupError(null);
+    setSmartLookupApplied(true);
+    setLookupResult(result.tumblerLookupResult ?? null);
+    setFlatLookupResult(result.flatLookupResult ?? null);
+    setFlatLookupMatch(
+      result.flatLookupResult?.matchedItemId
+        ? (FLAT_BED_ITEMS.find((item) => item.id === result.flatLookupResult!.matchedItemId) ?? null)
+        : matchedFlatItem,
+    );
+
+    let resolvedLookupPhotoFile: File | null = null;
+    let resolvedLookupBackPhotoFile: File | null = null;
+    if (primaryProductImageFile) {
+      await handleProductImage(primaryProductImageFile);
+      setLookupDebugImageUrl("");
+    } else if (draft.productPhotoUrl) {
+      try {
+        const resolved = await applyResolvedProductPhotoUrl(draft.productPhotoUrl, draft.productPhotoLabel ?? null);
+        resolvedLookupPhotoFile = resolved.file;
+      } catch {
+        // Non-fatal: dimensions and categorization should still be applied.
+      }
+    }
+    if (!files.backPhotoFile && draft.backPhotoUrl && draft.productType && draft.productType !== "flat") {
+      try {
+        const resolvedBack = await resolveLookupPhotoUrl(draft.backPhotoUrl);
+        resolvedLookupBackPhotoFile = resolvedBack.file;
+      } catch {
+        // Non-fatal: keep the mirrored fallback when the opposite-side photo cannot be pulled.
+      }
+    }
+
+    if (files.frontPhotoFile) {
+      await applyFacePhotoFile(files.frontPhotoFile, "front");
+    } else if (resolvedLookupPhotoFile && draft.productType && draft.productType !== "flat") {
+      await applyFacePhotoFile(resolvedLookupPhotoFile, "front");
+    }
+    if (files.backPhotoFile) {
+      setMirrorForBack(false);
+      await applyFacePhotoFile(files.backPhotoFile, "back");
+    } else if (resolvedLookupBackPhotoFile && draft.productType && draft.productType !== "flat") {
+      setMirrorForBack(false);
+      await applyFacePhotoFile(resolvedLookupBackPhotoFile, "back");
+    } else if ((files.frontPhotoFile || resolvedLookupPhotoFile) && draft.productType && draft.productType !== "flat") {
+      setMirrorForBack(true);
+      setBackOriginalUrl("");
+      setBackCleanUrl("");
+      setBackUseOriginal(false);
+      setBackBgStatus("idle");
+    }
+
+    if (draft.name) setName(draft.name);
+    if (draft.brand !== undefined && draft.brand !== null) setBrand(draft.brand);
+    if (draft.capacity !== undefined && draft.capacity !== null) setCapacity(draft.capacity);
+    if (draft.laserType) setLaserType(draft.laserType);
+    if (draft.productType) setProductType(draft.productType);
+
+    if (draft.glbPath !== undefined) {
+      const nextGlbPath = draft.glbPath ?? "";
+      setGlbPath(nextGlbPath);
+      setGlbFileName(nextGlbPath ? (nextGlbPath.split("/").pop() ?? null) : null);
+      setGlbUploadError(null);
+    }
+
+    if (draft.productType === "flat") {
+      setDiameterMm(0);
+      setTumblerMapping(undefined);
+      setHandleArcDeg(0);
+      setTaperCorrection("none");
+      setOverallHeightMm(draftDims?.overallHeightMm ?? 0);
+      setTopMarginMm(draftDims?.topMarginMm ?? 0);
+      setBottomMarginMm(draftDims?.bottomMarginMm ?? 0);
+
+      if (typeof draftDims?.templateWidthMm === "number") {
+        setFlatWidthMm(round2(draftDims.templateWidthMm));
+      }
+      if (typeof draftDims?.printHeightMm === "number") {
+        setPrintHeightMm(round2(draftDims.printHeightMm));
+      }
+      if (typeof draftDims?.flatThicknessMm === "number") {
+        setFlatThicknessMm(round2(draftDims.flatThicknessMm));
+      }
+      if (draftDims?.flatFamilyKey) {
+        setFlatFamilyKey(draftDims.flatFamilyKey);
+      }
+      return;
+    }
+
+    if (draft.productType) {
+      setFlatFamilyKey("");
+      applyProfileOrDimensions({
+        brand: draft.brand ?? result.tumblerLookupResult?.brand,
+        model: result.tumblerLookupResult?.model,
+        capacityOz: result.tumblerLookupResult?.capacityOz ?? parseCapacityOzValue(draft.capacity),
+        outsideDiameterMm: draftDims?.diameterMm ?? result.tumblerLookupResult?.dimensions.outsideDiameterMm,
+        topDiameterMm: result.tumblerLookupResult?.dimensions.topDiameterMm,
+        bottomDiameterMm: result.tumblerLookupResult?.dimensions.bottomDiameterMm,
+        overallHeightMm: draftDims?.overallHeightMm ?? result.tumblerLookupResult?.dimensions.overallHeightMm,
+        usableHeightMm: draftDims?.printHeightMm ?? result.tumblerLookupResult?.dimensions.usableHeightMm,
+      });
+
+      if (typeof draftDims?.handleArcDeg === "number") {
+        setHandleArcDeg(draftDims.handleArcDeg);
+      }
+      if (draftDims?.taperCorrection) {
+        setTaperCorrection(draftDims.taperCorrection);
+      }
+      if (typeof draftDims?.overallHeightMm === "number") {
+        setOverallHeightMm(round2(draftDims.overallHeightMm));
+      }
+      if (typeof draftDims?.topMarginMm === "number") {
+        setTopMarginMm(round2(draftDims.topMarginMm));
+      }
+      if (typeof draftDims?.bottomMarginMm === "number") {
+        setBottomMarginMm(round2(draftDims.bottomMarginMm));
+      }
+      if (typeof draftDims?.printHeightMm === "number") {
+        setPrintHeightMm(round2(draftDims.printHeightMm));
+      }
+    }
+  }, [applyFacePhotoFile, applyProfileOrDimensions, applyResolvedProductPhotoUrl, handleProductImage, resolveLookupPhotoUrl]);
+
   const handleItemLookup = async () => {
     const raw = lookupInput.trim();
     if (!raw) return;
 
     setLookingUpItem(true);
-    setLookupError(null);
-    setLookupResult(null);
+    clearLookupState({ keepInput: true });
     setDetectError(null);
-    setLookupDebugImageUrl("");
 
     try {
+      if (productType === "flat") {
+        try {
+          const result = await lookupFlatItemRequest(raw);
+          setFlatLookupResult(result);
+          setFlatLookupMatch(
+            result.matchedItemId
+              ? (FLAT_BED_ITEMS.find((item) => item.id === result.matchedItemId) ?? null)
+              : null,
+          );
+          setName(result.label);
+          setBrand(result.brand ?? "");
+          setCapacity("");
+          setDiameterMm(0);
+          setFlatWidthMm(round2(result.widthMm));
+          setFlatThicknessMm(round2(result.thicknessMm));
+          setFlatFamilyKey(result.familyKey);
+          setPrintHeightMm(round2(result.heightMm));
+          setGlbPath(result.glbPath || "");
+          setGlbFileName(result.glbPath ? (result.glbPath.split("/").pop() ?? null) : null);
+          setTumblerMapping(undefined);
+          setHandleArcDeg(0);
+          setTaperCorrection("none");
+
+          if (result.imageUrl) {
+            try {
+              const imageRes = await fetch("/api/admin/flatbed/fetch-url", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ url: result.imageUrl }),
+              });
+              const imagePayload = await imageRes.json();
+              if (imageRes.ok && imagePayload.dataUrl) {
+                const dataUrl = imagePayload.dataUrl as string;
+                setLookupDebugImageUrl(dataUrl);
+                setProductPhotoFullUrl(dataUrl);
+                setProductImageLabel("Lookup product photo");
+              }
+            } catch {
+              // Non-fatal: the lookup should still apply dimensions and model generation.
+            }
+          }
+          return;
+        } catch {
+          const matchedItem = findFlatItemLookupMatch(raw);
+          if (!matchedItem) {
+            throw new Error("No flat-item catalog match found. Try a simpler product name or fill in the dimensions manually.");
+          }
+
+          setFlatLookupMatch(matchedItem);
+          setName(matchedItem.label);
+          setBrand("");
+          setCapacity("");
+          setDiameterMm(0);
+          setFlatWidthMm(round2(matchedItem.widthMm));
+          setFlatThicknessMm(round2(matchedItem.thicknessMm));
+          setFlatFamilyKey(inferFlatFamilyKey({ label: matchedItem.label }));
+          setPrintHeightMm(round2(matchedItem.heightMm));
+          setGlbPath("");
+          setGlbFileName(null);
+          setTumblerMapping(undefined);
+          setHandleArcDeg(0);
+          setTaperCorrection("none");
+          return;
+        }
+      }
+
       const result = await lookupTumblerItem(raw);
       setLookupResult(result);
 
@@ -436,47 +1127,58 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       setName(parts.length > 0 ? parts.join(" ") : result.title ?? raw);
       if (result.brand) setBrand(result.brand);
       if (result.capacityOz) setCapacity(`${result.capacityOz}oz`);
-      setProductType("tumbler");
+      setFlatFamilyKey("");
+      const inferredProductType = inferLookupProductType(
+        [raw, result.title, result.model, result.brand].filter(Boolean).join(" "),
+        result,
+      );
+      setProductType(inferredProductType);
       setGlbPath(result.glbPath || "");
 
-      applyProfileOrDimensions({
-        brand: result.brand,
-        model: result.model,
-        capacityOz: result.capacityOz,
-        outsideDiameterMm: result.dimensions.outsideDiameterMm,
-        topDiameterMm: result.dimensions.topDiameterMm,
-        bottomDiameterMm: result.dimensions.bottomDiameterMm,
-        overallHeightMm: result.dimensions.overallHeightMm,
-        usableHeightMm: result.dimensions.usableHeightMm,
-      });
+      if (inferredProductType !== "flat") {
+        applyProfileOrDimensions({
+          brand: result.brand,
+          model: result.model,
+          capacityOz: result.capacityOz,
+          outsideDiameterMm: result.dimensions.outsideDiameterMm,
+          topDiameterMm: result.dimensions.topDiameterMm,
+          bottomDiameterMm: result.dimensions.bottomDiameterMm,
+          overallHeightMm: result.dimensions.overallHeightMm,
+          usableHeightMm: result.dimensions.usableHeightMm,
+        });
+      }
 
       if (result.imageUrl) {
-        const imageRes = await fetch("/api/admin/flatbed/fetch-url", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ url: result.imageUrl }),
-        });
-        const imagePayload = await imageRes.json();
-        if (imageRes.ok && imagePayload.dataUrl) {
-          const dataUrl = imagePayload.dataUrl as string;
-          const imgFetch = await fetch(dataUrl);
-          const blob = await imgFetch.blob();
-          const mimeType = imagePayload.mimeType ?? blob.type ?? "image/jpeg";
-          const fileName = result.imageUrl.split("/").pop() ?? "lookup-image.jpg";
-          const file = new File([blob], fileName, { type: mimeType });
-          setProductImageFile(file);
-          setProductImageLabel(getLookupPhotoLabel(result));
-          const thumb = await generateThumbnail(file);
-          setThumbDataUrl(thumb);
-          const full = await fileToFacePhotoDataUrl(file, 1024);
-          if (full) {
-            setLookupDebugImageUrl(full);
-            setProductPhotoFullUrl(full);
-            setFrontOriginalUrl(full);
-            setFrontPhotoDataUrl((prev) => prev || full);
+        try {
+          const imageRes = await fetch("/api/admin/flatbed/fetch-url", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ url: result.imageUrl }),
+          });
+          const imagePayload = await imageRes.json();
+          if (imageRes.ok && imagePayload.dataUrl) {
+            const dataUrl = imagePayload.dataUrl as string;
+            const imgFetch = await fetch(dataUrl);
+            const blob = await imgFetch.blob();
+            const mimeType = imagePayload.mimeType ?? blob.type ?? "image/jpeg";
+            const fileName = result.imageUrl.split("/").pop() ?? "lookup-image.jpg";
+            const file = new File([blob], fileName, { type: mimeType });
+            setProductImageFile(file);
+            setProductImageLabel(getLookupPhotoLabel(result));
+            const thumb = await generateThumbnail(file);
+            setThumbDataUrl(thumb);
+            const full = await fileToFacePhotoDataUrl(file, 1024);
+            if (full) {
+              setLookupDebugImageUrl(full);
+              setProductPhotoFullUrl(full);
+              setFrontOriginalUrl(full);
+              setFrontPhotoDataUrl((prev) => prev || full);
+            }
           }
+        } catch {
+          // Keep the resolved lookup details even if proxying the product image fails.
         }
       }
     } catch (e) {
@@ -528,7 +1230,11 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         setHandleArcDeg(0);
       }
       // Product type
-      setProductType(mapProductType(sug.productType));
+      const detectedProductType = mapProductType(sug.productType);
+      setProductType(detectedProductType);
+      if (detectedProductType !== "flat") {
+        setFlatFamilyKey("");
+      }
       // Taper
       if (sug.topDiameterMm && sug.bottomDiameterMm && sug.topDiameterMm !== sug.bottomDiameterMm) {
         setTaperCorrection(sug.topDiameterMm < sug.bottomDiameterMm ? "top-narrow" : "bottom-narrow");
@@ -617,7 +1323,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const handleSave = async () => {
     const errs: string[] = [];
     if (!name.trim()) errs.push("Product name is required.");
-    if (productType !== "flat" && diameterMm <= 0) errs.push("Diameter must be > 0 for non-flat products.");
+    if (!laserType) errs.push("Laser type is required.");
+    if (!productType) errs.push("Product type is required.");
+    if (productType === "flat" && flatWidthMm <= 0) errs.push("Template width must be > 0 for flat products.");
+    if (productType && productType !== "flat" && diameterMm <= 0) errs.push("Diameter must be > 0 for non-flat products.");
     if (printHeightMm <= 0) errs.push("Print height must be > 0.");
     if (glbPath.trim()) {
       const glbOk = await verifyCurrentGlbPath({ clearOnMissing: false });
@@ -630,13 +1339,21 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     setErrors([]);
 
     const now = new Date().toISOString();
+    const templateMaterial = inferTemplateMaterial(
+      editingTemplate,
+      flatLookupMatch,
+      flatLookupResult,
+      materialProfileId,
+    );
     const template: ProductTemplate = {
       id: editingTemplate?.id ?? crypto.randomUUID(),
       name: name.trim(),
       brand: brand.trim(),
       capacity: capacity.trim(),
-      laserType,
-      productType,
+      laserType: laserType as ProductTemplate["laserType"],
+      productType: productType as ProductTemplate["productType"],
+      materialSlug: templateMaterial.materialSlug,
+      materialLabel: templateMaterial.materialLabel,
       thumbnailDataUrl: thumbDataUrl,
       productPhotoFullUrl: productPhotoFullUrl || undefined,
       glbPath,
@@ -644,14 +1361,24 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         diameterMm,
         printHeightMm,
         templateWidthMm,
+        flatThicknessMm: productType === "flat" && flatThicknessMm > 0 ? flatThicknessMm : undefined,
+        flatFamilyKey: productType === "flat"
+          ? inferFlatFamilyKey({
+              familyKey: flatFamilyKey,
+              glbPath,
+              label: name.trim(),
+            })
+          : undefined,
         handleArcDeg,
         taperCorrection,
         overallHeightMm: overallHeightMm > 0 ? overallHeightMm : undefined,
         topMarginMm: Number.isFinite(topMarginMm) ? topMarginMm : undefined,
         bottomMarginMm: Number.isFinite(bottomMarginMm) ? bottomMarginMm : undefined,
         referencePhotoScalePct: Number.isFinite(referencePhotoScalePct) ? referencePhotoScalePct : undefined,
+        referencePhotoOffsetXPct: Number.isFinite(referencePhotoOffsetXPct) ? referencePhotoOffsetXPct : undefined,
         referencePhotoOffsetYPct: Number.isFinite(referencePhotoOffsetYPct) ? referencePhotoOffsetYPct : undefined,
         referencePhotoAnchorY,
+        referencePhotoCenterMode,
         bodyColorHex: bodyColorHex || undefined,
         rimColorHex: rimColorHex || undefined,
       },
@@ -666,7 +1393,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       createdAt: editingTemplate?.createdAt ?? now,
       updatedAt: now,
       builtIn: editingTemplate?.builtIn ?? false,
-      tumblerMapping,
+      tumblerMapping: productType === "flat" ? undefined : tumblerMapping,
       frontPhotoDataUrl: frontPhotoDataUrl || undefined,
       backPhotoDataUrl: backPhotoDataUrl || undefined,
     };
@@ -681,6 +1408,15 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
   return (
     <div className={styles.form}>
+      <div className={styles.section}>
+        <div className={styles.sectionTitle}>Smart lookup</div>
+        <SmartTemplateLookupPanel
+          onResolved={applySmartLookupResult}
+          onOpenMapping={() => setShowMappingWizard(true)}
+          canOpenMapping={Boolean(glbPath.trim()) && Boolean(productType) && productType !== "flat"}
+          onClearResult={() => setSmartLookupApplied(false)}
+        />
+      </div>
       {/* ── Product identity ──────────────────────────────────────── */}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Product identity</div>
@@ -692,7 +1428,6 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="YETI Rambler 40oz"
           />
         </div>
 
@@ -703,7 +1438,6 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
             type="text"
             value={brand}
             onChange={(e) => setBrand(e.target.value)}
-            placeholder="YETI"
           />
         </div>
 
@@ -714,7 +1448,6 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
             type="text"
             value={capacity}
             onChange={(e) => setCapacity(e.target.value)}
-            placeholder="40oz"
           />
         </div>
 
@@ -723,8 +1456,9 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           <select
             className={styles.selectInput}
             value={laserType}
-            onChange={(e) => setLaserType(e.target.value as "fiber" | "co2" | "diode")}
+            onChange={(e) => setLaserType(e.target.value as TemplateLaserType)}
           >
+            <option value="">Select laser type</option>
             <option value="fiber">Fiber</option>
             <option value="co2">CO₂</option>
             <option value="diode">Diode</option>
@@ -736,8 +1470,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           <select
             className={styles.selectInput}
             value={productType}
-            onChange={(e) => setProductType(e.target.value as "tumbler" | "mug" | "bottle" | "flat")}
+            onChange={(e) => {
+              setProductType(e.target.value as TemplateProductType);
+              setSmartLookupApplied(false);
+              clearLookupState({ clearFamilyKey: true });
+            }}
           >
+            <option value="">Select product type</option>
             <option value="tumbler">Tumbler</option>
             <option value="mug">Mug</option>
             <option value="bottle">Bottle</option>
@@ -750,38 +1489,44 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Product image</div>
 
-        {productType !== "flat" && (
+        {productType && !smartLookupApplied && (
           <div className={styles.lookupBlock}>
             <div className={styles.lookupHeader}>
               <div>
                 <div className={styles.lookupTitle}>Item lookup</div>
                 <div className={styles.lookupHint}>
-                  Paste a product URL or exact tumbler name. Lookup should resolve the item,
-                  assign the best profile, and pull a usable product photo.
+                  {productType === "flat"
+                    ? "Paste a product name or URL slug. Lookup will try to match a flat-bed catalog item and fill its dimensions."
+                    : "Paste a product URL or product name. Lookup will try to resolve the item, reuse a known tumbler profile when possible, and pull a usable product photo."}
                 </div>
               </div>
-              {lookupResult && (
+              {(lookupResult || flatLookupMatch || flatLookupResult) && (
                 <button
                   type="button"
                   className={styles.lookupResetBtn}
-                  onClick={() => {
-                    setLookupResult(null);
-                    setLookupError(null);
-                    setLookupInput("");
-                    setLookupDebugImageUrl("");
-                  }}
+                  onClick={() => clearLookupState({ clearFamilyKey: true })}
                 >
                   Clear lookup
                 </button>
               )}
             </div>
-            <div className={styles.lookupRow}>
+            <form
+              className={styles.lookupRow}
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!lookingUpItem && lookupInput.trim()) {
+                  void handleItemLookup();
+                }
+              }}
+            >
               <input
                 className={styles.textInput}
                 type="text"
                 value={lookupInput}
                 onChange={(e) => setLookupInput(e.target.value)}
-                placeholder="https://www.academy.com/... or Stanley IceFlow 30 oz Classic Flip Straw Tumbler"
+                placeholder={productType === "flat"
+                  ? "Acacia cutting board, stainless dog tag, slate coaster..."
+                  : "https://example.com/product or Stanley IceFlow 30 oz"}
               />
               <button
                 type="button"
@@ -791,6 +1536,11 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               >
                 {lookingUpItem ? "Looking up..." : "Run lookup"}
               </button>
+            </form>
+            <div className={styles.lookupAssistText} role="status" aria-live="polite">
+              {lookingUpItem
+                ? "Checking the product and filling the best available dimensions."
+                : "Press Enter or click Run lookup, then review the result before saving."}
             </div>
 
             {lookupResult && (
@@ -830,11 +1580,85 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               </div>
             )}
 
+            {flatLookupResult && (
+              <div
+                className={[
+                  styles.lookupSummary,
+                  flatLookupResult.isProxy ? styles.lookupSummaryWarning : "",
+                  flatLookupResult.requiresReview && !flatLookupResult.isProxy ? styles.lookupSummaryReview : "",
+                ].filter(Boolean).join(" ")}
+              >
+                <div className={styles.lookupSummaryHeader}>
+                  <div className={styles.lookupSummaryTitle}>{flatLookupResult.label}</div>
+                  <div className={styles.lookupBadgeRow}>
+                    <span className={styles.lookupBadgePrimary}>
+                      {getFlatLookupModeLabel(flatLookupResult.mode)}
+                    </span>
+                    <span className={styles.lookupBadgeMuted}>{flatLookupResult.materialLabel}</span>
+                    {flatLookupResult.glbPath && (
+                      <span
+                        className={[
+                          flatLookupResult.isProxy ? styles.lookupBadgeWarning : styles.lookupBadgeMuted,
+                          flatLookupResult.requiresReview && !flatLookupResult.isProxy ? styles.lookupBadgeReview : "",
+                        ].filter(Boolean).join(" ")}
+                      >
+                        {getFlatModelStrategyLabel(flatLookupResult.modelStrategy)}
+                      </span>
+                    )}
+                    {flatLookupResult.requiresReview && (
+                      <span className={styles.lookupBadgeReview}>Review before save</span>
+                    )}
+                  </div>
+                </div>
+                <div className={styles.lookupSummaryLine}>
+                  {[flatLookupResult.brand, flatLookupResult.category, `${Math.round(flatLookupResult.confidence * 100)}% confidence`]
+                    .filter(Boolean)
+                    .join(" / ")}
+                </div>
+                <div className={styles.lookupMetrics}>
+                  <span>Width {round2(flatLookupResult.widthMm)} mm</span>
+                  <span>Height {round2(flatLookupResult.heightMm)} mm</span>
+                  <span>Thickness {round2(flatLookupResult.thicknessMm)} mm</span>
+                  {formatFlatTraceQuality(flatLookupResult.traceScore) && (
+                    <span>{formatFlatTraceQuality(flatLookupResult.traceScore)}</span>
+                  )}
+                </div>
+                {!flatLookupResult.glbPath && getFlatLookupNotice(flatLookupResult) && (
+                  <div className={styles.lookupNotice}>{getFlatLookupNotice(flatLookupResult)}</div>
+                )}
+              </div>
+            )}
+
+            {!flatLookupResult && flatLookupMatch && (
+              <div className={styles.lookupSummary}>
+                <div className={styles.lookupSummaryHeader}>
+                  <div className={styles.lookupSummaryTitle}>{flatLookupMatch.label}</div>
+                  <div className={styles.lookupBadgeRow}>
+                    <span className={styles.lookupBadgePrimary}>Catalog match</span>
+                    <span className={styles.lookupBadgeMuted}>{flatLookupMatch.materialLabel}</span>
+                  </div>
+                </div>
+                <div className={styles.lookupSummaryLine}>{flatLookupMatch.category}</div>
+                <div className={styles.lookupMetrics}>
+                  <span>Width {round2(flatLookupMatch.widthMm)} mm</span>
+                  <span>Height {round2(flatLookupMatch.heightMm)} mm</span>
+                  <span>Thickness {round2(flatLookupMatch.thicknessMm)} mm</span>
+                </div>
+              </div>
+            )}
+
             {lookupError && <div className={styles.detectErrorBanner}>{lookupError}</div>}
 
             {lookupResult?.fitDebug && lookupDebugImageUrl && (
               <TumblerLookupDebugPanel
                 debug={lookupResult.fitDebug}
+                imageUrl={lookupDebugImageUrl}
+              />
+            )}
+
+            {flatLookupResult?.traceDebug && lookupDebugImageUrl && (
+              <FlatItemLookupDebugPanel
+                debug={flatLookupResult.traceDebug}
                 imageUrl={lookupDebugImageUrl}
               />
             )}
@@ -868,7 +1692,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           </div>
         </div>
 
-        {productImageFile && !detectResult && !lookupResult && (
+        {productImageFile && productType && productType !== "flat" && !detectResult && !lookupResult && !smartLookupApplied && (
           <button
             type="button"
             className={styles.detectBtn}
@@ -879,7 +1703,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           </button>
         )}
 
-        {detectResult && !lookupResult && (
+        {detectResult && !lookupResult && !smartLookupApplied && (
           <div className={styles.detectBanner}>
             <span className={styles.detectBannerText}>
               Detected: <strong>{name || "Unknown product"}</strong> — review and confirm
@@ -895,7 +1719,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           </div>
         )}
 
-        {detectError && !lookupResult && (
+        {detectError && !lookupResult && !smartLookupApplied && (
           <div className={styles.detectErrorBanner}>
             {detectError} — fill in manually below.
           </div>
@@ -903,7 +1727,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       </div>
 
       {/* ── Front / Back face photos ─────────────────────────────── */}
-      {productType !== "flat" && (
+      {productType && productType !== "flat" && (
         <div className={styles.section}>
           <div className={styles.sectionTitle}>Face photos (grid overlay)</div>
 
@@ -1142,9 +1966,22 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               }}
             />
             {glbPath && !glbUploading && (
-              <span className={styles.glbPathConfirm}>
-                {glbPath} ✓
-              </span>
+              getFlatGlbStatusLabel(activeFlatLookupModel) ? (
+                <div
+                  className={[
+                    styles.glbPathStatusBlock,
+                    activeFlatLookupModel?.isProxy ? styles.glbPathWarning : "",
+                    activeFlatLookupModel?.requiresReview && !activeFlatLookupModel?.isProxy ? styles.glbPathReview : "",
+                  ].filter(Boolean).join(" ")}
+                >
+                  <span className={styles.glbPathStatusLabel}>{getFlatGlbStatusLabel(activeFlatLookupModel)}</span>
+                  <span className={styles.glbPathValue}>{glbPath}</span>
+                </div>
+              ) : (
+                <span className={styles.glbPathConfirm}>
+                  {glbPath} ✓
+                </span>
+              )
             )}
             {glbUploadError && (
               <span className={styles.error}>{glbUploadError}</span>
@@ -1162,10 +1999,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               }}
               placeholder="/models/templates/my-model.glb"
             />
+            {activeFlatLookupModel && getFlatLookupNotice(activeFlatLookupModel) && (
+              <div className={styles.glbPathNote}>{getFlatLookupNotice(activeFlatLookupModel)}</div>
+            )}
           </div>
         </div>
 
-        {glbPath && productType !== "flat" && (
+        {glbPath && productType && productType !== "flat" && (
           <div className={styles.fieldRow}>
             <label className={styles.fieldLabel}>Orientation</label>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1194,6 +2034,49 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
             </div>
           </div>
         )}
+
+        {(previewModelFile || liveFlatPreview || previewLoadError) && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Preview</label>
+            <div className={styles.modelPreviewBlock}>
+              <div className={styles.modelPreviewMeta}>
+                <span className={styles.modelPreviewMode}>
+                  {previewModelFile ? "GLB preview" : "Generated flat preview"}
+                </span>
+                {!previewModelFile && liveFlatPreview && (
+                  <span className={styles.modelPreviewDims}>
+                    {liveFlatPreview.widthMm} × {liveFlatPreview.heightMm} × {liveFlatPreview.thicknessMm} mm
+                  </span>
+                )}
+              </div>
+              <div className={styles.modelPreviewViewport}>
+                {previewModelFile || liveFlatPreview ? (
+                  <ModelViewer
+                    file={previewModelFile}
+                    flatPreview={
+                      preferGeneratedFlatPreview
+                        ? liveFlatPreview
+                        : (previewModelFile ? null : liveFlatPreview)
+                    }
+                    bedWidthMm={liveFlatPreview?.widthMm}
+                    bedHeightMm={liveFlatPreview?.heightMm}
+                    tumblerDims={liveTumblerDims}
+                    handleArcDeg={handleArcDeg}
+                    glbPath={glbPath || null}
+                    tumblerMapping={tumblerMapping}
+                    bodyTintColor={productType === "flat" ? undefined : bodyColorHex}
+                    rimTintColor={productType === "flat" ? undefined : rimColorHex}
+                  />
+                ) : (
+                  <div className={styles.modelPreviewEmpty}>Preview unavailable</div>
+                )}
+              </div>
+              {previewLoadError && (
+                <div className={styles.modelPreviewNote}>{previewLoadError}</div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Physical dimensions ───────────────────────────────────── */}
@@ -1201,13 +2084,22 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         <div className={styles.sectionTitle}>Physical dimensions</div>
 
         <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Diameter (mm) *</label>
+          <label className={styles.fieldLabel}>
+            {productType === "flat" ? "Template width (mm) *" : "Diameter (mm) *"}
+          </label>
           <input
             className={styles.numInput}
             type="number"
-            value={diameterMm || ""}
+            value={productType === "flat" ? (flatWidthMm || "") : (diameterMm || "")}
             step={0.1}
-            onChange={(e) => setDiameterMm(Number(e.target.value) || 0)}
+            onChange={(e) => {
+              const next = Number(e.target.value) || 0;
+              if (productType === "flat") {
+                setFlatWidthMm(next);
+                return;
+              }
+              setDiameterMm(next);
+            }}
           />
         </div>
 
@@ -1222,44 +2114,65 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           />
         </div>
 
+        {productType === "flat" && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Thickness (mm)</label>
+            <input
+              className={styles.numInput}
+              type="number"
+              value={flatThicknessMm || ""}
+              step={0.1}
+              min={0}
+              onChange={(e) => setFlatThicknessMm(Number(e.target.value) || 0)}
+            />
+            <span className={styles.fieldHint}>Used for generated 3D preview</span>
+          </div>
+        )}
+
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>Template width</label>
           <span className={styles.readOnly}>
             {templateWidthMm > 0 ? `${templateWidthMm} mm` : "\u2014"}{" "}
-            <span className={styles.fieldHint}>(auto-calculated)</span>
+            <span className={styles.fieldHint}>
+              {productType === "flat" ? "(from flat width)" : "(auto-calculated)"}
+            </span>
           </span>
         </div>
 
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Handle arc (&deg;)</label>
-          <input
-            className={styles.numInput}
-            type="number"
-            value={handleArcDeg}
-            step={1}
-            min={0}
-            max={360}
-            onChange={(e) => setHandleArcDeg(Number(e.target.value) || 0)}
-          />
-          <span className={styles.fieldHint}>0 = no handle, 90 = YETI Rambler style</span>
-        </div>
+        {productType && productType !== "flat" && (
+          <>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Handle arc (&deg;)</label>
+              <input
+                className={styles.numInput}
+                type="number"
+                value={handleArcDeg}
+                step={1}
+                min={0}
+                max={360}
+                onChange={(e) => setHandleArcDeg(Number(e.target.value) || 0)}
+              />
+              <span className={styles.fieldHint}>0 = no handle, 90 = YETI Rambler style</span>
+            </div>
 
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Taper correction</label>
-          <select
-            className={styles.selectInput}
-            value={taperCorrection}
-            onChange={(e) => setTaperCorrection(e.target.value as "none" | "top-narrow" | "bottom-narrow")}
-          >
-            <option value="none">None</option>
-            <option value="top-narrow">Top narrow</option>
-            <option value="bottom-narrow">Bottom narrow</option>
-          </select>
-        </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Taper correction</label>
+              <select
+                className={styles.selectInput}
+                value={taperCorrection}
+                onChange={(e) => setTaperCorrection(e.target.value as "none" | "top-narrow" | "bottom-narrow")}
+              >
+                <option value="none">None</option>
+                <option value="top-narrow">Top narrow</option>
+                <option value="bottom-narrow">Bottom narrow</option>
+              </select>
+            </div>
+          </>
+        )}
       </div>
 
       {/* ── Engravable zone editor ──────────────────────────────── */}
-      {productType !== "flat" && frontPhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
+      {productType && productType !== "flat" && frontPhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
         <div className={styles.section}>
           <div className={styles.sectionTitle}>Engravable zone</div>
           <EngravableZoneEditor
@@ -1269,8 +2182,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
             bottomMarginMm={bottomMarginMm}
             diameterMm={diameterMm}
             photoScalePct={referencePhotoScalePct}
+            photoOffsetXPct={referencePhotoOffsetXPct}
             photoOffsetYPct={referencePhotoOffsetYPct}
             photoAnchorY={referencePhotoAnchorY}
+            photoCenterMode={referencePhotoCenterMode}
             bodyColorHex={bodyColorHex}
             rimColorHex={rimColorHex}
             onChange={(top, bottom) => {
@@ -1281,8 +2196,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               if (eng > 0) setPrintHeightMm(eng);
             }}
             onPhotoScaleChange={setReferencePhotoScalePct}
+            onPhotoOffsetXChange={setReferencePhotoOffsetXPct}
             onPhotoOffsetYChange={setReferencePhotoOffsetYPct}
             onPhotoAnchorYChange={setReferencePhotoAnchorY}
+            onPhotoCenterModeChange={setReferencePhotoCenterMode}
             onColorsChange={handleAutoSampleColors}
           />
         </div>
@@ -1394,7 +2311,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       </div>
 
       {/* ── Tumbler mapping wizard modal ── */}
-      {showMappingWizard && glbPath && (
+      {showMappingWizard && glbPath && productType && productType !== "flat" && (
         <TumblerMappingWizard
           glbPath={glbPath}
           diameterMm={diameterMm}

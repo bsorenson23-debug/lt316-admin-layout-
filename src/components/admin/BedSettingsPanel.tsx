@@ -8,8 +8,6 @@
  *   - Flat-bed dimensions
  *   - Tumbler dimensions (diameter + printable height)
  *   - Derived tumbler wrap width (circumference)
- *   - Grid spacing (mm)
- *   - Snap to grid toggle
  *   - Show origin toggle
  *   - Origin position (reserved for future bottom-left support)
  *   - Show crosshair toggle
@@ -51,6 +49,7 @@ function saveLbPaths(s: LightBurnPathSettings) {
 interface Props {
   bedConfig: BedConfig;
   onUpdateBedConfig: (config: BedConfig) => void;
+  showGridSection?: boolean;
 }
 
 type NumericConfigField =
@@ -60,7 +59,11 @@ type NumericConfigField =
   | "tumblerPrintableHeightMm"
   | "gridSpacing";
 
-export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
+export function BedSettingsPanel({
+  bedConfig,
+  onUpdateBedConfig,
+  showGridSection = true,
+}: Props) {
   const set = (patch: Partial<BedConfig>) =>
     onUpdateBedConfig(normalizeBedConfig({ ...bedConfig, ...patch }));
 
@@ -178,17 +181,16 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
               )}
 
               <FieldRow label="Diameter (mm)">
-                <span id="bed-cylinder-diameter">
-                  <DraftNumberInput
-                    className={styles.numInput}
-                    value={bedConfig.tumblerDiameterMm}
-                    min={10}
-                    max={300}
-                    step={0.1}
-                    onValueChange={(value) => handleNumber("tumblerDiameterMm", value)}
-                    aria-label="Tumbler diameter in mm"
-                  />
-                </span>
+                <DraftNumberInput
+                  id="bed-cylinder-diameter"
+                  className={styles.numInput}
+                  value={bedConfig.tumblerDiameterMm}
+                  min={10}
+                  max={300}
+                  step={0.1}
+                  onValueChange={(value) => handleNumber("tumblerDiameterMm", value)}
+                  aria-label="Tumbler diameter in mm"
+                />
               </FieldRow>
 
               <FieldRow label="Print Height (mm)">
@@ -206,7 +208,9 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
               </FieldRow>
 
               <FieldRow label="Template W (mm)">
-                <span id="bed-template-dimensions" className={styles.readonlyValue}>{wrapWidthMm.toFixed(2)}</span>
+                <span id="bed-template-dimensions" className={styles.readonlyValue} tabIndex={-1}>
+                  {wrapWidthMm.toFixed(2)}
+                </span>
               </FieldRow>
 
               {activeGuideBand && (
@@ -228,17 +232,16 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
           ) : (
             <>
               <FieldRow label="Width (mm)">
-                <span id="bed-template-dimensions">
-                  <DraftNumberInput
-                    className={styles.numInput}
-                    value={bedConfig.flatWidth}
-                    min={10}
-                    max={2000}
-                    step={10}
-                    onValueChange={(value) => handleNumber("flatWidth", value)}
-                    aria-label="Bed width in mm"
-                  />
-                </span>
+                <DraftNumberInput
+                  id="bed-template-dimensions"
+                  className={styles.numInput}
+                  value={bedConfig.flatWidth}
+                  min={10}
+                  max={2000}
+                  step={10}
+                  onValueChange={(value) => handleNumber("flatWidth", value)}
+                  aria-label="Bed width in mm"
+                />
               </FieldRow>
 
               <FieldRow label="Height (mm)">
@@ -257,7 +260,8 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
         </CollapsibleSection>
 
         {/* ── Grid & Snap ── */}
-        <CollapsibleSection
+        {showGridSection ? (
+          <CollapsibleSection
           title="Grid & Snap"
           open={gridOpen}
           onToggle={() => setGridOpen((o) => !o)}
@@ -285,7 +289,8 @@ export function BedSettingsPanel({ bedConfig, onUpdateBedConfig }: Props) {
               <span className={styles.toggleTrack} />
             </label>
           </FieldRow>
-        </CollapsibleSection>
+          </CollapsibleSection>
+        ) : null}
 
         {/* ── LightBurn Paths ── */}
         <CollapsibleSection
@@ -445,6 +450,7 @@ function formatDraftNumber(value: number): string {
 }
 
 function DraftNumberInput({
+  id,
   value,
   min,
   max,
@@ -453,6 +459,7 @@ function DraftNumberInput({
   onValueChange,
   "aria-label": ariaLabel,
 }: {
+  id?: string;
   value: number;
   min: number;
   max: number;
@@ -480,6 +487,7 @@ function DraftNumberInput({
 
   return (
     <input
+      id={id}
       type="number"
       className={className}
       value={draft}

@@ -1,21 +1,258 @@
-.panel { border-bottom:1px solid #2a2a2a; background:#1a1a1a; }
-.toggle { width:100%; display:flex; align-items:center; justify-content:space-between; padding:9px 14px; background:none; border:none; cursor:pointer; border-bottom:1px solid #222; text-align:left; }
-.toggle:hover { background:#1e1e1e; }
-.toggleLabel { font-size:11px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#888; }
-.chevron { font-size:11px; color:#555; }
-.body { padding:10px 14px 14px; display:flex; flex-direction:column; gap:6px; }
-.textInput { width:100%; box-sizing:border-box; background:#1e1e1e; border:1px solid #2e2e2e; border-radius:4px; color:#e0e0e0; font-size:13px; padding:6px 8px; }
-.textInput:focus { outline:none; border-color:#555; }
-.row { display:flex; gap:6px; align-items:center; }
-.fieldGroup { display:flex; flex-direction:column; gap:3px; flex:1; }
-.fieldLabel { font-size:10px; color:#555; }
-.select { width:100%; background:#242424; border:1px solid #333; border-radius:4px; color:#e0e0e0; font-size:11px; padding:4px 6px; }
-.numInput { width:100%; background:#242424; border:1px solid #333; border-radius:4px; color:#e0e0e0; font-size:11px; padding:4px 6px; }
-.numInput:focus, .select:focus { outline:none; border-color:#555; }
-.checkRow { display:flex; gap:12px; align-items:center; }
-.checkLabel { font-size:11px; color:#888; display:flex; align-items:center; gap:4px; cursor:pointer; }
-.colorInput { width:32px; height:22px; border:1px solid #333; border-radius:3px; padding:1px; background:#242424; cursor:pointer; }
-.previewBox { background:#f0f0f0; border-radius:4px; overflow:hidden; min-height:40px; display:flex; align-items:center; justify-content:center; }
-.addBtn { width:100%; font-size:11px; font-weight:600; padding:7px 10px; border-radius:4px; cursor:pointer; background:#4e3a2a; border:1px solid #7a5a3d; color:#f0d8c0; transition:background 100ms; }
-.addBtn:hover:not(:disabled) { background:#5e4a34; }
-.addBtn:disabled { opacity:0.45; cursor:not-allowed; }
+.panel {
+  border-bottom: 1px solid var(--border-normal);
+  background: var(--bg-card);
+}
+
+.toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+}
+
+.toggle:hover {
+  background: var(--bg-elevated);
+}
+
+.toggleLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.chevron {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.body {
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.note {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+
+.sectionTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.fieldGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.fieldLabel {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.textInput,
+.select,
+.numInput {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 6px 8px;
+}
+
+.textInput {
+  font-size: 13px;
+}
+
+.select,
+.numInput {
+  font-size: 11px;
+}
+
+.textInput:focus,
+.select:focus,
+.numInput:focus {
+  outline: none;
+  border-color: var(--accent-hover);
+}
+
+.colorInput {
+  width: 36px;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  background: var(--bg-input);
+  cursor: pointer;
+}
+
+.previewBox,
+.imagePreviewFrame {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-base);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.previewBox {
+  min-height: 72px;
+  padding: 6px;
+}
+
+.imagePreviewFrame {
+  min-height: 90px;
+  max-height: 180px;
+}
+
+.previewImage {
+  display: block;
+  max-width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+}
+
+.previewPlaceholder {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.buttonStack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.addBtn,
+.secondaryBtn {
+  width: 100%;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.addBtn {
+  background: var(--accent-dark);
+  border: 1px solid var(--accent);
+  color: var(--accent-hover);
+}
+
+.addBtn:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.secondaryBtn {
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+}
+
+.secondaryBtn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.addBtn:disabled,
+.secondaryBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.metaCard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.metaRow {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.metaLabel {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metaValue {
+  font-size: 11px;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.emptyState {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  padding: 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.noteList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.noteItem {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.errorText {
+  font-size: 11px;
+  color: var(--error);
+}
+
+.statusText {
+  font-size: 11px;
+  color: var(--success);
+}

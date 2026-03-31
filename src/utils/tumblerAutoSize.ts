@@ -548,6 +548,7 @@ export function applyTumblerSuggestion(
       ? findTumblerProfileIdForBrandModel({
           brand: storedBrand,
           model: storedModel ?? null,
+          capacityOz: normalizedDraft.capacityOz ?? null,
         })
       : null;
   const autoProfile = autoProfileId ? getTumblerProfileById(autoProfileId) : null;
@@ -612,4 +613,3 @@ export function roundDisplayMm(value: number | null | undefined): string {
   if (!isFinitePositive(value ?? null)) return "--";
   return (value ?? 0).toFixed(2);
 }
-

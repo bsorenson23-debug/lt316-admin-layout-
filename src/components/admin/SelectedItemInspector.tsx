@@ -57,6 +57,8 @@ export function SelectedItemInspector({
   onNormalizeItem,
   onDeleteItem,
 }: Props) {
+  const [showSimulator, setShowSimulator] = useState(false);
+
   if (!selectedItem) {
     return (
       <div className={styles.panel}>
@@ -91,7 +93,6 @@ export function SelectedItemInspector({
   const handleAlign = (mode: ItemAlignmentMode) => onAlignItem(selectedItem.id, mode);
   const handleCenterBetweenGuides = () => onCenterBetweenGuides(selectedItem.id);
   const handleNormalize = () => onNormalizeItem(selectedItem.id);
-  const [showSimulator, setShowSimulator] = useState(false);
   const positionLimit = Math.max(bedConfig.width, bedConfig.height) * 2;
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
   const activeGuideBand = getActiveTumblerGuideBand(bedConfig);

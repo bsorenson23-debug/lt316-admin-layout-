@@ -1,29 +1,20 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   BedConfig,
   DEFAULT_BED_CONFIG,
-  ItemAlignmentMode,
   PlacedItem,
-  PlacedItemPatch,
   SvgAsset,
-  WorkspaceMode,
   normalizeBedConfig,
 } from "@/types/admin";
-import { clamp } from "@/utils/geometry";
-import { parseSvgAsset, defaultPlacedSize, normalizeSvgToArtworkBounds } from "@/utils/svg";
-import { TumblerSpecDraft } from "@/types/tumblerAutoSize";
 import {
-  computeAlignmentPatch,
-  computePlacementFromArtworkRect,
-  getPlacedArtworkBounds,
-} from "@/utils/alignment";
-import { applyTumblerSuggestion } from "@/utils/tumblerAutoSize";
-import { checkSvgQuality } from "@/utils/svgQualityCheck";
-import { centerArtworkBetweenGrooves, getActiveTumblerGuideBand } from "@/utils/tumblerGuides";
+  createSvgLibraryAsset,
+  fetchSvgLibraryAssets,
+  updateSvgLibraryAsset,
+} from "@/lib/svgLibraryClient";
 import { SvgAssetLibraryPanel } from "./SvgAssetLibraryPanel";
 import { LaserBedWorkspace } from "./LaserBedWorkspace";
 import type { FramePreviewProp, BedMockupConfig, FlatBedItemOverlay } from "./LaserBedWorkspace";
@@ -32,8 +23,7 @@ import { TumblerAutoDetectPanel } from "./TumblerAutoDetectPanel";
 import { Model3DPanel } from "./Model3DPanel";
 import { TumblerPlacementView } from "./TumblerPlacementView";
 import { AccordionSection } from "./AccordionSection";
-import { TumblerExportPanel } from "./TumblerExportPanel";
-import type { PreflightNavTarget } from "./TumblerExportPanel";
+import { TumblerExportPanel, type PreflightNavTarget } from "./TumblerExportPanel";
 import { SelectedItemInspector } from "./SelectedItemInspector";
 import { OrdersPanel } from "./OrdersPanel";
 import { MaterialProfilePanel } from "./MaterialProfilePanel";
@@ -48,26 +38,173 @@ import { LightBurnPathSettingsPanel } from "./LightBurnPathSettingsPanel";
 import { TextPersonalizationPanel } from "./TextPersonalizationPanel";
 import { CameraOverlayPanel } from "./CameraOverlayPanel";
 import { TextToolPanel } from "./TextToolPanel";
-import { RasterToSvgPanel } from "./RasterToSvgPanel";
+import { RasterToSvgPanel, type RasterToSvgPreviewState } from "./RasterToSvgPanel";
 import { TestGridPanel } from "./TestGridPanel";
+import { GridSettingsPanel } from "./GridSettingsPanel";
 import { FlatBedItemPanel } from "./FlatBedItemPanel";
 import { FlatBedAutoDetectPanel } from "./FlatBedAutoDetectPanel";
 import { ColorLayerPanel } from "./ColorLayerPanel";
+import { SvgLibraryGallery } from "./SvgLibraryGallery";
+import { LensQuickSelect } from "./LensQuickSelect";
+import { JobRunnerOverlay } from "./JobRunnerOverlay";
+import { WorkflowRail, type WorkflowRailStep } from "./WorkflowRail";
+import { CurrentJobCard, type JobQuickAction } from "./CurrentJobCard";
+import { RunReadinessPanel, type RunReadinessItem } from "./RunReadinessPanel";
 import { type LaserLayer, buildDefaultLayers } from "@/types/laserLayer";
 import { FiberColorCalibrationPanel } from "./FiberColorCalibrationPanel";
 import { TemplateGallery } from "./TemplateGallery";
 import { TemplateCreateForm } from "./TemplateCreateForm";
 import type { ProductTemplate } from "@/types/productTemplate";
+import type { OrderJobRecipe, OrderRecord, OrderRecipePlacedItem } from "@/types/orders";
 import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
-import { getTumblerWrapLayout, getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
+import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
+import { getTumblerWrapLayout } from "@/utils/tumblerWrapLayout";
+import { getMaterialProfileById } from "@/data/materialProfiles";
+import type { LightBurnExportPayload } from "@/types/export";
+import {
+  LASER_PROFILE_STATE_CHANGED_EVENT,
+  getActiveLaserAndLens,
+} from "@/utils/laserProfileState";
+import { buildLightBurnExportArtifacts } from "@/utils/tumblerExportPlacement";
+import { buildLightBurnLbrn } from "@/utils/lightBurnLbrnExport";
+import { buildLightBurnExportSvg } from "@/utils/lightBurnSvgExport";
+import { useAdminWorkspacePersistence } from "./hooks/useAdminWorkspacePersistence";
+import { useQueueRunnerState } from "./hooks/useQueueRunnerState";
+import { useTemplateWorkflow } from "./hooks/useTemplateWorkflow";
+import { useAssetWorkflow } from "./hooks/useAssetWorkflow";
+import { useTemplateModalState } from "./hooks/useTemplateModalState";
+import { ModalDialog } from "./shared/ModalDialog";
+import { getRotaryPresets } from "@/utils/adminCalibrationState";
 import styles from "./AdminLayoutShell.module.css";
 
-function isDevEnvironment() {
-  return process.env.NODE_ENV !== "production";
+function buildActiveMaterialSettings(profileId: string): ActiveMaterialSettings | null {
+  if (!profileId) return null;
+
+  const profile = getMaterialProfileById(profileId);
+  if (!profile) return null;
+
+  return {
+    label: profile.label,
+    powerPct: profile.powerPct,
+    maxPowerPct: profile.maxPowerPct,
+    speedMmS: profile.speedMmS,
+    lpi: profile.lpi,
+    passes: profile.passes,
+  };
+}
+
+function getTemplateFallbackIcon(productType: ProductTemplate["productType"]): string {
+  switch (productType) {
+    case "mug":
+      return "MG";
+    case "bottle":
+      return "BT";
+    case "flat":
+      return "FL";
+    case "tumbler":
+    default:
+      return "TB";
+  }
+}
+
+function readActiveLaserSetup() {
+  try {
+    return getActiveLaserAndLens();
+  } catch {
+    return null;
+  }
+}
+
+function cloneRecipePlacedItems(items: OrderRecipePlacedItem[]): PlacedItem[] {
+  return items.map((item, index) => ({
+    ...item,
+    id: `item-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
+    documentBounds: { ...item.documentBounds },
+    artworkBounds: { ...item.artworkBounds },
+    defaults: { ...item.defaults },
+  }));
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target.closest("[contenteditable='true']")) return true;
+
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.getAttribute("role") === "textbox";
+}
+
+const CURRENT_JOB_BASENAME = "current-job";
+
+function inferTopSafeOffsetMm(bedConfig: BedConfig): number | undefined {
+  const overallHeightMm = bedConfig.tumblerOverallHeightMm;
+  const usableHeightMm = bedConfig.tumblerUsableHeightMm;
+  if (!Number.isFinite(overallHeightMm) || !Number.isFinite(usableHeightMm)) {
+    return undefined;
+  }
+  const delta = ((overallHeightMm ?? 0) - (usableHeightMm ?? 0)) / 2;
+  return delta > 0 ? Number(delta.toFixed(2)) : 0;
+}
+
+async function preprocessPayloadForCurrentJob(
+  payload: LightBurnExportPayload,
+): Promise<LightBurnExportPayload> {
+  try {
+    const response = await fetch("/api/admin/lightburn/preprocess-svg", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: payload.items.map((item) => ({
+          id: item.id,
+          svgText: item.svgText,
+        })),
+      }),
+    });
+
+    if (!response.ok) {
+      return payload;
+    }
+
+    const data = (await response.json()) as {
+      items?: Array<{
+        id: string;
+        svgText: string;
+      }>;
+    };
+
+    const byId = new Map((data.items ?? []).map((item) => [item.id, item.svgText]));
+    return {
+      ...payload,
+      items: payload.items.map((item) => {
+        const preprocessedSvg = byId.get(item.id);
+        return preprocessedSvg ? { ...item, svgText: preprocessedSvg } : item;
+      }),
+    };
+  } catch {
+    return payload;
+  }
+}
+
+async function saveCurrentJobFile(args: {
+  outputFolderPath: string;
+  filename: string;
+  content: string;
+}): Promise<void> {
+  const response = await fetch("/api/admin/lightburn/save-export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
+
+  const payload = (await response.json()) as { saved?: boolean; error?: string };
+  if (!response.ok || !payload.saved) {
+    throw new Error(payload.error ?? `Failed to save ${args.filename}`);
+  }
 }
 
 export function AdminLayoutShell() {
+  const router = useRouter();
+
   // -- Bed config -----------------------------------------------------------
   const [bedConfig, setBedConfig] = useState<BedConfig>(DEFAULT_BED_CONFIG);
 
@@ -87,6 +224,7 @@ export function AdminLayoutShell() {
 
   // -- Material profile -----------------------------------------------------
   const [materialSettings, setMaterialSettings] = useState<ActiveMaterialSettings | null>(null);
+  const [selectedMaterialProfileId, setSelectedMaterialProfileId] = useState("");
 
   // -- Tumbler mockup overlay -----------------------------------------------
   const [mockupConfig, setMockupConfig] = useState<BedMockupConfig | null>(null);
@@ -130,74 +268,90 @@ export function AdminLayoutShell() {
 
   // -- Color laser layers ---------------------------------------------------
   const [laserLayers, setLaserLayers] = useState<LaserLayer[]>(buildDefaultLayers);
+  const [rotaryAutoPlacementEnabled, setRotaryAutoPlacementEnabled] = useState(false);
+  const [selectedRotaryPresetId, setSelectedRotaryPresetId] = useState("");
 
   // -- Product template system -----------------------------------------------
   const [selectedTemplate, setSelectedTemplate] = useState<ProductTemplate | null>(null);
-  const [showTemplateGallery, setShowTemplateGallery] = useState(false);
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState<ProductTemplate | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [, setTemplateRefreshNonce] = useState(0);
-  const [didRestorePersistedState, setDidRestorePersistedState] = useState(false);
+  const [activeLaserSetup, setActiveLaserSetup] = useState(readActiveLaserSetup);
+
+  const {
+    showTemplateGallery,
+    showCreateForm,
+    editingTemplate,
+    toastMessage,
+    setShowTemplateGallery,
+    setShowCreateForm,
+    setToastMessage,
+    openTemplateGallery,
+    closeTemplateGallery,
+    openCreateTemplate,
+    handleEditTemplate,
+    handleDeleteTemplate,
+    cancelCreateTemplate,
+    showToast,
+  } = useTemplateModalState({
+    selectedTemplate,
+    setSelectedTemplate,
+  });
 
   const handleUpdateLayer = useCallback((layer: LaserLayer) => {
     setLaserLayers(prev => prev.map(l => l.id === layer.id ? layer : l));
   }, []);
 
+  const { didRestorePersistedState } = useAdminWorkspacePersistence({
+    bedConfig,
+    setBedConfig,
+    placedItems,
+    setPlacedItems,
+    laserLayers,
+    setLaserLayers,
+    setSelectedMaterialProfileId,
+    setMaterialSettings,
+    setLbOutputFolderPath,
+    buildMaterialSettings: buildActiveMaterialSettings,
+    normalizeBedConfig,
+  });
+
   useEffect(() => {
-    try {
-      const rawBedConfig = localStorage.getItem("lt316_bed_config");
-      if (rawBedConfig) {
-        setBedConfig(normalizeBedConfig(JSON.parse(rawBedConfig) as BedConfig));
-      }
+    if (!didRestorePersistedState) return;
 
-      const rawAssets = localStorage.getItem("lt316_svg_assets");
-      if (rawAssets) {
-        setSvgAssets(JSON.parse(rawAssets) as SvgAsset[]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const assets = await fetchSvgLibraryAssets();
+        if (cancelled) return;
+        setSvgAssets(assets);
+        setSelectedAssetId((prev) => {
+          if (prev && assets.some((asset) => asset.id === prev)) {
+            return prev;
+          }
+          return assets[0]?.id ?? null;
+        });
+        setUploadError(null);
+      } catch (error) {
+        if (cancelled) return;
+        setUploadError(error instanceof Error ? error.message : "Failed to load SVG library");
       }
+    })();
 
-      const rawPlacedItems = localStorage.getItem("lt316_placed_items");
-      if (rawPlacedItems) {
-        setPlacedItems(JSON.parse(rawPlacedItems) as PlacedItem[]);
-      }
+    return () => {
+      cancelled = true;
+    };
+  }, [didRestorePersistedState]);
 
-      const rawLayers = localStorage.getItem("lt316_laser_layers");
-      if (rawLayers) {
-        setLaserLayers(JSON.parse(rawLayers) as LaserLayer[]);
-      }
-
-      const rawLightBurnPaths = localStorage.getItem("lt316.integration.lightburn.paths");
-      if (rawLightBurnPaths) {
-        const parsed = JSON.parse(rawLightBurnPaths) as { outputFolderPath?: string };
-        setLbOutputFolderPath(parsed.outputFolderPath || undefined);
-      }
-    } catch {
-      // Ignore malformed persisted state and fall back to defaults.
-    } finally {
-      setDidRestorePersistedState(true);
-    }
+  useEffect(() => {
+    const syncActiveLaserSetup = () => setActiveLaserSetup(readActiveLaserSetup());
+    syncActiveLaserSetup();
+    window.addEventListener("storage", syncActiveLaserSetup);
+    window.addEventListener("focus", syncActiveLaserSetup);
+    window.addEventListener(LASER_PROFILE_STATE_CHANGED_EVENT, syncActiveLaserSetup);
+    return () => {
+      window.removeEventListener("storage", syncActiveLaserSetup);
+      window.removeEventListener("focus", syncActiveLaserSetup);
+      window.removeEventListener(LASER_PROFILE_STATE_CHANGED_EVENT, syncActiveLaserSetup);
+    };
   }, []);
-
-  // -- Persist workspace state to localStorage --------------------------------
-  useEffect(() => {
-    if (!didRestorePersistedState) return;
-    try { localStorage.setItem("lt316_bed_config", JSON.stringify(bedConfig)); } catch { /* quota exceeded */ }
-  }, [bedConfig, didRestorePersistedState]);
-
-  useEffect(() => {
-    if (!didRestorePersistedState) return;
-    try { localStorage.setItem("lt316_svg_assets", JSON.stringify(svgAssets)); } catch { /* quota exceeded */ }
-  }, [svgAssets, didRestorePersistedState]);
-
-  useEffect(() => {
-    if (!didRestorePersistedState) return;
-    try { localStorage.setItem("lt316_placed_items", JSON.stringify(placedItems)); } catch { /* quota exceeded */ }
-  }, [placedItems, didRestorePersistedState]);
-
-  useEffect(() => {
-    if (!didRestorePersistedState) return;
-    try { localStorage.setItem("lt316_laser_layers", JSON.stringify(laserLayers)); } catch { /* quota exceeded */ }
-  }, [laserLayers, didRestorePersistedState]);
 
   // -- Derived --------------------------------------------------------------
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
@@ -242,6 +396,23 @@ export function AdminLayoutShell() {
     selectedTemplate?.dimensions.handleArcDeg ??
     0;
   const rimTintColor = selectedTemplate?.dimensions.rimColorHex ?? "#d0d0d0";
+  const flatPreview = React.useMemo(() => {
+    if (!selectedTemplate || selectedTemplate.productType !== "flat") return null;
+    const widthMm = selectedTemplate.dimensions.templateWidthMm;
+    const heightMm = selectedTemplate.dimensions.printHeightMm;
+    if (!(widthMm > 0) || !(heightMm > 0)) return null;
+    return {
+      widthMm,
+      heightMm,
+      thicknessMm: selectedTemplate.dimensions.flatThicknessMm ?? 4,
+      familyKey: inferFlatFamilyKey({
+        familyKey: selectedTemplate.dimensions.flatFamilyKey,
+        glbPath: selectedTemplate.glbPath,
+        label: selectedTemplate.name,
+      }),
+      label: selectedTemplate.name,
+    };
+  }, [selectedTemplate]);
 
   React.useEffect(() => {
     setBodyTintColor(selectedTemplate?.dimensions.bodyColorHex ?? "#b0b8c4");
@@ -323,314 +494,462 @@ export function AdminLayoutShell() {
     });
   }, [isTumblerMode, selectedTemplate, templateEngravableDims, activeHandleArcDeg]);
 
-  // -------------------------------------------------------------------------
-  // Build a PlacedItem from an SvgAsset at a given center point (mm)
-  // -------------------------------------------------------------------------
-  const buildPlacedItem = useCallback((
-    asset: SvgAsset, xMm: number, yMm: number,
-  ): PlacedItem => {
-    const maxAutoSize = Math.max(40, Math.min(100, Math.min(bedConfig.width, bedConfig.height) * 0.35));
-    const { width, height } = defaultPlacedSize(asset, maxAutoSize);
-    const id = `item-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const itemX = xMm - width / 2;
-    const itemY = yMm - height / 2;
-    const defaults = { x: itemX, y: itemY, width, height, rotation: 0 };
-    return {
-      id, assetId: asset.id, name: asset.name,
-      svgText: asset.content, sourceSvgText: asset.content,
-      documentBounds: { ...asset.documentBounds },
-      artworkBounds: { ...asset.artworkBounds },
-      x: itemX, y: itemY, width, height, rotation: 0, defaults,
-    };
-  }, [bedConfig]);
+  const {
+    handleUploadAssets,
+    handleRemoveAsset,
+    handleClearAssets,
+    handlePlaceAsset,
+    handlePlaceSelectedAssetOnBed,
+    handleSelectItem,
+    handleUpdateItem,
+    handleNudgeSelected,
+    handleClearWorkspace,
+    handleDeleteItem,
+    handleResetItem,
+    handleAlignItem,
+    handleNormalizeItem,
+    handleCenterSelectedBetweenGuides,
+    handleApplyTumblerDraft,
+    handleWorkspaceModeChange,
+  } = useAssetWorkflow({
+    bedConfig,
+    activeHandleArcDeg,
+    isTumblerMode,
+    engravableZone,
+    svgAssets,
+    selectedAssetId,
+    placementAssetId,
+    selectedItemId,
+    setSvgAssets,
+    setSelectedAssetId,
+    setPlacementAssetId,
+    setUploadError,
+    setInspectorNote,
+    setPlacedItems,
+    setSelectedItemId,
+    setBedConfig,
+    setTumblerViewMode,
+    normalizeBedConfig,
+  });
 
-  // -------------------------------------------------------------------------
-  // Asset library handlers
-  // -------------------------------------------------------------------------
-  const handleUploadAssets = useCallback(async (files: FileList) => {
-    const accepted: SvgAsset[] = [];
-    const rejected: string[] = [];
-    const qualityNotes: string[] = [];
-
-    for (const file of Array.from(files)) {
-      if (file.type !== "image/svg+xml" && !/\.svg$/i.test(file.name)) {
-        rejected.push(`${file.name}: not an SVG file`); continue;
-      }
-      try {
-        const content = await file.text();
-        // Quality check — surface errors as rejections, warnings as notes
-        const quality = checkSvgQuality(content);
-        if (quality.hasErrors) {
-          const msgs = quality.issues.filter((i) => i.severity === "error").map((i) => i.message).join("; ");
-          rejected.push(`${file.name}: ${msgs}`); continue;
-        }
-        if (quality.hasWarnings) {
-          const msgs = quality.issues.filter((i) => i.severity === "warn").map((i) => i.code).join(", ");
-          qualityNotes.push(`${file.name}: ${msgs}`);
-        }
-        const id = `asset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const parsed = parseSvgAsset(id, file.name, content);
-        try {
-          const norm = normalizeSvgToArtworkBounds(parsed.content, parsed.artworkBounds);
-          accepted.push({
-            ...parsed,
-            content: norm.svgText,
-            viewBox: `${norm.documentBounds.x} ${norm.documentBounds.y} ${norm.documentBounds.width} ${norm.documentBounds.height}`,
-            naturalWidth: norm.documentBounds.width,
-            naturalHeight: norm.documentBounds.height,
-            documentBounds: norm.documentBounds,
-            artworkBounds: norm.artworkBounds,
-          });
-        } catch { accepted.push(parsed); }
-      } catch (e) {
-        rejected.push(`${file.name}: ${e instanceof Error ? e.message : "parse error"}`);
-      }
-    }
-
-    if (accepted.length > 0) {
-      setSvgAssets((prev) => [...prev, ...accepted]);
-      if (!selectedAssetId) setSelectedAssetId(accepted[0].id);
-
-        // Auto-place each uploaded SVG centered on the bed (skip the old "Place on Bed" step)
-        const placementCenterX =
-          bedConfig.workspaceMode === "tumbler-wrap"
-            ? getWrapFrontCenter(
-              bedConfig.width,
-              activeHandleArcDeg,
-            )
-            : bedConfig.width / 2;
-      const newItems: PlacedItem[] = accepted.map((asset) =>
-        buildPlacedItem(asset, placementCenterX, bedConfig.height / 2),
-      );
-      if (newItems.length > 0) {
-        setPlacedItems((prev) => [...prev, ...newItems]);
-        setSelectedItemId(newItems[newItems.length - 1].id);
-      }
-    }
-    if (qualityNotes.length > 0) {
-      setInspectorNote(`Quality warnings: ${qualityNotes.slice(0, 2).join(" | ")}${qualityNotes.length > 2 ? " | ..." : ""}`);
-    }
-    if (rejected.length > 0) {
-      const preview = rejected.slice(0, 2).join(" | ") + (rejected.length > 2 ? " | ..." : "");
-      setUploadError(`Skipped ${rejected.length} file(s): ${preview}`);
-    } else { setUploadError(null); }
-  }, [selectedAssetId, buildPlacedItem, bedConfig, activeHandleArcDeg]);
-
-  const handleRemoveAsset = useCallback((assetId: string) => {
-    setSvgAssets((prev) => {
-      const next = prev.filter((a) => a.id !== assetId);
-      if (selectedAssetId === assetId) setSelectedAssetId(next[0]?.id ?? null);
-      if (placementAssetId === assetId) setPlacementAssetId(null);
-      return next;
-    });
-    setPlacedItems((prev) => prev.filter((p) => p.assetId !== assetId));
-    setSelectedItemId((id) => {
-      if (id && placedItems.some((p) => p.id === id && p.assetId === assetId)) {
-        setInspectorNote(null); return null;
-      }
-      return id;
-    });
-  }, [selectedAssetId, placementAssetId, placedItems]);
-
-  const handleClearAssets = useCallback(() => {
-    setSvgAssets([]); setSelectedAssetId(null); setPlacementAssetId(null);
-    setPlacedItems([]); setSelectedItemId(null);
-    setUploadError(null); setInspectorNote(null);
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // Item handlers
-  // -------------------------------------------------------------------------
-
-  const handlePlaceAsset = useCallback((xMm: number, yMm: number) => {
-    if (!placementAssetId) return;
-    const asset = svgAssets.find((a) => a.id === placementAssetId);
-    if (!asset) return;
-    const item = buildPlacedItem(asset, xMm, yMm);
-    setPlacedItems((prev) => [...prev, item]);
-    setSelectedItemId(item.id);
-    setPlacementAssetId(null);
-    setInspectorNote(null);
-  }, [placementAssetId, svgAssets, buildPlacedItem]);
-
-  const handlePlaceSelectedAssetOnBed = useCallback(() => {
-    if (!selectedAssetId) return;
-    // In tumbler mode, auto-place at front-center immediately
-      if (isTumblerMode) {
-        const asset = svgAssets.find((a) => a.id === selectedAssetId);
-        if (asset) {
-          const item = buildPlacedItem(
-            asset,
-            getWrapFrontCenter(
-              bedConfig.width,
-              activeHandleArcDeg,
-            ),
-            bedConfig.height / 2,
-          );
-          setPlacedItems((prev) => [...prev, item]);
-          setSelectedItemId(item.id);
-          setInspectorNote(null);
-          return;
-        }
-      }
-    setPlacementAssetId(selectedAssetId);
-    setInspectorNote(null);
-    }, [selectedAssetId, isTumblerMode, svgAssets, buildPlacedItem, bedConfig, activeHandleArcDeg]);
-
-  const handleSelectItem = useCallback((id: string | null) => {
-    setSelectedItemId(id);
-    if (!id) setInspectorNote(null);
-  }, []);
-
-  const handleUpdateItem = useCallback((id: string, patch: PlacedItemPatch) => {
-    setPlacedItems((prev) => prev.map((p) => p.id === id ? { ...p, ...patch } : p));
-  }, []);
-
-  const handleNudgeSelected = useCallback((dxMm: number, dyMm: number) => {
-    if (!selectedItemId) return;
-    setPlacedItems((prev) => prev.map((p) => {
-      if (p.id !== selectedItemId) return p;
-      return {
-        ...p,
-        x: clamp(p.x + dxMm, 0, Math.max(0, bedConfig.width - p.width)),
-        y: clamp(p.y + dyMm, 0, Math.max(0, bedConfig.height - p.height)),
-      };
-    }));
-  }, [selectedItemId, bedConfig]);
-
-  const handleClearWorkspace = useCallback(() => {
-    setPlacedItems([]); setSelectedItemId(null);
-    setPlacementAssetId(null); setInspectorNote(null);
-  }, []);
-
-  const handleDeleteItem = useCallback((id: string) => {
-    setPlacedItems((prev) => prev.filter((p) => p.id !== id));
-    if (selectedItemId === id) setSelectedItemId(null);
-  }, [selectedItemId]);
-
-  // -------------------------------------------------------------------------
-  // Inspector handlers
-  // -------------------------------------------------------------------------
-  const handleResetItem = useCallback((id: string) => {
-    setPlacedItems((prev) => prev.map((p) =>
-      p.id !== id ? p : { ...p, x: p.defaults.x, y: p.defaults.y, width: p.defaults.width, height: p.defaults.height, rotation: p.defaults.rotation }
-    ));
-    setInspectorNote("Reset to defaults");
-  }, []);
-
-  const handleAlignItem = useCallback((id: string, mode: ItemAlignmentMode) => {
-    setPlacedItems((prev) => prev.map((p) =>
-      p.id !== id ? p : { ...p, ...computeAlignmentPatch(p, bedConfig, mode, engravableZone) }
-    ));
-    if (mode === "center-bed")      setInspectorNote("Centered using artwork bounds");
-    if (mode === "center-x")        setInspectorNote("Centered horizontally");
-    if (mode === "center-y")        setInspectorNote("Centered vertically");
-    if (mode === "fit-bed")         setInspectorNote("Fitted to bed");
-    if (mode === "opposite-logo")   setInspectorNote("Placed opposite logo (180\u00B0)");
-    if (mode === "center-on-front") setInspectorNote("Centered on front face");
-    if (mode === "center-zone")     setInspectorNote("Centered in engravable zone");
-    if (mode === "fit-zone")        setInspectorNote("Fitted to engravable zone");
-  }, [bedConfig, engravableZone]);
-
-  const handleNormalizeItem = useCallback((id: string) => {
-    let did = false;
-    setPlacedItems((prev) => prev.map((p) => {
-      if (p.id !== id) return p;
-      try {
-        const current = getPlacedArtworkBounds(p);
-        const n = normalizeSvgToArtworkBounds(p.sourceSvgText, p.artworkBounds);
-        const next = computePlacementFromArtworkRect({ targetArtwork: current, documentBounds: n.documentBounds, artworkBounds: n.artworkBounds });
-        did = true;
-        return { ...p, svgText: n.svgText, documentBounds: n.documentBounds, artworkBounds: n.artworkBounds, ...next, defaults: { ...p.defaults, ...next } };
-      } catch { return p; }
-    }));
-    setInspectorNote(did ? "Normalized SVG bounds" : "Could not normalize");
-  }, []);
-
-  const handleCenterSelectedBetweenGuides = useCallback((id: string) => {
-    const guideBand = getActiveTumblerGuideBand(bedConfig);
-    if (!guideBand) return;
-    setPlacedItems((prev) => prev.map((p) => {
-      if (p.id !== id) return p;
-      const c = centerArtworkBetweenGrooves({ currentYmm: p.y, itemHeightMm: p.height, workspaceHeightMm: bedConfig.height, band: guideBand });
-      if (isDevEnvironment()) console.info("[tumbler-guides] centered", { guideBand, nextY: c.yMm });
-      return { ...p, y: Number(c.yMm.toFixed(3)) };
-    }));
-    setInspectorNote("Centered between groove guides");
-  }, [bedConfig]);
-
-  const handleApplyTumblerDraft = useCallback((draft: TumblerSpecDraft) => {
-    setBedConfig((prev) => applyTumblerSuggestion(prev, draft));
-    setInspectorNote("Applied auto-detected tumbler template");
-  }, []);
-
-  const handleWorkspaceModeChange = useCallback((mode: WorkspaceMode) => {
-    setBedConfig((prev) => normalizeBedConfig({ ...prev, workspaceMode: mode }));
-    if (mode !== "tumbler-wrap") setTumblerViewMode("grid");
-  }, []);
-
-  const handleLoadOrder = useCallback((snapshot: BedConfig) => {
-    setBedConfig(normalizeBedConfig(snapshot));
-  }, []);
+  const {
+    handleMaterialProfileSelection,
+    handleTemplateSelect,
+    handleUpdateCalibration,
+  } = useTemplateWorkflow({
+    bedConfig,
+    normalizeBedConfig,
+    selectedTemplate,
+    setSelectedMaterialProfileId,
+    setMaterialSettings,
+    setBedConfig,
+    setSelectedRotaryPresetId,
+    setRotaryAutoPlacementEnabled,
+    setSelectedTemplate,
+    setMockupConfig,
+    setFlatBedItemOverlay,
+    setShowTemplateGallery,
+    setShowCreateForm,
+    setBgRemovalStatus,
+    setEngravableZone,
+    setToastMessage,
+    buildMaterialSettings: buildActiveMaterialSettings,
+  });
 
   // Derived list of asset names for order capture
   const assetNames = svgAssets.map((a) => a.name);
 
   // Right panel tab + accordion
   const [rightTab, setRightTab] = useState<"workflow" | "tools" | "setup">("workflow");
+  const [svgDoctorOpenSignal, setSvgDoctorOpenSignal] = useState(0);
+  const [showSvgLibraryModal, setShowSvgLibraryModal] = useState(false);
+  const [svgDoctorPreview, setSvgDoctorPreview] = useState<RasterToSvgPreviewState | null>(null);
   const [openSection, setOpenSection] = useState<string | null>(null);
-  const [showOrders, setShowOrders] = useState(false);
+  const [showOrders, setShowOrders] = useState(true);
+  const [showJobRunnerOverlay, setShowJobRunnerOverlay] = useState(false);
+  const productStepActionRef = useRef<HTMLButtonElement | null>(null);
+  const artworkStepActionRef = useRef<HTMLButtonElement | null>(null);
+  const workspaceStepSectionRef = useRef<HTMLElement | null>(null);
+  const runCheckSectionRef = useRef<HTMLDivElement | null>(null);
+  const exportStepSectionRef = useRef<HTMLDivElement | null>(null);
   const handleAccordionToggle = useCallback((id: string) => {
     setOpenSection((prev) => (prev === id ? null : id));
   }, []);
-  const router = useRouter();
 
-  const scrollAndPulse = useCallback((elementId: string) => {
-    setTimeout(() => {
-      const el = document.getElementById(elementId);
-      if (!el) return;
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("preflight-pulse");
-      setTimeout(() => el.classList.remove("preflight-pulse"), 1000);
-    }, 150);
+  const focusAndPulseTarget = useCallback((element: HTMLElement | null) => {
+    window.setTimeout(() => {
+      if (!(element instanceof HTMLElement)) return;
+
+      if (
+        !element.hasAttribute("tabindex") &&
+        !["BUTTON", "INPUT", "SELECT", "TEXTAREA", "A"].includes(element.tagName)
+      ) {
+        element.setAttribute("tabindex", "-1");
+      }
+
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+      element.focus({ preventScroll: true });
+      element.classList.add("preflight-pulse");
+      window.setTimeout(() => element.classList.remove("preflight-pulse"), 1000);
+    }, 220);
   }, []);
+
+  const focusAndPulseElement = useCallback((elementId: string) => {
+    focusAndPulseTarget(document.getElementById(elementId));
+  }, [focusAndPulseTarget]);
 
   const handlePreflightNav = useCallback((target: PreflightNavTarget) => {
-    switch (target) {
-      case "rotary-preset":
-        scrollAndPulse("rotary-preset-select");
-        break;
-      case "cylinder-diameter":
-        scrollAndPulse("bed-cylinder-diameter");
-        break;
-      case "template-dimensions":
-        scrollAndPulse("bed-template-dimensions");
-        break;
-      case "top-anchor":
-        router.push("/admin/calibration");
-        break;
+    if (target === "top-anchor") {
+      router.push("/admin/calibration");
+      return;
     }
-  }, [scrollAndPulse, router]);
 
-  const handleAddGeneratedSvgAsset = useCallback((svgContent: string, fileName: string) => {
-    const id = `asset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    try {
-      const parsed = parseSvgAsset(id, fileName, svgContent);
-      try {
-        const norm = normalizeSvgToArtworkBounds(parsed.content, parsed.artworkBounds);
-        setSvgAssets((prev) => [...prev, {
-          ...parsed, content: norm.svgText,
-          viewBox: `${norm.documentBounds.x} ${norm.documentBounds.y} ${norm.documentBounds.width} ${norm.documentBounds.height}`,
-          naturalWidth: norm.documentBounds.width, naturalHeight: norm.documentBounds.height,
-          documentBounds: norm.documentBounds, artworkBounds: norm.artworkBounds,
-        }]);
-        setSelectedAssetId(id);
-      } catch {
-        setSvgAssets((prev) => [...prev, parsed]);
-        setSelectedAssetId(id);
-      }
-    } catch { /* noop */ }
+    setRightTab("workflow");
+
+    if (target === "cylinder-diameter" || target === "template-dimensions") {
+      setOpenSection("bed");
+    }
+
+    const targetIdByNav: Record<Exclude<PreflightNavTarget, "top-anchor">, string> = {
+      "rotary-preset": "rotary-preset-select",
+      "cylinder-diameter": "bed-cylinder-diameter",
+      "template-dimensions": "bed-template-dimensions",
+    };
+
+    focusAndPulseElement(targetIdByNav[target]);
+  }, [focusAndPulseElement, router]);
+
+  const handleOpenSvgDoctor = useCallback(() => {
+    setRightTab("tools");
+    setSvgDoctorOpenSignal((prev) => prev + 1);
   }, []);
+
+  const handleOpenSvgLibrary = useCallback(() => {
+    setShowSvgLibraryModal(true);
+  }, []);
+
+  const handleCloseSvgLibrary = useCallback(() => {
+    setShowSvgLibraryModal(false);
+  }, []);
+
+  const handleWorkflowSectionNav = useCallback((sectionId: string, focusId: string) => {
+    setRightTab("workflow");
+    setOpenSection(sectionId);
+    focusAndPulseElement(focusId);
+  }, [focusAndPulseElement]);
+
+  const handleWorkflowStepNav = useCallback((step: "product" | "artwork" | "placement" | "run-check" | "export") => {
+    if (step === "product") {
+      if (!selectedTemplate) {
+        openTemplateGallery();
+        return;
+      }
+      focusAndPulseTarget(productStepActionRef.current);
+      return;
+    }
+
+    if (step === "artwork") {
+      focusAndPulseTarget(artworkStepActionRef.current);
+      return;
+    }
+
+    if (step === "placement") {
+      focusAndPulseTarget(workspaceStepSectionRef.current);
+      return;
+    }
+
+    if (step === "run-check") {
+      setRightTab("workflow");
+      focusAndPulseTarget(runCheckSectionRef.current);
+      return;
+    }
+
+    setRightTab("workflow");
+    focusAndPulseTarget(exportStepSectionRef.current);
+  }, [focusAndPulseTarget, openTemplateGallery, selectedTemplate]);
+
+  const handleOpenJobBoard = useCallback(() => {
+    setShowOrders(true);
+    setShowJobRunnerOverlay(true);
+  }, []);
+
+  const syncOrderToLightBurnWatchedFolder = useCallback(async (
+    order: OrderRecord,
+    snapshot: BedConfig,
+    recipeItems: PlacedItem[],
+  ) => {
+    const outputFolderPath = lbOutputFolderPath?.trim();
+    if (!outputFolderPath || recipeItems.length === 0) {
+      return;
+    }
+
+    const selectedPreset = order.jobRecipe?.rotaryPresetId
+      ? getRotaryPresets().find((preset) => preset.id === order.jobRecipe?.rotaryPresetId) ?? null
+      : null;
+    const materialSettings = order.jobRecipe?.materialProfileId
+      ? buildActiveMaterialSettings(order.jobRecipe.materialProfileId) ?? undefined
+      : undefined;
+    const placementProfile = {
+      overallHeightMm: snapshot.tumblerOverallHeightMm ?? snapshot.height,
+      usableHeightMm: snapshot.tumblerUsableHeightMm ?? snapshot.height,
+      topToSafeZoneStartMm: inferTopSafeOffsetMm(snapshot),
+      bottomMarginMm: undefined,
+      topAnchorMode: "physical-top" as const,
+    };
+
+    try {
+      const exportArtifacts = buildLightBurnExportArtifacts({
+        includeLightBurnSetup: snapshot.workspaceMode === "tumbler-wrap",
+        bedConfig: snapshot,
+        workspaceMode: snapshot.workspaceMode,
+        templateWidthMm: snapshot.width,
+        templateHeightMm: snapshot.height,
+        items: recipeItems,
+        rotary: {
+          enabled: Boolean(order.jobRecipe?.rotaryAutoPlacementEnabled),
+          preset: selectedPreset,
+          anchorMode: "physical-top",
+          placementProfile,
+        },
+      });
+      const preprocessedPayload = await preprocessPayloadForCurrentJob(exportArtifacts.artworkPayload);
+      const sidecarPayload = JSON.stringify({
+        artwork: exportArtifacts.artworkPayload,
+        setup: exportArtifacts.sidecar,
+        setupSummary: exportArtifacts.setupSummary,
+        materialSettings: materialSettings ?? null,
+      }, null, 2);
+      const svgContent = buildLightBurnExportSvg(exportArtifacts.artworkPayload);
+      const lbrnContent = buildLightBurnLbrn(
+        preprocessedPayload,
+        materialSettings,
+        undefined,
+        { mode: "minimal" },
+      );
+
+      await Promise.all([
+        saveCurrentJobFile({
+          outputFolderPath,
+          filename: `${CURRENT_JOB_BASENAME}.lbrn2`,
+          content: lbrnContent,
+        }),
+        saveCurrentJobFile({
+          outputFolderPath,
+          filename: `${CURRENT_JOB_BASENAME}.svg`,
+          content: svgContent,
+        }),
+        saveCurrentJobFile({
+          outputFolderPath,
+          filename: `${CURRENT_JOB_BASENAME}.lightburn.json`,
+          content: sidecarPayload,
+        }),
+      ]);
+    } catch (error) {
+      setToastMessage(
+        `Loaded ${order.customerName}, but couldn't refresh current-job in the watched LightBurn folder: ${
+          error instanceof Error ? error.message : "Unknown save error"
+        }`,
+      );
+    }
+  }, [lbOutputFolderPath, setToastMessage]);
+
+  const handleLoadOrder = useCallback((order: OrderRecord) => {
+    const snapshot = normalizeBedConfig(order.bedConfigSnapshot);
+    const recipeItems = order.jobRecipe?.placedItems?.length
+      ? cloneRecipePlacedItems(order.jobRecipe.placedItems)
+      : [];
+    const matchedAsset = [
+      ...(order.jobRecipe?.assetIds ?? []).map((assetId) => svgAssets.find((asset) => asset.id === assetId) ?? null),
+      ...order.assetNames.map((assetName) => svgAssets.find((asset) => asset.name === assetName) ?? null),
+    ]
+      .find((asset): asset is SvgAsset => asset !== null) ?? null;
+    const assignedTemplate = order.assignedTemplateId
+      ? loadTemplates().find((template) => template.id === order.assignedTemplateId) ?? null
+      : null;
+
+    setPlacedItems([]);
+    setSelectedItemId(null);
+    setPlacementAssetId(null);
+    setFramePreview(null);
+    setMockupConfig(null);
+    setFlatBedItemOverlay(null);
+    setTumblerViewMode("grid");
+    setSelectedAssetId(matchedAsset?.id ?? null);
+    setOpenSection(null);
+    setRightTab("workflow");
+    void syncOrderToLightBurnWatchedFolder(order, snapshot, recipeItems);
+
+    if (assignedTemplate) {
+      handleTemplateSelect(assignedTemplate);
+      if (order.jobRecipe?.materialProfileId) {
+        handleMaterialProfileSelection(order.jobRecipe.materialProfileId);
+      }
+      if (typeof order.jobRecipe?.rotaryAutoPlacementEnabled === "boolean") {
+        setRotaryAutoPlacementEnabled(order.jobRecipe.rotaryAutoPlacementEnabled);
+      }
+      if (typeof order.jobRecipe?.rotaryPresetId === "string") {
+        setSelectedRotaryPresetId(order.jobRecipe.rotaryPresetId);
+      }
+      setBedConfig((previous) =>
+        normalizeBedConfig({
+          ...previous,
+          gridSpacing: snapshot.gridSpacing,
+          snapToGrid: snapshot.snapToGrid,
+          showOrigin: snapshot.showOrigin,
+          showCrosshair: snapshot.showCrosshair,
+          crosshairMode: snapshot.crosshairMode,
+          originPosition: snapshot.originPosition,
+          showTumblerGuideBand: snapshot.showTumblerGuideBand,
+          tumblerBrand: snapshot.tumblerBrand,
+          tumblerModel: snapshot.tumblerModel,
+          tumblerProfileId: snapshot.tumblerProfileId,
+          tumblerCapacityOz: snapshot.tumblerCapacityOz,
+          tumblerHasHandle: snapshot.tumblerHasHandle,
+          tumblerShapeType: snapshot.tumblerShapeType,
+          tumblerGuideBand: snapshot.tumblerGuideBand,
+          tumblerTopDiameterMm: snapshot.tumblerTopDiameterMm,
+          tumblerBottomDiameterMm: snapshot.tumblerBottomDiameterMm,
+        }),
+      );
+      if (recipeItems.length > 0) {
+        setPlacedItems(recipeItems);
+        setSelectedItemId(recipeItems[recipeItems.length - 1]?.id ?? null);
+        setInspectorNote(
+          `Loaded ${recipeItems.length} saved placement item${recipeItems.length === 1 ? "" : "s"} for ${order.customerName}.`,
+        );
+        setToastMessage(
+          `Loaded ${assignedTemplate.name} and restored the saved recipe for ${order.customerName}.`,
+        );
+        return;
+      }
+      setInspectorNote(
+        matchedAsset
+          ? `Setup loaded for ${order.customerName}. ${matchedAsset.name} is selected for placement.`
+          : `Setup loaded for ${order.customerName}. Place this job's artwork next.`,
+      );
+      setToastMessage(`Loaded ${assignedTemplate.name} for ${order.customerName}.`);
+      return;
+    }
+
+    setSelectedTemplate(null);
+    setMaterialSettings(null);
+    setSelectedMaterialProfileId("");
+    setSelectedRotaryPresetId("");
+    setRotaryAutoPlacementEnabled(false);
+    setEngravableZone(null);
+    setBedConfig(snapshot);
+    if (order.jobRecipe?.materialProfileId) {
+      handleMaterialProfileSelection(order.jobRecipe.materialProfileId);
+    }
+    if (typeof order.jobRecipe?.rotaryAutoPlacementEnabled === "boolean") {
+      setRotaryAutoPlacementEnabled(order.jobRecipe.rotaryAutoPlacementEnabled);
+    }
+    if (typeof order.jobRecipe?.rotaryPresetId === "string") {
+      setSelectedRotaryPresetId(order.jobRecipe.rotaryPresetId);
+    }
+    if (recipeItems.length > 0) {
+      setPlacedItems(recipeItems);
+      setSelectedItemId(recipeItems[recipeItems.length - 1]?.id ?? null);
+    }
+    setInspectorNote(
+      recipeItems.length > 0
+        ? `Loaded the saved recipe for ${order.customerName}. Verify product setup before running.`
+        : order.assignedTemplateId
+        ? `Assigned template for ${order.customerName} is missing. Saved bed settings were loaded instead.`
+        : matchedAsset
+          ? `Saved setup loaded for ${order.customerName}. ${matchedAsset.name} is selected for placement.`
+          : `Saved setup loaded for ${order.customerName}. Stage or choose the product template next.`,
+    );
+    setToastMessage(
+      recipeItems.length > 0
+        ? `Loaded the saved recipe for ${order.customerName}.`
+        : order.assignedTemplateId
+        ? `Assigned template could not be found for ${order.customerName}. Loaded the saved bed settings instead.`
+        : `Loaded saved setup for ${order.customerName}.`,
+    );
+  }, [
+    handleMaterialProfileSelection,
+    handleTemplateSelect,
+    syncOrderToLightBurnWatchedFolder,
+    setToastMessage,
+    svgAssets,
+  ]);
+
+  const {
+    queuedJobCount,
+    runnableOrders,
+    activeQueueOrder,
+    currentJobProductLabel,
+    handleActivateQueuedOrder,
+    handleLoadNextQueuedOrder,
+    handleReopenCurrentQueuedJob,
+    handleDoneAndLoadNextQueuedOrder,
+    handleCompleteQueuedOrder,
+  } = useQueueRunnerState({ onLoadOrder: handleLoadOrder });
+
+  const handleAddGeneratedSvgAsset = useCallback(async (svgContent: string, fileName: string) => {
+    try {
+      const asset = await createSvgLibraryAsset({ name: fileName, svgText: svgContent });
+      setSvgAssets((prev) => [asset, ...prev.filter((entry) => entry.id !== asset.id)]);
+      setSelectedAssetId(asset.id);
+      setUploadError(null);
+      setInspectorNote("Saved SVG to library");
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "Could not save generated SVG");
+    }
+  }, []);
+
+  const handleUpdateSvgLibraryAssetEntry = useCallback(async (
+    assetId: string,
+    patch: { name?: string; svgText?: string },
+    successNote = "Updated SVG in library",
+  ) => {
+    const currentAsset = svgAssets.find((asset) => asset.id === assetId);
+    if (!currentAsset) return null;
+
+    try {
+      const nextAsset = await updateSvgLibraryAsset({
+        id: currentAsset.id,
+        name: patch.name,
+        svgText: patch.svgText,
+      });
+
+      setPlacedItems((placedPrev) =>
+        placedPrev.map((item) =>
+          item.assetId !== currentAsset.id
+            ? item
+            : {
+                ...item,
+                name: nextAsset.name,
+                ...(patch.svgText
+                  ? {
+                      svgText: nextAsset.content,
+                      sourceSvgText: nextAsset.content,
+                      documentBounds: { ...nextAsset.documentBounds },
+                      artworkBounds: { ...nextAsset.artworkBounds },
+                    }
+                  : {}),
+              },
+        ),
+      );
+      setSvgAssets((prev) => prev.map((asset) => (asset.id === currentAsset.id ? nextAsset : asset)));
+      setInspectorNote(successNote);
+      setUploadError(null);
+      return nextAsset;
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "Could not update SVG");
+      return null;
+    }
+  }, [setInspectorNote, setPlacedItems, setSvgAssets, setUploadError, svgAssets]);
+
+  const handleReplaceSelectedSvgAsset = useCallback(async (svgContent: string) => {
+    if (!selectedAssetId) return;
+    await handleUpdateSvgLibraryAssetEntry(
+      selectedAssetId,
+      { svgText: svgContent },
+      "Updated selected SVG in library",
+    );
+  }, [handleUpdateSvgLibraryAssetEntry, selectedAssetId]);
 
   const handleApplyFlatBedItem = useCallback((
     item: import("@/data/flatBedItems").FlatBedItem,
@@ -646,11 +965,44 @@ export function AdminLayoutShell() {
       label: item.label,
       category: item.category,
       material: item.material,
+      materialLabel: item.materialLabel,
+      productHint: item.productHint,
       imageSrc,
       imageNaturalWidth,
       imageNaturalHeight,
     });
   }, []);
+
+  const activeFlatBedItemId = flatBedItemOverlay?.itemId ?? null;
+  const selectedAsset = svgAssets.find((asset) => asset.id === selectedAssetId) ?? null;
+  const currentMaterialContext = React.useMemo(() => {
+    if (!isTumblerMode && flatBedItemOverlay?.material) {
+      return {
+        materialSlug: flatBedItemOverlay.material,
+        materialLabel: flatBedItemOverlay.materialLabel ?? flatBedItemOverlay.material,
+        productHint: flatBedItemOverlay.productHint ?? null,
+      };
+    }
+
+    if (selectedTemplate?.materialSlug) {
+      return {
+        materialSlug: selectedTemplate.materialSlug,
+        materialLabel: selectedTemplate.materialLabel ?? selectedTemplate.materialSlug,
+        productHint:
+          selectedTemplate.productType === "tumbler" ||
+          selectedTemplate.productType === "mug" ||
+          selectedTemplate.productType === "bottle"
+            ? "tumbler"
+            : null,
+      };
+    }
+
+    return {
+      materialSlug: null,
+      materialLabel: null,
+      productHint: null,
+    };
+  }, [flatBedItemOverlay, isTumblerMode, selectedTemplate]);
 
   const handleCameraCapture = useCallback((dataUrl: string) => {
     const img = new Image();
@@ -668,6 +1020,7 @@ export function AdminLayoutShell() {
   }, []);
 
   // Left panel state machine
+  const hasArtworkLoaded = svgAssets.length > 0 || placedItems.length > 0;
   const leftPanelState = React.useMemo(() => {
     if (!selectedTemplate) return "no-template" as const;
     if (placedItems.length === 0) return "no-artwork" as const;
@@ -691,116 +1044,657 @@ export function AdminLayoutShell() {
     return `Grid: ${bedConfig.gridSpacing}mm \u2014 Snap: ${bedConfig.snapToGrid ? "On" : "Off"}`;
   }, [bedConfig.gridSpacing, bedConfig.snapToGrid]);
 
+  const currentCylinderDiameterMm =
+    bedConfig.tumblerOutsideDiameterMm ?? bedConfig.tumblerDiameterMm ?? 0;
+  const hasOutputFolder = Boolean(lbOutputFolderPath?.trim());
+  const selectedRotaryPreset = React.useMemo(() => {
+    if (!selectedRotaryPresetId) return null;
+    return getRotaryPresets().find((preset) => preset.id === selectedRotaryPresetId) ?? null;
+  }, [selectedRotaryPresetId]);
+  const selectedRotaryPresetName = selectedRotaryPreset?.name ?? null;
+  const machineSetupLabel = activeLaserSetup
+    ? `${activeLaserSetup.laser.name} · ${activeLaserSetup.lens.name}`
+    : "No active laser + lens";
+  const currentJobRecipe = React.useMemo<OrderJobRecipe | null>(() => {
+    const placedRecipeItems = placedItems.map<OrderRecipePlacedItem>((item) => ({
+      assetId: item.assetId,
+      name: item.name,
+      svgText: item.svgText,
+      sourceSvgText: item.sourceSvgText,
+      documentBounds: { ...item.documentBounds },
+      artworkBounds: { ...item.artworkBounds },
+      x: item.x,
+      y: item.y,
+      width: item.width,
+      height: item.height,
+      rotation: item.rotation,
+      defaults: { ...item.defaults },
+    }));
+    const assetIds = Array.from(new Set(placedItems.map((item) => item.assetId)));
+    const hasRecipe =
+      placedRecipeItems.length > 0 ||
+      Boolean(selectedMaterialProfileId) ||
+      Boolean(selectedRotaryPresetId) ||
+      rotaryAutoPlacementEnabled;
+
+    if (!hasRecipe) return null;
+
+    return {
+      assetIds,
+      placedItems: placedRecipeItems,
+      materialProfileId: selectedMaterialProfileId || undefined,
+      materialLabel: materialSettings?.label,
+      rotaryPresetId: selectedRotaryPresetId || undefined,
+      rotaryPresetName: selectedRotaryPresetName ?? undefined,
+      rotaryAutoPlacementEnabled,
+    };
+  }, [
+    materialSettings?.label,
+    placedItems,
+    rotaryAutoPlacementEnabled,
+    selectedMaterialProfileId,
+    selectedRotaryPresetId,
+    selectedRotaryPresetName,
+  ]);
+  const activeJobRecipePlacedCount = activeQueueOrder?.jobRecipe?.placedItems?.length ?? 0;
+  const activeJobRecipeAssetCount = activeQueueOrder?.jobRecipe?.assetIds?.length ?? 0;
+  const currentRecipeCount = currentJobRecipe?.placedItems.length ?? currentJobRecipe?.assetIds.length ?? 0;
+  const currentRecipeAssetNames = React.useMemo(() => (
+    Array.from(new Set(
+      placedItems.length > 0
+        ? placedItems.map((item) => item.name).filter(Boolean)
+        : svgAssets
+          .filter((asset) => asset.id === selectedAssetId)
+          .map((asset) => asset.name),
+    ))
+  ), [placedItems, selectedAssetId, svgAssets]);
+  const activeOrderHasStagedTemplate = Boolean(activeQueueOrder?.assignedTemplateId);
+  const activeOrderTemplateMatches =
+    Boolean(activeQueueOrder?.assignedTemplateId) &&
+    activeQueueOrder?.assignedTemplateId === selectedTemplate?.id;
+  const activeOrderTemplateMismatch =
+    Boolean(activeQueueOrder?.assignedTemplateId) &&
+    activeQueueOrder?.assignedTemplateId !== selectedTemplate?.id;
+
+  const workflowReadinessItems = React.useMemo<RunReadinessItem[]>(() => {
+    const productTemplateItem: RunReadinessItem = activeOrderTemplateMismatch
+      ? {
+          id: "product-template",
+          label: "Product template",
+          detail: `Queued job is staged for ${activeQueueOrder?.assignedTemplateName ?? "a different template"}. Reload that setup before continuing.`,
+          status: "fail",
+          onSelect: handleOpenJobBoard,
+        }
+      : {
+          id: "product-template",
+          label: "Product template",
+          detail: selectedTemplate
+            ? activeOrderTemplateMatches && activeQueueOrder?.assignedTemplateName
+              ? `${selectedTemplate.name} loaded from the job board staging`
+              : activeQueueOrder && !activeOrderHasStagedTemplate
+                ? `${selectedTemplate.name} loaded manually. Drag it onto the queued job in the board to save time next run.`
+              : selectedTemplate.name
+            : activeQueueOrder && !activeOrderHasStagedTemplate
+              ? "Choose a product template or stage this queued job in the job board first."
+              : "Choose a product template to load dimensions and defaults.",
+          status: selectedTemplate ? "pass" : "fail",
+          onSelect:
+            activeQueueOrder && (!selectedTemplate || !activeOrderHasStagedTemplate)
+              ? handleOpenJobBoard
+              : () => handleWorkflowStepNav("product"),
+        };
+
+    const items: RunReadinessItem[] = [
+      productTemplateItem,
+      {
+        id: "artwork-library",
+        label: "Artwork",
+        detail: hasArtworkLoaded
+          ? placedItems.length > 0
+            ? `${placedItems.length} item${placedItems.length === 1 ? "" : "s"} on the bed`
+            : `${svgAssets.length} asset${svgAssets.length === 1 ? "" : "s"} loaded`
+          : "Upload or choose artwork for this job.",
+        status: hasArtworkLoaded ? "pass" : "fail",
+        onSelect: () => handleWorkflowStepNav("artwork"),
+      },
+      {
+        id: "placement",
+        label: "Placement",
+        detail:
+          placedItems.length > 0
+            ? `${placedItems.length} item${placedItems.length === 1 ? "" : "s"} positioned and ready to review`
+            : "Place and align artwork on the workspace before export.",
+        status: placedItems.length > 0 ? "pass" : "fail",
+        onSelect: () => handleWorkflowStepNav("placement"),
+      },
+      ...(activeQueueOrder
+        ? [{
+            id: "job-recipe",
+            label: "Saved recipe",
+            detail: activeQueueOrder.jobRecipe
+              ? activeJobRecipePlacedCount > 0
+                ? `${activeJobRecipePlacedCount} placed item${activeJobRecipePlacedCount === 1 ? "" : "s"} saved with this job`
+                : "Material and machine settings were saved with this job."
+              : "No saved recipe yet. Capturing layout with the order removes another setup step next run.",
+            status: activeQueueOrder.jobRecipe ? "pass" : "warn",
+            onSelect: handleOpenJobBoard,
+          } satisfies RunReadinessItem]
+        : []),
+      {
+        id: "machine-lens",
+        label: "Machine + lens",
+        detail: activeLaserSetup
+          ? `${activeLaserSetup.laser.name} · ${activeLaserSetup.lens.name}`
+          : "Pick the active laser and lens in Setup so the operator is working against the real machine context.",
+        status: activeLaserSetup ? "pass" : "warn",
+        onSelect: () => setRightTab("setup"),
+      },
+      {
+        id: "material-profile",
+        label: "Material profile",
+        detail: materialSettings
+          ? materialSettings.label
+          : "Recommended before export so the LightBurn handoff matches the job.",
+        status: materialSettings ? "pass" : "warn",
+        onSelect: () => handleWorkflowSectionNav("material", "material-header"),
+      },
+    ];
+
+    if (isTumblerMode) {
+      items.push({
+        id: "cylinder-diameter",
+        label: "Cylinder diameter",
+        detail:
+          currentCylinderDiameterMm > 0
+            ? `${currentCylinderDiameterMm.toFixed(1)} mm confirmed`
+            : "Confirm the cup diameter so wrap width and scaling are correct.",
+        status: currentCylinderDiameterMm > 0 ? "pass" : "fail",
+        onSelect: () => handlePreflightNav("cylinder-diameter"),
+      });
+
+      if (rotaryAutoPlacementEnabled) {
+        items.push({
+          id: "rotary-preset",
+          label: "Rotary preset",
+          detail: selectedRotaryPresetId
+            ? selectedRotaryPresetName ?? selectedRotaryPresetId
+            : "Pick a rotary preset so origin and setup values match the machine.",
+          status: selectedRotaryPresetId ? "pass" : "fail",
+          onSelect: () => handlePreflightNav("rotary-preset"),
+        });
+
+        items.push({
+          id: "top-anchor-calibration",
+          label: "Top anchor calibration",
+          detail: selectedRotaryPreset?.rotaryTopYmm != null
+            ? `${selectedRotaryPreset.rotaryTopYmm.toFixed(1)} mm top anchor captured`
+            : "Verify top anchor calibration before running this rotary preset.",
+          status: selectedRotaryPreset?.rotaryTopYmm != null ? "pass" : "warn",
+          onSelect: () => handlePreflightNav("top-anchor"),
+        });
+      }
+    }
+
+    items.push({
+      id: "export-handoff",
+      label: "Export handoff",
+      detail: hasOutputFolder
+        ? `Saves directly to ${lbOutputFolderPath?.trim()} and refreshes current-job aliases`
+        : "Downloads the LightBurn bundle locally. Configure a watched output folder to skip the manual copy step.",
+      status: hasOutputFolder ? "pass" : "warn",
+      onSelect: () => handleWorkflowStepNav("export"),
+    });
+
+    return items;
+  }, [
+    activeLaserSetup,
+    currentCylinderDiameterMm,
+    handlePreflightNav,
+    handleOpenJobBoard,
+    handleWorkflowSectionNav,
+    handleWorkflowStepNav,
+    activeJobRecipePlacedCount,
+    activeOrderHasStagedTemplate,
+    activeOrderTemplateMatches,
+    activeOrderTemplateMismatch,
+    activeQueueOrder,
+    hasArtworkLoaded,
+    hasOutputFolder,
+    isTumblerMode,
+    lbOutputFolderPath,
+    materialSettings,
+    placedItems.length,
+    rotaryAutoPlacementEnabled,
+    selectedRotaryPresetId,
+    selectedRotaryPreset,
+    selectedRotaryPresetName,
+    selectedTemplate,
+    svgAssets.length,
+  ]);
+
+  const workflowBlockerCount = workflowReadinessItems.filter((item) => item.status === "fail").length;
+  const workflowWarningCount = workflowReadinessItems.filter((item) => item.status === "warn").length;
+
+  const workflowGuidance = React.useMemo(() => {
+    if (activeOrderTemplateMismatch) {
+      return {
+        text: `Reload ${activeQueueOrder?.assignedTemplateName ?? "the staged product"} from the job board so this queued job matches the setup.`,
+        actionLabel: "Open job board",
+        onAction: handleOpenJobBoard,
+      };
+    }
+
+    if (!selectedTemplate) {
+      return {
+        text: activeQueueOrder
+          ? "Stage the queued job's product in the job board or choose it now so setup starts from the right template."
+          : "Choose the product first so the bed, model, and default settings are already loaded.",
+        actionLabel: activeQueueOrder ? "Open job board" : "Choose product",
+        onAction: activeQueueOrder ? handleOpenJobBoard : () => handleWorkflowStepNav("product"),
+      };
+    }
+
+    if (!hasArtworkLoaded) {
+      return {
+        text: "Load artwork now so the operator can place the job without leaving this screen.",
+        actionLabel: "Load artwork",
+        onAction: () => handleWorkflowStepNav("artwork"),
+      };
+    }
+
+    if (placedItems.length === 0) {
+      return {
+        text: "Place the artwork on the bed so sizing, wrap position, and proofs are based on the real job.",
+        actionLabel: "Open placement",
+        onAction: () => handleWorkflowStepNav("placement"),
+      };
+    }
+
+    if (isTumblerMode && currentCylinderDiameterMm <= 0) {
+      return {
+        text: "Confirm cylinder diameter before export so the wrap width matches the actual cup.",
+        actionLabel: "Set diameter",
+        onAction: () => handlePreflightNav("cylinder-diameter"),
+      };
+    }
+
+    if (isTumblerMode && rotaryAutoPlacementEnabled && !selectedRotaryPresetId) {
+      return {
+        text: "Pick the rotary preset now so origin and top anchor are based on the actual machine.",
+        actionLabel: "Select preset",
+        onAction: () => handlePreflightNav("rotary-preset"),
+      };
+    }
+
+    if (!activeLaserSetup) {
+      return {
+        text: "Set the active laser and lens so this job is staged against the actual machine before export.",
+        actionLabel: "Open setup",
+        onAction: () => setRightTab("setup"),
+      };
+    }
+
+    if (!materialSettings) {
+      return {
+        text: "Select a material profile before export to reduce operator guesswork in LightBurn.",
+        actionLabel: "Choose material",
+        onAction: () => handleWorkflowSectionNav("material", "material-header"),
+      };
+    }
+
+    return {
+      text: hasOutputFolder
+        ? "Save the LightBurn bundle straight to the watched folder and cut one more manual step."
+        : "Export the LightBurn bundle and hand off a ready-to-run job package.",
+      actionLabel: "Go to export",
+      onAction: () => handleWorkflowStepNav("export"),
+    };
+  }, [
+    activeLaserSetup,
+    activeOrderTemplateMismatch,
+    activeQueueOrder,
+    currentCylinderDiameterMm,
+    handleOpenJobBoard,
+    handlePreflightNav,
+    handleWorkflowSectionNav,
+    handleWorkflowStepNav,
+    hasArtworkLoaded,
+    hasOutputFolder,
+    isTumblerMode,
+    materialSettings,
+    placedItems.length,
+    rotaryAutoPlacementEnabled,
+    selectedRotaryPresetId,
+    selectedTemplate,
+  ]);
+
+  const workflowCurrentStepId = React.useMemo(() => {
+    if (activeOrderTemplateMismatch) return "product";
+    if (!selectedTemplate) return "product";
+    if (!hasArtworkLoaded) return "artwork";
+    if (placedItems.length === 0) return "placement";
+    if (workflowBlockerCount > 0 || workflowWarningCount > 0) return "run-check";
+    return "export";
+  }, [
+    activeOrderTemplateMismatch,
+    hasArtworkLoaded,
+    placedItems.length,
+    selectedTemplate,
+    workflowBlockerCount,
+    workflowWarningCount,
+  ]);
+
+  const workflowSteps = React.useMemo<WorkflowRailStep[]>(() => {
+    const artworkDetail = hasArtworkLoaded
+      ? placedItems.length > 0
+        ? `${placedItems.length} on bed`
+        : `${svgAssets.length} loaded`
+      : "Load artwork";
+
+    const runCheckDetail =
+      workflowBlockerCount > 0
+        ? `${workflowBlockerCount} blocker${workflowBlockerCount === 1 ? "" : "s"}`
+        : workflowWarningCount > 0
+          ? `${workflowWarningCount} warning${workflowWarningCount === 1 ? "" : "s"}`
+          : "Setup verified";
+
+    const stepState = (stepId: string): WorkflowRailStep["state"] => {
+      if (stepId === workflowCurrentStepId) return "active";
+
+      const order = ["product", "artwork", "placement", "run-check", "export"];
+      const currentIndex = order.indexOf(workflowCurrentStepId);
+      const stepIndex = order.indexOf(stepId);
+      return stepIndex >= 0 && currentIndex >= 0 && stepIndex < currentIndex ? "done" : "upcoming";
+    };
+
+    return [
+      {
+        id: "product",
+        label: "Product",
+        detail: selectedTemplate?.name ?? "Choose product",
+        state: stepState("product"),
+        onSelect: () => handleWorkflowStepNav("product"),
+      },
+      {
+        id: "artwork",
+        label: "Artwork",
+        detail: artworkDetail,
+        state: stepState("artwork"),
+        onSelect: () => handleWorkflowStepNav("artwork"),
+      },
+      {
+        id: "placement",
+        label: "Placement",
+        detail:
+          placedItems.length > 0
+            ? `${placedItems.length} positioned`
+            : "Place and align",
+        state: stepState("placement"),
+        onSelect: () => handleWorkflowStepNav("placement"),
+      },
+      {
+        id: "run-check",
+        label: "Run Check",
+        detail: runCheckDetail,
+        state: stepState("run-check"),
+        onSelect: () => handleWorkflowStepNav("run-check"),
+      },
+      {
+        id: "export",
+        label: "Export",
+        detail: hasOutputFolder ? "Save watched folder bundle" : "Download LightBurn bundle",
+        state: stepState("export"),
+        onSelect: () => handleWorkflowStepNav("export"),
+        spanFull: true,
+      },
+    ];
+  }, [
+    handleWorkflowStepNav,
+    hasArtworkLoaded,
+    hasOutputFolder,
+    placedItems.length,
+    selectedTemplate,
+    svgAssets.length,
+    workflowBlockerCount,
+    workflowCurrentStepId,
+    workflowWarningCount,
+  ]);
+
+  const runConfidenceLabel = React.useMemo(() => {
+    if (activeOrderTemplateMismatch) {
+      return "Low · staged job mismatch";
+    }
+    if (!activeLaserSetup) {
+      return "Medium · machine context missing";
+    }
+    if (workflowBlockerCount > 0) {
+      return `Low · ${workflowBlockerCount} blocker${workflowBlockerCount === 1 ? "" : "s"}`;
+    }
+    if (workflowWarningCount > 0) {
+      return `Medium · ${workflowWarningCount} review${workflowWarningCount === 1 ? "" : "s"}`;
+    }
+    if (activeOrderTemplateMatches) {
+      return "High · staged template matched";
+    }
+    return "High · setup aligned";
+  }, [
+    activeLaserSetup,
+    activeOrderTemplateMatches,
+    activeOrderTemplateMismatch,
+    workflowBlockerCount,
+    workflowWarningCount,
+  ]);
+
+  const currentJobMetrics = React.useMemo(() => {
+    return [
+      {
+        label: "Job",
+        value: !activeQueueOrder
+          ? "Manual setup"
+          : activeJobRecipePlacedCount > 0
+            ? `Queued · ${activeJobRecipePlacedCount} placed saved`
+            : activeQueueOrder.assignedTemplateName
+              ? `Queued · ${activeQueueOrder.assignedTemplateName}`
+              : "Queued · not staged",
+      },
+      {
+        label: "Recipe",
+        value: !activeQueueOrder
+          ? currentJobRecipe
+            ? currentRecipeCount > 0
+              ? `${currentRecipeCount} item${currentRecipeCount === 1 ? "" : "s"} ready`
+              : "Settings ready"
+            : "Not saved yet"
+          : activeJobRecipePlacedCount > 0
+            ? `${activeJobRecipePlacedCount} placed item${activeJobRecipePlacedCount === 1 ? "" : "s"}`
+            : activeQueueOrder.jobRecipe
+              ? activeJobRecipeAssetCount > 0
+                ? `${activeJobRecipeAssetCount} staged asset${activeJobRecipeAssetCount === 1 ? "" : "s"}`
+                : "Settings only"
+              : "Queued · not staged",
+      },
+      {
+        label: "Artwork",
+        value:
+          placedItems.length > 0
+            ? `${placedItems.length} item${placedItems.length === 1 ? "" : "s"} placed`
+            : hasArtworkLoaded
+              ? `${svgAssets.length} asset${svgAssets.length === 1 ? "" : "s"} loaded`
+              : "No artwork yet",
+      },
+      {
+        label: "Machine",
+        value: machineSetupLabel,
+      },
+      { label: "Material", value: materialSettings?.label ?? "Not selected" },
+      {
+        label: "Rotary",
+        value:
+          !isTumblerMode
+            ? "Not needed"
+            : rotaryAutoPlacementEnabled
+              ? selectedRotaryPresetName ?? "Preset not selected"
+              : "Manual placement",
+      },
+      {
+        label: "Calibration",
+        value:
+          !isTumblerMode
+            ? "Not needed"
+            : selectedRotaryPreset?.rotaryTopYmm != null
+              ? `Top anchor ${selectedRotaryPreset.rotaryTopYmm.toFixed(1)} mm`
+              : "Top anchor review",
+      },
+      {
+        label: "Export",
+        value: hasOutputFolder ? "Watched folder save" : "Manual download",
+      },
+      {
+        label: "Confidence",
+        value: runConfidenceLabel,
+      },
+    ];
+  }, [
+    activeQueueOrder,
+    activeJobRecipeAssetCount,
+    activeJobRecipePlacedCount,
+    currentRecipeCount,
+    currentJobRecipe,
+    hasOutputFolder,
+    hasArtworkLoaded,
+    isTumblerMode,
+    materialSettings,
+    machineSetupLabel,
+    placedItems.length,
+    runConfidenceLabel,
+    rotaryAutoPlacementEnabled,
+    selectedRotaryPreset,
+    selectedRotaryPresetName,
+    svgAssets.length,
+  ]);
+
+  const currentJobQuickActions = React.useMemo<JobQuickAction[]>(() => {
+    const actions: JobQuickAction[] = [];
+
+    if (runnableOrders.length > 0) {
+      actions.push({
+        label: "Job Board",
+        shortcut: "J",
+        onClick: handleOpenJobBoard,
+      });
+
+      actions.push({
+        label: activeQueueOrder ? "Next Job" : "Start Next",
+        shortcut: "N",
+        onClick: handleLoadNextQueuedOrder,
+        disabled: queuedJobCount === 0,
+        variant: "primary",
+      });
+    }
+
+    if (activeQueueOrder) {
+      actions.push({
+        label: "Done + Next",
+        shortcut: "Shift+N",
+        onClick: handleDoneAndLoadNextQueuedOrder,
+        variant: "primary",
+      });
+    }
+
+    actions.push({
+      label: "Jump to Export",
+      shortcut: "E",
+      onClick: () => handleWorkflowStepNav("export"),
+    });
+
+    return actions;
+  }, [
+    activeQueueOrder,
+    handleDoneAndLoadNextQueuedOrder,
+    handleLoadNextQueuedOrder,
+    handleOpenJobBoard,
+    handleWorkflowStepNav,
+    queuedJobCount,
+    runnableOrders.length,
+  ]);
+
+  useEffect(() => {
+    const handleWorkflowShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (isTypingTarget(event.target)) return;
+      if (showJobRunnerOverlay || showTemplateGallery || showCreateForm || showSvgLibraryModal) return;
+
+      const key = event.key.toLowerCase();
+
+      if (key === "j" && !event.shiftKey && runnableOrders.length > 0) {
+        event.preventDefault();
+        handleOpenJobBoard();
+        return;
+      }
+
+      if (key === "n" && event.shiftKey) {
+        if (!activeQueueOrder && queuedJobCount === 0) return;
+        event.preventDefault();
+        handleDoneAndLoadNextQueuedOrder();
+        return;
+      }
+
+      if (key === "n" && queuedJobCount > 0) {
+        event.preventDefault();
+        handleLoadNextQueuedOrder();
+        return;
+      }
+
+      if (key === "e" && !event.shiftKey) {
+        event.preventDefault();
+        handleWorkflowStepNav("export");
+      }
+    };
+
+    window.addEventListener("keydown", handleWorkflowShortcut);
+    return () => window.removeEventListener("keydown", handleWorkflowShortcut);
+  }, [
+    activeQueueOrder,
+    handleDoneAndLoadNextQueuedOrder,
+    handleLoadNextQueuedOrder,
+    handleOpenJobBoard,
+    handleWorkflowStepNav,
+    queuedJobCount,
+    runnableOrders.length,
+    showCreateForm,
+    showJobRunnerOverlay,
+    showSvgLibraryModal,
+    showTemplateGallery,
+  ]);
+
   // Ref for the standalone artwork upload button (state B)
   const artworkFileRef = React.useRef<HTMLInputElement>(null);
-
-  const handleTemplateSelect = useCallback((template: ProductTemplate) => {
-    // Apply all dimensions at once via bedConfig
-    const isRotary = template.productType === "tumbler" || template.productType === "mug" || template.productType === "bottle";
-    const mode: WorkspaceMode = isRotary ? "tumbler-wrap" : "flat-bed";
-    const dims = isRotary ? getEngravableDimensions(template) : null;
-
-    setBedConfig((prev) =>
-      normalizeBedConfig({
-        ...prev,
-        workspaceMode: mode,
-        tumblerDiameterMm: template.dimensions.diameterMm,
-        tumblerPrintableHeightMm: dims?.engravableHeightMm ?? template.dimensions.printHeightMm,
-        tumblerTemplateWidthMm: template.dimensions.templateWidthMm,
-        tumblerTemplateHeightMm: dims?.engravableHeightMm ?? template.dimensions.printHeightMm,
-        tumblerOverallHeightMm:
-          template.dimensions.overallHeightMm ??
-          dims?.totalHeightMm,
-        ...(isRotary
-          ? {
-              tumblerOutsideDiameterMm: template.dimensions.diameterMm,
-              tumblerUsableHeightMm: dims?.engravableHeightMm ?? template.dimensions.printHeightMm,
-            }
-          : {
-              flatWidth: template.dimensions.templateWidthMm,
-              flatHeight: template.dimensions.printHeightMm,
-            }),
-      })
-    );
-
-    setSelectedTemplate(template);
-    setShowTemplateGallery(false);
-    setShowCreateForm(false);
-    setBgRemovalStatus("idle");
-
-      // Compute engravable safe zone for rotary products
-      if (isRotary) {
-        const fullWrapW = dims?.circumferenceMm ?? template.dimensions.templateWidthMm;
-        const layout = getTumblerWrapLayout(template.dimensions.handleArcDeg);
-        const frontCenterX = fullWrapW * layout.frontCenterRatio;
-        const backCenterX = layout.backCenterRatio == null ? null : fullWrapW * layout.backCenterRatio;
-        const handleCenterX = layout.handleCenterRatio == null ? null : fullWrapW * layout.handleCenterRatio;
-        // Engravable zone width: front face area (≈ diameter), clamped to printable arc
-        let zoneW = Math.max(0, Math.min(dims?.printableWidthMm ?? fullWrapW, fullWrapW));
-        if (zoneW <= 0) zoneW = fullWrapW;
-        let zoneX = frontCenterX - zoneW / 2;
-        if (zoneX < 0 || zoneX + zoneW > fullWrapW) {
-        zoneX = 0;
-        zoneW = fullWrapW;
-      }
-        // Vertical: bed is already sized to printHeightMm (the engravable area),
-        // so zone fills the bed. Y=0 = bed top = printable area top.
-        const zoneY = 0;
-        const zoneH = Math.min(dims?.engravableHeightMm ?? template.dimensions.printHeightMm, template.dimensions.printHeightMm);
-        setEngravableZone({ x: zoneX, y: zoneY, width: zoneW, height: zoneH, frontCenterX, backCenterX, handleCenterX });
-      } else {
-        setEngravableZone(null);
-      }
-
-    // Show toast
-    setToastMessage(`${template.name} loaded \u2014 place your artwork`);
-    setTimeout(() => setToastMessage(null), 2200);
-  }, []);
-
-  const handleUpdateCalibration = useCallback((offsetX: number, offsetY: number, rotation: number) => {
-    if (!selectedTemplate) return;
-    const calXLimit = Math.max(15, Math.min(45, Math.round(bedConfig.width * 0.12)));
-    const calYLimit = Math.max(10, Math.min(35, Math.round(bedConfig.height * 0.2)));
-    const calRotLimit = 35;
-    const clampCal = (value: number, min: number, max: number) =>
-      Math.min(max, Math.max(min, value));
-    const updatedMapping = {
-      ...(selectedTemplate.tumblerMapping ?? {
-        frontFaceRotation: 0,
-        handleCenterAngle: Math.PI,
-        handleArcDeg: 0,
-        isMapped: false,
-      }),
-      calibrationOffsetX: clampCal(offsetX, -calXLimit, calXLimit),
-      calibrationOffsetY: clampCal(offsetY, -calYLimit, calYLimit),
-      calibrationRotation: clampCal(rotation, -calRotLimit, calRotLimit),
-    };
-    const updated = { ...selectedTemplate, tumblerMapping: updatedMapping };
-    updateTemplate(updated.id, updated);
-    setSelectedTemplate(updated);
-  }, [selectedTemplate, bedConfig.width, bedConfig.height]);
+  const templateSearchInputRef = React.useRef<HTMLInputElement>(null);
 
   const previewTemplates = loadTemplates().slice(0, 4);
+  const autoDetectPanel = isTumblerMode ? (
+    <TumblerAutoDetectPanel
+      bedConfig={bedConfig}
+      onApplyDraft={handleApplyTumblerDraft}
+      onSetMockup={setMockupConfig}
+      mockupActive={Boolean(mockupConfig)}
+    />
+  ) : (
+    <FlatBedAutoDetectPanel
+      onApplyItem={handleApplyFlatBedItem}
+      onSetMockup={setMockupConfig}
+      onClearItemOverlay={() => setFlatBedItemOverlay(null)}
+      mockupActive={Boolean(mockupConfig)}
+    />
+  );
 
   return (
     <div className={styles.shell}>
       {/* LEFT */}
       <aside className={styles.leftPanel}>
         {/* ── Step indicator ── */}
-        <div className={styles.stepIndicator}>
-          <span className={`${styles.stepPill} ${selectedTemplate ? styles.stepPillDone : styles.stepPillActive}`}>
-            <span className={styles.stepPillNumber}>{selectedTemplate ? "\u2713" : "1"}</span>
-            Product
-          </span>
-          <span className={`${styles.stepPill} ${leftPanelState === "ready" ? styles.stepPillDone : leftPanelState === "no-artwork" ? styles.stepPillActive : ""}`}>
-            <span className={styles.stepPillNumber}>{leftPanelState === "ready" ? "\u2713" : "2"}</span>
-            Artwork
-          </span>
-          <span className={`${styles.stepPill} ${leftPanelState === "ready" ? styles.stepPillActive : ""}`}>
-            <span className={styles.stepPillNumber}>3</span>
-            Export
-          </span>
-        </div>
+        <WorkflowRail steps={workflowSteps} />
 
         <div className={styles.leftPanelScroll}>
           {/* ══════════════════════════════════════════════════════════ */}
@@ -810,12 +1704,13 @@ export function AdminLayoutShell() {
             <>
               <div className={styles.selectProductPrompt}>
                 <span className={styles.selectProductPromptText}>
-                  Select a product to get started
+                  Select a product or start with artwork
                 </span>
                 <button
+                  ref={productStepActionRef}
                   type="button"
                   className={styles.selectProductBtn}
-                  onClick={() => setShowTemplateGallery(true)}
+                  onClick={openTemplateGallery}
                 >
                   Browse Products
                 </button>
@@ -832,8 +1727,14 @@ export function AdminLayoutShell() {
                       className={styles.productMiniCard}
                       onClick={() => handleTemplateSelect(t)}
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={t.thumbnailDataUrl} alt={t.name} className={styles.productMiniThumb} />
+                      {t.thumbnailDataUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={t.thumbnailDataUrl} alt={t.name} className={styles.productMiniThumb} />
+                      ) : (
+                        <div className={`${styles.productMiniThumb} ${styles.productThumbFallback}`} aria-hidden="true">
+                          {getTemplateFallbackIcon(t.productType)}
+                        </div>
+                      )}
                       <span className={styles.productMiniName}>{t.name}</span>
                     </button>
                   ))}
@@ -841,10 +1742,100 @@ export function AdminLayoutShell() {
                 <button
                   type="button"
                   className={styles.seeAllBtn}
-                  onClick={() => setShowTemplateGallery(true)}
+                  onClick={openTemplateGallery}
                 >
                   See all {"\u2192"}
                 </button>
+              </div>
+
+              {placedItems.map((item) => (
+                <div key={item.id} className={styles.artworkCard}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/svg+xml,${encodeURIComponent(item.svgText)}`}
+                    alt={item.name}
+                    className={styles.artworkCardThumb}
+                  />
+                  <div className={styles.artworkCardInfo}>
+                    <span className={styles.artworkCardName}>{item.name}</span>
+                    <span className={styles.artworkCardDims}>
+                      {item.width.toFixed(1)} \u00D7 {item.height.toFixed(1)}mm
+                    </span>
+                  </div>
+                  <div className={styles.artworkCardActions}>
+                    <button
+                      type="button"
+                      className={styles.artworkCardBtn}
+                      onClick={() => {
+                        artworkFileRef.current?.click();
+                      }}
+                      title="Replace artwork"
+                    >
+                      Replace
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.artworkCardBtn} ${styles.artworkCardBtnDanger}`}
+                      onClick={() => handleDeleteItem(item.id)}
+                      title="Remove from bed"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              <div
+                className={styles.artworkUploadSection}
+                onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add(styles.artworkUploadDragOver); }}
+                onDragLeave={(e) => { e.currentTarget.classList.remove(styles.artworkUploadDragOver); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.classList.remove(styles.artworkUploadDragOver);
+                  if (e.dataTransfer.files.length) handleUploadAssets(e.dataTransfer.files);
+                }}
+              >
+                <span className={styles.artworkSectionLabel}>Artwork</span>
+                <input
+                  ref={artworkFileRef}
+                  type="file"
+                  accept=".svg,image/svg+xml"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    if (e.target.files?.length) {
+                      handleUploadAssets(e.target.files);
+                      e.target.value = "";
+                    }
+                  }}
+                />
+                <div className={styles.artworkUploadActions}>
+                  <button
+                    ref={artworkStepActionRef}
+                    type="button"
+                    className={styles.artworkUploadBtn}
+                    onClick={() => artworkFileRef.current?.click()}
+                  >
+                    + Upload SVG
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.artworkDoctorBtn}
+                    onClick={handleOpenSvgDoctor}
+                  >
+                    SVG Doctor
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.artworkLibraryBtn}
+                    onClick={handleOpenSvgLibrary}
+                  >
+                    SVG Library
+                  </button>
+                </div>
+                <span className={styles.artworkUploadHint}>
+                  You can place artwork on the bed before choosing a product template.
+                </span>
               </div>
             </>
           )}
@@ -856,12 +1847,18 @@ export function AdminLayoutShell() {
             <>
               {/* Compact product card */}
               <div className={styles.productCardCompact}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={selectedTemplate.thumbnailDataUrl}
-                  alt={selectedTemplate.name}
-                  className={styles.productCardCompactThumb}
-                />
+                {selectedTemplate.thumbnailDataUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={selectedTemplate.thumbnailDataUrl}
+                    alt={selectedTemplate.name}
+                    className={styles.productCardCompactThumb}
+                  />
+                ) : (
+                  <div className={`${styles.productCardCompactThumb} ${styles.productThumbFallback}`} aria-hidden="true">
+                    {getTemplateFallbackIcon(selectedTemplate.productType)}
+                  </div>
+                )}
                 <div className={styles.productCardCompactInfo}>
                   <span className={styles.productCardCompactName}>{selectedTemplate.name}</span>
                   <span className={styles.productCardCompactDims}>
@@ -871,13 +1868,16 @@ export function AdminLayoutShell() {
                   </span>
                 </div>
                 <button
+                  ref={productStepActionRef}
                   type="button"
                   className={styles.productCardCompactChange}
-                  onClick={() => setShowTemplateGallery(true)}
+                  onClick={openTemplateGallery}
                 >
                   Change
                 </button>
               </div>
+
+              {autoDetectPanel}
 
               {/* Product photo overlay controls */}
               <div className={styles.overlayControlsRow}>
@@ -1050,15 +2050,32 @@ export function AdminLayoutShell() {
                     }
                   }}
                 />
-                <button
-                  type="button"
-                  className={styles.artworkUploadBtn}
-                  onClick={() => artworkFileRef.current?.click()}
-                >
-                  + Upload SVG
-                </button>
+                <div className={styles.artworkUploadActions}>
+                  <button
+                    ref={artworkStepActionRef}
+                    type="button"
+                    className={styles.artworkUploadBtn}
+                    onClick={() => artworkFileRef.current?.click()}
+                  >
+                    + Upload SVG
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.artworkDoctorBtn}
+                    onClick={handleOpenSvgDoctor}
+                  >
+                    SVG Doctor
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.artworkLibraryBtn}
+                    onClick={handleOpenSvgLibrary}
+                  >
+                    SVG Library
+                  </button>
+                </div>
                 <span className={styles.artworkUploadHint}>
-                  Drop an SVG file or click to browse
+                  Drop an SVG file, or open SVG Doctor for raster cleanup and tracing
                 </span>
               </div>
             </>
@@ -1071,12 +2088,18 @@ export function AdminLayoutShell() {
             <>
               {/* Compact product card */}
               <div className={styles.productCardCompact}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={selectedTemplate.thumbnailDataUrl}
-                  alt={selectedTemplate.name}
-                  className={styles.productCardCompactThumb}
-                />
+                {selectedTemplate.thumbnailDataUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={selectedTemplate.thumbnailDataUrl}
+                    alt={selectedTemplate.name}
+                    className={styles.productCardCompactThumb}
+                  />
+                ) : (
+                  <div className={`${styles.productCardCompactThumb} ${styles.productThumbFallback}`} aria-hidden="true">
+                    {getTemplateFallbackIcon(selectedTemplate.productType)}
+                  </div>
+                )}
                 <div className={styles.productCardCompactInfo}>
                   <span className={styles.productCardCompactName}>{selectedTemplate.name}</span>
                   <span className={styles.productCardCompactDims}>
@@ -1086,13 +2109,16 @@ export function AdminLayoutShell() {
                   </span>
                 </div>
                 <button
+                  ref={productStepActionRef}
                   type="button"
                   className={styles.productCardCompactChange}
-                  onClick={() => setShowTemplateGallery(true)}
+                  onClick={openTemplateGallery}
                 >
                   Change
                 </button>
               </div>
+
+              {autoDetectPanel}
 
               {/* Product photo overlay controls */}
               <div className={styles.overlayControlsRow}>
@@ -1274,14 +2300,31 @@ export function AdminLayoutShell() {
                     }
                   }}
                 />
-                <button
-                  type="button"
-                  className={styles.artworkUploadBtn}
-                  onClick={() => artworkFileRef.current?.click()}
-                  style={{ padding: "8px 0", fontSize: "12px" }}
-                >
-                  + Add more artwork
-                </button>
+                <div className={styles.artworkUploadActions}>
+                  <button
+                    ref={artworkStepActionRef}
+                    type="button"
+                    className={styles.artworkUploadBtn}
+                    onClick={() => artworkFileRef.current?.click()}
+                    style={{ padding: "8px 0", fontSize: "12px" }}
+                  >
+                    + Add more artwork
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.artworkDoctorBtn}
+                    onClick={handleOpenSvgDoctor}
+                  >
+                    SVG Doctor
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.artworkLibraryBtn}
+                    onClick={handleOpenSvgLibrary}
+                  >
+                    SVG Library
+                  </button>
+                </div>
               </div>
 
             </>
@@ -1290,13 +2333,15 @@ export function AdminLayoutShell() {
           {/* 3D preview */}
           {selectedTemplate && !is3DPlacement && (
             <Model3DPanel
+              templateKey={selectedTemplate.id}
               placedItems={placedItems}
               bedWidthMm={bedConfig.width}
               bedHeightMm={bedConfig.height}
               workspaceMode={bedConfig.workspaceMode}
               tumblerDims={tumblerDims}
-                handleArcDeg={activeHandleArcDeg}
+              handleArcDeg={activeHandleArcDeg}
               modelPathOverride={selectedTemplate?.glbPath ?? null}
+              flatPreview={flatPreview}
               tumblerMapping={selectedTemplate?.tumblerMapping}
               onUpdateCalibration={handleUpdateCalibration}
               bodyTintColor={bodyTintColor}
@@ -1308,7 +2353,7 @@ export function AdminLayoutShell() {
       </aside>
 
       {/* CENTER */}
-      <main className={styles.centerPanel}>
+      <main ref={workspaceStepSectionRef} className={styles.centerPanel}>
         {/* 3D placement view */}
         {is3DPlacement && tumblerDims ? (
           <div className={styles.center3DWrap}>
@@ -1340,6 +2385,7 @@ export function AdminLayoutShell() {
             placedItems={placedItems}
             selectedItemId={selectedItemId}
             placementAsset={placementAsset}
+            svgDoctorPreview={svgDoctorPreview}
             isPlacementArmed={isPlacementArmed}
             framePreview={framePreview}
             showTwoSidedCrosshairs={isTumblerMode}
@@ -1354,6 +2400,14 @@ export function AdminLayoutShell() {
             onUpdateItem={handleUpdateItem}
             onNudgeSelected={handleNudgeSelected}
             onDeleteItem={handleDeleteItem}
+            currentJobLabel={activeQueueOrder?.customerName ?? null}
+            currentJobProduct={currentJobProductLabel || selectedTemplate?.name || null}
+            onLoadNextJob={handleLoadNextQueuedOrder}
+            onDoneAndNextJob={handleDoneAndLoadNextQueuedOrder}
+            onReopenCurrentJob={handleReopenCurrentQueuedJob}
+            onViewAllJobs={() => setShowJobRunnerOverlay(true)}
+            hasQueuedJobs={queuedJobCount > 0}
+            queuedJobCount={queuedJobCount}
             onClearWorkspace={handleClearWorkspace}
             productName={selectedTemplate?.name}
               templateOverlayUrl={selectedTemplate?.frontPhotoDataUrl ?? selectedTemplate?.productPhotoFullUrl ?? selectedTemplate?.thumbnailDataUrl ?? null}
@@ -1380,7 +2434,7 @@ export function AdminLayoutShell() {
             onClick={() => setRightTab("workflow")}
             type="button"
           >
-            Job
+            Production
           </button>
           <button
             className={rightTab === "tools" ? styles.tabActive : styles.tab}
@@ -1401,28 +2455,59 @@ export function AdminLayoutShell() {
           </Link>
         </div>
 
+        <LensQuickSelect />
+
         {rightTab === "workflow" && (
           <>
             {/* ZONE 2: Accordion sections (scrollable) */}
             <div className={styles.rightAccordionScroll}>
-              {/* Orders toggle — hidden by default */}
-              {showOrders && (
-                <>
-                  <OrdersPanel
-                    bedConfig={bedConfig}
-                    assetNames={assetNames}
-                    onLoadOrder={handleLoadOrder}
-                  />
-                  <BatchQueuePanel onLoadOrder={handleLoadOrder} />
-                </>
-              )}
+              <CurrentJobCard
+                modeLabel={isTumblerMode ? "Tumbler Wrap" : "Flat Bed"}
+                productName={currentJobProductLabel || selectedTemplate?.name || "No product selected"}
+                orderName={
+                  activeQueueOrder?.customerName
+                    ? `Active order: ${activeQueueOrder.customerName}`
+                    : queuedJobCount > 0
+                      ? `${queuedJobCount} queued job${queuedJobCount === 1 ? "" : "s"} ready`
+                      : "Manual setup job"
+                }
+                nextAction={workflowGuidance.text}
+                metrics={currentJobMetrics}
+                quickActions={currentJobQuickActions}
+              />
+
+              <div ref={runCheckSectionRef}>
+                <RunReadinessPanel
+                  items={workflowReadinessItems}
+                  nextAction={workflowGuidance.text}
+                  primaryActionLabel={workflowGuidance.actionLabel}
+                  onPrimaryAction={workflowGuidance.onAction}
+                />
+              </div>
+
+              {/* Orders and batch queue */}
               <button
                 type="button"
                 className={styles.ordersToggle}
-                onClick={() => setShowOrders((p) => !p)}
+                onClick={() => setShowOrders((previous) => !previous)}
+                aria-expanded={showOrders}
+                aria-controls="workflow-orders-section"
               >
-                {showOrders ? "\u25BE" : "\u25B8"} Orders
+                <span>{showOrders ? "\u25BE" : "\u25B8"}</span>
+                <span>{showOrders ? "Hide orders and queue" : "Show orders and queue"}</span>
               </button>
+              {showOrders && (
+                <div id="workflow-orders-section" className={styles.ordersSection}>
+                  <OrdersPanel
+                    bedConfig={bedConfig}
+                    assetNames={assetNames}
+                    selectedTemplate={selectedTemplate}
+                    currentJobRecipe={currentJobRecipe}
+                    onLoadOrder={handleLoadOrder}
+                  />
+                  <BatchQueuePanel onLoadOrder={handleLoadOrder} />
+                </div>
+              )}
 
               {/* Selected item inspector — only when item selected */}
               {selectedItem && (
@@ -1447,7 +2532,11 @@ export function AdminLayoutShell() {
                 isOpen={openSection === "bed"}
                 onToggle={handleAccordionToggle}
               >
-                <BedSettingsPanel bedConfig={bedConfig} onUpdateBedConfig={setBedConfig} />
+                <BedSettingsPanel
+                  bedConfig={bedConfig}
+                  onUpdateBedConfig={setBedConfig}
+                  showGridSection={false}
+                />
               </AccordionSection>
 
               <AccordionSection
@@ -1457,7 +2546,14 @@ export function AdminLayoutShell() {
                 isOpen={openSection === "material"}
                 onToggle={handleAccordionToggle}
               >
-                <MaterialProfilePanel onMaterialChange={setMaterialSettings} />
+                <MaterialProfilePanel
+                  onMaterialChange={setMaterialSettings}
+                  selectedProfileId={selectedMaterialProfileId}
+                  onSelectedProfileIdChange={handleMaterialProfileSelection}
+                  currentMaterialSlug={currentMaterialContext.materialSlug}
+                  currentMaterialLabel={currentMaterialContext.materialLabel}
+                  productHint={currentMaterialContext.productHint}
+                />
               </AccordionSection>
 
               <AccordionSection
@@ -1467,8 +2563,8 @@ export function AdminLayoutShell() {
                 isOpen={openSection === "grid"}
                 onToggle={handleAccordionToggle}
               >
-                {/* Grid settings are inside BedSettingsPanel — reuse */}
-                <BedSettingsPanel bedConfig={bedConfig} onUpdateBedConfig={setBedConfig} />
+                {/* Dedicated grid controls avoid mounting the full bed panel twice */}
+                <GridSettingsPanel bedConfig={bedConfig} onUpdateBedConfig={setBedConfig} />
               </AccordionSection>
 
               <AccordionSection
@@ -1478,7 +2574,7 @@ export function AdminLayoutShell() {
                 isOpen={openSection === "history"}
                 onToggle={handleAccordionToggle}
               >
-                <ExportHistoryPanel bedConfig={bedConfig} placedItems={placedItems} />
+                <ExportHistoryPanel />
               </AccordionSection>
 
               <AccordionSection
@@ -1497,12 +2593,17 @@ export function AdminLayoutShell() {
             </div>
 
             {/* ZONE 1: Export — pinned at bottom */}
-            <div className={styles.rightPinnedExport}>
+            <div ref={exportStepSectionRef} className={styles.rightPinnedExport}>
               <TumblerExportPanel
+                compact
                 bedConfig={bedConfig}
                 placedItems={placedItems}
                 onFramePreviewChange={setFramePreview}
                 materialSettings={materialSettings}
+                rotaryEnabled={rotaryAutoPlacementEnabled}
+                onRotaryEnabledChange={setRotaryAutoPlacementEnabled}
+                selectedPresetId={selectedRotaryPresetId}
+                onSelectedPresetIdChange={setSelectedRotaryPresetId}
                 onPreflightNav={handlePreflightNav}
                 taperWarpEnabled={taperWarpEnabled}
                 onTaperWarpChange={setTaperWarpEnabled}
@@ -1531,15 +2632,53 @@ export function AdminLayoutShell() {
 
         {rightTab === "tools" && (
           <div className={styles.tabPane}>
+            <SvgAssetLibraryPanel
+              assets={svgAssets}
+              selectedAssetId={selectedAssetId}
+              placedAssetIds={placedItems.map((item) => item.assetId)}
+              onSelectAsset={setSelectedAssetId}
+              onUpload={handleUploadAssets}
+              uploadError={uploadError}
+              onPlaceSelectedAsset={handlePlaceSelectedAssetOnBed}
+              onRemoveAsset={handleRemoveAsset}
+              onUpdateAssetContent={(_id, newSvgContent) => {
+                void handleReplaceSelectedSvgAsset(newSvgContent);
+              }}
+              onClearAll={() => {
+                void handleClearAssets();
+              }}
+            />
             <ColorLayerPanel
               layers={laserLayers}
               onUpdateLayer={handleUpdateLayer}
               onSetLayers={setLaserLayers}
               activeAssetContent={svgAssets.find(a => a.id === selectedAssetId)?.content}
+              currentMaterialSlug={currentMaterialContext.materialSlug}
+              currentMaterialLabel={currentMaterialContext.materialLabel}
+              productHint={currentMaterialContext.productHint}
             />
-            <FlatBedItemPanel />
-            <TextToolPanel onAddAsset={handleAddGeneratedSvgAsset} />
-            <RasterToSvgPanel onAddAsset={handleAddGeneratedSvgAsset} />
+            {!isTumblerMode && (
+              <FlatBedItemPanel
+                onApplyItem={(item) => {
+                  if (item) {
+                    handleApplyFlatBedItem(item);
+                    return;
+                  }
+                  setFlatBedItemOverlay(null);
+                }}
+                activeItemId={activeFlatBedItemId}
+              />
+            )}
+            <TextToolPanel
+              onAddAsset={handleAddGeneratedSvgAsset}
+              selectedAsset={selectedAsset}
+              onReplaceSelectedAsset={handleReplaceSelectedSvgAsset}
+            />
+              <RasterToSvgPanel
+                onAddAsset={handleAddGeneratedSvgAsset}
+                openSignal={svgDoctorOpenSignal}
+                onPreviewChange={setSvgDoctorPreview}
+              />
             <TextPersonalizationPanel />
             <CameraOverlayPanel onCaptureOverlay={handleCameraCapture} />
             <TestGridPanel bedWidthMm={bedConfig.width} bedHeightMm={bedConfig.height} />
@@ -1552,7 +2691,11 @@ export function AdminLayoutShell() {
             <LightBurnPathSettingsPanel
               onPathSettingsChange={(s) => setLbOutputFolderPath(s.outputFolderPath)}
             />
-            <FiberColorCalibrationPanel />
+            <FiberColorCalibrationPanel
+              currentMaterialSlug={currentMaterialContext.materialSlug}
+              currentMaterialLabel={currentMaterialContext.materialLabel}
+              currentProcessFamily={materialSettings?.processFamily ?? null}
+            />
             <SprCalibrationPanel bedConfig={bedConfig} />
             <RotaryPresetSharePanel />
           </div>
@@ -1560,80 +2703,97 @@ export function AdminLayoutShell() {
       </aside>
 
       {/* ── Template gallery modal ── */}
-      {showTemplateGallery && (
-        <div className={styles.modalBackdrop} onClick={() => { setShowTemplateGallery(false); setShowCreateForm(false); setEditingTemplate(null); }}>
-          <div className={styles.modalContainer} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.modalHeader}>
-              <span className={styles.modalTitle}>
-                {showCreateForm
-                  ? editingTemplate ? "Edit template" : "Create new template"
-                  : "Select product"}
-              </span>
-              <button
-                type="button"
-                className={styles.modalCloseBtn}
-                onClick={() => { setShowTemplateGallery(false); setShowCreateForm(false); setEditingTemplate(null); }}
-              >
-                ×
-              </button>
-            </div>
-            <div className={styles.modalBody}>
-              {showCreateForm ? (
-                <TemplateCreateForm
-                  editingTemplate={editingTemplate ?? undefined}
-                  onSave={(t) => {
-                    setTemplateRefreshNonce((n) => n + 1);
-                    // If the edited template is the active one, re-select to sync workspace
-                    if (editingTemplate && selectedTemplate?.id === t.id) {
-                      handleTemplateSelect(t);
-                    } else if (!editingTemplate) {
-                      handleTemplateSelect(t);
-                    }
-                    setShowCreateForm(false);
-                    setEditingTemplate(null);
-                    if (editingTemplate) {
-                      setToastMessage("Template updated");
-                      setTimeout(() => setToastMessage(null), 2200);
-                    }
-                  }}
-                  onCancel={() => { setShowCreateForm(false); setEditingTemplate(null); }}
-                />
-              ) : (
-                <TemplateGallery
-                  onSelect={handleTemplateSelect}
-                  onCreateNew={() => { setEditingTemplate(null); setShowCreateForm(true); }}
-                  onEdit={(t) => { setEditingTemplate(t); setShowCreateForm(true); }}
-                  onDelete={(id) => {
-                    setTemplateRefreshNonce((n) => n + 1);
-                    if (selectedTemplate?.id === id) {
-                      setSelectedTemplate(null);
-                    }
-                    setToastMessage("Template deleted");
-                    setTimeout(() => setToastMessage(null), 2200);
-                  }}
-                  selectedId={selectedTemplate?.id}
-                />
-              )}
-            </div>
-            {!showCreateForm && (
-              <div className={styles.modalFooter}>
-                <button
-                  type="button"
-                  className={styles.modalCreateBtn}
-                  onClick={() => { setEditingTemplate(null); setShowCreateForm(true); }}
-                >
-                  Create new template
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
+      <JobRunnerOverlay
+        open={showJobRunnerOverlay}
+        orders={runnableOrders}
+        activeOrderId={activeQueueOrder?.id ?? null}
+        currentTemplateId={selectedTemplate?.id ?? null}
+        currentTemplateName={selectedTemplate?.name ?? null}
+        currentJobRecipe={currentJobRecipe}
+        currentBedConfig={bedConfig}
+        currentRecipeAssetNames={currentRecipeAssetNames}
+        autoRefreshEnabled={Boolean(lbOutputFolderPath?.trim())}
+        onClose={() => setShowJobRunnerOverlay(false)}
+        onLoadOrder={(order) => {
+          handleActivateQueuedOrder(order);
+          setShowJobRunnerOverlay(false);
+        }}
+        onMarkDone={handleCompleteQueuedOrder}
+      />
+      <ModalDialog
+        open={showSvgLibraryModal}
+        title="Vector Library"
+        onClose={handleCloseSvgLibrary}
+        size="xwide"
+      >
+        <SvgLibraryGallery
+          assets={svgAssets}
+          selectedId={selectedAssetId}
+          placedAssetIds={placedItems.map((item) => item.assetId)}
+          uploadError={uploadError}
+          onSelect={setSelectedAssetId}
+          onUpload={handleUploadAssets}
+          onRename={async (id, name) => {
+            await handleUpdateSvgLibraryAssetEntry(id, { name }, "Renamed artwork in library");
+          }}
+          onDelete={handleRemoveAsset}
+          onClearAll={handleClearAssets}
+          onPlaceSelected={() => {
+            handlePlaceSelectedAssetOnBed();
+            handleCloseSvgLibrary();
+          }}
+        />
+      </ModalDialog>
+      <ModalDialog
+        open={showTemplateGallery}
+        title={showCreateForm
+          ? editingTemplate ? "Edit template" : "Create new template"
+          : "Select product"}
+        onClose={closeTemplateGallery}
+        size="fullscreen"
+        initialFocusRef={showCreateForm ? undefined : templateSearchInputRef}
+      >
+        {showCreateForm ? (
+          <TemplateCreateForm
+            editingTemplate={editingTemplate ?? undefined}
+            onSave={(t) => {
+              if (editingTemplate && selectedTemplate?.id === t.id) {
+                handleTemplateSelect(t);
+              } else if (!editingTemplate) {
+                handleTemplateSelect(t);
+              }
+              cancelCreateTemplate();
+              if (editingTemplate) {
+                showToast("Template updated");
+              }
+            }}
+            onCancel={cancelCreateTemplate}
+          />
+        ) : (
+          <TemplateGallery
+            onSelect={handleTemplateSelect}
+            onCreateNew={openCreateTemplate}
+            onEdit={handleEditTemplate}
+            onDelete={handleDeleteTemplate}
+            selectedId={selectedTemplate?.id}
+            searchInputRef={templateSearchInputRef}
+          />
+        )}
+      </ModalDialog>
       {/* ── Toast ── */}
       {toastMessage && (
-        <div className={styles.toast}>{toastMessage}</div>
+        <div className={styles.statusBanner} role="status" aria-live="polite">
+          <span className={styles.statusBannerText}>{toastMessage}</span>
+          <button
+            type="button"
+            className={styles.statusBannerDismiss}
+            onClick={() => setToastMessage(null)}
+          >
+            Dismiss
+          </button>
+        </div>
       )}
     </div>
   );
 }
+

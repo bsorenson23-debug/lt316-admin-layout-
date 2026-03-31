@@ -1,31 +1,203 @@
-/* ── Header row (filters + manage toggle) ─────────────────────── */
-.headerRow {
+.galleryShell {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 100%;
 }
 
-/* ── Filter row ────────────────────────────────────────────────── */
+.hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--bg-card)), var(--bg-card) 45%),
+    var(--bg-card);
+}
+
+.heroCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.heroEyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.heroTitle {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+
+.heroText {
+  max-width: 640px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.heroActions {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.heroStats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 100px;
+}
+
+.heroStatValue {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-primary);
+}
+
+.heroStatLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.createBtn {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--bg-base);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), transform var(--transition);
+}
+
+.createBtn:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.searchField {
+  flex: 1 1 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.searchLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.searchInput {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.searchClearBtn {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
+}
+
+.searchClearBtn:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .filterRow {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   flex-wrap: wrap;
   flex: 1;
+}
+
+.headerMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.resultCount {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.resultSubtle {
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 .filterPill {
   display: inline-flex;
   align-items: center;
-  padding: 5px 12px;
+  min-height: 34px;
+  padding: 0 12px;
   border: 1px solid var(--border-normal);
-  border-radius: 20px;
+  border-radius: 999px;
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
   font-family: inherit;
   cursor: pointer;
-  transition: border-color 150ms, background 150ms, color 150ms;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
 }
 
 .filterPill:hover {
@@ -39,21 +211,21 @@
   color: var(--accent);
 }
 
-/* ── Manage pill ──────────────────────────────────────────────── */
 .managePill {
   display: inline-flex;
   align-items: center;
-  padding: 5px 12px;
+  min-height: 34px;
+  padding: 0 12px;
   border: 1px solid var(--border-normal);
-  border-radius: 20px;
+  border-radius: 999px;
   background: transparent;
   color: var(--text-muted);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
-  transition: border-color 150ms, background 150ms, color 150ms;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
 }
 
 .managePill:hover {
@@ -67,56 +239,115 @@
   color: var(--warning);
 }
 
-/* ── Manage banner ────────────────────────────────────────────── */
 .manageBanner {
-  padding: 6px 12px;
-  margin-bottom: 12px;
+  padding: 10px 12px;
   border-radius: var(--radius);
   background: var(--warning-bg);
   border: 1px solid var(--warning-border);
   color: var(--warning);
-  font-size: 11px;
-  text-align: center;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
-/* ── Grid ──────────────────────────────────────────────────────── */
+.resultsPanel {
+  flex: 1 1 auto;
+  min-height: min(60vh, 640px);
+  padding: 4px 0 2px;
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+}
+
+.emptyTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.emptyText {
+  max-width: 560px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.emptyAction {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.emptyAction:hover {
+  border-color: var(--accent-hover);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-card));
+  color: var(--accent-hover);
+}
+
 .grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
 }
 
-@media (max-width: 700px) {
-  .grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-/* ── Card ──────────────────────────────────────────────────────── */
 .card {
   position: relative;
   display: flex;
   flex-direction: column;
-  border: 1.5px solid var(--border-normal);
-  border-radius: var(--radius);
+  min-height: 320px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-lg);
   background: var(--bg-card);
-  cursor: pointer;
   overflow: hidden;
-  transition: border-color 150ms, background 150ms, opacity 250ms;
+  transition: border-color var(--transition), background var(--transition), opacity 250ms, transform var(--transition);
 }
 
 .card:hover {
   border-color: var(--border-strong);
   background: var(--bg-elevated);
+  transform: translateY(-1px);
+}
+
+.cardButton {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cardButton:disabled {
+  cursor: default;
 }
 
 .cardSelected {
-  border-color: var(--success);
-  border-width: 2px;
+  border-color: var(--success-border);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--success) 30%, transparent);
 }
 
 .cardSelected:hover {
-  border-color: var(--success);
+  border-color: var(--success-border);
 }
 
 .cardFading {
@@ -128,12 +359,14 @@
   border-color: var(--error-border);
 }
 
-/* ── Thumbnail ─────────────────────────────────────────────────── */
 .thumbWrap {
   position: relative;
   width: 100%;
   aspect-ratio: 1;
   overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text-primary) 4%, transparent), transparent),
+    var(--bg-base);
 }
 
 .thumb {
@@ -144,35 +377,43 @@
   background: var(--bg-base);
 }
 
+.thumbFallback {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text-primary) 4%, transparent), transparent),
+    var(--bg-base);
+}
+
 .thumbIcon {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: color-mix(in srgb, var(--text-primary) 50%, transparent);
   pointer-events: none;
 }
 
 .thumbBuiltIn {
   position: absolute;
-  bottom: 4px;
-  left: 4px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: rgba(0, 0, 0, 0.5);
-  color: white;
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.03em;
+  left: 10px;
+  bottom: 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-base) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-normal) 70%, transparent);
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   pointer-events: none;
 }
 
 .checkOverlay {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 22px;
-  height: 22px;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: var(--success);
   display: flex;
@@ -184,31 +425,28 @@
   pointer-events: none;
 }
 
-/* ── Action row (edit + delete icons) ─────────────────────────── */
 .actionRow {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 10px;
+  right: 10px;
   display: none;
-  gap: 2px;
+  gap: 6px;
   z-index: 2;
 }
 
-/* Show on card hover (select mode) */
 .card:hover .actionRow {
   display: flex;
 }
 
-/* Always visible in manage mode */
 .actionRowVisible {
   display: flex;
 }
 
 .editBtn,
 .deleteBtn {
-  width: 22px;
-  height: 22px;
-  border: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-normal);
   border-radius: var(--radius-sm);
   font-size: 12px;
   line-height: 1;
@@ -216,15 +454,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 100ms, color 100ms;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
 }
 
 .editBtn {
-  background: var(--bg-hover);
-  color: var(--text-muted);
+  background: var(--bg-card);
+  color: var(--text-secondary);
 }
 
 .editBtn:hover {
+  border-color: var(--accent);
   background: var(--accent-dim);
   color: var(--accent);
 }
@@ -232,118 +471,127 @@
 .deleteBtn {
   background: var(--error-bg);
   color: var(--error);
-  font-size: 13px;
 }
 
 .deleteBtn:hover {
+  border-color: var(--error-border);
   background: var(--error);
   color: var(--bg-base);
 }
 
-/* ── Inline delete confirmation ───────────────────────────────── */
 .confirmOverlay {
   position: absolute;
   inset: 0;
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 12px;
+  gap: 12px;
+  padding: 18px;
   z-index: 3;
 }
 
 .confirmText {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
   text-align: center;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .confirmBtns {
   display: flex;
-  gap: 6px;
+  gap: 8px;
+}
+
+.confirmCancelBtn,
+.confirmDeleteBtn {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
 }
 
 .confirmCancelBtn {
-  padding: 4px 12px;
   border: 1px solid var(--border-normal);
-  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 100ms;
 }
 
 .confirmCancelBtn:hover {
   background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .confirmDeleteBtn {
-  padding: 4px 12px;
-  border: none;
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--error-border);
   background: var(--error);
   color: var(--bg-base);
-  font-size: 11px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  transition: opacity 100ms;
+  font-weight: 700;
 }
 
 .confirmDeleteBtn:hover {
-  opacity: 0.85;
+  opacity: 0.9;
 }
 
-/* ── Card body ─────────────────────────────────────────────────── */
 .cardBody {
-  padding: 8px 10px 10px;
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
+  padding: 14px;
 }
 
 .cardName {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 700;
   color: var(--text-primary);
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cardMeta {
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  min-height: 1.4em;
 }
 
-/* ── Badges ────────────────────────────────────────────────────── */
+.specLine {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
 .badgeRow {
   display: flex;
-  gap: 4px;
-  margin-top: 2px;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 8px;
+  flex-wrap: wrap;
 }
 
-.laserBadge {
+.laserBadge,
+.builtInBadge,
+.mappedBadge,
+.unmappedBadge {
   display: inline-flex;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 9px;
-  font-weight: 600;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .laserFiber {
-  background: rgba(45, 212, 191, 0.12);
-  color: rgb(45, 212, 191);
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
 }
 
 .laserCo2 {
@@ -357,61 +605,43 @@
 }
 
 .builtInBadge {
-  display: inline-flex;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.03em;
   background: var(--bg-hover);
   color: var(--text-dim);
 }
 
 .mappedBadge {
-  display: inline-flex;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.03em;
   background: var(--success-bg);
   color: var(--success);
 }
 
 .unmappedBadge {
-  display: inline-flex;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.03em;
   background: var(--warning-bg);
   color: var(--warning);
 }
 
-/* ── Add card ──────────────────────────────────────────────────── */
 .addCard {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  border: 1.5px dashed var(--border-normal);
-  border-radius: var(--radius);
+  gap: 8px;
+  min-height: 320px;
+  border: 1px dashed var(--border-normal);
+  border-radius: var(--radius-lg);
   background: transparent;
   cursor: pointer;
-  min-height: 160px;
   font-family: inherit;
-  transition: border-color 150ms, background 150ms;
+  transition: border-color var(--transition), background var(--transition), transform var(--transition);
 }
 
 .addCard:hover {
   border-color: var(--accent);
   background: var(--accent-dim);
+  transform: translateY(-1px);
 }
 
 .addIcon {
-  font-size: 28px;
+  font-size: 30px;
   color: var(--text-dim);
   line-height: 1;
 }
@@ -421,10 +651,42 @@
 }
 
 .addLabel {
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 700;
   color: var(--text-muted);
 }
 
 .addCard:hover .addLabel {
   color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .hero {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .heroActions {
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .heroStats {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .galleryShell {
+    min-height: auto;
+  }
+
+  .headerMeta,
+  .heroActions {
+    justify-content: flex-start;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
 }

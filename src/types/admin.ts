@@ -6,6 +6,8 @@
  * laser bed, x increases to the right, y increases downward.
  */
 
+import type { SvgLibraryClassification } from "./svgLibrary";
+
 // ---------------------------------------------------------------------------
 // Bed configuration
 // ---------------------------------------------------------------------------
@@ -178,6 +180,19 @@ export interface SvgAsset {
   artworkBounds: SvgBounds;
   /** When the asset was added to the session */
   uploadedAt: Date;
+  /** Optional metadata provided by the persistent SVG library catalog */
+  libraryMeta?: {
+    originalFileName: string;
+    sourceRelativePath: string | null;
+    sourceFolderLabel: string | null;
+    checksumSha256: string;
+    thumbnailPath: string | null;
+    previewPath: string | null;
+    tags: string[];
+    laserReady: boolean;
+    laserWarnings: string[];
+    classification: SvgLibraryClassification;
+  };
 }
 
 // ---------------------------------------------------------------------------

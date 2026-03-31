@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useSyncExternalStore } from "react";
 import {
   FLAT_BED_ITEMS,
   FLAT_BED_CATEGORIES,
@@ -9,72 +9,61 @@ import {
   type FlatBedCategory,
 } from "@/data/flatBedItems";
 import { getBestPreset } from "@/data/laserMaterialPresets";
-import { getActiveLaserAndLens } from "@/utils/laserProfileState";
+import {
+  LASER_PROFILE_STATE_CHANGED_EVENT,
+  getActiveLaserProfile,
+} from "@/utils/laserProfileState";
 import type { LaserProfile } from "@/types/laserProfile";
-import type { BedMockupConfig } from "./LaserBedWorkspace";
 import styles from "./FlatBedItemPanel.module.css";
 
-// Color per category for the bed overlay
 const CATEGORY_COLORS: Record<string, string> = {
-  drinkware:      "#4a8aaa",
-  "plate-board":  "#6aaa5a",
+  drinkware: "#4a8aaa",
+  "plate-board": "#6aaa5a",
   "coaster-tile": "#aa8a4a",
-  "sign-plaque":  "#aa5a8a",
-  "patch-tag":    "#5aaa8a",
-  tech:           "#7a5aaa",
-  other:          "#8a8a5a",
+  "sign-plaque": "#aa5a8a",
+  "patch-tag": "#5aaa8a",
+  tech: "#7a5aaa",
+  other: "#8a8a5a",
 };
 
-function generateBedOverlay(
-  item: FlatBedItem,
-  bedW: number,
-  bedH: number,
-): string {
-  const x = ((bedW - item.widthMm) / 2).toFixed(2);
-  const y = ((bedH - item.heightMm) / 2).toFixed(2);
-  const color = CATEGORY_COLORS[item.category] ?? "#6a8a9b";
-  const label = item.label.length > 28 ? item.label.slice(0, 27) + "…" : item.label;
-  const cx = (bedW / 2).toFixed(2);
-  const cy = ((bedH - item.heightMm) / 2 + item.heightMm / 2).toFixed(2);
-  const labelY = (parseFloat(cy) - 5).toFixed(2);
-  const dimY   = (parseFloat(cy) + 7).toFixed(2);
-
-  const svg = [
-    `<svg viewBox="0 0 ${bedW} ${bedH}" xmlns="http://www.w3.org/2000/svg">`,
-    `<rect x="${x}" y="${y}" width="${item.widthMm}" height="${item.heightMm}"`,
-    ` fill="${color}28" stroke="${color}cc" stroke-width="0.6" stroke-dasharray="3,1.5"/>`,
-    `<text x="${cx}" y="${labelY}" text-anchor="middle"`,
-    ` font-family="system-ui,sans-serif" font-size="7" fill="${color}ee">${label}</text>`,
-    `<text x="${cx}" y="${dimY}" text-anchor="middle"`,
-    ` font-family="system-ui,sans-serif" font-size="5.5" fill="${color}99">`,
-    `${item.widthMm} \u00d7 ${item.heightMm} mm \u2022 ${item.thicknessMm}mm thick</text>`,
-    `</svg>`,
-  ].join("");
-
-  return `data:image/svg+xml;base64,${btoa(svg)}`;
+interface Props {
+  onApplyItem?: (item: FlatBedItem | null) => void;
+  activeItemId?: string | null;
 }
 
-interface Props {
-  bedWidthMm?: number;
-  bedHeightMm?: number;
-  onPlaceToBed?: (config: BedMockupConfig | null) => void;
+function subscribeToLaserProfileState(onStoreChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+
+  window.addEventListener("storage", onStoreChange);
+  window.addEventListener("focus", onStoreChange);
+  window.addEventListener(LASER_PROFILE_STATE_CHANGED_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStoreChange);
+    window.removeEventListener("focus", onStoreChange);
+    window.removeEventListener(LASER_PROFILE_STATE_CHANGED_EVENT, onStoreChange);
+  };
+}
+
+function getActiveLaserSnapshot(): LaserProfile | null {
+  try {
+    return getActiveLaserProfile();
+  } catch {
+    return null;
+  }
 }
 
 export function FlatBedItemPanel({
-  bedWidthMm = 300,
-  bedHeightMm = 300,
-  onPlaceToBed,
+  onApplyItem,
+  activeItemId = null,
 }: Props) {
   const [open, setOpen] = useState(true);
   const [category, setCategory] = useState<FlatBedCategory | "">("");
   const [selectedItemId, setSelectedItemId] = useState("");
-  const [overlayActive, setOverlayActive] = useState(false);
-  const [activeLaser, setActiveLaser] = useState<LaserProfile | null>(null);
-
-  useEffect(() => {
-    const result = getActiveLaserAndLens();
-    setActiveLaser(result?.laser ?? null);
-  }, []);
+  const activeLaser = useSyncExternalStore(
+    subscribeToLaserProfileState,
+    getActiveLaserSnapshot,
+    () => null,
+  );
 
   const selectedItem = FLAT_BED_ITEMS.find(i => i.id === selectedItemId) ?? null;
 
@@ -91,31 +80,22 @@ export function FlatBedItemPanel({
     ? FLAT_BED_ITEMS.filter(i => i.category === category)
     : FLAT_BED_ITEMS;
 
+  const overlayActive = selectedItem !== null && activeItemId === selectedItem.id;
+
   function handlePlaceToBed() {
-    if (!selectedItem || !onPlaceToBed) return;
+    if (!selectedItem || !onApplyItem) return;
     if (overlayActive) {
-      onPlaceToBed(null);
-      setOverlayActive(false);
+      onApplyItem(null);
       return;
     }
-    const src = generateBedOverlay(selectedItem, bedWidthMm, bedHeightMm);
-    onPlaceToBed({
-      src,
-      naturalWidth: bedWidthMm,
-      naturalHeight: bedHeightMm,
-      printTopPct: 0,
-      printBottomPct: 1,
-      opacity: 0.85,
-    });
-    setOverlayActive(true);
+    onApplyItem(selectedItem);
   }
 
   // Clear overlay when item changes
   function handleSelectItem(id: string) {
     setSelectedItemId(id);
     if (overlayActive) {
-      onPlaceToBed?.(null);
-      setOverlayActive(false);
+      onApplyItem?.(null);
     }
   }
 
@@ -168,7 +148,7 @@ export function FlatBedItemPanel({
           </select>
 
           {/* Place on Bed button */}
-          {onPlaceToBed && (
+          {onApplyItem && (
             <button
               className={overlayActive ? styles.clearBedBtn : styles.placeBedBtn}
               onClick={handlePlaceToBed}

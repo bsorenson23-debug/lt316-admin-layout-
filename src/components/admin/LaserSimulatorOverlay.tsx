@@ -1,19 +1,10 @@
 "use client";
 
-/**
- * LaserSimulatorOverlay
- *
- * Full-screen modal that animates an SVG as if being laser engraved —
- * powered by GSAP stroke-dashoffset animation. A glowing orange "laser dot"
- * traces each path at a speed proportional to the machine speed setting.
- *
- * Usage:
- *   <LaserSimulatorOverlay svgContent={item.svgText} speedMmPerSec={100} onClose={...} />
- */
-
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import gsap from "gsap";
 import { estimateLaserTime } from "@/utils/svgLaserUtils";
+import { ModalDialog } from "./shared/ModalDialog";
+import styles from "./LaserSimulatorOverlay.module.css";
 
 interface Props {
   svgContent: string;
@@ -31,200 +22,181 @@ export function LaserSimulatorOverlay({
   onClose,
 }: Props) {
   const svgContainerRef = useRef<HTMLDivElement>(null);
-  const dotRef          = useRef<HTMLDivElement>(null);
-  const tlRef           = useRef<gsap.core.Timeline | null>(null);
-  const [progress, setProgress]   = useState(0);
+  const dotRef = useRef<HTMLDivElement>(null);
+  const tlRef = useRef<gsap.core.Timeline | null>(null);
+  const intervalRef = useRef<number | null>(null);
+  const [progress, setProgress] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
-  const [elapsed, setElapsed]     = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [elapsed, setElapsed] = useState(0);
 
-  const timeEst = estimateLaserTime(svgContent, speedMmPerSec, passes);
+  const timeEstimate = estimateLaserTime(svgContent, speedMmPerSec, passes);
 
-  // ── Run animation on mount ────────────────────────────────────────────────
   useEffect(() => {
     const container = svgContainerRef.current;
     const dot = dotRef.current;
     if (!container || !dot) return;
 
-    // Give SVG time to render before querying geometry
-    const raf = requestAnimationFrame(() => {
+    const raf = window.requestAnimationFrame(() => {
       const paths = Array.from(
         container.querySelectorAll<SVGGeometryElement>(
-          "path, line, polyline, polygon, circle, ellipse, rect"
-        )
-      ).filter(el => el.getTotalLength && el.getTotalLength() > 0);
+          "path, line, polyline, polygon, circle, ellipse, rect",
+        ),
+      ).filter((element) => element.getTotalLength && element.getTotalLength() > 0);
 
       if (paths.length === 0) return;
 
-      // Paint all paths laser-orange with stroke-dashoffset ready to animate
-      const LASER_COLOR = "#ff6a00";
-      const PX_PER_SEC  = speedMmPerSec / 0.2646; // mm/s → svg-px/s
+      const pxPerSecond = speedMmPerSec / 0.2646;
 
-      paths.forEach(path => {
-        const len = path.getTotalLength();
+      paths.forEach((path) => {
+        const length = path.getTotalLength();
         gsap.set(path, {
           attr: {
-            stroke: LASER_COLOR,
+            stroke: "var(--accent)",
             strokeWidth: 1.5,
-            strokeDasharray: len,
-            strokeDashoffset: len,
+            strokeDasharray: length,
+            strokeDashoffset: length,
             fill: "none",
           },
         });
       });
 
-      const tl = gsap.timeline({
-        onUpdate() { setProgress(tl.progress()); },
-        onComplete() { setIsPlaying(false); },
+      const timeline = gsap.timeline({
+        onUpdate() {
+          setProgress(timeline.progress());
+        },
+        onComplete() {
+          setIsPlaying(false);
+        },
       });
 
-      // Track which path is currently being drawn for the dot
       let cumulativeTime = 0;
-      paths.forEach(path => {
-        const len      = path.getTotalLength();
-        const duration = len / PX_PER_SEC;
+      paths.forEach((path) => {
+        const length = path.getTotalLength();
+        const duration = length / pxPerSecond;
 
-        tl.to(path, {
+        timeline.to(path, {
           duration,
           ease: "linear",
           attr: { strokeDashoffset: 0 },
           onUpdate() {
-            // Move dot to current drawing position
-            const localProgress = tl.time() - cumulativeTime;
-            const distAlong = Math.min(len, localProgress * PX_PER_SEC);
-            const pt = (path as SVGGeometryElement).getPointAtLength(distAlong);
+            const localProgress = timeline.time() - cumulativeTime;
+            const distance = Math.min(length, localProgress * pxPerSecond);
+            const point = (path as SVGGeometryElement).getPointAtLength(distance);
             const containerRect = container.getBoundingClientRect();
-            const svgEl = container.querySelector("svg");
-            if (svgEl && containerRect) {
-              const svgRect = svgEl.getBoundingClientRect();
-              gsap.set(dot, {
-                x: svgRect.left - containerRect.left + pt.x * (svgRect.width  / (svgEl.viewBox?.baseVal?.width  || svgRect.width)),
-                y: svgRect.top  - containerRect.top  + pt.y * (svgRect.height / (svgEl.viewBox?.baseVal?.height || svgRect.height)),
-              });
-            }
+            const svgElement = container.querySelector("svg");
+            if (!svgElement) return;
+
+            const svgRect = svgElement.getBoundingClientRect();
+            gsap.set(dot, {
+              x:
+                svgRect.left -
+                containerRect.left +
+                point.x * (svgRect.width / (svgElement.viewBox?.baseVal?.width || svgRect.width)),
+              y:
+                svgRect.top -
+                containerRect.top +
+                point.y * (svgRect.height / (svgElement.viewBox?.baseVal?.height || svgRect.height)),
+            });
           },
         }, cumulativeTime);
 
         cumulativeTime += duration;
       });
 
-      tlRef.current = tl;
+      tlRef.current = timeline;
     });
 
-    // Elapsed time counter
-    intervalRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
+    intervalRef.current = window.setInterval(() => setElapsed((current) => current + 1), 1000);
 
     return () => {
-      cancelAnimationFrame(raf);
+      window.cancelAnimationFrame(raf);
       tlRef.current?.kill();
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (intervalRef.current) {
+        window.clearInterval(intervalRef.current);
+      }
     };
   }, [svgContent, speedMmPerSec]);
 
   const handlePlayPause = useCallback(() => {
-    const tl = tlRef.current;
-    if (!tl) return;
-    if (tl.paused()) { tl.play(); setIsPlaying(true); }
-    else             { tl.pause(); setIsPlaying(false); }
+    const timeline = tlRef.current;
+    if (!timeline) return;
+
+    if (timeline.paused()) {
+      timeline.play();
+      setIsPlaying(true);
+      return;
+    }
+
+    timeline.pause();
+    setIsPlaying(false);
   }, []);
 
   const handleRestart = useCallback(() => {
-    const tl = tlRef.current;
-    if (!tl) return;
-    tl.restart();
+    const timeline = tlRef.current;
+    if (!timeline) return;
+    timeline.restart();
     setProgress(0);
     setElapsed(0);
     setIsPlaying(true);
   }, []);
 
-  const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const formatTime = (seconds: number) =>
+    `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 9999,
-      background: "rgba(0,0,0,0.92)",
-      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-      backdropFilter: "blur(4px)",
-    }}>
-      {/* Header */}
-      <div style={{ color: "#fff", fontSize: 15, fontFamily: "system-ui", marginBottom: 16, display: "flex", gap: 16, alignItems: "center" }}>
-        <span style={{ color: "#ff6a00", fontWeight: 700 }}>LASER SIMULATION</span>
-        <span style={{ color: "#888" }}>{itemName}</span>
-        <span style={{ color: "#5ab0d0" }}>{speedMmPerSec} mm/s · {passes} pass{passes > 1 ? "es" : ""}</span>
-      </div>
-
-      {/* SVG canvas */}
-      <div style={{ position: "relative", background: "#0a0a0a", border: "1px solid #2a3a45", borderRadius: 8, overflow: "hidden" }}>
-        <div
-          ref={svgContainerRef}
-          style={{ width: 480, height: 480, display: "flex", alignItems: "center", justifyContent: "center" }}
-          dangerouslySetInnerHTML={{ __html: svgContent }}
-        />
-        {/* Laser dot */}
-        <div
-          ref={dotRef}
-          style={{
-            position: "absolute", width: 10, height: 10,
-            borderRadius: "50%",
-            background: "radial-gradient(circle, #fff 0%, #ff6a00 40%, transparent 70%)",
-            boxShadow: "0 0 8px 4px #ff6a00, 0 0 20px 8px rgba(255,106,0,0.4)",
-            transform: "translate(-50%, -50%)",
-            top: 0, left: 0,
-            pointerEvents: "none",
-            zIndex: 10,
-          }}
-        />
-        {/* Scanline overlay for realism */}
-        <div style={{
-          position: "absolute", inset: 0, pointerEvents: "none",
-          background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)",
-        }} />
-      </div>
-
-      {/* Progress bar */}
-      <div style={{ width: 480, marginTop: 12 }}>
-        <div style={{ height: 3, background: "#1a2a2a", borderRadius: 2, overflow: "hidden" }}>
-          <div style={{
-            height: "100%", borderRadius: 2,
-            width: `${progress * 100}%`,
-            background: "linear-gradient(90deg, #ff6a00, #ffaa00)",
-            boxShadow: "0 0 6px #ff6a00",
-            transition: "width 0.05s linear",
-          }} />
+    <ModalDialog open title="Laser Simulation" onClose={onClose} size="wide">
+      <div className={styles.layout}>
+        <div className={styles.header}>
+          <span className={styles.kicker}>Laser Simulation</span>
+          <span className={styles.itemName}>{itemName}</span>
+          <span className={styles.speedInfo}>
+            {speedMmPerSec} mm/s / {passes} pass{passes > 1 ? "es" : ""}
+          </span>
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 11, fontFamily: "monospace", color: "#556" }}>
-          <span>Elapsed {fmtTime(elapsed)}</span>
-          <span>{Math.round(progress * 100)}%</span>
-          <span>Est. {fmtTime(Math.round(timeEst.estimatedSeconds * passes))}</span>
+
+        <div className={styles.canvasShell}>
+          <div
+            ref={svgContainerRef}
+            className={styles.canvasStage}
+            dangerouslySetInnerHTML={{ __html: svgContent }}
+          />
+          <div ref={dotRef} className={styles.dot} />
+          <div className={styles.scanlines} />
         </div>
-      </div>
 
-      {/* Stats row */}
-      <div style={{ display: "flex", gap: 24, marginTop: 10, fontSize: 12, fontFamily: "monospace", color: "#5ab0d0" }}>
-        <span>Path: {timeEst.totalPathMm.toFixed(0)} mm</span>
-        <span>Passes: {passes}</span>
-        <span>Total: {(timeEst.totalWithPasses / 1000).toFixed(2)} m</span>
-      </div>
+        <div className={styles.progressBlock}>
+          <div className={styles.progressTrack}>
+            <div className={styles.progressFill} style={{ width: `${progress * 100}%` }} />
+          </div>
+          <div className={styles.progressMeta}>
+            <span>Elapsed {formatTime(elapsed)}</span>
+            <span>{Math.round(progress * 100)}%</span>
+            <span>Est. {formatTime(Math.round(timeEstimate.estimatedSeconds * passes))}</span>
+          </div>
+        </div>
 
-      {/* Controls */}
-      <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-        <button onClick={handlePlayPause}
-          style={{ background: "#1a2a30", border: "1px solid #3a5060", color: "#fff", padding: "8px 20px", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
-          {isPlaying ? "⏸ Pause" : "▶ Play"}
-        </button>
-        <button onClick={handleRestart}
-          style={{ background: "#1a2a30", border: "1px solid #3a5060", color: "#8ab0c8", padding: "8px 20px", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
-          ↺ Restart
-        </button>
-        <button onClick={onClose}
-          style={{ background: "#2a1010", border: "1px solid #5a2020", color: "#c87878", padding: "8px 20px", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
-          ✕ Close
-        </button>
-      </div>
+        <div className={styles.statsRow}>
+          <span>Path: {timeEstimate.totalPathMm.toFixed(0)} mm</span>
+          <span>Passes: {passes}</span>
+          <span>Total: {(timeEstimate.totalWithPasses / 1000).toFixed(2)} m</span>
+        </div>
 
-      <p style={{ marginTop: 12, color: "#333", fontSize: 11, fontFamily: "monospace" }}>
-        GSAP stroke-dashoffset simulation · speed scaled to machine setting
-      </p>
-    </div>
+        <div className={styles.actions}>
+          <button type="button" className={styles.primaryBtn} onClick={handlePlayPause}>
+            {isPlaying ? "Pause" : "Play"}
+          </button>
+          <button type="button" className={styles.secondaryBtn} onClick={handleRestart}>
+            Restart
+          </button>
+          <button type="button" className={styles.dangerBtn} onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <p className={styles.caption}>
+          GSAP stroke-dashoffset simulation scaled to the active machine speed.
+        </p>
+      </div>
+    </ModalDialog>
   );
 }

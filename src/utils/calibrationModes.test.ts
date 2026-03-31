@@ -20,6 +20,7 @@ test("mode definitions include all calibration workspace modes", () => {
     "rotary",
     "export",
     "lens",
+    "laser",
     "geometry",
     "red-light",
     "distortion",
@@ -77,6 +78,7 @@ test("export mode exposes export preview in visible keys", () => {
 test("placeholder implementation flags are correct", () => {
   assert.equal(isImplementedCalibrationMode("rotary"), true);
   assert.equal(isImplementedCalibrationMode("export"), true);
+  assert.equal(isImplementedCalibrationMode("laser"), true);
   assert.equal(isImplementedCalibrationMode("geometry"), false);
   assert.equal(isImplementedCalibrationMode("red-light"), false);
   assert.equal(isImplementedCalibrationMode("distortion"), false);

@@ -31,6 +31,8 @@ export interface LaserProfile {
   sourceType: LaserSourceType;
   source: string;        // e.g. "RECI W2", "xTool D1 Pro", "Cloudray"
   wattagePeak: number;
+  /** Only meaningful for fiber sources. Missing/false defaults to standard fiber. */
+  isMopaCapable?: boolean;
   lenses: LaserLens[];
 }
 

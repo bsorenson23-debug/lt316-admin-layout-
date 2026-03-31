@@ -16,12 +16,25 @@
   flex-shrink: 0;
 }
 
+.headerTitleWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .title {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.assetCount {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .clearBtn {
@@ -34,6 +47,7 @@
   border-radius: var(--radius-sm);
   transition: background var(--transition);
 }
+
 .clearBtn:hover {
   background: var(--error-bg);
 }
@@ -48,7 +62,11 @@
   cursor: pointer;
   transition: background var(--transition);
 }
-.confirmYes:hover { background: rgba(248, 113, 113, 0.18); }
+
+.confirmYes:hover {
+  background: rgba(248, 113, 113, 0.18);
+}
+
 .confirmNo {
   font-size: 11px;
   padding: 2px 8px;
@@ -59,10 +77,19 @@
   cursor: pointer;
   transition: color var(--transition);
 }
-.confirmNo:hover { color: var(--text-secondary); }
+
+.confirmNo:hover {
+  color: var(--text-secondary);
+}
 
 .fileInput {
   display: none;
+}
+
+.uploadActions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 12px;
 }
 
 .uploadBtn {
@@ -70,10 +97,9 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  margin: 10px 12px;
   padding: 7px 12px;
   background: var(--accent);
-  color: #fff;
+  color: var(--text-primary);
   border: none;
   border-radius: var(--radius);
   font-size: 12px;
@@ -82,9 +108,34 @@
   transition: background var(--transition);
   flex-shrink: 0;
   letter-spacing: 0.02em;
+  flex: 1;
 }
+
 .uploadBtn:hover {
   background: var(--accent-hover);
+}
+
+.folderBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 12px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+  flex-shrink: 0;
+}
+
+.folderBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg-hover);
 }
 
 .uploadIcon {
@@ -106,7 +157,7 @@
 .placeBar {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   margin: 0 12px 10px;
 }
 
@@ -122,21 +173,126 @@
   cursor: pointer;
   transition: background var(--transition), border-color var(--transition);
 }
+
 .placeBtn:hover:not(:disabled) {
   background: rgba(96, 165, 250, 0.14);
   border-color: rgba(96, 165, 250, 0.4);
 }
+
 .placeBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
+.placeStatus {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.statusChip {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-normal);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.statusChipInfo {
+  background: var(--info-bg);
+  border-color: var(--info-border);
+  color: var(--info);
+}
+
+.statusChipSuccess {
+  background: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
 .placeHint {
   font-size: 10px;
   color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.35;
+}
+
+.activePreview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 12px 10px;
+  padding: 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent-dim);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+    var(--bg-elevated);
+}
+
+.activePreviewHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.activePreviewMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.activePreviewLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.activePreviewName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.activePreviewBadges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.activePreviewFrame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 132px;
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-normal);
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%, rgba(255, 255, 255, 0.06)),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%, rgba(255, 255, 255, 0.06)),
+    var(--bg-hover);
+  background-position: 0 0, 8px 8px, 0 0;
+  background-size: 16px 16px, 16px 16px, auto;
+}
+
+.activePreviewImage {
+  display: block;
+  width: 100%;
+  max-width: 220px;
+  max-height: 160px;
+  object-fit: contain;
 }
 
 .assetList {
@@ -145,10 +301,9 @@
   padding: 4px 8px 12px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
-/* ── Empty state ── */
 .emptyState {
   display: flex;
   flex-direction: column;
@@ -173,29 +328,48 @@
   line-height: 1.5;
 }
 
-/* ── Asset card ── */
 .assetCard {
   position: relative;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
   border-radius: var(--radius);
   border: 1px solid var(--border-normal);
   background: var(--bg-elevated);
   cursor: pointer;
-  transition: border-color var(--transition), background var(--transition);
+  transition: border-color var(--transition), background var(--transition), box-shadow var(--transition);
   outline: none;
 }
-.assetCard:hover { border-color: var(--border-strong); background: var(--bg-hover); }
-.assetCard.selected { border-color: var(--accent); background: var(--accent-dark); }
-.assetCard:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+
+.assetCard:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.assetCard.selected {
+  border-color: var(--accent);
+  background:
+    linear-gradient(180deg, rgba(249, 115, 22, 0.16), rgba(249, 115, 22, 0.08)),
+    var(--accent-dark);
+  box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.18);
+}
+
+.assetCard:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
 
 .thumbnail {
-  width: 36px;
-  height: 36px;
+  width: 56px;
+  height: 56px;
   border-radius: var(--radius-sm);
-  background: var(--bg-hover);
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%, rgba(255, 255, 255, 0.06)),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%, rgba(255, 255, 255, 0.06)),
+    var(--bg-hover);
+  background-position: 0 0, 8px 8px, 0 0;
+  background-size: 16px 16px, 16px 16px, auto;
+  border: 1px solid var(--border-normal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -214,21 +388,122 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
 .assetName {
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.assetSize {
-  font-size: 10px;
+.assetMetaBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.previewBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-normal);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.2;
+}
+
+.previewBadgeLibrary {
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+}
+
+.previewBadgePlaced {
+  background: var(--info-bg);
+  border-color: var(--info-border);
+  color: var(--info);
+}
+
+.previewBadgeReady {
+  background: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
+.previewBadgeWarn {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning);
+}
+
+.previewBadgeText {
+  background: var(--accent-dark);
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.previewBadgeError {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+  color: var(--error);
+}
+
+.analysisPending {
+  font-size: 9px;
+  color: var(--text-dim);
+  font-family: monospace;
+}
+
+.analysisStats {
+  font-size: 9px;
   color: var(--text-muted);
+  font-family: monospace;
+}
+
+.smartMonochromeBtn,
+.laserReadyBtn {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-family: monospace;
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success);
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.smartMonochromeBtn {
+  background: var(--info-bg);
+  border: 1px solid var(--info-border);
+  color: var(--info);
+}
+
+.smartMonochromeBtn:hover {
+  background: rgba(96, 165, 250, 0.14);
+}
+
+.laserReadyBtn:hover {
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.repairLabel {
+  margin-top: 8px;
+  margin-bottom: 2px;
+  font-size: 9px;
+  font-family: monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
 }
 
 .activeBadge {
@@ -251,12 +526,13 @@
   border: none;
   cursor: pointer;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
   padding: 2px 4px;
   border-radius: var(--radius-sm);
   line-height: 1;
   transition: color var(--transition), background var(--transition);
 }
+
 .removeBtn:hover {
   color: var(--error);
   background: var(--error-bg);

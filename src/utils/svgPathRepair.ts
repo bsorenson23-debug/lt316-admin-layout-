@@ -332,6 +332,200 @@ export interface RepairResult {
   removedTinySegmentCount: number;
 }
 
+export interface DespeckleResult {
+  cleaned: string;
+  removedPathCount: number;
+}
+
+interface Bounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+function accumulateBounds(bounds: Bounds | null, x: number, y: number): Bounds {
+  if (!bounds) {
+    return { minX: x, minY: y, maxX: x, maxY: y };
+  }
+
+  return {
+    minX: Math.min(bounds.minX, x),
+    minY: Math.min(bounds.minY, y),
+    maxX: Math.max(bounds.maxX, x),
+    maxY: Math.max(bounds.maxY, y),
+  };
+}
+
+function computePathBounds(cmds: RawCmd[]): Bounds | null {
+  let bounds: Bounds | null = null;
+  let cx = 0;
+  let cy = 0;
+  let startX = 0;
+  let startY = 0;
+
+  for (const cmd of cmds) {
+    const dx = cmd.rel ? cx : 0;
+    const dy = cmd.rel ? cy : 0;
+
+    switch (cmd.op) {
+      case "M":
+      case "L":
+      case "T": {
+        bounds = accumulateBounds(bounds, cmd.args[0] + dx, cmd.args[1] + dy);
+        const pt = cmdEndpoint(cmd, cx, cy);
+        cx = pt.x;
+        cy = pt.y;
+        if (cmd.op === "M") {
+          startX = cx;
+          startY = cy;
+        }
+        break;
+      }
+      case "H": {
+        bounds = accumulateBounds(bounds, cmd.args[0] + dx, cy);
+        const pt = cmdEndpoint(cmd, cx, cy);
+        cx = pt.x;
+        cy = pt.y;
+        break;
+      }
+      case "V": {
+        bounds = accumulateBounds(bounds, cx, cmd.args[0] + dy);
+        const pt = cmdEndpoint(cmd, cx, cy);
+        cx = pt.x;
+        cy = pt.y;
+        break;
+      }
+      case "C": {
+        bounds = accumulateBounds(bounds, cmd.args[0] + dx, cmd.args[1] + dy);
+        bounds = accumulateBounds(bounds, cmd.args[2] + dx, cmd.args[3] + dy);
+        bounds = accumulateBounds(bounds, cmd.args[4] + dx, cmd.args[5] + dy);
+        const pt = cmdEndpoint(cmd, cx, cy);
+        cx = pt.x;
+        cy = pt.y;
+        break;
+      }
+      case "S":
+      case "Q": {
+        bounds = accumulateBounds(bounds, cmd.args[0] + dx, cmd.args[1] + dy);
+        bounds = accumulateBounds(bounds, cmd.args[2] + dx, cmd.args[3] + dy);
+        const pt = cmdEndpoint(cmd, cx, cy);
+        cx = pt.x;
+        cy = pt.y;
+        break;
+      }
+      case "A": {
+        bounds = accumulateBounds(bounds, cx, cy);
+        bounds = accumulateBounds(bounds, cmd.args[5] + dx, cmd.args[6] + dy);
+        const pt = cmdEndpoint(cmd, cx, cy);
+        cx = pt.x;
+        cy = pt.y;
+        break;
+      }
+      case "Z": {
+        bounds = accumulateBounds(bounds, startX, startY);
+        cx = startX;
+        cy = startY;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return bounds;
+}
+
+function parseRootBounds(svgTag: Element): { width: number; height: number } | null {
+  const viewBox = svgTag.getAttribute("viewBox");
+  if (viewBox) {
+    const parts = viewBox
+      .split(/[\s,]+/)
+      .map((value) => Number.parseFloat(value))
+      .filter((value) => Number.isFinite(value));
+    if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+      return { width: parts[2], height: parts[3] };
+    }
+  }
+
+  const width = Number.parseFloat((svgTag.getAttribute("width") ?? "").replace(/[^\d.+-]/g, ""));
+  const height = Number.parseFloat((svgTag.getAttribute("height") ?? "").replace(/[^\d.+-]/g, ""));
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    return { width, height };
+  }
+
+  return null;
+}
+
+function hasVisiblePaint(el: Element): boolean {
+  const fill = (el.getAttribute("fill") ?? "").trim().toLowerCase();
+  const stroke = (el.getAttribute("stroke") ?? "").trim().toLowerCase();
+  const style = (el.getAttribute("style") ?? "").toLowerCase();
+  const hasFill = fill !== "" && fill !== "none" && fill !== "transparent";
+  const hasStroke = stroke !== "" && stroke !== "none" && stroke !== "transparent";
+  const styleFillVisible = /fill\s*:\s*(?!none|transparent)/.test(style);
+  const styleStrokeVisible = /stroke\s*:\s*(?!none|transparent)/.test(style);
+  return hasFill || hasStroke || styleFillVisible || styleStrokeVisible;
+}
+
+export function despeckleSvgPaths(
+  svgContent: string,
+  options?: {
+    level?: number;
+  },
+): DespeckleResult {
+  const level = Math.max(0, Math.min(4, Math.round(options?.level ?? 0)));
+  if (level <= 0 || typeof window === "undefined") {
+    return { cleaned: svgContent, removedPathCount: 0 };
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgContent, "image/svg+xml");
+  if (doc.querySelector("parsererror")) {
+    return { cleaned: svgContent, removedPathCount: 0 };
+  }
+
+  const svgEl = doc.querySelector("svg");
+  if (!svgEl) {
+    return { cleaned: svgContent, removedPathCount: 0 };
+  }
+
+  const rootBounds = parseRootBounds(svgEl);
+  if (!rootBounds) {
+    return { cleaned: svgContent, removedPathCount: 0 };
+  }
+
+  const minDimensionRatios = [0, 0.0008, 0.0014, 0.0022, 0.0032];
+  const minAreaRatios = [0, 0.0000008, 0.0000016, 0.0000032, 0.000006];
+  const maxRootDimension = Math.max(rootBounds.width, rootBounds.height);
+  const minDimension = maxRootDimension * minDimensionRatios[level];
+  const minArea = rootBounds.width * rootBounds.height * minAreaRatios[level];
+
+  let removedPathCount = 0;
+  for (const el of Array.from(doc.querySelectorAll("path"))) {
+    if (!hasVisiblePaint(el)) continue;
+    const d = (el.getAttribute("d") ?? "").trim();
+    if (!d) continue;
+
+    const bounds = computePathBounds(tokenizePath(d));
+    if (!bounds) continue;
+
+    const width = Math.max(0, bounds.maxX - bounds.minX);
+    const height = Math.max(0, bounds.maxY - bounds.minY);
+    const area = width * height;
+
+    if ((width <= minDimension && height <= minDimension) || area <= minArea) {
+      el.parentNode?.removeChild(el);
+      removedPathCount += 1;
+    }
+  }
+
+  return {
+    cleaned: new XMLSerializer().serializeToString(doc),
+    removedPathCount,
+  };
+}
+
 /**
  * Auto-fix all fixable issues in the SVG:
  *  - Close near-closed and open paths (adds Z)

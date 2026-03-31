@@ -1,0 +1,203 @@
+.layout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.kicker {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.itemName {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.speedInfo {
+  color: var(--info);
+  font-size: 12px;
+}
+
+.canvasShell {
+  position: relative;
+  width: min(100%, 560px);
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+.canvasStage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1;
+  min-height: 320px;
+  max-height: 60vh;
+}
+
+.canvasStage :global(svg) {
+  width: min(100%, 520px);
+  height: min(100%, 520px);
+}
+
+.canvasStage :global(path),
+.canvasStage :global(line),
+.canvasStage :global(polyline),
+.canvasStage :global(polygon),
+.canvasStage :global(circle),
+.canvasStage :global(ellipse),
+.canvasStage :global(rect) {
+  vector-effect: non-scaling-stroke;
+}
+
+.dot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 10;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, var(--text-primary) 0%, var(--accent) 40%, transparent 70%);
+  box-shadow:
+    0 0 8px 4px color-mix(in srgb, var(--accent) 70%, transparent),
+    0 0 20px 8px color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+.scanlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      color-mix(in srgb, var(--bg-base) 22%, transparent) 2px,
+      color-mix(in srgb, var(--bg-base) 22%, transparent) 4px
+    );
+}
+
+.progressBlock {
+  width: min(100%, 560px);
+}
+
+.progressTrack {
+  height: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-input);
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--warning));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent);
+  transition: width 0.05s linear;
+}
+
+.progressMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+}
+
+.statsRow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px 24px;
+  color: var(--info);
+  font-family: "Courier New", monospace;
+  font-size: 12px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.primaryBtn,
+.secondaryBtn,
+.dangerBtn {
+  min-width: 110px;
+  padding: 9px 16px;
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.primaryBtn {
+  border: 1px solid var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.primaryBtn:hover {
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg-card));
+}
+
+.secondaryBtn {
+  border: 1px solid var(--border-normal);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+}
+
+.secondaryBtn:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.dangerBtn {
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.dangerBtn:hover {
+  background: color-mix(in srgb, var(--error) 18%, var(--bg-card));
+}
+
+.caption {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .progressMeta {
+    flex-direction: column;
+    align-items: center;
+  }
+}

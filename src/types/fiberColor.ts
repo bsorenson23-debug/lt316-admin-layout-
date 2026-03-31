@@ -1,6 +1,7 @@
 // Fiber laser color marking — types
 // Physics: oxide layer interference on metal, controlled by energy density.
 // ED (J/mm²) = Power (W) / (Speed (mm/s) × Line Spacing (mm))
+import type { MarkingProcessFamily } from "../features/color-profiles/types";
 
 // ---------------------------------------------------------------------------
 // Color spectrum
@@ -71,10 +72,15 @@ export interface FiberMachineProfile {
   id: string;
   /** Operator-given name, e.g. "MOPA-100W #1" */
   machine: string;
+  /** Active laser profile id when this calibration was captured */
+  laserProfileId?: string;
   /** Rated laser power in watts */
   ratedPower: number;
   wavelength: Wavelength;
   material: SubstrateMaterial;
+  materialSlug?: string;
+  materialLabel?: string;
+  processFamily?: MarkingProcessFamily;
   /** ISO date string when calibration was locked */
   lockedAt: string;
   /** Which bracket line the operator selected (1–5) */

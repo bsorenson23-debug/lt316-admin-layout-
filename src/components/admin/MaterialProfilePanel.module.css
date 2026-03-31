@@ -47,6 +47,46 @@
   gap: 7px;
 }
 
+.contextCard {
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  padding: 7px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.contextRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.contextLabel {
+  font-size: 9px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.contextValue {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.warningBox {
+  font-size: 10px;
+  color: var(--warning);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  padding: 5px 7px;
+  line-height: 1.4;
+}
+
 /* ── Laser filter ── */
 .filterRow {
   display: flex;

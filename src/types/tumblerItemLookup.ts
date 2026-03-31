@@ -56,6 +56,7 @@ export interface TumblerItemLookupResponse {
   matchedProfileId: string | null;
   glbPath: string;
   imageUrl: string | null;
+  backImageUrl?: string | null;
   imageUrls: string[];
   fitDebug?: TumblerItemLookupFitDebug | null;
   dimensions: TumblerItemLookupDimensions;

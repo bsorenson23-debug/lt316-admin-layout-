@@ -28,9 +28,12 @@ export function LaserTypePanel({ onSelectionChange, onItemSelect }: Props) {
 
   // Load persisted state client-side only to avoid SSR hydration mismatch
   useEffect(() => {
-    setProfiles(getLaserProfiles());
-    setActiveLaserIdState(getActiveLaserId());
-    setActiveLensIdState(getActiveLensId());
+    const frameId = window.requestAnimationFrame(() => {
+      setProfiles(getLaserProfiles());
+      setActiveLaserIdState(getActiveLaserId());
+      setActiveLensIdState(getActiveLensId());
+    });
+    return () => window.cancelAnimationFrame(frameId);
   }, []);
 
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
@@ -41,6 +44,7 @@ export function LaserTypePanel({ onSelectionChange, onItemSelect }: Props) {
   const [draftSourceType, setDraftSourceType] = useState<LaserSourceType>("co2");
   const [draftSource, setDraftSource] = useState("");
   const [draftWattage, setDraftWattage] = useState("");
+  const [draftIsMopaCapable, setDraftIsMopaCapable] = useState(false);
 
   // Lens draft state
   const [lDraftName, setLDraftName] = useState("");
@@ -82,6 +86,7 @@ export function LaserTypePanel({ onSelectionChange, onItemSelect }: Props) {
     setDraftSourceType(p.sourceType);
     setDraftSource(p.source);
     setDraftWattage(String(p.wattagePeak ?? ""));
+    setDraftIsMopaCapable(p.isMopaCapable === true);
     setEditingProfileId(p.id);
   }
 
@@ -90,6 +95,7 @@ export function LaserTypePanel({ onSelectionChange, onItemSelect }: Props) {
     setDraftSourceType("co2");
     setDraftSource("");
     setDraftWattage("");
+    setDraftIsMopaCapable(false);
     setEditingProfileId("__new__");
   }
 
@@ -106,6 +112,7 @@ export function LaserTypePanel({ onSelectionChange, onItemSelect }: Props) {
       sourceType: draftSourceType,
       source: draftSource.trim(),
       wattagePeak: draftWattage ? Number(draftWattage) : 0,
+      isMopaCapable: draftSourceType === "fiber" ? draftIsMopaCapable : false,
       lenses: existingProfile?.lenses ?? [],
     };
 
@@ -284,15 +291,28 @@ export function LaserTypePanel({ onSelectionChange, onItemSelect }: Props) {
                 />
               </label>
             </div>
-            <label className={styles.formField}>
-              <span>Source / Manufacturer</span>
-              <input
-                className={styles.textInput}
-                value={draftSource}
+              <label className={styles.formField}>
+                <span>Source / Manufacturer</span>
+                <input
+                  className={styles.textInput}
+                  value={draftSource}
                 onChange={e => setDraftSource(e.target.value)}
-                placeholder="e.g. RECI W2, xTool D1 Pro"
-              />
-            </label>
+                  placeholder="e.g. RECI W2, xTool D1 Pro"
+                />
+              </label>
+              {draftSourceType === "fiber" && (
+                <label className={styles.formField}>
+                  <span>Fiber pulse control</span>
+                  <select
+                    className={styles.selectInput}
+                    value={draftIsMopaCapable ? "mopa" : "standard"}
+                    onChange={e => setDraftIsMopaCapable(e.target.value === "mopa")}
+                  >
+                    <option value="standard">Standard fiber</option>
+                    <option value="mopa">MOPA fiber</option>
+                  </select>
+                </label>
+              )}
             <div className={styles.formActions}>
               <button className={styles.saveBtn} onClick={handleSaveProfile} disabled={!draftName.trim()}>Save</button>
               {editingProfileId !== "__new__" && (

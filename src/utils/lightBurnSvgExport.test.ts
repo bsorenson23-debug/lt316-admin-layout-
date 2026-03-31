@@ -26,6 +26,8 @@ function buildPayload(itemOverrides: Partial<LightBurnExportPayload["items"][num
       presetName: "Preset A",
       bedOrigin: "top-left",
       chuckOrRoller: "roller",
+      stepsPerRotation: null,
+      sprCorrectionFactor: null,
       anchorMode: "physical-top",
       rotaryCenterXmm: 170,
       rotaryTopYmm: 22,

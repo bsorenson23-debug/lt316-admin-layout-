@@ -1,6 +1,8 @@
 import type { LaserLens, LaserProfile } from "@/types/laserProfile";
 import { LASER_PROFILES_KEY, ACTIVE_LASER_PROFILE_KEY, ACTIVE_LENS_KEY } from "@/types/laserProfile";
 
+export const LASER_PROFILE_STATE_CHANGED_EVENT = "lt316:laser-profile-state-changed";
+
 function load<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -9,19 +11,32 @@ function load<T>(key: string, fallback: T): T {
 }
 
 function persist(key: string, value: unknown): void {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* noop */ }
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event(LASER_PROFILE_STATE_CHANGED_EVENT));
+    }
+  } catch { /* noop */ }
+}
+
+function normalizeLaserProfile(profile: LaserProfile): LaserProfile {
+  return {
+    ...profile,
+    isMopaCapable: profile.sourceType === "fiber" ? profile.isMopaCapable === true : false,
+  };
 }
 
 export function getLaserProfiles(): LaserProfile[] {
-  return load<LaserProfile[]>(LASER_PROFILES_KEY, []);
+  return load<LaserProfile[]>(LASER_PROFILES_KEY, []).map(normalizeLaserProfile);
 }
 
 export function saveLaserProfile(profile: LaserProfile): LaserProfile[] {
   const profiles = getLaserProfiles();
   const idx = profiles.findIndex((p) => p.id === profile.id);
+  const normalizedProfile = normalizeLaserProfile(profile);
   const next = idx >= 0
-    ? profiles.map((p) => (p.id === profile.id ? profile : p))
-    : [...profiles, profile];
+    ? profiles.map((p) => (p.id === profile.id ? normalizedProfile : p))
+    : [...profiles, normalizedProfile];
   persist(LASER_PROFILES_KEY, next);
   return next;
 }

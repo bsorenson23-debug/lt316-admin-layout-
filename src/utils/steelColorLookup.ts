@@ -9,7 +9,7 @@
  * accidentally hitting "Black".
  */
 
-import type { LaserPreset } from "@/data/laserMaterialPresets";
+import type { LaserPreset } from "../data/laserMaterialPresets.ts";
 
 // ─── CIELAB conversion helpers ────────────────────────────────────────────────
 

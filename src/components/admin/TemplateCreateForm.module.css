@@ -3,7 +3,10 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
-  max-width: 560px;
+  width: 100%;
+  max-width: none;
+  min-height: 100%;
+  padding-right: 8px;
 }
 
 /* ── Sections ──────────────────────────────────────────────────── */
@@ -161,6 +164,17 @@
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.lookupRow > :first-child {
+  flex: 1 1 280px;
+}
+
+.lookupAssistText {
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 1.45;
 }
 
 .lookupResetBtn {
@@ -189,6 +203,16 @@
   border-radius: var(--radius);
   background: rgba(34, 197, 94, 0.08);
   border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.lookupSummaryReview {
+  background: var(--info-bg);
+  border-color: var(--info-border);
+}
+
+.lookupSummaryWarning {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
 }
 
 .lookupSummaryHeader {
@@ -233,6 +257,27 @@
   border: 1px solid var(--border-subtle);
 }
 
+.lookupBadgeReview,
+.lookupBadgeWarning {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.lookupBadgeReview {
+  background: var(--info-bg);
+  color: var(--info);
+  border: 1px solid var(--info-border);
+}
+
+.lookupBadgeWarning {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid var(--warning-border);
+}
+
 .lookupSummaryLine {
   font-size: 11px;
   color: var(--text-secondary);
@@ -244,6 +289,12 @@
   gap: 10px;
   font-size: 10px;
   color: var(--text-dim);
+}
+
+.lookupNotice {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 
 .productPhotoPreview {
@@ -381,6 +432,88 @@
   font-size: 11px;
   font-family: monospace;
   color: var(--success);
+}
+
+.glbPathStatusBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.glbPathStatusLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-family: inherit;
+}
+
+.glbPathValue {
+  font-size: 11px;
+  font-family: monospace;
+}
+
+.glbPathReview {
+  color: var(--info);
+}
+
+.glbPathWarning {
+  color: var(--warning);
+}
+
+.glbPathNote {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.modelPreviewBlock {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.modelPreviewMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.modelPreviewMode {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.modelPreviewDims {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: monospace;
+}
+
+.modelPreviewViewport {
+  height: 240px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  overflow: hidden;
+}
+
+.modelPreviewEmpty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.modelPreviewNote {
+  font-size: 10px;
+  color: var(--warning);
 }
 
 /* ── Auto-detect ──────────────────────────────────────────────── */

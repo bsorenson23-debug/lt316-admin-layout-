@@ -2,26 +2,36 @@
 
 import React from "react";
 import type { ExportHistoryEntry } from "@/types/exportHistory";
-import { EXPORT_HISTORY_KEY } from "@/types/exportHistory";
-import type { BedConfig, PlacedItem } from "@/types/admin";
-import type { LightBurnExportPayload } from "@/types/export";
+import { EXPORT_HISTORY_KEY, EXPORT_HISTORY_MAX } from "@/types/exportHistory";
+import type { PlacedItem } from "@/types/admin";
 import { buildLightBurnLbrn, downloadLbrnFile } from "@/utils/lightBurnLbrnExport";
-import {
-  buildLightBurnExportArtifacts,
-} from "@/utils/tumblerExportPlacement";
 import styles from "./ExportHistoryPanel.module.css";
 
 function loadHistory(): ExportHistoryEntry[] {
-  try { return JSON.parse(localStorage.getItem(EXPORT_HISTORY_KEY) ?? "[]") as ExportHistoryEntry[]; }
-  catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem(EXPORT_HISTORY_KEY) ?? "[]") as ExportHistoryEntry[];
+  } catch {
+    return [];
+  }
 }
+
 function saveHistory(entries: ExportHistoryEntry[]) {
-  try { localStorage.setItem(EXPORT_HISTORY_KEY, JSON.stringify(entries)); } catch { /* noop */ }
+  let trimmed = entries.slice(0, EXPORT_HISTORY_MAX);
+
+  while (trimmed.length > 0) {
+    try {
+      localStorage.setItem(EXPORT_HISTORY_KEY, JSON.stringify(trimmed));
+      return;
+    } catch {
+      if (trimmed.length === 1) break;
+      trimmed = trimmed.slice(0, Math.max(1, Math.floor(trimmed.length / 2)));
+    }
+  }
 }
 
 /** Called by TumblerExportPanel after every successful export */
 export function appendExportHistory(
-  entry: Omit<ExportHistoryEntry, "id" | "exportedAt">
+  entry: Omit<ExportHistoryEntry, "id" | "exportedAt">,
 ): void {
   const current = loadHistory();
   const next: ExportHistoryEntry = {
@@ -29,7 +39,7 @@ export function appendExportHistory(
     id: `exp-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     exportedAt: new Date().toISOString(),
   };
-  const trimmed = [next, ...current].slice(0, 200);
+  const trimmed = [next, ...current].slice(0, EXPORT_HISTORY_MAX);
   saveHistory(trimmed);
 }
 
@@ -41,12 +51,7 @@ export function fingerprintItems(items: PlacedItem[]): string {
   return (h >>> 0).toString(16).padStart(8, "0");
 }
 
-interface Props {
-  bedConfig: BedConfig;
-  placedItems: PlacedItem[];
-}
-
-export function ExportHistoryPanel({ bedConfig, placedItems }: Props) {
+export function ExportHistoryPanel() {
   const [open, setOpen] = React.useState(false);
   const [history, setHistory] = React.useState<ExportHistoryEntry[]>([]);
   const [filter, setFilter] = React.useState("");
@@ -56,28 +61,27 @@ export function ExportHistoryPanel({ bedConfig, placedItems }: Props) {
   }, [open]);
 
   const filtered = filter.trim()
-    ? history.filter((e) =>
-        [e.tumblerBrand, e.tumblerModel, e.materialLabel]
+    ? history.filter((entry) =>
+        [entry.tumblerBrand, entry.tumblerModel, entry.materialLabel]
           .join(" ")
           .toLowerCase()
-          .includes(filter.toLowerCase())
+          .includes(filter.toLowerCase()),
       )
     : history;
 
   const handleReexport = (entry: ExportHistoryEntry) => {
-    // Reconstruct a minimal payload from the snapshot
-    const artifacts = buildLightBurnExportArtifacts({
-      includeLightBurnSetup: false,
-      bedConfig,
-      workspaceMode: bedConfig.workspaceMode,
-      templateWidthMm: entry.templateWidthMm,
-      templateHeightMm: entry.templateHeightMm,
-      items: placedItems,
-      rotary: { enabled: false, preset: null, anchorMode: "physical-top", placementProfile: { overallHeightMm: entry.templateHeightMm, topAnchorMode: "physical-top" } },
-      taperWarpEnabled: false,
-    });
+    if (!entry.exportPayloadSnapshot) return;
+
     const name = `lt316-reexport-${entry.id.slice(-6)}`;
-    downloadLbrnFile(buildLightBurnLbrn(artifacts.artworkPayload), `${name}.lbrn2`);
+    downloadLbrnFile(
+      buildLightBurnLbrn(
+        entry.exportPayloadSnapshot,
+        entry.materialSettingsSnapshot ?? undefined,
+        undefined,
+        { mode: "minimal" },
+      ),
+      `${name}.lbrn2`,
+    );
   };
 
   const handleClearAll = () => {
@@ -87,13 +91,21 @@ export function ExportHistoryPanel({ bedConfig, placedItems }: Props) {
 
   const formatDate = (iso: string) => {
     try {
-      return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "2-digit", hour: "2-digit", minute: "2-digit" });
-    } catch { return iso; }
+      return new Date(iso).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return iso;
+    }
   };
 
   return (
     <div className={styles.panel}>
-      <button className={styles.toggle} onClick={() => setOpen((o) => !o)} type="button">
+      <button className={styles.toggle} onClick={() => setOpen((value) => !value)} type="button">
         <span className={styles.toggleLabel}>
           Export History
           {history.length > 0 && !open && <span className={styles.countBadge}>{history.length}</span>}
@@ -106,9 +118,9 @@ export function ExportHistoryPanel({ bedConfig, placedItems }: Props) {
           {history.length > 0 && (
             <input
               className={styles.searchInput}
-              placeholder="Filter by brand, model, material…"
+              placeholder="Filter by brand, model, material..."
               value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              onChange={(event) => setFilter(event.target.value)}
             />
           )}
 
@@ -120,26 +132,45 @@ export function ExportHistoryPanel({ bedConfig, placedItems }: Props) {
             </div>
           )}
 
-          {filtered.map((entry) => (
-            <div key={entry.id} className={styles.entryCard}>
-              <div className={styles.entryTop}>
-                <span className={styles.entryDate}>{formatDate(entry.exportedAt)}</span>
-                <button className={styles.reexportBtn} onClick={() => handleReexport(entry)} title="Re-export this configuration">
-                  ↓ Re-export
-                </button>
+          {filtered.map((entry) => {
+            const canReexport = Boolean(entry.exportPayloadSnapshot);
+
+            return (
+              <div key={entry.id} className={styles.entryCard}>
+                <div className={styles.entryTop}>
+                  <span className={styles.entryDate}>{formatDate(entry.exportedAt)}</span>
+                  <button
+                    className={styles.reexportBtn}
+                    onClick={() => handleReexport(entry)}
+                    title={
+                      canReexport
+                        ? "Re-export this configuration"
+                        : "Exact re-export is only available for newer history entries"
+                    }
+                    disabled={!canReexport}
+                  >
+                    ↓ Re-export
+                  </button>
+                </div>
+                <div className={styles.entryMeta}>
+                  {entry.tumblerBrand && <span className={styles.chip}>{entry.tumblerBrand}</span>}
+                  {entry.tumblerModel && <span className={styles.chip}>{entry.tumblerModel}</span>}
+                  {entry.materialLabel && <span className={styles.chipMat}>{entry.materialLabel}</span>}
+                </div>
+                <div className={styles.entryDims}>
+                  {entry.templateWidthMm.toFixed(1)}×{entry.templateHeightMm.toFixed(1)} mm
+                  {" · "}
+                  {entry.itemsSnapshot.length} item{entry.itemsSnapshot.length !== 1 ? "s" : ""}
+                  {entry.rotaryPresetName && ` · ${entry.rotaryPresetName}`}
+                </div>
+                {!canReexport && (
+                  <div className={styles.entryDims}>
+                    Exact re-export is unavailable for older entries saved before snapshot history.
+                  </div>
+                )}
               </div>
-              <div className={styles.entryMeta}>
-                {entry.tumblerBrand && <span className={styles.chip}>{entry.tumblerBrand}</span>}
-                {entry.tumblerModel && <span className={styles.chip}>{entry.tumblerModel}</span>}
-                {entry.materialLabel && <span className={styles.chipMat}>{entry.materialLabel}</span>}
-              </div>
-              <div className={styles.entryDims}>
-                {entry.templateWidthMm.toFixed(1)}×{entry.templateHeightMm.toFixed(1)} mm
-                · {entry.itemsSnapshot.length} item{entry.itemsSnapshot.length !== 1 ? "s" : ""}
-                {entry.rotaryPresetName && ` · ${entry.rotaryPresetName}`}
-              </div>
-            </div>
-          ))}
+            );
+          })}
 
           {history.length > 0 && (
             <button className={styles.clearBtn} onClick={handleClearAll}>

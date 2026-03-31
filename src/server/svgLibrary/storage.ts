@@ -1,0 +1,401 @@
+import { createHash, randomUUID } from "crypto";
+import { mkdir, readdir, readFile, rm, unlink, writeFile } from "fs/promises";
+import path from "path";
+import sharp from "sharp";
+import type {
+  SvgLibraryEntry,
+  SvgLibraryEntryCreateInput,
+  SvgLibraryEntryImportInput,
+  SvgLibraryImportRejected,
+  SvgLibraryImportResult,
+} from "../../types/svgLibrary.ts";
+import {
+  analyzeSvgMarkup,
+  buildInitialClassification,
+  inferSourceFolderLabel,
+  sanitizeSvgForLibrary,
+} from "./libraryMeta.ts";
+
+type SvgLibraryStoredRecord = Omit<SvgLibraryEntry, "svgText">;
+
+interface SvgLibraryLayout {
+  root: string;
+  records: string;
+  originals: string;
+  sanitized: string;
+  thumbs: string;
+  previews: string;
+  accounts: string;
+}
+
+interface LegacySvgLibraryEntry {
+  id: string;
+  name: string;
+  svgText: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function resolveSvgLibraryRoot() {
+  return process.env.LT316_SVG_LIBRARY_DIR
+    ? path.resolve(process.env.LT316_SVG_LIBRARY_DIR)
+    : path.join(process.cwd(), "storage", "svg-library");
+}
+
+function getLayout(): SvgLibraryLayout {
+  const root = resolveSvgLibraryRoot();
+  return {
+    root,
+    records: path.join(root, "records"),
+    originals: path.join(root, "originals"),
+    sanitized: path.join(root, "sanitized"),
+    thumbs: path.join(root, "thumbs"),
+    previews: path.join(root, "previews"),
+    accounts: path.join(root, "accounts"),
+  };
+}
+
+function recordPath(layout: SvgLibraryLayout, id: string) {
+  return path.join(layout.records, `${id}.json`);
+}
+
+function toAssetPaths(id: string) {
+  return {
+    originalSvgPath: `originals/${id}.svg`,
+    sanitizedSvgPath: `sanitized/${id}.svg`,
+    thumbnailPath: `thumbs/${id}.png`,
+    previewPath: `previews/${id}.png`,
+  };
+}
+
+function toAbsolutePath(layout: SvgLibraryLayout, relativeAssetPath: string) {
+  return path.join(layout.root, relativeAssetPath);
+}
+
+function sanitizeEntryName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "untitled.svg";
+  const safe = trimmed.replace(/[<>:"/\\|?*\u0000-\u001F]+/g, "-");
+  return safe.toLowerCase().endsWith(".svg") ? safe : `${safe}.svg`;
+}
+
+function sanitizeRelativePath(relativePath?: string | null): string | null {
+  if (!relativePath) return null;
+  const segments = relativePath
+    .split(/[\\/]+/)
+    .map((segment) => segment.trim().replace(/[<>:"|?*\u0000-\u001F]+/g, "-"))
+    .filter((segment) => segment && segment !== "." && segment !== "..");
+
+  return segments.length > 0 ? segments.join("/") : null;
+}
+
+function assertSvgText(svgText: string) {
+  if (!svgText || !svgText.includes("<svg")) {
+    throw new Error("Invalid SVG content");
+  }
+}
+
+function computeChecksum(svgText: string) {
+  return createHash("sha256").update(svgText).digest("hex");
+}
+
+async function ensureSvgLibraryDir() {
+  const layout = getLayout();
+  await Promise.all([
+    mkdir(layout.root, { recursive: true }),
+    mkdir(layout.records, { recursive: true }),
+    mkdir(layout.originals, { recursive: true }),
+    mkdir(layout.sanitized, { recursive: true }),
+    mkdir(layout.thumbs, { recursive: true }),
+    mkdir(layout.previews, { recursive: true }),
+    mkdir(layout.accounts, { recursive: true }),
+  ]);
+  await migrateLegacyEntries(layout);
+  return layout;
+}
+
+async function writeThumbnailArtifacts(
+  layout: SvgLibraryLayout,
+  id: string,
+  svgText: string,
+): Promise<{ thumbnailPath: string | null; previewPath: string | null }> {
+  const assetPaths = toAssetPaths(id);
+  const input = Buffer.from(svgText, "utf8");
+
+  try {
+    await sharp(input)
+      .resize(120, 120, {
+        fit: "contain",
+        background: { r: 255, g: 255, b: 255, alpha: 0 },
+        withoutEnlargement: true,
+      })
+      .png()
+      .toFile(toAbsolutePath(layout, assetPaths.thumbnailPath));
+
+    await sharp(input)
+      .resize(512, 512, {
+        fit: "contain",
+        background: { r: 255, g: 255, b: 255, alpha: 0 },
+        withoutEnlargement: true,
+      })
+      .png()
+      .toFile(toAbsolutePath(layout, assetPaths.previewPath));
+
+    return {
+      thumbnailPath: assetPaths.thumbnailPath,
+      previewPath: assetPaths.previewPath,
+    };
+  } catch {
+    return {
+      thumbnailPath: null,
+      previewPath: null,
+    };
+  }
+}
+
+async function readStoredRecord(layout: SvgLibraryLayout, id: string): Promise<SvgLibraryStoredRecord | null> {
+  try {
+    const raw = await readFile(recordPath(layout, id), "utf8");
+    return JSON.parse(raw) as SvgLibraryStoredRecord;
+  } catch {
+    return null;
+  }
+}
+
+async function hydrateEntry(
+  layout: SvgLibraryLayout,
+  record: SvgLibraryStoredRecord,
+): Promise<SvgLibraryEntry> {
+  const svgText = await readFile(toAbsolutePath(layout, record.sanitizedSvgPath), "utf8");
+  return {
+    ...record,
+    svgText,
+  };
+}
+
+async function listStoredRecords(layout: SvgLibraryLayout): Promise<SvgLibraryStoredRecord[]> {
+  const files = await readdir(layout.records);
+  const records = await Promise.all(
+    files
+      .filter((file) => file.toLowerCase().endsWith(".json"))
+      .map(async (file) => {
+        const raw = await readFile(path.join(layout.records, file), "utf8");
+        return JSON.parse(raw) as SvgLibraryStoredRecord;
+      }),
+  );
+
+  return records.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+async function persistSvgLibraryEntry(args: {
+  layout: SvgLibraryLayout;
+  id?: string;
+  name: string;
+  svgText: string;
+  relativePath?: string | null;
+  originalFileName?: string;
+  tags?: string[];
+  createdAt?: string;
+  uploadedAt?: string;
+  lastUsedAt?: string | null;
+}): Promise<SvgLibraryEntry> {
+  const id = args.id ?? randomUUID();
+  const createdAt = args.createdAt ?? new Date().toISOString();
+  const uploadedAt = args.uploadedAt ?? createdAt;
+  const originalFileName = sanitizeEntryName(args.originalFileName ?? args.name);
+  const name = sanitizeEntryName(args.name);
+  const relativePath = sanitizeRelativePath(args.relativePath);
+
+  assertSvgText(args.svgText);
+
+  const sanitizedSvgText = sanitizeSvgForLibrary(args.svgText);
+  assertSvgText(sanitizedSvgText);
+
+  const assetPaths = toAssetPaths(id);
+  const checksumSha256 = computeChecksum(sanitizedSvgText);
+  const classification = buildInitialClassification({
+    name,
+    relativePath,
+    svgText: sanitizedSvgText,
+  });
+  const { laserReady, laserWarnings } = analyzeSvgMarkup(sanitizedSvgText);
+  const { thumbnailPath, previewPath } = await writeThumbnailArtifacts(args.layout, id, sanitizedSvgText);
+  const updatedAt = new Date().toISOString();
+
+  await writeFile(toAbsolutePath(args.layout, assetPaths.originalSvgPath), args.svgText, "utf8");
+  await writeFile(toAbsolutePath(args.layout, assetPaths.sanitizedSvgPath), sanitizedSvgText, "utf8");
+
+  const record: SvgLibraryStoredRecord = {
+    id,
+    name,
+    originalFileName,
+    sourceRelativePath: relativePath,
+    sourceFolderLabel: inferSourceFolderLabel(relativePath),
+    checksumSha256,
+    originalSvgPath: assetPaths.originalSvgPath,
+    sanitizedSvgPath: assetPaths.sanitizedSvgPath,
+    thumbnailPath,
+    previewPath,
+    uploadedAt,
+    lastUsedAt: args.lastUsedAt ?? null,
+    tags: Array.isArray(args.tags) ? [...new Set(args.tags.map((tag) => tag.trim()).filter(Boolean))] : [],
+    laserReady,
+    laserWarnings,
+    classification,
+    createdAt,
+    updatedAt,
+  };
+
+  await writeFile(recordPath(args.layout, id), JSON.stringify(record, null, 2), "utf8");
+
+  return {
+    ...record,
+    svgText: sanitizedSvgText,
+  };
+}
+
+async function migrateLegacyEntries(layout: SvgLibraryLayout) {
+  const files = await readdir(layout.root, { withFileTypes: true });
+  const legacyFiles = files.filter(
+    (entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"),
+  );
+
+  for (const file of legacyFiles) {
+    try {
+      const raw = await readFile(path.join(layout.root, file.name), "utf8");
+      const parsed = JSON.parse(raw) as Partial<LegacySvgLibraryEntry>;
+      if (
+        typeof parsed.id !== "string" ||
+        typeof parsed.name !== "string" ||
+        typeof parsed.svgText !== "string" ||
+        typeof parsed.createdAt !== "string" ||
+        typeof parsed.updatedAt !== "string"
+      ) {
+        continue;
+      }
+
+      const existing = await readStoredRecord(layout, parsed.id);
+      if (!existing) {
+        await persistSvgLibraryEntry({
+          layout,
+          id: parsed.id,
+          name: parsed.name,
+          originalFileName: parsed.name,
+          svgText: parsed.svgText,
+          createdAt: parsed.createdAt,
+          uploadedAt: parsed.createdAt,
+        });
+      }
+
+      await unlink(path.join(layout.root, file.name));
+    } catch {
+      // Leave unreadable legacy files untouched so a human can inspect them.
+    }
+  }
+}
+
+export async function listSvgLibraryEntries(): Promise<SvgLibraryEntry[]> {
+  const layout = await ensureSvgLibraryDir();
+  const records = await listStoredRecords(layout);
+  return Promise.all(records.map((record) => hydrateEntry(layout, record)));
+}
+
+export async function createSvgLibraryEntry(
+  input: SvgLibraryEntryCreateInput,
+): Promise<SvgLibraryEntry> {
+  const layout = await ensureSvgLibraryDir();
+  return persistSvgLibraryEntry({
+    layout,
+    name: input.name,
+    originalFileName: input.name,
+    svgText: input.svgText,
+    relativePath: input.relativePath,
+    tags: input.tags,
+  });
+}
+
+export async function importSvgLibraryEntries(
+  inputs: SvgLibraryEntryImportInput[],
+): Promise<SvgLibraryImportResult> {
+  const layout = await ensureSvgLibraryDir();
+  const entries: SvgLibraryEntry[] = [];
+  const rejected: SvgLibraryImportRejected[] = [];
+
+  for (const input of inputs) {
+    try {
+      const entry = await persistSvgLibraryEntry({
+        layout,
+        name: input.name,
+        originalFileName: input.originalFileName ?? input.name,
+        svgText: input.svgText,
+        relativePath: input.relativePath,
+        tags: input.tags,
+      });
+      entries.push(entry);
+    } catch (error) {
+      rejected.push({
+        name: input.name,
+        relativePath: sanitizeRelativePath(input.relativePath),
+        error: error instanceof Error ? error.message : "Failed to import SVG",
+      });
+    }
+  }
+
+  return { entries, rejected };
+}
+
+export async function deleteSvgLibraryEntry(id: string): Promise<boolean> {
+  const layout = await ensureSvgLibraryDir();
+  const existing = await readStoredRecord(layout, id);
+  if (!existing) {
+    return false;
+  }
+
+  const artifactPaths = [
+    existing.originalSvgPath,
+    existing.sanitizedSvgPath,
+    existing.thumbnailPath,
+    existing.previewPath,
+  ].filter((value): value is string => Boolean(value));
+
+  await Promise.all([
+    unlink(recordPath(layout, id)),
+    ...artifactPaths.map((relativeAssetPath) =>
+      unlink(toAbsolutePath(layout, relativeAssetPath)).catch(() => undefined),
+    ),
+  ]);
+
+  return true;
+}
+
+export async function clearSvgLibrary(): Promise<void> {
+  const layout = getLayout();
+  await rm(layout.root, { recursive: true, force: true });
+  await ensureSvgLibraryDir();
+}
+
+export async function updateSvgLibraryEntry(
+  id: string,
+  patch: { name?: string; svgText?: string },
+): Promise<SvgLibraryEntry | null> {
+  const layout = await ensureSvgLibraryDir();
+  const existing = await readStoredRecord(layout, id);
+  if (!existing) {
+    return null;
+  }
+
+  const svgText = patch.svgText ?? await readFile(toAbsolutePath(layout, existing.sanitizedSvgPath), "utf8");
+
+  return persistSvgLibraryEntry({
+    layout,
+    id,
+    name: patch.name ?? existing.name,
+    originalFileName: existing.originalFileName,
+    svgText,
+    relativePath: existing.sourceRelativePath,
+    tags: existing.tags,
+    createdAt: existing.createdAt,
+    uploadedAt: existing.uploadedAt,
+    lastUsedAt: existing.lastUsedAt,
+  });
+}

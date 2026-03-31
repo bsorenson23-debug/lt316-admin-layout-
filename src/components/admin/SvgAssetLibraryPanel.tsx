@@ -1,21 +1,27 @@
 "use client";
 
-import React, { useRef, useState, useEffect, useCallback } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SvgAsset } from "@/types/admin";
 import { svgToDataUrl } from "@/utils/svg";
-import { analyzeSvgForLaser, makeSvgLaserReady, type LaserAnalysis } from "@/utils/svgLaserUtils";
+import {
+  analyzeSvgForLaser,
+  makeSvgLaserReady,
+  makeSvgSmartMonochrome,
+  type LaserAnalysis,
+} from "@/utils/svgLaserUtils";
+import { VECTOR_UPLOAD_ACCEPT, VECTOR_UPLOAD_LABEL } from "@/lib/vectorImport";
 import { SvgRepairPanel } from "./SvgRepairPanel";
 import styles from "./SvgAssetLibraryPanel.module.css";
 
 interface Props {
   assets: SvgAsset[];
   selectedAssetId: string | null;
+  placedAssetIds?: string[];
   onSelectAsset: (id: string) => void;
   onUpload: (files: FileList) => void | Promise<void>;
   uploadError: string | null;
   onPlaceSelectedAsset: () => void;
   onRemoveAsset: (id: string) => void;
-  /** Called with a modified SVG string to replace the asset's content */
   onUpdateAssetContent?: (id: string, newSvgContent: string) => void;
   onClearAll: () => void;
   children?: React.ReactNode;
@@ -24,6 +30,7 @@ interface Props {
 export function SvgAssetLibraryPanel({
   assets,
   selectedAssetId,
+  placedAssetIds = [],
   onSelectAsset,
   onUpload,
   uploadError,
@@ -34,60 +41,109 @@ export function SvgAssetLibraryPanel({
   children,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const directoryInputRef = useRef<HTMLInputElement | null>(null);
   const [clearConfirm, setClearConfirm] = useState(false);
   const [analysisCache, setAnalysisCache] = useState<Map<string, LaserAnalysis>>(new Map());
-  const activeAsset = assets.find((a) => a.id === selectedAssetId) ?? null;
+  const activeAsset = assets.find((asset) => asset.id === selectedAssetId) ?? null;
+  const activeAssetAnalysis = activeAsset ? analysisCache.get(activeAsset.id) ?? null : null;
+  const activeAssetPreviewUrl = activeAsset ? svgToDataUrl(activeAsset.content) : null;
+  const activeAssetPlaced = activeAsset ? placedAssetIds.includes(activeAsset.id) : false;
+  const missingAnalyses = useMemo(
+    () => assets.filter((asset) => !analysisCache.has(asset.id)),
+    [analysisCache, assets],
+  );
 
-  // Analyze each asset on mount / when assets change
   useEffect(() => {
-    assets.forEach(asset => {
-      if (analysisCache.has(asset.id)) return;
-      // Run analysis asynchronously to avoid blocking render
-      setTimeout(() => {
+    if (missingAnalyses.length === 0) return undefined;
+
+    const timeouts = missingAnalyses.map((asset) =>
+      window.setTimeout(() => {
         const result = analyzeSvgForLaser(asset.content);
-        setAnalysisCache(prev => new Map(prev).set(asset.id, result));
-      }, 0);
+        setAnalysisCache((prev) => {
+          if (prev.has(asset.id)) return prev;
+          return new Map(prev).set(asset.id, result);
+        });
+      }, 0),
+    );
+
+    return () => {
+      timeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    };
+  }, [missingAnalyses]);
+
+  useEffect(() => {
+    const ids = new Set(assets.map((asset) => asset.id));
+    const frameId = window.requestAnimationFrame(() => {
+      setAnalysisCache((prev) => {
+        const next = new Map(prev);
+        let changed = false;
+        for (const key of next.keys()) {
+          if (!ids.has(key)) {
+            next.delete(key);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     });
-    // Prune removed assets
-    setAnalysisCache(prev => {
-      const ids = new Set(assets.map(a => a.id));
-      const next = new Map(prev);
-      let changed = false;
-      for (const k of next.keys()) { if (!ids.has(k)) { next.delete(k); changed = true; } }
-      return changed ? next : prev;
-    });
-  }, [assets]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [assets]);
 
   const handleMakeLaserReady = useCallback((asset: SvgAsset) => {
     const ready = makeSvgLaserReady(asset.content);
     onUpdateAssetContent?.(asset.id, ready);
-    // Re-analyze
     setTimeout(() => {
-      setAnalysisCache(prev => new Map(prev).set(asset.id, analyzeSvgForLaser(ready)));
+      setAnalysisCache((prev) => new Map(prev).set(asset.id, analyzeSvgForLaser(ready)));
     }, 50);
   }, [onUpdateAssetContent]);
 
-  const triggerUpload = () => fileInputRef.current?.click();
+  const handleMakeSmartMonochrome = useCallback((asset: SvgAsset) => {
+    const monochrome = makeSvgSmartMonochrome(asset.content);
+    onUpdateAssetContent?.(asset.id, monochrome);
+    setTimeout(() => {
+      setAnalysisCache((prev) => new Map(prev).set(asset.id, analyzeSvgForLaser(monochrome)));
+    }, 50);
+  }, [onUpdateAssetContent]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      onUpload(e.target.files);
-      e.target.value = "";
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files.length > 0) {
+      onUpload(event.target.files);
+      event.target.value = "";
     }
   };
+
+  const bindDirectoryInput = useCallback((node: HTMLInputElement | null) => {
+    directoryInputRef.current = node;
+    if (!node) return;
+    node.setAttribute("webkitdirectory", "");
+    node.setAttribute("directory", "");
+    node.multiple = true;
+  }, []);
 
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
-        <span className={styles.title}>SVG Assets</span>
+        <div className={styles.headerTitleWrap}>
+          <span className={styles.title}>Vector Library</span>
+          <span className={styles.assetCount}>{assets.length} loaded</span>
+        </div>
         {assets.length > 0 && (
           clearConfirm ? (
             <>
-              <button className={styles.confirmYes} onClick={() => { onClearAll(); setClearConfirm(false); }}>Yes, clear</button>
-              <button className={styles.confirmNo} onClick={() => setClearConfirm(false)}>Cancel</button>
+              <button className={styles.confirmYes} onClick={() => { onClearAll(); setClearConfirm(false); }}>
+                Yes, clear
+              </button>
+              <button className={styles.confirmNo} onClick={() => setClearConfirm(false)}>
+                Cancel
+              </button>
             </>
           ) : (
-            <button className={styles.clearBtn} onClick={() => setClearConfirm(true)} title="Remove all assets and clear workspace">
+            <button
+              className={styles.clearBtn}
+              onClick={() => setClearConfirm(true)}
+              title="Remove all assets and clear workspace"
+            >
               Clear All
             </button>
           )
@@ -97,17 +153,30 @@ export function SvgAssetLibraryPanel({
       <input
         ref={fileInputRef}
         type="file"
-        accept=".svg,image/svg+xml"
+        accept={VECTOR_UPLOAD_ACCEPT}
         multiple
         className={styles.fileInput}
         onChange={handleFileChange}
-        aria-label="Upload SVG files"
+        aria-label={`Upload ${VECTOR_UPLOAD_LABEL} files`}
+      />
+      <input
+        ref={bindDirectoryInput}
+        type="file"
+        accept={VECTOR_UPLOAD_ACCEPT}
+        className={styles.fileInput}
+        onChange={handleFileChange}
+        aria-label={`Import ${VECTOR_UPLOAD_LABEL} folder`}
       />
 
-      <button className={styles.uploadBtn} onClick={triggerUpload}>
-        <span className={styles.uploadIcon}>+</span>
-        Upload SVG
-      </button>
+      <div className={styles.uploadActions}>
+        <button className={styles.uploadBtn} onClick={() => fileInputRef.current?.click()}>
+          <span className={styles.uploadIcon}>+</span>
+          Upload Vector
+        </button>
+        <button className={styles.folderBtn} onClick={() => directoryInputRef.current?.click()}>
+          Import Folder
+        </button>
+      </div>
 
       {uploadError && <div className={styles.uploadError}>{uploadError}</div>}
 
@@ -115,10 +184,43 @@ export function SvgAssetLibraryPanel({
         <button className={styles.placeBtn} onClick={onPlaceSelectedAsset} disabled={!activeAsset}>
           Place on Bed
         </button>
-        <span className={styles.placeHint}>
-          {activeAsset ? activeAsset.name : "Select an asset to place"}
-        </span>
+        <div className={styles.placeStatus}>
+          <span className={`${styles.statusChip} ${activeAssetPlaced ? styles.statusChipSuccess : styles.statusChipInfo}`}>
+            {activeAssetPlaced ? "Imported and on bed" : activeAsset ? "Imported to library" : "No asset selected"}
+          </span>
+          <span className={styles.placeHint}>
+            {activeAsset
+              ? activeAssetPlaced
+                ? "This artwork is already placed in the workspace."
+                : "Preview it below, then click Place on Bed."
+              : "Select an asset to confirm the import and place it."}
+          </span>
+        </div>
       </div>
+
+      {activeAsset && activeAssetPreviewUrl && (
+        <div className={styles.activePreview}>
+          <div className={styles.activePreviewHeader}>
+            <div className={styles.activePreviewMeta}>
+              <span className={styles.activePreviewLabel}>Selected Artwork</span>
+              <span className={styles.activePreviewName}>{activeAsset.name.replace(/\.svg$/i, "")}</span>
+            </div>
+            <div className={styles.activePreviewBadges}>
+              <span className={`${styles.previewBadge} ${styles.previewBadgeLibrary}`}>In library</span>
+              {activeAssetPlaced && (
+                <span className={`${styles.previewBadge} ${styles.previewBadgePlaced}`}>On bed</span>
+              )}
+              {activeAssetAnalysis?.isLaserReady && (
+                <span className={`${styles.previewBadge} ${styles.previewBadgeReady}`}>Laser ready</span>
+              )}
+            </div>
+          </div>
+          <div className={styles.activePreviewFrame}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={activeAssetPreviewUrl} alt={activeAsset.name} className={styles.activePreviewImage} />
+          </div>
+        </div>
+      )}
 
       {children}
 
@@ -126,8 +228,8 @@ export function SvgAssetLibraryPanel({
         {assets.length === 0 ? (
           <div className={styles.emptyState}>
             <div className={styles.emptyIcon}>[]</div>
-            <p>No SVGs loaded.</p>
-            <p className={styles.emptyHint}>Upload one or more SVG files to get started.</p>
+            <p>No vector artwork loaded.</p>
+            <p className={styles.emptyHint}>Upload {VECTOR_UPLOAD_LABEL} files to get started.</p>
           </div>
         ) : (
           assets.map((asset) => (
@@ -135,10 +237,12 @@ export function SvgAssetLibraryPanel({
               key={asset.id}
               asset={asset}
               isSelected={asset.id === selectedAssetId}
+              isPlaced={placedAssetIds.includes(asset.id)}
               analysis={analysisCache.get(asset.id) ?? null}
               onSelect={() => onSelectAsset(asset.id)}
               onRemove={() => onRemoveAsset(asset.id)}
               onMakeLaserReady={onUpdateAssetContent ? () => handleMakeLaserReady(asset) : undefined}
+              onMakeSmartMonochrome={onUpdateAssetContent ? () => handleMakeSmartMonochrome(asset) : undefined}
               onUpdateAssetContent={onUpdateAssetContent}
             />
           ))
@@ -148,25 +252,25 @@ export function SvgAssetLibraryPanel({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Asset card sub-component
-// ---------------------------------------------------------------------------
-
 function AssetCard({
   asset,
   isSelected,
+  isPlaced,
   analysis,
   onSelect,
   onRemove,
   onMakeLaserReady,
+  onMakeSmartMonochrome,
   onUpdateAssetContent,
 }: {
   asset: SvgAsset;
   isSelected: boolean;
+  isPlaced: boolean;
   analysis: LaserAnalysis | null;
   onSelect: () => void;
   onRemove: () => void;
   onMakeLaserReady?: () => void;
+  onMakeSmartMonochrome?: () => void;
   onUpdateAssetContent?: (id: string, newContent: string) => void;
 }) {
   const dataUrl = svgToDataUrl(asset.content);
@@ -178,7 +282,7 @@ function AssetCard({
       onClick={onSelect}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => e.key === "Enter" && onSelect()}
+      onKeyDown={(event) => event.key === "Enter" && onSelect()}
       aria-pressed={isSelected}
       title={asset.name}
     >
@@ -189,76 +293,79 @@ function AssetCard({
 
       <div className={styles.assetMeta}>
         <span className={styles.assetName}>{displayName}</span>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
+        <div className={styles.assetMetaBadges}>
+          {isPlaced && <span className={`${styles.previewBadge} ${styles.previewBadgePlaced}`}>On bed</span>}
           {analysis ? (
             analysis.isLaserReady ? (
-              <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#0a3a1a", color: "#4dbb6a", border: "1px solid #1a5a2a", fontFamily: "monospace" }}>
-                ✓ Laser Ready
-              </span>
+              <span className={`${styles.previewBadge} ${styles.previewBadgeReady}`}>Laser ready</span>
             ) : (
               <>
                 {analysis.hasFills && (
-                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#3a1a00", color: "#ff8833", border: "1px solid #5a3010", fontFamily: "monospace" }}>
-                    ⚠ Fills
-                  </span>
+                  <span className={`${styles.previewBadge} ${styles.previewBadgeWarn}`}>Fills</span>
                 )}
                 {analysis.hasText && (
-                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#2a1a3a", color: "#cc88ff", border: "1px solid #4a2a5a", fontFamily: "monospace" }}>
-                    ⚠ Text
-                  </span>
+                  <span className={`${styles.previewBadge} ${styles.previewBadgeText}`}>Text</span>
                 )}
                 {analysis.pathCount === 0 && (
-                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#2a1a1a", color: "#ff6666", border: "1px solid #5a2a2a", fontFamily: "monospace" }}>
-                    ⚠ No paths
-                  </span>
+                  <span className={`${styles.previewBadge} ${styles.previewBadgeError}`}>No paths</span>
                 )}
               </>
             )
           ) : (
-            <span style={{ fontSize: 9, color: "#444", fontFamily: "monospace" }}>analyzing…</span>
+            <span className={styles.analysisPending}>Analyzing...</span>
           )}
           {analysis && (
-            <span style={{ fontSize: 9, color: "#555", fontFamily: "monospace" }}>
+            <span className={styles.analysisStats}>
               {analysis.pathCount}p · {analysis.totalPathLengthMm.toFixed(0)}mm
             </span>
           )}
         </div>
+
+        {isSelected && onMakeSmartMonochrome && (
+          <button
+            onClick={(event) => {
+              event.stopPropagation();
+              onMakeSmartMonochrome();
+            }}
+            title="Convert a colored SVG into a smart black-and-white version"
+            className={styles.smartMonochromeBtn}
+          >
+            Smart B/W
+          </button>
+        )}
+
+        {isSelected && analysis && !analysis.isLaserReady && onMakeLaserReady && (
+          <button
+            onClick={(event) => {
+              event.stopPropagation();
+              onMakeLaserReady();
+            }}
+            title="Strip fills and set stroke-only for laser output"
+            className={styles.laserReadyBtn}
+          >
+            Make Laser Ready
+          </button>
+        )}
+
+        {isSelected && onUpdateAssetContent && (
+          <div onClick={(event) => event.stopPropagation()}>
+            <div className={styles.repairLabel}>Path Repair</div>
+            <SvgRepairPanel
+              svgContent={asset.content}
+              onRepaired={(fixed) => onUpdateAssetContent(asset.id, fixed)}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Make Laser Ready button — only when needed and handler provided */}
-      {isSelected && analysis && !analysis.isLaserReady && onMakeLaserReady && (
-        <button
-          onClick={(e) => { e.stopPropagation(); onMakeLaserReady(); }}
-          title="Strip fills and set stroke-only for laser output"
-          style={{
-            display: "block", width: "100%", marginTop: 6,
-            padding: "4px 8px", fontSize: 10, fontFamily: "monospace",
-            background: "#0a2a1a", border: "1px solid #1a5a2a", color: "#4dbb6a",
-            borderRadius: 4, cursor: "pointer", textAlign: "left",
-          }}
-        >
-          ⚡ Make Laser Ready
-        </button>
-      )}
-
-      {/* ── Path repair panel — only shown when asset is selected ── */}
-      {isSelected && onUpdateAssetContent && (
-        <div onClick={e => e.stopPropagation()}>
-          <div style={{ marginTop: 8, marginBottom: 2, fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "0.08em", color: "#555" }}>
-            Path Repair
-          </div>
-          <SvgRepairPanel
-            svgContent={asset.content}
-            onRepaired={(fixed) => onUpdateAssetContent(asset.id, fixed)}
-          />
-        </div>
-      )}
-
-      {isSelected && <span className={styles.activeBadge}>active</span>}
+      {isSelected && <span className={styles.activeBadge}>selected</span>}
 
       <button
         className={styles.removeBtn}
-        onClick={(e) => { e.stopPropagation(); onRemove(); }}
+        onClick={(event) => {
+          event.stopPropagation();
+          onRemove();
+        }}
         title="Remove asset"
         aria-label={`Remove ${asset.name}`}
       >

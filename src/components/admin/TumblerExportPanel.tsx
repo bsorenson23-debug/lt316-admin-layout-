@@ -38,8 +38,13 @@ export type PreflightNavTarget =
 interface Props {
   bedConfig: BedConfig;
   placedItems: PlacedItem[];
+  compact?: boolean;
   onFramePreviewChange?: (preview: FramePreview | null) => void;
   materialSettings?: LbrnMaterialSettings | null;
+  rotaryEnabled?: boolean;
+  onRotaryEnabledChange?: (enabled: boolean) => void;
+  selectedPresetId?: string;
+  onSelectedPresetIdChange?: (presetId: string) => void;
   onPreflightNav?: (target: PreflightNavTarget) => void;
   /** Lifted taper warp state — synced with overlay controls */
   taperWarpEnabled?: boolean;
@@ -107,6 +112,7 @@ async function downloadLightBurnBundle(args: {
       "Open the .lbrn2 file in LightBurn for the minimal artwork-only project.",
       "This export includes basic galvo rotary diameter/setup when rotary is enabled.",
       "It still excludes bounds, notes, and advanced LT316 settings.",
+      "Save-to-folder mode also refreshes fixed aliases named current-job.lbrn2 / .svg / .lightburn.json.",
       "Import or inspect the .svg only if you need the raw artwork export.",
       "The .lightburn.json file is LT316 metadata and is not meant to be opened by LightBurn.",
     ].join("\r\n"),
@@ -122,6 +128,8 @@ async function downloadLightBurnBundle(args: {
   document.body.removeChild(link);
   URL.revokeObjectURL(href);
 }
+
+const CURRENT_JOB_BASENAME = "current-job";
 
 async function preprocessPayloadForLbrn(
   payload: LightBurnExportPayload,
@@ -182,25 +190,34 @@ async function preprocessPayloadForLbrn(
 // ---------------------------------------------------------------------------
 
 export function TumblerExportPanel({
-  bedConfig, placedItems, onFramePreviewChange, materialSettings, onPreflightNav,
+  bedConfig, placedItems, compact = false, onFramePreviewChange, materialSettings,
+  rotaryEnabled: rotaryEnabledProp, onRotaryEnabledChange,
+  selectedPresetId: selectedPresetIdProp, onSelectedPresetIdChange,
+  onPreflightNav,
   taperWarpEnabled: taperWarpEnabledProp, onTaperWarpChange, outputFolderPath, onDiameterChange,
   onSnapFullWrap,
 }: Props) {
-  const [rotaryEnabled,       setRotaryEnabled]       = React.useState(false);
+  const [localRotaryEnabled,  setLocalRotaryEnabled]  = React.useState(false);
   const [availablePresets,    setAvailablePresets]    = React.useState<RotaryPlacementPreset[]>(DEFAULT_ROTARY_PLACEMENT_PRESETS);
-  const [selectedPresetId,    setSelectedPresetId]    = React.useState("");
+  const [localSelectedPresetId, setLocalSelectedPresetId] = React.useState("");
   const [anchorMode,          setAnchorMode]          = React.useState<TopAnchorMode>("physical-top");
   const [topOffsetDraft,      setTopOffsetDraft]      = React.useState("");
   const [showNextSteps,       setShowNextSteps]       = React.useState(false);
+  const [showSetupDetails,    setShowSetupDetails]    = React.useState(!compact);
   const [saving,              setSaving]              = React.useState(false);
   const [saveResult,          setSaveResult]          = React.useState<{ ok: boolean; message: string } | null>(null);
   const [diameterDraft,       setDiameterDraft]       = React.useState("");
+  const rotaryEnabled = rotaryEnabledProp ?? localRotaryEnabled;
+  const setRotaryEnabled = onRotaryEnabledChange ?? setLocalRotaryEnabled;
+  const selectedPresetId = selectedPresetIdProp ?? localSelectedPresetId;
+  const setSelectedPresetId = onSelectedPresetIdChange ?? setLocalSelectedPresetId;
   // Use lifted state if provided, otherwise local fallback
   const [localTaperWarp,      setLocalTaperWarp]      = React.useState(true);
   const taperWarpEnabled = taperWarpEnabledProp ?? localTaperWarp;
   const setTaperWarpEnabled = onTaperWarpChange ?? setLocalTaperWarp;
 
   React.useEffect(() => { setAvailablePresets(getRotaryPresets()); }, []);
+  React.useEffect(() => { setShowSetupDetails(!compact); }, [compact]);
 
   // Sync diameter draft from bedConfig when it changes externally
   const currentDiameterMm = bedConfig.tumblerOutsideDiameterMm ?? bedConfig.tumblerDiameterMm ?? 0;
@@ -258,6 +275,28 @@ export function TumblerExportPanel({
   const warnings = exportArtifacts.artworkPayload.warnings;
 
   const hasOutputFolder = Boolean(outputFolderPath?.trim());
+  const quickSummary = [
+    {
+      label: "Rotary",
+      value: !isTumblerMode
+        ? "Flat-bed export"
+        : rotaryEnabled
+          ? selectedPreset?.name ?? "Preset needed"
+          : "Manual placement",
+    },
+    {
+      label: "Diameter",
+      value: isTumblerMode && currentDiameterMm > 0 ? `${fmt(currentDiameterMm)} mm` : "n/a",
+    },
+    {
+      label: "Origin",
+      value: `X ${fmt(previewOrigin.xMm)} · Y ${fmt(previewOrigin.yMm)}`,
+    },
+    {
+      label: "Output",
+      value: hasOutputFolder ? "Watched folder save" : "Download bundle",
+    },
+  ];
 
   const doExport = async (mode: "download" | "save") => {
     const name = `lt316-${Date.now()}`;
@@ -303,14 +342,24 @@ export function TumblerExportPanel({
       };
 
       try {
-        const [lbrnPath, svgPath, jsonPath] = await Promise.all([
+        const [
+          lbrnPath,
+          svgPath,
+          jsonPath,
+          currentLbrnPath,
+          currentSvgPath,
+          currentJsonPath,
+        ] = await Promise.all([
         saveFile(`${name}.lbrn2`, lbrnContent),
         saveFile(`${name}.svg`, svgContent),
         saveFile(`${name}.lightburn.json`, sidecarContent),
+        saveFile(`${CURRENT_JOB_BASENAME}.lbrn2`, lbrnContent),
+        saveFile(`${CURRENT_JOB_BASENAME}.svg`, svgContent),
+        saveFile(`${CURRENT_JOB_BASENAME}.lightburn.json`, sidecarContent),
         ]);
         setSaveResult({
           ok: true,
-          message: `Saved ${lbrnPath}, ${svgPath}, and ${jsonPath}${preprocessedForLbrn.usedInkscape ? " (Inkscape preprocessed .lbrn2 artwork)" : ""}`,
+          message: `Saved ${lbrnPath}, ${svgPath}, and ${jsonPath}. Updated fixed job files at ${currentLbrnPath}, ${currentSvgPath}, and ${currentJsonPath}${preprocessedForLbrn.usedInkscape ? " (Inkscape preprocessed .lbrn2 artwork)" : ""}`,
         });
       } catch (err) {
         setSaveResult({
@@ -345,6 +394,8 @@ export function TumblerExportPanel({
       itemsSnapshot: placedItems.map((p) => ({ name: p.name, x: p.x, y: p.y, width: p.width, height: p.height, rotation: p.rotation })),
       exportOriginXmm: previewOrigin.xMm,
       exportOriginYmm: previewOrigin.yMm,
+      exportPayloadSnapshot: preprocessedForLbrn.payload,
+      materialSettingsSnapshot: material ? { ...material } : null,
     });
   };
 
@@ -362,13 +413,34 @@ export function TumblerExportPanel({
   return (
     <section className={styles.panel}>
       <div className={styles.header}>
-        <span className={styles.title}>LightBurn Export</span>
+        <span className={styles.title}>{compact ? "Export Bundle" : "LightBurn Export"}</span>
         <span className={styles.modeBadge}>{isTumblerMode ? "Tumbler" : "Flat Bed"}</span>
       </div>
 
       <div className={styles.body}>
+        {compact && (
+          <>
+            <div className={styles.quickSummaryGrid}>
+              {quickSummary.map((entry) => (
+                <div key={entry.label} className={styles.quickSummaryCard}>
+                  <span className={styles.quickSummaryLabel}>{entry.label}</span>
+                  <span className={styles.quickSummaryValue}>{entry.value}</span>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              className={styles.setupToggle}
+              onClick={() => setShowSetupDetails((prev) => !prev)}
+            >
+              {showSetupDetails ? "Hide export setup" : "Show export setup"}
+            </button>
+          </>
+        )}
 
         {/* ── Rotary Placement ── */}
+        {showSetupDetails && (
+          <>
         <div className={styles.sectionCard}>
           <div className={styles.sectionCardTitle}>Rotary Placement</div>
           <div className={styles.sectionCardBody}>
@@ -508,15 +580,17 @@ export function TumblerExportPanel({
         ))}
 
         {/* ── Pre-flight ── */}
-        <PreflightChecklist
-          isTumblerMode={isTumblerMode}
-          hasItems={placedItems.length > 0}
-          hasPreset={!rotaryEnabled || Boolean(selectedPresetId)}
-          hasDiameter={Boolean(exportArtifacts.artworkPayload.cylinder?.objectDiameterMm)}
-          hasTemplateDimensions={bedConfig.width > 0 && bedConfig.height > 0}
-          hasTopAnchor={Boolean(selectedPreset?.rotaryTopYmm)}
-          onNavigate={onPreflightNav}
-        />
+        {!compact && (
+          <PreflightChecklist
+            isTumblerMode={isTumblerMode}
+            hasItems={placedItems.length > 0}
+            hasPreset={!rotaryEnabled || Boolean(selectedPresetId)}
+            hasDiameter={Boolean(exportArtifacts.artworkPayload.cylinder?.objectDiameterMm)}
+            hasTemplateDimensions={bedConfig.width > 0 && bedConfig.height > 0}
+            hasTopAnchor={Boolean(selectedPreset?.rotaryTopYmm)}
+            onNavigate={onPreflightNav}
+          />
+        )}
 
         {/* ── Taper Warp toggle ── */}
         {taperApplicable && (
@@ -535,6 +609,9 @@ export function TumblerExportPanel({
         )}
 
         {/* ── Export actions ── */}
+          </>
+        )}
+
         <div className={styles.exportBtnRow}>
           {hasOutputFolder ? (
             <button
@@ -542,7 +619,7 @@ export function TumblerExportPanel({
               disabled={saving}
               onClick={() => doExport("save")}
             >
-              {saving ? "Saving..." : "Save LightBurn Files"}
+              {saving ? "Saving..." : "Save LightBurn Files + current-job"}
             </button>
           ) : (
             <button

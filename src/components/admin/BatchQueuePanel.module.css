@@ -51,6 +51,128 @@
   gap: 6px;
 }
 
+.runnerCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #2d2d2d;
+  border-radius: 6px;
+  background: #1b1b1b;
+}
+
+.runnerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.runnerTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9aa3ad;
+}
+
+.runnerCount {
+  font-size: 10px;
+  color: #6b737d;
+}
+
+.currentJob {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.currentName {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e2e2;
+}
+
+.currentMeta {
+  font-size: 10px;
+  color: #7b7b7b;
+}
+
+.currentText {
+  font-size: 10px;
+  color: #9a9a9a;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.runnerActionRow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.runnerPrimaryBtn,
+.runnerSecondaryBtn,
+.runnerLoadBtn {
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 100ms, color 100ms, border-color 100ms, opacity 100ms;
+}
+
+.runnerPrimaryBtn,
+.runnerSecondaryBtn {
+  padding: 5px 8px;
+}
+
+.runnerPrimaryBtn {
+  background: #173223;
+  border: 1px solid #2e5b41;
+  color: #8ddbb6;
+}
+
+.runnerPrimaryBtn:hover {
+  background: #1d3b29;
+}
+
+.runnerSecondaryBtn {
+  background: #222;
+  border: 1px solid #333;
+  color: #b0b0b0;
+}
+
+.runnerSecondaryBtn:hover {
+  background: #2a2a2a;
+  color: #d0d0d0;
+}
+
+.runnerLoadBtn {
+  width: 100%;
+  padding: 8px 10px;
+  background: #234464;
+  border: 1px solid #3d6c96;
+  color: #d8ebff;
+}
+
+.runnerLoadBtn:hover {
+  background: #2a5076;
+}
+
+.runnerPrimaryBtn:disabled,
+.runnerSecondaryBtn:disabled,
+.runnerLoadBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.runnerEmpty {
+  font-size: 10px;
+  color: #7f7f7f;
+  line-height: 1.45;
+}
+
 .empty {
   font-size: 10px;
   color: #444;
@@ -186,6 +308,15 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.orderLoaded {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8ddbb6;
   flex-shrink: 0;
 }
 

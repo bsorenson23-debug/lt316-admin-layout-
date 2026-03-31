@@ -6,7 +6,7 @@ export interface GlbTemplate {
   id: string;
   /** Short display label shown under the thumbnail */
   label: string;
-  /** Path relative to /public — fetched at runtime */
+  /** Path relative to /public — empty when no approved GLB has been added yet */
   glbPath: string;
   /** Optional thumbnail image — falls back to icon if missing/404 */
   thumbnailPath?: string;
@@ -21,7 +21,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "tumbler-20oz-skinny",
     label: "20oz Skinny",
-    glbPath: "/models/templates/tumbler-20oz-skinny.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/tumbler-20oz-skinny.png",
     icon: "🥤",
     workspaceModes: ["tumbler-wrap"],
@@ -29,7 +29,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "tumbler-30oz",
     label: "30oz Tumbler",
-    glbPath: "/models/templates/tumbler-30oz.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/tumbler-30oz.png",
     icon: "🥤",
     workspaceModes: ["tumbler-wrap"],
@@ -45,7 +45,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "tumbler-wine",
     label: "Wine Tumbler",
-    glbPath: "/models/templates/tumbler-wine.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/tumbler-wine.png",
     icon: "🍷",
     workspaceModes: ["tumbler-wrap"],
@@ -53,7 +53,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "mug-12oz",
     label: "12oz Mug",
-    glbPath: "/models/templates/mug-12oz.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/mug-12oz.png",
     icon: "☕",
     workspaceModes: ["tumbler-wrap"],
@@ -61,7 +61,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "bottle-24oz",
     label: "24oz Bottle",
-    glbPath: "/models/templates/bottle-24oz.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/bottle-24oz.png",
     icon: "🍶",
     workspaceModes: ["tumbler-wrap"],
@@ -71,7 +71,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "flat-phone-case",
     label: "Phone Case",
-    glbPath: "/models/templates/phone-case.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/phone-case.png",
     icon: "📱",
     workspaceModes: ["flat-bed"],
@@ -79,7 +79,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "flat-wood-plank",
     label: "Wood Plank",
-    glbPath: "/models/templates/wood-plank.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/wood-plank.png",
     icon: "🪵",
     workspaceModes: ["flat-bed"],
@@ -87,7 +87,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "flat-dog-tag",
     label: "Dog Tag",
-    glbPath: "/models/templates/dog-tag.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/dog-tag.png",
     icon: "🏷",
     workspaceModes: ["flat-bed"],
@@ -95,7 +95,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "flat-slate",
     label: "Slate Tile",
-    glbPath: "/models/templates/slate-tile.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/slate-tile.png",
     icon: "◼",
     workspaceModes: ["flat-bed"],
@@ -103,7 +103,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "flat-keychain",
     label: "Keychain",
-    glbPath: "/models/templates/keychain.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/keychain.png",
     icon: "🔑",
     workspaceModes: ["flat-bed"],
@@ -111,7 +111,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
   {
     id: "flat-tumbler-blank",
     label: "Tumbler Blank",
-    glbPath: "/models/templates/tumbler-blank.glb",
+    glbPath: "",
     thumbnailPath: "/models/thumbnails/tumbler-blank.png",
     icon: "⬛",
     workspaceModes: ["flat-bed"],

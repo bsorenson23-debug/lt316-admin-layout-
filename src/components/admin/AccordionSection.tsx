@@ -21,15 +21,18 @@ export function AccordionSection({
   onToggle,
   children,
 }: AccordionSectionProps) {
+  const headerId = `${id}-header`;
+  const panelId = `${id}-panel`;
+
   return (
     <div className={styles.section}>
-      <div
+      <button
+        id={headerId}
+        type="button"
         className={styles.header}
         onClick={() => onToggle(id)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => e.key === "Enter" && onToggle(id)}
         aria-expanded={isOpen}
+        aria-controls={panelId}
       >
         <span className={`${styles.chevron} ${isOpen ? styles.chevronOpen : ""}`}>
           {"\u25B8"}
@@ -38,8 +41,13 @@ export function AccordionSection({
         <span className={`${styles.summary} ${isOpen ? styles.summaryHidden : ""}`}>
           {summary}
         </span>
-      </div>
-      <div className={`${styles.body} ${isOpen ? styles.bodyOpen : ""}`}>
+      </button>
+      <div
+        id={panelId}
+        className={`${styles.body} ${isOpen ? styles.bodyOpen : ""}`}
+        role="region"
+        aria-labelledby={headerId}
+      >
         <div className={styles.bodyInner}>
           {children}
         </div>

@@ -1,5 +1,6 @@
 import type { ProductTemplate, ProductTemplateStore } from "@/types/productTemplate";
 import { BUILT_IN_TEMPLATES } from "@/data/builtInTemplates";
+import { getMaterialProfileById } from "@/data/materialProfiles";
 
 const STORAGE_KEY = "lt316_product_templates";
 const REMOVED_GLB_PATHS = new Set([
@@ -27,6 +28,39 @@ function dedupeTemplates(templates: ProductTemplate[]): ProductTemplate[] {
   return [...byId.values()];
 }
 
+function inferMaterialFromProfileId(materialProfileId: string | undefined): Pick<ProductTemplate, "materialSlug" | "materialLabel"> {
+  const profile = materialProfileId ? getMaterialProfileById(materialProfileId) : null;
+  if (!profile) {
+    return {};
+  }
+
+  switch (profile.finishType) {
+    case "powder-coat":
+      return { materialSlug: "powder-coat", materialLabel: "Powder Coat" };
+    case "raw-stainless":
+      return { materialSlug: "stainless-steel", materialLabel: "Stainless Steel" };
+    case "painted":
+      return { materialSlug: "painted-metal", materialLabel: "Painted Metal" };
+    case "anodized":
+      return { materialSlug: "anodized-aluminum", materialLabel: "Anodized Aluminum" };
+    case "chrome-plated":
+      return { materialSlug: "painted-metal", materialLabel: "Chrome-Plated Metal" };
+    case "matte-finish":
+      return { materialSlug: "painted-metal", materialLabel: "Matte Finish Metal" };
+    default:
+      return {};
+  }
+}
+
+function normalizeTemplate(template: ProductTemplate): ProductTemplate {
+  const inferredMaterial = inferMaterialFromProfileId(template.laserSettings.materialProfileId);
+  return {
+    ...template,
+    materialSlug: template.materialSlug ?? inferredMaterial.materialSlug,
+    materialLabel: template.materialLabel ?? inferredMaterial.materialLabel,
+  };
+}
+
 function normalizeStore(store: Partial<InternalTemplateStore>): InternalTemplateStore {
   const rawTemplates = Array.isArray(store.templates) ? dedupeTemplates(store.templates) : [];
   let sanitizedRemovedGlbPath = false;
@@ -35,11 +69,11 @@ function normalizeStore(store: Partial<InternalTemplateStore>): InternalTemplate
     .map((template) => {
       const removedGlbPath = template.glbPath && REMOVED_GLB_PATHS.has(template.glbPath);
       if (removedGlbPath) sanitizedRemovedGlbPath = true;
-      return {
+      return normalizeTemplate({
         ...template,
         builtIn: false,
         glbPath: removedGlbPath ? "" : template.glbPath,
-      };
+      });
     });
 
   return {
@@ -147,10 +181,10 @@ export function saveTemplate(template: ProductTemplate): void {
   const store = readStore();
   const nextTemplates = store.templates.filter((existing) => existing.id !== template.id);
 
-  nextTemplates.push({
+  nextTemplates.push(normalizeTemplate({
     ...template,
     builtIn: false,
-  });
+  }));
 
   writeStore({
     ...store,

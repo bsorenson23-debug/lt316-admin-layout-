@@ -2,7 +2,7 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
-import type { ModelViewerProps, TumblerDimensions } from "./ModelViewer";
+import type { FlatPreviewDimensions, ModelViewerProps, TumblerDimensions } from "./ModelViewer";
 import type { PlacedItem } from "@/types/admin";
 import { GLB_TEMPLATES } from "@/data/glbTemplates";
 import type { GlbTemplate } from "@/data/glbTemplates";
@@ -59,6 +59,7 @@ async function rasterizeItem(item: PlacedItem, tintColor?: string): Promise<HTML
 // ---------------------------------------------------------------------------
 
 export interface Model3DPanelProps {
+  templateKey?: string | null;
   placedItems?: PlacedItem[];
   bedWidthMm?: number;
   bedHeightMm?: number;
@@ -66,6 +67,7 @@ export interface Model3DPanelProps {
   tumblerDims?: TumblerDimensions | null;
   handleArcDeg?: number;
   modelPathOverride?: string | null;
+  flatPreview?: FlatPreviewDimensions | null;
   /** Tumbler mapping from the wizard — orients the front face */
   tumblerMapping?: import("@/types/productTemplate").TumblerMapping;
   /** Lifted model file — parent tracks it for center 3D view */
@@ -81,6 +83,7 @@ export interface Model3DPanelProps {
 }
 
 export function Model3DPanel({
+  templateKey,
   placedItems = [],
   bedWidthMm = 100,
   bedHeightMm = 100,
@@ -88,6 +91,7 @@ export function Model3DPanel({
   tumblerDims,
   handleArcDeg,
   modelPathOverride,
+  flatPreview,
   tumblerMapping,
   onModelFileChange,
   onUpdateCalibration,
@@ -144,6 +148,16 @@ export function Model3DPanel({
 
   const modelExt = modelFile?.name.split(".").pop()?.toLowerCase() ?? "";
   const viewable = VIEWABLE_EXTS.has(modelExt);
+  const hasProceduralFlatPreview =
+    workspaceMode === "flat-bed" &&
+    !!flatPreview &&
+    flatPreview.widthMm > 0 &&
+    flatPreview.heightMm > 0;
+  const preferGeneratedFlatPreview =
+    hasProceduralFlatPreview &&
+    typeof modelPathOverride === "string" &&
+    modelPathOverride.startsWith("/models/generated/");
+  const canPreview = (modelFile !== null && viewable) || hasProceduralFlatPreview;
   const hasItems = placedItems.length > 0;
 
   // Probe template files so missing assets are disabled instead of erroring on click.
@@ -155,6 +169,9 @@ export function Model3DPanel({
     let cancelled = false;
     Promise.all(
       filteredTemplates.map(async (tpl) => {
+        if (!tpl.glbPath) {
+          return [tpl.id, false] as const;
+        }
         try {
           const res = await fetch(tpl.glbPath, { method: "HEAD" });
           return [tpl.id, res.ok || res.status === 405] as const;
@@ -189,6 +206,10 @@ export function Model3DPanel({
   };
 
   const loadTemplate = React.useCallback(async (tpl: GlbTemplate) => {
+    if (!tpl.glbPath) {
+      setTemplateError(`${tpl.label} does not have a GLB asset in /public/models/templates yet.`);
+      return;
+    }
     setTemplateLoading(tpl.id);
     setTemplateError(null);
     try {
@@ -208,6 +229,13 @@ export function Model3DPanel({
       setTemplateLoading(null);
     }
   }, [accept]);
+
+  React.useEffect(() => {
+    if (!templateKey || modelPathOverride?.trim()) return;
+    setModelFile(null);
+    setTemplateError(null);
+    setViewerOpen(hasProceduralFlatPreview);
+  }, [templateKey, modelPathOverride, hasProceduralFlatPreview, setModelFile]);
 
   // Auto-load GLB when a product template is selected
   React.useEffect(() => {
@@ -345,7 +373,7 @@ export function Model3DPanel({
 
         {sizeError && <div className={styles.error}>{sizeError}</div>}
 
-        {modelFile && viewable && (
+        {canPreview && (
           <button
             className={`${styles.toggleBtn} ${viewerOpen ? styles.toggleBtnActive : ""}`}
             onClick={() => setViewerOpen((o) => !o)}
@@ -360,11 +388,16 @@ export function Model3DPanel({
           </div>
         )}
 
-        {modelFile && viewable && viewerOpen && (
+        {viewerOpen && canPreview && (
           <>
             <div className={styles.viewerWrap}>
               <ModelViewer
                 file={modelFile}
+                flatPreview={
+                  preferGeneratedFlatPreview
+                    ? flatPreview
+                    : (modelFile ? null : (hasProceduralFlatPreview ? flatPreview : null))
+                }
                 placedItems={placedItems}
                 itemTextures={itemTextures}
                 bedWidthMm={bedWidthMm}
@@ -495,7 +528,10 @@ export function Model3DPanel({
               {filteredTemplates.map((tpl) => {
                 const isActive = modelFile?.name === tpl.glbPath.split("/").pop();
                 const isLoading = templateLoading === tpl.id;
-                const isAvailable = templateAvailability[tpl.id] ?? true;
+                const isAvailable = tpl.glbPath ? (templateAvailability[tpl.id] ?? true) : false;
+                const missingReason = tpl.glbPath
+                  ? `${tpl.label} (missing model file)`
+                  : `${tpl.label} (no GLB added yet)`;
                 return (
                   <button
                     key={tpl.id}
@@ -503,7 +539,7 @@ export function Model3DPanel({
                     className={`${styles.templateCard} ${isActive ? styles.templateCardActive : ""}`}
                     onClick={() => void loadTemplate(tpl)}
                     disabled={templateLoading !== null || !isAvailable}
-                    title={isAvailable ? tpl.label : `${tpl.label} (missing model file)`}
+                    title={isAvailable ? tpl.label : missingReason}
                   >
                     <div className={styles.templateThumb}>
                       {isLoading ? (
@@ -525,7 +561,9 @@ export function Model3DPanel({
                     </div>
                     <span className={styles.templateCardLabel}>{tpl.label}</span>
                     {!isAvailable && (
-                      <span className={styles.templateMissing}>Missing asset</span>
+                      <span className={styles.templateMissing}>
+                        {tpl.glbPath ? "Missing asset" : "No GLB yet"}
+                      </span>
                     )}
                   </button>
                 );

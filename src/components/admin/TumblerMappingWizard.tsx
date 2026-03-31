@@ -8,6 +8,7 @@ import type { GLTF } from "three-stdlib";
 import type { TumblerMapping } from "@/types/productTemplate";
 import { detectAxisCorrection } from "@/lib/modelAxisCorrection";
 import { analyzeTumblerMesh } from "@/lib/analyzeTumblerMesh";
+import { ModalDialog } from "./shared/ModalDialog";
 import styles from "./TumblerMappingWizard.module.css";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -609,16 +610,16 @@ function PrintableAreaScene({
 
 // ─── Main Wizard ────────────────────────────────────────────────────────────
 
-export function TumblerMappingWizard({
-  glbPath,
-  diameterMm,
-  printHeightMm,
-  productType: _productType,
-  existingMapping,
-  handleArcDeg: initialHandleArcDeg,
-  onSave,
-  onCancel,
-}: Props) {
+export function TumblerMappingWizard(props: Props) {
+  const {
+    glbPath,
+    diameterMm,
+    printHeightMm,
+    existingMapping,
+    handleArcDeg: initialHandleArcDeg,
+    onSave,
+    onCancel,
+  } = props;
   const [step, setStep] = useState<WizardStep>(1);
   const [frontFaceRotation, setFrontFaceRotation] = useState(
     existingMapping?.frontFaceRotation ?? 0,
@@ -706,8 +707,21 @@ export function TumblerMappingWizard({
   }, [frontFaceRotation, handleArcDeg, topMargin, bottomMargin, onSave]);
 
   return (
-    <div className={styles.overlay} onClick={onCancel}>
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+    <ModalDialog
+      open
+      title="Tumbler Mapping"
+      onClose={onCancel}
+      size="wide"
+      footer={(
+        <button
+          type="button"
+          className={styles.cancelBtn}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+      )}
+    >
         {/* ── Step pills ── */}
         <div className={styles.stepRow}>
           {stepLabels.map(({ step: stepNum, label }) => {
@@ -944,16 +958,6 @@ export function TumblerMappingWizard({
         </div>
 
         {/* ── Footer ── */}
-        <div className={styles.footer}>
-          <button
-            type="button"
-            className={styles.cancelBtn}
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 }

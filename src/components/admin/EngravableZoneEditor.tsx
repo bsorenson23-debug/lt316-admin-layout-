@@ -18,8 +18,12 @@ interface Props {
   photoScalePct: number;
   /** Saved editor vertical nudge for the reference photo (percent of editor height) */
   photoOffsetYPct: number;
+  /** Saved editor horizontal nudge for the reference photo (percent of editor width) */
+  photoOffsetXPct: number;
   /** Saved editor vertical anchor for the reference photo */
   photoAnchorY: "center" | "bottom";
+  /** Saved editor horizontal centering mode for the reference photo */
+  photoCenterMode: "body" | "photo";
   /** Current sampled / saved body color */
   bodyColorHex: string;
   /** Current sampled / saved rim / engrave color */
@@ -27,7 +31,9 @@ interface Props {
   onChange: (topMarginMm: number, bottomMarginMm: number) => void;
   onPhotoScaleChange: (scalePct: number) => void;
   onPhotoOffsetYChange: (offsetPct: number) => void;
+  onPhotoOffsetXChange: (offsetPct: number) => void;
   onPhotoAnchorYChange: (anchor: "center" | "bottom") => void;
+  onPhotoCenterModeChange: (mode: "body" | "photo") => void;
   onColorsChange: (bodyColorHex: string, rimColorHex: string) => void;
 }
 
@@ -40,6 +46,7 @@ const VISIBLE_TUMBLER_HEIGHT_PCT = 0.98;
 const MIN_PHOTO_SCALE_PCT = 60;
 const MAX_PHOTO_SCALE_PCT = 180;
 const MAX_PHOTO_OFFSET_Y_PCT = 25;
+const MAX_PHOTO_OFFSET_X_PCT = 25;
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
@@ -222,13 +229,17 @@ export function EngravableZoneEditor({
   diameterMm,
   photoScalePct,
   photoOffsetYPct,
+  photoOffsetXPct,
   photoAnchorY,
+  photoCenterMode,
   bodyColorHex,
   rimColorHex,
   onChange,
   onPhotoScaleChange,
   onPhotoOffsetYChange,
+  onPhotoOffsetXChange,
   onPhotoAnchorYChange,
+  onPhotoCenterModeChange,
   onColorsChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -277,6 +288,7 @@ export function EngravableZoneEditor({
   const bodyWidthPx = Math.max(40, round1(diameterMm * pxPerMm));
   const clampedPhotoScalePct = Math.max(MIN_PHOTO_SCALE_PCT, Math.min(photoScalePct || 100, MAX_PHOTO_SCALE_PCT));
   const clampedPhotoOffsetYPct = Math.max(-MAX_PHOTO_OFFSET_Y_PCT, Math.min(photoOffsetYPct || 0, MAX_PHOTO_OFFSET_Y_PCT));
+  const clampedPhotoOffsetXPct = Math.max(-MAX_PHOTO_OFFSET_X_PCT, Math.min(photoOffsetXPct || 0, MAX_PHOTO_OFFSET_X_PCT));
   const basePhotoHeightPx = CANVAS_HEIGHT * VISIBLE_TUMBLER_HEIGHT_PCT;
   const maxPhotoHeightPx = basePhotoHeightPx * (MAX_PHOTO_SCALE_PCT / 100);
   const targetPhotoHeightPx = basePhotoHeightPx * (clampedPhotoScalePct / 100);
@@ -294,9 +306,15 @@ export function EngravableZoneEditor({
   const maxScaledBodyCenterX = activeDisplayPhoto
     ? (activeDisplayPhoto.bodyCenterX / activeDisplayPhoto.h) * maxPhotoHeightPx
     : maxPhotoWidthPx / 2;
+  const scaledPhotoCenterX = photoWidthPx / 2;
   const sideSpanPx = Math.max(maxScaledBodyCenterX, maxPhotoWidthPx - maxScaledBodyCenterX);
   const containerWidthPx = Math.max(Math.ceil(sideSpanPx * 2 + 32), bodyWidthPx + 96);
-  const photoLeftPx = Math.round(containerWidthPx / 2 - scaledBodyCenterX);
+  const centeringAnchorX = photoCenterMode === "photo" ? scaledPhotoCenterX : scaledBodyCenterX;
+  const photoLeftPx = Math.round(
+    containerWidthPx / 2
+    - centeringAnchorX
+    + (clampedPhotoOffsetXPct / 100) * containerWidthPx,
+  );
   const basePhotoTopPx = photoAnchorY === "bottom"
     ? CANVAS_HEIGHT - targetPhotoHeightPx
     : (CANVAS_HEIGHT - targetPhotoHeightPx) / 2;
@@ -516,6 +534,28 @@ export function EngravableZoneEditor({
           </div>
           <div className={styles.sliderGroup}>
             <div className={styles.sliderHeader}>
+              <span className={styles.readoutLabel}>Photo centering</span>
+              <span className={styles.readoutValue}>{photoCenterMode === "body" ? "ignore handle" : "full photo"}</span>
+            </div>
+            <div className={styles.anchorButtonRow}>
+              <button
+                type="button"
+                className={`${styles.anchorButton} ${photoCenterMode === "body" ? styles.anchorButtonActive : ""}`}
+                onClick={() => onPhotoCenterModeChange("body")}
+              >
+                Center body
+              </button>
+              <button
+                type="button"
+                className={`${styles.anchorButton} ${photoCenterMode === "photo" ? styles.anchorButtonActive : ""}`}
+                onClick={() => onPhotoCenterModeChange("photo")}
+              >
+                Center full photo
+              </button>
+            </div>
+          </div>
+          <div className={styles.sliderGroup}>
+            <div className={styles.sliderHeader}>
               <span className={styles.readoutLabel}>Photo anchor</span>
               <span className={styles.readoutValue}>{photoAnchorY}</span>
             </div>
@@ -557,6 +597,32 @@ export function EngravableZoneEditor({
               disabled={Math.round(clampedPhotoScalePct) === 100}
             >
               Reset size
+            </button>
+          </div>
+          <div className={styles.sliderGroup}>
+            <div className={styles.sliderHeader}>
+              <span className={styles.readoutLabel}>Photo X offset</span>
+              <span className={styles.readoutValue}>
+                {clampedPhotoOffsetXPct > 0 ? "+" : ""}
+                {Math.round(clampedPhotoOffsetXPct)}%
+              </span>
+            </div>
+            <input
+              className={styles.sliderInput}
+              type="range"
+              min={-MAX_PHOTO_OFFSET_X_PCT}
+              max={MAX_PHOTO_OFFSET_X_PCT}
+              step={1}
+              value={clampedPhotoOffsetXPct}
+              onChange={(e) => onPhotoOffsetXChange(Number(e.target.value) || 0)}
+            />
+            <button
+              type="button"
+              className={styles.sliderReset}
+              onClick={() => onPhotoOffsetXChange(0)}
+              disabled={Math.round(clampedPhotoOffsetXPct) === 0}
+            >
+              Reset X
             </button>
           </div>
           <div className={styles.sliderGroup}>

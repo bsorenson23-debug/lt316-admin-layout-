@@ -45,6 +45,20 @@ export interface LaserLayer {
   matchedPresetId?: string;
   /** Human-readable label of that preset */
   matchedPresetLabel?: string;
+  /** Generic process family for the applied material-aware outcome */
+  processFamily?: string;
+  /** Stable id for the selected achievable outcome */
+  outcomeId?: string;
+  /** Human-readable outcome label */
+  outcomeLabel?: string;
+  /** Reference hex for the resolved outcome */
+  outcomeTargetHex?: string;
+  /** DeltaE-style match score for nearest-color suggestions */
+  outcomeDeltaE?: number;
+  /** Notes attached to the resolved outcome */
+  outcomeNotes?: string;
+
+  // Legacy stainless-only lookup metadata kept for persisted-state migration.
   /** ΔE colour-match score (lower = better, 0 = perfect) */
   matchDeltaE?: number;
   /** The target colour name the match resolved to (e.g. "Gold / Yellow") */
@@ -108,6 +122,12 @@ export function buildDefaultLayers(): LaserLayer[] {
     lineIntervalMm:  undefined,
     matchedPresetId: undefined,
     matchedPresetLabel: undefined,
+    processFamily:    undefined,
+    outcomeId:        undefined,
+    outcomeLabel:     undefined,
+    outcomeTargetHex: undefined,
+    outcomeDeltaE:    undefined,
+    outcomeNotes:     undefined,
     matchDeltaE:     undefined,
     matchTargetName: undefined,
     matchTargetHex:  undefined,

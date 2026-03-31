@@ -2,27 +2,18 @@
 
 import React from "react";
 import type { BedConfig } from "@/types/admin";
-import type { OrderRecord, OrderStatus } from "@/types/orders";
+import type { OrderJobRecipe, OrderRecord, OrderStatus } from "@/types/orders";
+import type { ProductTemplate } from "@/types/productTemplate";
 import { ORDER_STATUS_LABELS } from "@/types/orders";
+import { loadOrders, saveOrders } from "@/utils/orderState";
 import styles from "./OrdersPanel.module.css";
-
-const ORDERS_KEY = "lt316_orders";
-
-function loadOrders(): OrderRecord[] {
-  try {
-    const raw = localStorage.getItem(ORDERS_KEY);
-    return raw ? (JSON.parse(raw) as OrderRecord[]) : [];
-  } catch { return []; }
-}
-
-function saveOrders(orders: OrderRecord[]) {
-  try { localStorage.setItem(ORDERS_KEY, JSON.stringify(orders)); } catch { /* noop */ }
-}
 
 interface Props {
   bedConfig: BedConfig;
   assetNames: string[];
-  onLoadOrder: (bedConfig: BedConfig) => void;
+  selectedTemplate: ProductTemplate | null;
+  currentJobRecipe: OrderJobRecipe | null;
+  onLoadOrder: (order: OrderRecord) => void;
 }
 
 type NewOrderDraft = {
@@ -33,7 +24,34 @@ type NewOrderDraft = {
 
 const EMPTY_DRAFT: NewOrderDraft = { customerName: "", engravingText: "", powerSpeedNotes: "" };
 
-export function OrdersPanel({ bedConfig, assetNames, onLoadOrder }: Props) {
+function describeJobRecipe(jobRecipe: OrderJobRecipe | undefined): string | null {
+  if (!jobRecipe) return null;
+
+  const placedItems = jobRecipe.placedItems ?? [];
+  const assetIds = jobRecipe.assetIds ?? [];
+  const details: string[] = [];
+  if (placedItems.length > 0) {
+    details.push(`${placedItems.length} placed item${placedItems.length === 1 ? "" : "s"}`);
+  } else if (assetIds.length > 0) {
+    details.push(`${assetIds.length} staged asset${assetIds.length === 1 ? "" : "s"}`);
+  }
+  if (jobRecipe.materialLabel) {
+    details.push(jobRecipe.materialLabel);
+  }
+  if (jobRecipe.rotaryAutoPlacementEnabled) {
+    details.push(jobRecipe.rotaryPresetName ?? "Rotary auto");
+  }
+
+  return details.length > 0 ? details.join(" · ") : null;
+}
+
+export function OrdersPanel({
+  bedConfig,
+  assetNames,
+  selectedTemplate,
+  currentJobRecipe,
+  onLoadOrder,
+}: Props) {
   const [orders, setOrders] = React.useState<OrderRecord[]>(() => loadOrders());
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
   const [creating, setCreating] = React.useState(false);
@@ -57,6 +75,9 @@ export function OrdersPanel({ bedConfig, assetNames, onLoadOrder }: Props) {
       tumblerModel: bedConfig.tumblerModel,
       tumblerProfileId: bedConfig.tumblerProfileId,
       assetNames: [...assetNames],
+      assignedTemplateId: selectedTemplate?.id,
+      assignedTemplateName: selectedTemplate?.name,
+      jobRecipe: currentJobRecipe ?? undefined,
       bedConfigSnapshot: { ...bedConfig },
       powerSpeedNotes: draft.powerSpeedNotes.trim() || undefined,
       status: "pending",
@@ -110,6 +131,9 @@ export function OrdersPanel({ bedConfig, assetNames, onLoadOrder }: Props) {
           tumblerModel: bedConfig.tumblerModel,
           tumblerProfileId: bedConfig.tumblerProfileId,
           assetNames: [...assetNames],
+          assignedTemplateId: selectedTemplate?.id,
+          assignedTemplateName: selectedTemplate?.name,
+          jobRecipe: currentJobRecipe ?? undefined,
           bedConfigSnapshot: { ...bedConfig },
           powerSpeedNotes: powerSpeedNotes || undefined,
           status: "pending" as const,
@@ -173,6 +197,16 @@ export function OrdersPanel({ bedConfig, assetNames, onLoadOrder }: Props) {
                   {bedConfig.tumblerBrand} {bedConfig.tumblerModel ?? ""} · {bedConfig.width.toFixed(0)}×{bedConfig.height.toFixed(0)}mm
                 </div>
               )}
+              {selectedTemplate && (
+                <div className={styles.snapshotPreview}>
+                  Template: {selectedTemplate.name}
+                </div>
+              )}
+              {currentJobRecipe && describeJobRecipe(currentJobRecipe) && (
+                <div className={styles.snapshotPreview}>
+                  Recipe: {describeJobRecipe(currentJobRecipe)}
+                </div>
+              )}
               {assetNames.length > 0 && (
                 <div className={styles.snapshotPreview}>
                   {assetNames.slice(0, 3).join(", ")}{assetNames.length > 3 ? ` +${assetNames.length - 3} more` : ""}
@@ -218,7 +252,7 @@ export function OrdersPanel({ bedConfig, assetNames, onLoadOrder }: Props) {
               confirmDelete={confirmDeleteId === order.id}
               onToggle={() => setExpandedId(expandedId === order.id ? null : order.id)}
               onStatusChange={(s) => updateStatus(order.id, s)}
-              onLoadSettings={() => { onLoadOrder(order.bedConfigSnapshot); setExpandedId(null); }}
+              onLoadSettings={() => { onLoadOrder(order); setExpandedId(null); }}
               onRequestDelete={() => setConfirmDeleteId(order.id)}
               onConfirmDelete={() => deleteOrder(order.id)}
               onCancelDelete={() => setConfirmDeleteId(null)}
@@ -275,6 +309,18 @@ function OrderCard({
               <span className={styles.detailValue}>{order.tumblerBrand} {order.tumblerModel}</span>
             </div>
           )}
+          {order.assignedTemplateName && (
+            <div className={styles.detailRow}>
+              <span className={styles.detailLabel}>Template</span>
+              <span className={styles.detailValue}>{order.assignedTemplateName}</span>
+            </div>
+          )}
+          {describeJobRecipe(order.jobRecipe) && (
+            <div className={styles.detailRow}>
+              <span className={styles.detailLabel}>Recipe</span>
+              <span className={styles.detailValue}>{describeJobRecipe(order.jobRecipe)}</span>
+            </div>
+          )}
           {order.assetNames.length > 0 && (
             <div className={styles.detailRow}>
               <span className={styles.detailLabel}>Assets</span>
@@ -314,9 +360,9 @@ function OrderCard({
             <button
               className={styles.loadBtn}
               onClick={onLoadSettings}
-              title="Restore tumbler + bed settings from this order"
+              title="Load the saved setup for this order"
             >
-              Load Settings
+              Set Up
             </button>
             {confirmDelete ? (
               <>

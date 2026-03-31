@@ -2,6 +2,10 @@ export interface ProductTemplateDimensions {
   diameterMm: number;
   printHeightMm: number;
   templateWidthMm: number; // computed: Math.PI * diameterMm
+  /** Flat-item body thickness used for generated 3D preview (mm) */
+  flatThicknessMm?: number;
+  /** Flat-item preview family key (magazine, knife-blank, dog-tag, etc.) */
+  flatFamilyKey?: string;
   handleArcDeg: number; // 0 = no handle
   taperCorrection: "none" | "top-narrow" | "bottom-narrow";
   /** Total product height including non-engravable areas (mm) */
@@ -14,8 +18,12 @@ export interface ProductTemplateDimensions {
   referencePhotoScalePct?: number;
   /** Template editor-only vertical nudge for the reference photo (percent of editor height) */
   referencePhotoOffsetYPct?: number;
+  /** Template editor-only horizontal nudge for the reference photo (percent of editor width) */
+  referencePhotoOffsetXPct?: number;
   /** Template editor-only vertical anchor for the reference photo */
   referencePhotoAnchorY?: "center" | "bottom";
+  /** Template editor-only horizontal centering mode for the reference photo */
+  referencePhotoCenterMode?: "body" | "photo";
   /** Sampled body color from the engravable zone */
   bodyColorHex?: string;
   /** Sampled rim / engraved render color */
@@ -59,6 +67,8 @@ export interface ProductTemplate {
   capacity: string;
   laserType: "fiber" | "co2" | "diode";
   productType: "tumbler" | "mug" | "bottle" | "flat";
+  materialSlug?: string;
+  materialLabel?: string;
   thumbnailDataUrl: string; // base64 120x120 PNG
   /** Full-resolution product photo (max 1024px, JPEG base64) for grid overlay */
   productPhotoFullUrl?: string;

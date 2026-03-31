@@ -68,8 +68,18 @@ export interface ItemTexture {
   canvas: HTMLCanvasElement;
 }
 
+export interface FlatPreviewDimensions {
+  widthMm: number;
+  heightMm: number;
+  thicknessMm: number;
+  familyKey?: string;
+  label?: string;
+  material?: string;
+}
+
 export interface ModelViewerProps {
-  file: File;
+  file?: File | null;
+  flatPreview?: FlatPreviewDimensions | null;
   placedItems?: PlacedItem[];
   itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number;
@@ -116,6 +126,17 @@ function computeModelTransform(
   dims: TumblerDimensions | null | undefined,
 ): ModelTransform {
   if (!dims || dims.overallHeightMm <= 0) {
+    const isFlatSlab =
+      rawSize.y > 0 &&
+      rawSize.x > 0 &&
+      rawSize.z > 0 &&
+      rawSize.y < rawSize.x * 0.4 &&
+      rawSize.y < rawSize.z * 0.4;
+    if (isFlatSlab) {
+      // Flat items are usually authored lying on the XZ plane, which reads edge-on
+      // from the default front camera. Tilt them upright for a usable preview.
+      return { scale: 1, rotation: [Math.PI / 2, 0, 0] };
+    }
     return { scale: 1, rotation: [0, 0, 0] };
   }
 
@@ -174,13 +195,16 @@ function AutoFit({ url }: { url: string }) {
     const timer = setTimeout(() => {
       bounds.refresh().clip().fit();
       const { center, distance } = bounds.getSize();
-      const direction = camera.position.clone().sub(center);
+      const isFlatView = url.startsWith("flat:");
+      const direction = isFlatView
+        ? new THREE.Vector3(0.95, 0.72, 1.18)
+        : camera.position.clone().sub(center);
       if (direction.lengthSq() < 1e-6) {
         direction.set(0.35, 0.25, 1);
       }
       direction.normalize();
       bounds
-        .moveTo(center.clone().addScaledVector(direction, distance * 1.58))
+        .moveTo(center.clone().addScaledVector(direction, distance * (isFlatView ? 1.72 : 1.58)))
         .lookAt({ target: center });
     }, 180);
     return () => clearTimeout(timer);
@@ -465,6 +489,132 @@ function GltfMesh({
 }
 
 // ── Build DecalItem[] from PlacedItems + texture map ──
+function FlatItemPreview({
+  dims,
+  placedItems,
+  itemTextures,
+  bedWidthMm,
+  bedHeightMm,
+  bodyTintColor,
+  onReady,
+}: {
+  dims: FlatPreviewDimensions;
+  placedItems?: PlacedItem[];
+  itemTextures?: Map<string, HTMLCanvasElement>;
+  bedWidthMm?: number;
+  bedHeightMm?: number;
+  bodyTintColor?: string;
+  onReady?: OnReady;
+}) {
+  const ref = useRef<THREE.Group>(null);
+  const topY = Math.max(0.5, dims.thicknessMm / 2);
+  const surfaceWidth = bedWidthMm && bedWidthMm > 0 ? bedWidthMm : dims.widthMm;
+  const surfaceHeight = bedHeightMm && bedHeightMm > 0 ? bedHeightMm : dims.heightMm;
+  const geometry = useMemo(() => {
+    const shape = buildFlatPreviewShape(dims);
+    const nextGeometry = new THREE.ExtrudeGeometry(shape, {
+      depth: Math.max(0.8, dims.thicknessMm),
+      bevelEnabled: true,
+      bevelSegments: 3,
+      bevelSize: Math.min(1.2, Math.max(0.18, dims.thicknessMm * 0.06)),
+      bevelThickness: Math.min(0.9, Math.max(0.12, dims.thicknessMm * 0.05)),
+      curveSegments: 24,
+    });
+    nextGeometry.center();
+    nextGeometry.rotateX(-Math.PI / 2);
+    nextGeometry.computeVertexNormals();
+    return nextGeometry;
+  }, [dims]);
+
+  const materialAppearance = useMemo(
+    () => getFlatPreviewMaterialAppearance(dims.material, dims.familyKey),
+    [dims.material, dims.familyKey],
+  );
+
+  const threeTextures = useMemo(() => {
+    if (!itemTextures) return new Map<string, THREE.CanvasTexture>();
+    const map = new Map<string, THREE.CanvasTexture>();
+    itemTextures.forEach((canvas, id) => {
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.needsUpdate = true;
+      map.set(id, tex);
+    });
+    return map;
+  }, [itemTextures]);
+
+  useEffect(() => {
+    return () => {
+      threeTextures.forEach((texture) => texture.dispose());
+    };
+  }, [threeTextures]);
+
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+    };
+  }, [geometry]);
+
+  const overlays = useMemo(() => {
+    if (!placedItems?.length) return [];
+    return placedItems
+      .filter((item) => item.visible !== false)
+      .map((item) => ({
+        itemId: item.id,
+        x: (item.x + item.width / 2) - surfaceWidth / 2,
+        z: -((item.y + item.height / 2) - surfaceHeight / 2),
+        y: topY + 0.2,
+        width: item.width,
+        height: item.height,
+        rotationRad: THREE.MathUtils.degToRad(item.rotation ?? 0),
+      }));
+  }, [placedItems, surfaceWidth, surfaceHeight, topY]);
+
+  useEffect(() => {
+    if (ref.current) onReady?.(ref.current);
+  }, [dims, onReady]);
+
+  return (
+    <group ref={ref}>
+      <mesh geometry={geometry} castShadow receiveShadow>
+        <meshPhysicalMaterial
+          color={bodyTintColor ?? materialAppearance.baseColor}
+          metalness={materialAppearance.metalness}
+          roughness={materialAppearance.roughness}
+          clearcoat={materialAppearance.clearcoat}
+          clearcoatRoughness={materialAppearance.clearcoatRoughness}
+        />
+      </mesh>
+
+      {dims.familyKey === "magazine" && (
+        <MagazineProxyDetails dims={dims} topY={topY} color={materialAppearance.accentColor} />
+      )}
+
+      {overlays.map((overlay) => {
+        const texture = threeTextures.get(overlay.itemId);
+        if (!texture) return null;
+        return (
+          <mesh
+            key={overlay.itemId}
+            position={[overlay.x, overlay.y, overlay.z]}
+            rotation={[-Math.PI / 2, 0, overlay.rotationRad]}
+          >
+            <planeGeometry args={[overlay.width, overlay.height]} />
+            <meshBasicMaterial
+              map={texture}
+              transparent
+              side={THREE.DoubleSide}
+              depthWrite={false}
+              polygonOffset
+              polygonOffsetFactor={-4}
+            />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
 function buildDecalItems(
   placedItems: PlacedItem[] | undefined,
   itemTextures: Map<string, HTMLCanvasElement> | undefined,
@@ -481,6 +631,267 @@ function buildDecalItems(
       gridH: item.height,
       gridRotationDeg: item.rotation ?? 0,
     }));
+}
+
+function createRoundedRectShape(widthMm: number, heightMm: number, radiusMm: number): THREE.Shape {
+  const halfW = widthMm / 2;
+  const halfH = heightMm / 2;
+  const r = Math.min(radiusMm, halfW * 0.45, halfH * 0.45);
+  const shape = new THREE.Shape();
+  shape.moveTo(-halfW + r, -halfH);
+  shape.lineTo(halfW - r, -halfH);
+  shape.quadraticCurveTo(halfW, -halfH, halfW, -halfH + r);
+  shape.lineTo(halfW, halfH - r);
+  shape.quadraticCurveTo(halfW, halfH, halfW - r, halfH);
+  shape.lineTo(-halfW + r, halfH);
+  shape.quadraticCurveTo(-halfW, halfH, -halfW, halfH - r);
+  shape.lineTo(-halfW, -halfH + r);
+  shape.quadraticCurveTo(-halfW, -halfH, -halfW + r, -halfH);
+  return shape;
+}
+
+function createDogTagShape(widthMm: number, heightMm: number): THREE.Shape {
+  const radius = Math.min(widthMm, heightMm) * 0.22;
+  const shape = createRoundedRectShape(widthMm, heightMm, radius);
+  const hole = new THREE.Path();
+  const holeRadius = Math.min(widthMm, heightMm) * 0.09;
+  hole.absellipse(0, heightMm * 0.28, holeRadius, holeRadius, 0, Math.PI * 2, false, 0);
+  shape.holes.push(hole);
+  return shape;
+}
+
+function createMagazineShape(widthMm: number, heightMm: number): THREE.Shape {
+  const halfW = widthMm / 2;
+  const halfH = heightMm / 2;
+  const shape = new THREE.Shape();
+  const points: THREE.Vector2[] = [];
+  const sampleCount = 18;
+
+  for (let i = 0; i <= sampleCount; i += 1) {
+    const t = i / sampleCount;
+    const y = halfH - t * heightMm;
+    const centerOffset = THREE.MathUtils.lerp(-halfW * 0.05, halfW * 0.14, Math.pow(t, 1.18));
+    const widthFactor =
+      t < 0.12
+        ? THREE.MathUtils.lerp(0.34, 0.4, t / 0.12)
+        : t < 0.84
+          ? THREE.MathUtils.lerp(0.4, 0.47, (t - 0.12) / 0.72)
+          : THREE.MathUtils.lerp(0.47, 0.5, (t - 0.84) / 0.16);
+    points.push(new THREE.Vector2(centerOffset + halfW * widthFactor, y));
+  }
+
+  points.push(new THREE.Vector2(halfW * 0.56, -halfH * 0.97));
+  points.push(new THREE.Vector2(halfW * 0.18, -halfH * 1.04));
+  points.push(new THREE.Vector2(-halfW * 0.2, -halfH * 1.02));
+  points.push(new THREE.Vector2(-halfW * 0.34, -halfH * 0.9));
+
+  for (let i = sampleCount; i >= 0; i -= 1) {
+    const t = i / sampleCount;
+    const y = halfH - t * heightMm;
+    const centerOffset = THREE.MathUtils.lerp(-halfW * 0.05, halfW * 0.14, Math.pow(t, 1.18));
+    const widthFactor =
+      t < 0.1
+        ? THREE.MathUtils.lerp(0.31, 0.36, t / 0.1)
+        : t < 0.82
+          ? THREE.MathUtils.lerp(0.36, 0.39, (t - 0.1) / 0.72)
+          : THREE.MathUtils.lerp(0.39, 0.43, (t - 0.82) / 0.18);
+    points.push(new THREE.Vector2(centerOffset - halfW * widthFactor, y));
+  }
+
+  shape.setFromPoints(points);
+  return shape;
+}
+
+function buildMagazineDetailLayout(dims: FlatPreviewDimensions) {
+  const plateDepth = Math.max(0.24, Math.min(0.62, dims.thicknessMm * 0.08));
+  return [
+    { width: dims.widthMm * 0.56, height: dims.heightMm * 0.16, z: dims.heightMm * 0.14 },
+    { width: dims.widthMm * 0.58, height: dims.heightMm * 0.18, z: -dims.heightMm * 0.12 },
+    { width: dims.widthMm * 0.56, height: dims.heightMm * 0.18, z: -dims.heightMm * 0.38 },
+    { width: dims.widthMm * 0.48, height: dims.heightMm * 0.1, z: -dims.heightMm * 0.73 },
+  ].map((panel) => ({ ...panel, depth: plateDepth }));
+}
+
+function MagazineProxyDetails({
+  dims,
+  topY,
+  color,
+}: {
+  dims: FlatPreviewDimensions;
+  topY: number;
+  color: string;
+}) {
+  const panels = useMemo(() => buildMagazineDetailLayout(dims), [dims]);
+  const panelMaterial = useMemo(
+    () => new THREE.MeshStandardMaterial({ color, metalness: 0.04, roughness: 0.88 }),
+    [color],
+  );
+  const panelGeometries = useMemo(
+    () => panels.map((panel) => {
+      const geometry = new THREE.ExtrudeGeometry(
+        createRoundedRectShape(panel.width, panel.height, Math.min(panel.width, panel.height) * 0.16),
+        {
+          depth: panel.depth,
+          bevelEnabled: true,
+          bevelSegments: 2,
+          bevelSize: Math.min(0.24, panel.depth * 0.4),
+          bevelThickness: Math.min(0.14, panel.depth * 0.45),
+          curveSegments: 20,
+        },
+      );
+      geometry.center();
+      geometry.rotateX(-Math.PI / 2);
+      return geometry;
+    }),
+    [panels],
+  );
+  const floorplateGeometry = useMemo(() => {
+    const geometry = new THREE.ExtrudeGeometry(
+      createRoundedRectShape(dims.widthMm * 0.94, dims.heightMm * 0.1, dims.widthMm * 0.08),
+      {
+        depth: Math.max(0.8, Math.min(1.6, dims.thicknessMm * 0.22)),
+        bevelEnabled: true,
+        bevelSegments: 2,
+        bevelSize: 0.35,
+        bevelThickness: 0.22,
+        curveSegments: 20,
+      },
+    );
+    geometry.center();
+    geometry.rotateX(-Math.PI / 2);
+    return geometry;
+  }, [dims.heightMm, dims.thicknessMm, dims.widthMm]);
+
+  useEffect(() => {
+    return () => {
+      panelMaterial.dispose();
+      panelGeometries.forEach((geometry) => geometry.dispose());
+      floorplateGeometry.dispose();
+    };
+  }, [floorplateGeometry, panelGeometries, panelMaterial]);
+
+  return (
+    <group>
+      {panelGeometries.map((geometry, index) => (
+        <mesh
+          key={index}
+          geometry={geometry}
+          material={panelMaterial}
+          position={[0, topY + 0.16 + panels[index].depth * 0.5, panels[index].z]}
+          castShadow
+          receiveShadow
+        />
+      ))}
+      <mesh
+        geometry={floorplateGeometry}
+        material={panelMaterial}
+        position={[dims.widthMm * 0.06, topY + 0.24, -dims.heightMm * 0.88]}
+        rotation={[0, THREE.MathUtils.degToRad(-4), 0]}
+        castShadow
+        receiveShadow
+      />
+    </group>
+  );
+}
+
+function createKnifeBlankShape(widthMm: number, heightMm: number): THREE.Shape {
+  const halfW = widthMm / 2;
+  const halfH = heightMm / 2;
+  const bladeX = halfW * 0.58;
+  const tangX = -halfW * 0.14;
+  const handleBulgeX = -halfW;
+  const guardX = halfW * 0.08;
+  const shape = new THREE.Shape();
+  shape.moveTo(handleBulgeX, -halfH * 0.22);
+  shape.quadraticCurveTo(-halfW * 0.82, -halfH * 0.58, tangX, -halfH * 0.5);
+  shape.lineTo(guardX, -halfH * 0.46);
+  shape.lineTo(bladeX, -halfH * 0.14);
+  shape.lineTo(halfW, 0);
+  shape.lineTo(bladeX, halfH * 0.14);
+  shape.lineTo(guardX, halfH * 0.46);
+  shape.lineTo(tangX, halfH * 0.5);
+  shape.quadraticCurveTo(-halfW * 0.82, halfH * 0.58, handleBulgeX, halfH * 0.22);
+  shape.quadraticCurveTo(-halfW * 0.72, 0, handleBulgeX, -halfH * 0.22);
+  return shape;
+}
+
+function buildFlatPreviewShape(dims: FlatPreviewDimensions): THREE.Shape {
+  switch (dims.familyKey) {
+    case "dog-tag":
+      return createDogTagShape(dims.widthMm, dims.heightMm);
+    case "magazine":
+      return createMagazineShape(dims.widthMm, dims.heightMm);
+    case "knife-blank":
+      return createKnifeBlankShape(dims.widthMm, dims.heightMm);
+    case "round-plate": {
+      const radius = Math.min(dims.widthMm, dims.heightMm) / 2;
+      const shape = new THREE.Shape();
+      shape.absellipse(0, 0, radius, radius, 0, Math.PI * 2, false, 0);
+      return shape;
+    }
+    case "keychain":
+    case "card":
+    case "phone-case":
+    case "rect-plate":
+    default:
+      return createRoundedRectShape(
+        dims.widthMm,
+        dims.heightMm,
+        Math.min(dims.widthMm, dims.heightMm) * 0.12,
+      );
+  }
+}
+
+function getFlatPreviewMaterialAppearance(material?: string, familyKey?: string) {
+  const normalized = `${material ?? ""} ${familyKey ?? ""}`.toLowerCase();
+  if (normalized.includes("plastic") || normalized.includes("abs") || normalized.includes("magazine")) {
+    return {
+      baseColor: "#343a43",
+      accentColor: "#252a31",
+      metalness: 0.06,
+      roughness: 0.84,
+      clearcoat: 0.04,
+      clearcoatRoughness: 0.88,
+    };
+  }
+  if (normalized.includes("stainless") || normalized.includes("steel")) {
+    return {
+      baseColor: "#a4adb8",
+      accentColor: "#d4dce6",
+      metalness: 0.78,
+      roughness: 0.34,
+      clearcoat: 0.18,
+      clearcoatRoughness: 0.28,
+    };
+  }
+  if (normalized.includes("aluminum") || normalized.includes("anodized")) {
+    return {
+      baseColor: "#7d8794",
+      accentColor: "#a7b0bc",
+      metalness: 0.58,
+      roughness: 0.42,
+      clearcoat: 0.12,
+      clearcoatRoughness: 0.34,
+    };
+  }
+  if (normalized.includes("wood") || normalized.includes("bamboo")) {
+    return {
+      baseColor: "#8f633e",
+      accentColor: "#b68357",
+      metalness: 0.02,
+      roughness: 0.9,
+      clearcoat: 0.04,
+      clearcoatRoughness: 0.86,
+    };
+  }
+  return {
+    baseColor: "#959daa",
+    accentColor: "#c2c9d2",
+    metalness: 0.22,
+    roughness: 0.62,
+    clearcoat: 0.08,
+    clearcoatRoughness: 0.5,
+  };
 }
 
 // Known model component registry — maps GLB path substrings to components
@@ -590,7 +1001,7 @@ class CanvasErrorBoundary extends Component<
 // ---------------------------------------------------------------------------
 
 export default function ModelViewer({
-  file, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, bodyTintColor, rimTintColor,
+  file, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, bodyTintColor, rimTintColor,
 }: ModelViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
@@ -615,15 +1026,23 @@ export default function ModelViewer({
 
   // Create blob URL inside useEffect — safe for React Strict Mode
   useEffect(() => {
+    if (!file) {
+      const frameId = window.requestAnimationFrame(() => {
+        setUrl(null);
+        setModelBounds(null);
+        setIsAutoRotating(false);
+      });
+      return () => window.cancelAnimationFrame(frameId);
+    }
     const objectUrl = URL.createObjectURL(file);
-    // Syncing state to a new file load is intentional here.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setUrl(objectUrl);
-    setModelBounds(null);
-    setIsAutoRotating(!!tumblerDims);
+    const frameId = window.requestAnimationFrame(() => {
+      setUrl(objectUrl);
+      setModelBounds(null);
+      setIsAutoRotating(!!tumblerDims);
+    });
     return () => {
+      window.cancelAnimationFrame(frameId);
       URL.revokeObjectURL(objectUrl);
-      setUrl(null);
     };
   }, [file, tumblerDims]);
 
@@ -632,7 +1051,10 @@ export default function ModelViewer({
     if (!box.isEmpty()) setModelBounds(box);
   }, []);
 
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const ext = file?.name.split(".").pop()?.toLowerCase() ?? "";
+  const viewKey = flatPreview
+    ? `flat:${flatPreview.widthMm}:${flatPreview.heightMm}:${flatPreview.thicknessMm}:${flatPreview.familyKey ?? ""}:${flatPreview.label ?? ""}`
+    : (url ?? "");
 
   // ── Adaptive scene scale based on physical dimensions ──────────────────────
   const H = tumblerDims?.overallHeightMm ?? 200;
@@ -648,7 +1070,7 @@ export default function ModelViewer({
   const shadowScale= isMmScale ? H * 4     : 20;
   const shadowFar  = isMmScale ? H * 0.7   : 5;
 
-  if (!url) return null;
+  if (!url && !flatPreview) return null;
 
   const hasItems = !!placedItems?.length && !!itemTextures?.size;
 
@@ -675,23 +1097,36 @@ export default function ModelViewer({
 
         <Bounds observe={false} margin={4.4}>
           <Suspense fallback={<LoadingIndicator />}>
-            <ModelByExtension
-              url={url} ext={ext}
-              dims={tumblerDims}
-              handleArcDeg={handleArcDeg}
-              placedItems={placedItems}
-              itemTextures={itemTextures}
-              bedWidthMm={bedWidthMm}
-              bedHeightMm={bedHeightMm}
-              glbPath={glbPath}
-              sourceName={file.name}
-              tumblerMapping={tumblerMapping}
-              bodyTintColor={bodyTintColor}
-              rimTintColor={rimTintColor}
-              onReady={handleModelReady}
-            />
+            {flatPreview ? (
+              <FlatItemPreview
+                dims={flatPreview}
+                placedItems={placedItems}
+                itemTextures={itemTextures}
+                bedWidthMm={bedWidthMm}
+                bedHeightMm={bedHeightMm}
+                bodyTintColor={bodyTintColor}
+                onReady={handleModelReady}
+              />
+            ) : url ? (
+              <ModelByExtension
+                url={url}
+                ext={ext}
+                dims={tumblerDims}
+                handleArcDeg={handleArcDeg}
+                placedItems={placedItems}
+                itemTextures={itemTextures}
+                bedWidthMm={bedWidthMm}
+                bedHeightMm={bedHeightMm}
+                glbPath={glbPath}
+                sourceName={file?.name}
+                tumblerMapping={tumblerMapping}
+                bodyTintColor={bodyTintColor}
+                rimTintColor={rimTintColor}
+                onReady={handleModelReady}
+              />
+            ) : null}
           </Suspense>
-          <AutoFit url={url} />
+          <AutoFit url={viewKey} />
         </Bounds>
 
         {/* Engravable zone highlight — shown when tumbler loaded, no items placed */}

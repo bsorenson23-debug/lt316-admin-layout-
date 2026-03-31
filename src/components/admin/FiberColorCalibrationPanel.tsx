@@ -2,53 +2,102 @@
 
 import React from "react";
 import type {
-  FiberMachineProfile,
-  FiberBaseParams,
   BracketParam,
   BracketStepSize,
   BracketTestLine,
-  Wavelength,
+  FiberBaseParams,
+  FiberMachineProfile,
   SubstrateMaterial,
+  Wavelength,
 } from "@/types/fiberColor";
+import type { MarkingProcessFamily } from "@/features/color-profiles/types";
 import {
-  computeEnergyDensity,
-  predictColorFromED,
-  generateBracketTest,
   applyCalibration,
   buildCalibratedColorMapping,
+  computeEnergyDensity,
+  generateBracketTest,
+  getActiveFiberProfileId,
   getStepPct,
   loadFiberProfiles,
+  predictColorFromED,
   saveFiberProfiles,
-  getActiveFiberProfileId,
   setActiveFiberProfileId,
 } from "@/utils/fiberColorCalc";
+import { getActiveLaserProfile } from "@/utils/laserProfileState";
+import {
+  matchesFiberCalibrationScope,
+  normalizeFiberCalibrationProfile,
+  type FiberCalibrationScope,
+} from "@/features/color-profiles/calibration";
+import type { LaserProfile } from "@/types/laserProfile";
 import styles from "./FiberColorCalibrationPanel.module.css";
-
-// ---------------------------------------------------------------------------
-// Phase of the calibration flow
-// ---------------------------------------------------------------------------
 
 type Phase = "idle" | "config" | "test" | "done";
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
+interface Props {
+  currentMaterialSlug?: string | null;
+  currentMaterialLabel?: string | null;
+  currentProcessFamily?: string | null;
+}
 
-export function FiberColorCalibrationPanel() {
-  // ── Saved profiles ──────────────────────────────────────────────────────
+function createFiberProfileId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `fiber-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function FiberColorCalibrationPanel({
+  currentMaterialSlug,
+  currentMaterialLabel,
+  currentProcessFamily,
+}: Props) {
   const [profiles, setProfiles] = React.useState<FiberMachineProfile[]>([]);
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [phase, setPhase] = React.useState<Phase>("idle");
+  const [activeLaser, setActiveLaser] = React.useState<LaserProfile | null>(null);
 
-  // Load profiles from localStorage on mount
   React.useEffect(() => {
+    const nextActiveLaser = getActiveLaserProfile();
     setProfiles(loadFiberProfiles());
     setActiveId(getActiveFiberProfileId());
-  }, []);
+    setActiveLaser(nextActiveLaser);
+  }, [currentMaterialSlug, currentProcessFamily]);
 
-  const activeProfile = profiles.find((p) => p.id === activeId) ?? null;
+  const scopedMaterial = currentMaterialSlug === "titanium" ? "ti" : "ss";
+  const scopedProcessFamily = normalizeProcessFamily(currentProcessFamily);
+  const calibrationScope = React.useMemo((): FiberCalibrationScope | null => {
+    if (!currentMaterialSlug || !scopedProcessFamily) return null;
+    return {
+      laserProfileId: activeLaser?.id,
+      materialSlug: currentMaterialSlug,
+      processFamily: scopedProcessFamily,
+    };
+  }, [activeLaser?.id, currentMaterialSlug, scopedProcessFamily]);
+  const isEligible =
+    currentMaterialSlug != null &&
+    (currentMaterialSlug === "stainless-steel" || currentMaterialSlug === "titanium") &&
+    scopedProcessFamily != null &&
+    activeLaser?.sourceType === "fiber" &&
+    activeLaser.isMopaCapable === true;
 
-  // ── Config form state ───────────────────────────────────────────────────
+  const scopedProfiles = React.useMemo(() => {
+    if (!calibrationScope) return [];
+    return profiles
+      .map(normalizeFiberCalibrationProfile)
+      .filter((profile) => matchesFiberCalibrationScope(profile, calibrationScope));
+  }, [calibrationScope, profiles]);
+  const activeProfile =
+    scopedProfiles.find((profile) => profile.id === activeId) ??
+    scopedProfiles[0] ??
+    null;
+
+  React.useEffect(() => {
+    if (!activeProfile) return;
+    if (activeId === activeProfile.id) return;
+    setActiveId(activeProfile.id);
+  }, [activeId, activeProfile]);
+
   const [machine, setMachine] = React.useState("MOPA #1");
   const [ratedPower, setRatedPower] = React.useState(100);
   const [wavelength, setWavelength] = React.useState<Wavelength>(1064);
@@ -61,17 +110,20 @@ export function FiberColorCalibrationPanel() {
   const [bracketParam, setBracketParam] = React.useState<BracketParam>("speed");
   const [bracketStep, setBracketStep] = React.useState<BracketStepSize>("normal");
 
-  // ── Test state ──────────────────────────────────────────────────────────
   const [testLines, setTestLines] = React.useState<BracketTestLine[] | null>(null);
   const [selectedLine, setSelectedLine] = React.useState<1 | 2 | 3 | 4 | 5>(3);
 
-  // ── Derived ─────────────────────────────────────────────────────────────
   const currentED = computeEnergyDensity(power, speed, lineSpacing);
   const predictedColor = predictColorFromED(currentED);
+  const availabilityMessage = buildAvailabilityMessage({
+    currentMaterialSlug,
+    scopedProcessFamily,
+    activeLaser,
+  });
 
-  // ── Handlers ────────────────────────────────────────────────────────────
   const handleStartCalibration = () => {
-    // Pre-fill form from active profile if one exists
+    if (!isEligible || !calibrationScope) return;
+
     if (activeProfile) {
       setMachine(activeProfile.machine);
       setRatedPower(activeProfile.ratedPower);
@@ -82,7 +134,12 @@ export function FiberColorCalibrationPanel() {
       setPulseWidth(activeProfile.physicalTruth.pulseWidth_ns);
       setFrequency(activeProfile.physicalTruth.frequency_khz);
       setLineSpacing(activeProfile.physicalTruth.lineSpacing_mm);
+    } else {
+      setMachine(activeLaser?.name ?? "MOPA #1");
+      setRatedPower(activeLaser?.wattagePeak ?? 100);
+      setMaterial(scopedMaterial);
     }
+
     setTestLines(null);
     setSelectedLine(3);
     setPhase("config");
@@ -107,17 +164,21 @@ export function FiberColorCalibrationPanel() {
   };
 
   const handleSave = () => {
-    if (!testLines) return;
+    if (!testLines || !calibrationScope || !isEligible) return;
     const stepPct = getStepPct(bracketStep);
     const { offsetPercent, offsetMultiplier } = applyCalibration(selectedLine, stepPct);
     const picked = testLines[selectedLine - 1];
 
-    const profile: FiberMachineProfile = {
-      id: activeProfile?.id ?? `fiber-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    const profile: FiberMachineProfile = normalizeFiberCalibrationProfile({
+      id: activeProfile?.id ?? createFiberProfileId(),
       machine,
+      laserProfileId: calibrationScope.laserProfileId,
       ratedPower,
       wavelength,
       material,
+      materialSlug: calibrationScope.materialSlug,
+      materialLabel: currentMaterialLabel ?? (material === "ti" ? "Titanium" : "Stainless Steel"),
+      processFamily: calibrationScope.processFamily,
       lockedAt: new Date().toISOString(),
       selectedLine,
       offsetPercent,
@@ -127,10 +188,10 @@ export function FiberColorCalibrationPanel() {
         energyDensity_Jmm2: picked.energyDensity,
       },
       colorMapping: buildCalibratedColorMapping(offsetMultiplier),
-    };
+    });
 
     const next = activeProfile
-      ? profiles.map((p) => (p.id === profile.id ? profile : p))
+      ? profiles.map((entry) => (entry.id === profile.id ? profile : entry))
       : [...profiles, profile];
 
     setProfiles(next);
@@ -149,33 +210,41 @@ export function FiberColorCalibrationPanel() {
 
   const handleDelete = () => {
     if (!activeProfile) return;
-    const next = profiles.filter((p) => p.id !== activeProfile.id);
+    const next = profiles.filter((profile) => profile.id !== activeProfile.id);
     setProfiles(next);
     saveFiberProfiles(next);
-    setActiveId(next[0]?.id ?? null);
-    setActiveFiberProfileId(next[0]?.id ?? null);
+    const nextScopedProfile = next
+      .map(normalizeFiberCalibrationProfile)
+      .find((profile) => calibrationScope && matchesFiberCalibrationScope(profile, calibrationScope));
+    setActiveId(nextScopedProfile?.id ?? null);
+    setActiveFiberProfileId(nextScopedProfile?.id ?? null);
     setPhase("idle");
     setTestLines(null);
   };
 
-  // ── Render helpers ──────────────────────────────────────────────────────
-  const paramLabel = (p: BracketParam) =>
-    p === "speed" ? "Speed" : p === "power" ? "Power" : "Pulse Width";
+  const paramLabel = (param: BracketParam) =>
+    param === "speed" ? "Speed" : param === "power" ? "Power" : "Pulse Width";
 
   const formatLineParam = (line: BracketTestLine, param: BracketParam) => {
     switch (param) {
-      case "speed": return `${Math.round(line.params.speed_mms)} mm/s`;
-      case "power": return `${line.params.power_w.toFixed(1)} W`;
-      case "pulseWidth": return `${Math.round(line.params.pulseWidth_ns)} ns`;
+      case "speed":
+        return `${Math.round(line.params.speed_mms)} mm/s`;
+      case "power":
+        return `${line.params.power_w.toFixed(1)} W`;
+      case "pulseWidth":
+        return `${Math.round(line.params.pulseWidth_ns)} ns`;
+      default:
+        return "";
     }
   };
 
-  // ── Render ──────────────────────────────────────────────────────────────
   return (
     <section className={styles.panel}>
       <div className={styles.header}>
         <span className={styles.title}>Fiber Color Calibration</span>
-        {activeProfile ? (
+        {!isEligible ? (
+          <span className={`${styles.statusBadge} ${styles.statusUncalibrated}`}>Unavailable</span>
+        ) : activeProfile ? (
           <span className={`${styles.statusBadge} ${styles.statusCalibrated}`}>Calibrated</span>
         ) : (
           <span className={`${styles.statusBadge} ${styles.statusUncalibrated}`}>Uncalibrated</span>
@@ -183,24 +252,46 @@ export function FiberColorCalibrationPanel() {
       </div>
 
       <div className={styles.body}>
-        {/* ── Profile selector ── */}
-        {profiles.length > 0 && phase === "idle" && (
+        <div className={styles.resultBox}>
+          <div className={styles.resultRow}>
+            <span>Laser scope</span>
+            <span className={styles.resultValue}>{activeLaser?.name ?? "No active laser"}</span>
+          </div>
+          <div className={styles.resultRow}>
+            <span>Material</span>
+            <span className={styles.resultValue}>{currentMaterialLabel ?? "Not selected"}</span>
+          </div>
+          <div className={styles.resultRow}>
+            <span>Process</span>
+            <span className={styles.resultValue}>{scopedProcessFamily ?? "Not eligible"}</span>
+          </div>
+        </div>
+
+        {!isEligible && (
+          <div className={styles.resultBox}>
+            <div className={styles.resultRow}>
+            <span>Status</span>
+              <span className={styles.resultValue}>{availabilityMessage}</span>
+            </div>
+          </div>
+        )}
+
+        {isEligible && scopedProfiles.length > 0 && phase === "idle" && (
           <>
             <div className={styles.profileRow}>
               <select
                 className={styles.profileSelect}
-                value={activeId ?? ""}
-                onChange={(e) => handleSelectProfile(e.target.value)}
+                value={activeProfile?.id ?? ""}
+                onChange={(event) => handleSelectProfile(event.target.value)}
               >
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.machine} ({p.wavelength}nm, {p.material.toUpperCase()})
+                {scopedProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.machine} ({profile.materialLabel}, {profile.processFamily})
                   </option>
                 ))}
               </select>
             </div>
 
-            {/* Active profile summary */}
             {activeProfile && (
               <div className={styles.resultBox}>
                 <div className={styles.resultRow}>
@@ -210,8 +301,8 @@ export function FiberColorCalibrationPanel() {
                 <div className={styles.resultRow}>
                   <span>Offset</span>
                   <span className={styles.resultValue}>
-                    {activeProfile.offsetPercent >= 0 ? "+" : ""}{activeProfile.offsetPercent.toFixed(0)}%
-                    (×{activeProfile.offsetMultiplier.toFixed(2)})
+                    {activeProfile.offsetPercent >= 0 ? "+" : ""}
+                    {activeProfile.offsetPercent.toFixed(0)}% (x{activeProfile.offsetMultiplier.toFixed(2)})
                   </span>
                 </div>
                 <div className={styles.resultRow}>
@@ -221,10 +312,8 @@ export function FiberColorCalibrationPanel() {
                   </span>
                 </div>
                 <div className={styles.resultRow}>
-                  <span>Line selected</span>
-                  <span className={styles.resultValue}>
-                    {activeProfile.selectedLine} of 5
-                  </span>
+                  <span>Selected line</span>
+                  <span className={styles.resultValue}>{activeProfile.selectedLine} of 5</span>
                 </div>
               </div>
             )}
@@ -240,8 +329,7 @@ export function FiberColorCalibrationPanel() {
           </>
         )}
 
-        {/* ── Start button when no profiles ── */}
-        {profiles.length === 0 && phase === "idle" && (
+        {isEligible && scopedProfiles.length === 0 && phase === "idle" && (
           <button
             className={`${styles.primaryBtn} ${styles.generateBtn}`}
             onClick={handleStartCalibration}
@@ -250,9 +338,20 @@ export function FiberColorCalibrationPanel() {
           </button>
         )}
 
-        {/* ── Phase: config ── */}
-        {phase === "config" && (
+        {phase === "config" && isEligible && (
           <>
+            <span className={styles.sectionLabel}>Calibration Scope</span>
+
+            <div className={styles.fieldRow}>
+              <span className={styles.fieldLabel}>Material</span>
+              <span className={styles.resultValue}>{currentMaterialLabel}</span>
+            </div>
+
+            <div className={styles.fieldRow}>
+              <span className={styles.fieldLabel}>Process</span>
+              <span className={styles.resultValue}>{scopedProcessFamily}</span>
+            </div>
+
             <span className={styles.sectionLabel}>Machine</span>
 
             <div className={styles.fieldRow}>
@@ -260,7 +359,7 @@ export function FiberColorCalibrationPanel() {
               <input
                 className={`${styles.input} ${styles.inputWide}`}
                 value={machine}
-                onChange={(e) => setMachine(e.target.value)}
+                onChange={(event) => setMachine(event.target.value)}
               />
             </div>
 
@@ -271,7 +370,7 @@ export function FiberColorCalibrationPanel() {
                 className={styles.input}
                 value={ratedPower}
                 min={1}
-                onChange={(e) => setRatedPower(Number(e.target.value))}
+                onChange={(event) => setRatedPower(Number(event.target.value))}
               />
               <span className={styles.fieldUnit}>W</span>
             </div>
@@ -281,7 +380,7 @@ export function FiberColorCalibrationPanel() {
               <select
                 className={styles.select}
                 value={wavelength}
-                onChange={(e) => setWavelength(Number(e.target.value) as Wavelength)}
+                onChange={(event) => setWavelength(Number(event.target.value) as Wavelength)}
               >
                 <option value={1064}>1064 nm</option>
                 <option value={532}>532 nm</option>
@@ -289,63 +388,76 @@ export function FiberColorCalibrationPanel() {
               </select>
             </div>
 
-            <div className={styles.fieldRow}>
-              <span className={styles.fieldLabel}>Material</span>
-              <div className={styles.materialToggle}>
-                <button
-                  type="button"
-                  className={`${styles.materialBtn} ${material === "ss" ? styles.materialBtnActive : ""}`}
-                  onClick={() => setMaterial("ss")}
-                >SS</button>
-                <button
-                  type="button"
-                  className={`${styles.materialBtn} ${material === "ti" ? styles.materialBtnActive : ""}`}
-                  onClick={() => setMaterial("ti")}
-                >Ti</button>
-              </div>
-            </div>
-
             <span className={styles.sectionLabel}>Base Parameters (Line 3)</span>
 
             <div className={styles.fieldRow}>
               <span className={styles.fieldLabel}>Power</span>
-              <input type="number" className={styles.input} value={power} min={0.1} step={0.1}
-                onChange={(e) => setPower(Number(e.target.value))} />
+              <input
+                type="number"
+                className={styles.input}
+                value={power}
+                min={0.1}
+                step={0.1}
+                onChange={(event) => setPower(Number(event.target.value))}
+              />
               <span className={styles.fieldUnit}>W</span>
             </div>
 
             <div className={styles.fieldRow}>
               <span className={styles.fieldLabel}>Speed</span>
-              <input type="number" className={styles.input} value={speed} min={1} step={10}
-                onChange={(e) => setSpeed(Number(e.target.value))} />
+              <input
+                type="number"
+                className={styles.input}
+                value={speed}
+                min={1}
+                step={10}
+                onChange={(event) => setSpeed(Number(event.target.value))}
+              />
               <span className={styles.fieldUnit}>mm/s</span>
             </div>
 
             <div className={styles.fieldRow}>
               <span className={styles.fieldLabel}>Pulse width</span>
-              <input type="number" className={styles.input} value={pulseWidth} min={1} step={1}
-                onChange={(e) => setPulseWidth(Number(e.target.value))} />
+              <input
+                type="number"
+                className={styles.input}
+                value={pulseWidth}
+                min={1}
+                step={1}
+                onChange={(event) => setPulseWidth(Number(event.target.value))}
+              />
               <span className={styles.fieldUnit}>ns</span>
             </div>
 
             <div className={styles.fieldRow}>
               <span className={styles.fieldLabel}>Frequency</span>
-              <input type="number" className={styles.input} value={frequency} min={1} step={1}
-                onChange={(e) => setFrequency(Number(e.target.value))} />
+              <input
+                type="number"
+                className={styles.input}
+                value={frequency}
+                min={1}
+                step={1}
+                onChange={(event) => setFrequency(Number(event.target.value))}
+              />
               <span className={styles.fieldUnit}>kHz</span>
             </div>
 
             <div className={styles.fieldRow}>
               <span className={styles.fieldLabel}>Line spacing</span>
-              <input type="number" className={styles.input} value={lineSpacing} min={0.001} step={0.005}
-                onChange={(e) => setLineSpacing(Number(e.target.value))} />
+              <input
+                type="number"
+                className={styles.input}
+                value={lineSpacing}
+                min={0.001}
+                step={0.005}
+                onChange={(event) => setLineSpacing(Number(event.target.value))}
+              />
               <span className={styles.fieldUnit}>mm</span>
             </div>
 
-            {/* Live ED preview */}
             <div className={styles.edPreview}>
               <span>ED:</span>
-              <span className={styles.edValue}>{currentED.toFixed(2)} J/mm²</span>
+              <span className={styles.edValue}>{currentED.toFixed(2)} J/mm2</span>
               <span className={styles.swatch} style={{ backgroundColor: predictedColor.hex }} />
               <span className={styles.swatchLabel}>{predictedColor.color}</span>
             </div>
@@ -354,18 +466,24 @@ export function FiberColorCalibrationPanel() {
 
             <div className={styles.fieldRow}>
               <span className={styles.fieldLabel}>Vary</span>
-              <select className={styles.select} value={bracketParam}
-                onChange={(e) => setBracketParam(e.target.value as BracketParam)}>
+              <select
+                className={styles.select}
+                value={bracketParam}
+                onChange={(event) => setBracketParam(event.target.value as BracketParam)}
+              >
                 <option value="speed">Speed</option>
                 <option value="power">Power</option>
-                <option value="pulseWidth">Pulse W.</option>
+                <option value="pulseWidth">Pulse Width</option>
               </select>
             </div>
 
             <div className={styles.fieldRow}>
               <span className={styles.fieldLabel}>Step size</span>
-              <select className={styles.select} value={bracketStep}
-                onChange={(e) => setBracketStep(e.target.value as BracketStepSize)}>
+              <select
+                className={styles.select}
+                value={bracketStep}
+                onChange={(event) => setBracketStep(event.target.value as BracketStepSize)}
+              >
                 <option value="fine">Fine (5%)</option>
                 <option value="normal">Normal (10%)</option>
                 <option value="coarse">Coarse (20%)</option>
@@ -376,14 +494,19 @@ export function FiberColorCalibrationPanel() {
               Generate 5-Line Test
             </button>
 
-            <button className={styles.secondaryBtn} onClick={() => { setPhase("idle"); setTestLines(null); }}>
+            <button
+              className={styles.secondaryBtn}
+              onClick={() => {
+                setPhase("idle");
+                setTestLines(null);
+              }}
+            >
               Cancel
             </button>
           </>
         )}
 
-        {/* ── Phase: test — select best line ── */}
-        {phase === "test" && testLines && (
+        {phase === "test" && testLines && isEligible && (
           <>
             <span className={styles.sectionLabel}>
               Select Best Line (varying {paramLabel(bracketParam)})
@@ -397,25 +520,19 @@ export function FiberColorCalibrationPanel() {
                   onClick={() => setSelectedLine(line.line)}
                   role="button"
                   tabIndex={0}
-                  onKeyDown={(e) => e.key === "Enter" && setSelectedLine(line.line)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") setSelectedLine(line.line);
+                  }}
                 >
                   <span className={styles.testLineNum}>{line.line}</span>
-                  <span
-                    className={styles.testLineBar}
-                    style={{ backgroundColor: line.predictedColor.hex }}
-                  />
+                  <span className={styles.testLineBar} style={{ backgroundColor: line.predictedColor.hex }} />
                   <span className={styles.swatch} style={{ backgroundColor: line.predictedColor.hex }} />
-                  <span className={styles.testLineParams}>
-                    {formatLineParam(line, bracketParam)}
-                  </span>
-                  <span className={styles.testLineED}>
-                    {line.energyDensity.toFixed(2)}
-                  </span>
+                  <span className={styles.testLineParams}>{formatLineParam(line, bracketParam)}</span>
+                  <span className={styles.testLineED}>{line.energyDensity.toFixed(2)}</span>
                 </div>
               ))}
             </div>
 
-            {/* Preview of calibration result */}
             {(() => {
               const stepPct = getStepPct(bracketStep);
               const { offsetPercent, offsetMultiplier } = applyCalibration(selectedLine, stepPct);
@@ -424,21 +541,19 @@ export function FiberColorCalibrationPanel() {
                   <div className={styles.resultRow}>
                     <span>Offset</span>
                     <span className={styles.resultValue}>
-                      {offsetPercent >= 0 ? "+" : ""}{offsetPercent.toFixed(0)}%
+                      {offsetPercent >= 0 ? "+" : ""}
+                      {offsetPercent.toFixed(0)}%
                     </span>
                   </div>
                   <div className={styles.resultRow}>
                     <span>Multiplier</span>
-                    <span className={styles.resultValue}>×{offsetMultiplier.toFixed(2)}</span>
+                    <span className={styles.resultValue}>x{offsetMultiplier.toFixed(2)}</span>
                   </div>
                 </div>
               );
             })()}
 
-            <button
-              className={`${styles.primaryBtn} ${styles.saveBtn}`}
-              onClick={handleSave}
-            >
+            <button className={`${styles.primaryBtn} ${styles.saveBtn}`} onClick={handleSave}>
               Save Calibration
             </button>
 
@@ -448,7 +563,6 @@ export function FiberColorCalibrationPanel() {
           </>
         )}
 
-        {/* ── Phase: done ── */}
         {phase === "done" && activeProfile && (
           <>
             <div className={styles.resultBox}>
@@ -459,13 +573,15 @@ export function FiberColorCalibrationPanel() {
               <div className={styles.resultRow}>
                 <span>Offset</span>
                 <span className={styles.resultValue}>
-                  {activeProfile.offsetPercent >= 0 ? "+" : ""}{activeProfile.offsetPercent.toFixed(0)}%
-                  (×{activeProfile.offsetMultiplier.toFixed(2)})
+                  {activeProfile.offsetPercent >= 0 ? "+" : ""}
+                  {activeProfile.offsetPercent.toFixed(0)}% (x{activeProfile.offsetMultiplier.toFixed(2)})
                 </span>
               </div>
               <div className={styles.resultRow}>
-                <span>Line selected</span>
-                <span className={styles.resultValue}>{activeProfile.selectedLine} of 5</span>
+                <span>Scope</span>
+                <span className={styles.resultValue}>
+                  {activeProfile.materialLabel} - {activeProfile.processFamily}
+                </span>
               </div>
             </div>
 
@@ -477,4 +593,42 @@ export function FiberColorCalibrationPanel() {
       </div>
     </section>
   );
+}
+
+function normalizeProcessFamily(processFamily: string | null | undefined): MarkingProcessFamily | null {
+  switch (processFamily) {
+    case "oxide-color":
+    case "oxide-black":
+    case "oxide-dark":
+      return processFamily;
+    default:
+      return null;
+  }
+}
+
+function buildAvailabilityMessage({
+  currentMaterialSlug,
+  scopedProcessFamily,
+  activeLaser,
+}: {
+  currentMaterialSlug?: string | null;
+  scopedProcessFamily: MarkingProcessFamily | null;
+  activeLaser: LaserProfile | null;
+}): string {
+  if (!activeLaser) {
+    return "Select an active MOPA fiber laser before calibrating.";
+  }
+  if (activeLaser.sourceType !== "fiber" || activeLaser.isMopaCapable !== true) {
+    return "Color calibration is only available for active MOPA fiber laser profiles.";
+  }
+  if (!currentMaterialSlug) {
+    return "Select a stainless steel or titanium material before calibrating.";
+  }
+  if (currentMaterialSlug !== "stainless-steel" && currentMaterialSlug !== "titanium") {
+    return "Calibration is only available for stainless steel and titanium color-marking scopes.";
+  }
+  if (!scopedProcessFamily) {
+    return "Calibration is only available for MOPA oxide-color process families.";
+  }
+  return "Scope ready.";
 }

@@ -1,3 +1,14 @@
+import type { LightBurnExportPayload } from "./export";
+
+export interface ExportHistoryMaterialSettingsSnapshot {
+  label: string;
+  powerPct: number;
+  maxPowerPct: number;
+  speedMmS: number;
+  lpi: number;
+  passes: number;
+}
+
 export interface ExportHistoryEntry {
   id: string;
   exportedAt: string;           // ISO timestamp
@@ -20,6 +31,8 @@ export interface ExportHistoryEntry {
   }>;
   exportOriginXmm: number;
   exportOriginYmm: number;
+  exportPayloadSnapshot?: LightBurnExportPayload;
+  materialSettingsSnapshot?: ExportHistoryMaterialSettingsSnapshot | null;
   linkedOrderId?: string;
 }
 
