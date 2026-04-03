@@ -31,6 +31,20 @@ export interface EditableBodyOutline {
    * more closely than the simplified mirrored control profile.
    */
   directContour?: EditableBodyOutlineContourPoint[];
+  /**
+   * Preview-space contour in the original imported SVG/image coordinates.
+   * This is used to render the BODY REFERENCE photo and outline from the same
+   * source geometry so the preview cannot drift from the SVG seed.
+   */
+  sourceContour?: EditableBodyOutlineContourPoint[];
+  sourceContourBounds?: {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+    width: number;
+    height: number;
+  };
 }
 
 export interface ReferencePaths {

@@ -2,23 +2,48 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
-import type { ProductTemplate, TumblerMapping } from "@/types/productTemplate";
+import {
+  type EditableBodyOutline,
+  type ReferenceLayerState,
+  type ReferencePaths,
+  getTemplateBaseDiameterMm,
+  getTemplateBodyDiameterMm,
+  getTemplateTopOuterDiameterMm,
+  type ProductTemplate,
+  type TumblerMapping,
+} from "@/types/productTemplate";
 import type { AutoDetectResult } from "@/lib/autoDetect";
 import type { FlatItemLookupResponse } from "@/types/flatItemLookup";
+import type { TumblerFinish } from "@/types/materials";
+import type { RasterVectorizeResponse } from "@/types/rasterVectorize";
 import type { SmartTemplateLookupResponse } from "@/types/smartTemplateLookup";
 import type { TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
+import type { CatalogBatchImportSummary } from "@/lib/catalogBatchImport";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
 import { lookupFlatItem as lookupFlatItemRequest } from "@/lib/flatItemLookup";
 import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
+import { importCatalogTemplates } from "@/lib/catalogBatchImport";
 import { FLAT_BED_ITEMS, type FlatBedItem } from "@/data/flatBedItems";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
 import { getMaterialProfileById } from "@/data/materialProfiles";
-import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "@/data/rotaryPlacementPresets";
 import { saveTemplate, updateTemplate } from "@/lib/templateStorage";
 import { generateThumbnail } from "@/lib/generateThumbnail";
+import {
+  extractManufacturerLogoStamp,
+  MANUFACTURER_LOGO_STAMP_ALGO_VERSION,
+} from "@/lib/manufacturerLogoStamp";
+import { resolveTumblerMaterialSetup } from "@/lib/tumblerMaterialInference";
 import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHandleArcDeg } from "@/data/tumblerProfiles";
 import { getDefaultLaserSettings } from "@/lib/scopedDefaults";
-import { getEngravableDimensions } from "@/lib/engravableDimensions";
+import { deriveEngravableZoneFromFitDebug, getEngravableDimensions } from "@/lib/engravableDimensions";
+import {
+  cloneReferenceLayerState,
+  createEditableBodyOutline,
+  createDefaultReferenceLayerState,
+  createEditableBodyOutlineFromSeedSvgText,
+  createReferencePaths,
+  deriveDimensionsFromEditableBodyOutline,
+} from "@/lib/editableBodyOutline";
 import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -38,10 +63,82 @@ interface Props {
   onSave: (template: ProductTemplate) => void;
   onCancel: () => void;
   editingTemplate?: ProductTemplate;
+  showActions?: boolean;
+}
+
+export interface TemplateCreateFormHandle {
+  save: () => void;
 }
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+function resolveBodyReferenceDiameterMm(args: {
+  outsideDiameterMm?: number | null;
+  topDiameterMm?: number | null;
+  bottomDiameterMm?: number | null;
+  fallbackOutsideDiameterMm?: number | null;
+}): number | null {
+  const outside = typeof args.outsideDiameterMm === "number" && Number.isFinite(args.outsideDiameterMm)
+    ? args.outsideDiameterMm
+    : null;
+  const top = typeof args.topDiameterMm === "number" && Number.isFinite(args.topDiameterMm)
+    ? args.topDiameterMm
+    : null;
+  const bottom = typeof args.bottomDiameterMm === "number" && Number.isFinite(args.bottomDiameterMm)
+    ? args.bottomDiameterMm
+    : null;
+  const fallbackOutside = typeof args.fallbackOutsideDiameterMm === "number" && Number.isFinite(args.fallbackOutsideDiameterMm)
+    ? args.fallbackOutsideDiameterMm
+    : null;
+
+  const topBottomDelta = top != null && bottom != null
+    ? Math.abs(top - bottom)
+    : null;
+  const taperedAverage = top != null && bottom != null
+    ? (top + bottom) / 2
+    : null;
+  const looksLikeSyntheticAverage = (
+    outside != null &&
+    taperedAverage != null &&
+    topBottomDelta != null &&
+    topBottomDelta > 3 &&
+    Math.abs(outside - taperedAverage) < 0.75
+  );
+
+  if (fallbackOutside != null && (outside == null || looksLikeSyntheticAverage)) {
+    return round2(fallbackOutside);
+  }
+  if (outside != null) {
+    return round2(outside);
+  }
+  if (top != null && bottom != null && Math.abs(top - bottom) <= 3) {
+    return round2((top + bottom) / 2);
+  }
+  if (top != null && bottom == null) {
+    return round2(top);
+  }
+  if (bottom != null && top == null) {
+    return round2(bottom);
+  }
+  return null;
+}
+
+function lineIntervalFromLpi(lpi: number): number {
+  return lpi > 0 ? round2(25.4 / lpi) : 0.06;
+}
+
+function resolveReferencePaths(dimensions?: ProductTemplate["dimensions"]): ReferencePaths {
+  return createReferencePaths({
+    bodyOutline: dimensions?.referencePaths?.bodyOutline ?? dimensions?.bodyOutlineProfile ?? null,
+    lidProfile: dimensions?.referencePaths?.lidProfile ?? null,
+    silverProfile: dimensions?.referencePaths?.silverProfile ?? null,
+  });
+}
+
+function resolveReferenceLayerState(dimensions?: ProductTemplate["dimensions"]): ReferenceLayerState {
+  return cloneReferenceLayerState(dimensions?.referenceLayerState ?? createDefaultReferenceLayerState());
 }
 
 /** Convert an image file to a data URL (max 480px on longest side for face photos) */
@@ -84,6 +181,90 @@ function flipImageHorizontal(dataUrl: string): Promise<string> {
     img.onerror = () => resolve("");
     img.src = dataUrl;
   });
+}
+
+async function fetchImageUrlAsDataUrl(url: string): Promise<string> {
+  const response = await fetch("/api/admin/flatbed/fetch-url", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  const payload = await response.json().catch(() => null) as { dataUrl?: string } | null;
+  if (!response.ok || !payload?.dataUrl) {
+    throw new Error(`Could not fetch lookup image: ${url}`);
+  }
+  return payload.dataUrl;
+}
+
+async function dataUrlToFile(dataUrl: string, fileName: string): Promise<File> {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  const type = blob.type || "image/png";
+  return new File([blob], fileName, { type });
+}
+
+async function removeBackgroundForOutlineSeed(sourceDataUrl: string, fileName: string): Promise<string> {
+  const sourceFile = await dataUrlToFile(sourceDataUrl, fileName);
+  const formData = new FormData();
+  formData.set("image", sourceFile);
+
+  try {
+    const response = await fetch("/api/admin/image/remove-bg", {
+      method: "POST",
+      body: formData,
+    });
+    const payload = await response.json().catch(() => null) as { dataUrl?: string; error?: string } | null;
+    if (response.ok && payload?.dataUrl) {
+      return payload.dataUrl;
+    }
+  } catch {
+    // Fall through to the local client-side background-removal fallback.
+  }
+
+  const blob = await (await fetch(sourceDataUrl)).blob();
+  const { removeBackground } = await import("@imgly/background-removal");
+  const cleanBlob = await removeBackground(blob, { model: "isnet_quint8", proxyToWorker: false });
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const nextUrl = typeof reader.result === "string" ? reader.result : "";
+      if (nextUrl) {
+        resolve(nextUrl);
+        return;
+      }
+      reject(new Error("Background removal did not return a usable image."));
+    };
+    reader.onerror = () => reject(new Error("Background removal output could not be read."));
+    reader.readAsDataURL(cleanBlob);
+  });
+}
+
+async function vectorizeOutlineSeedSvg(sourceDataUrl: string, fileName: string): Promise<string> {
+  const sourceFile = await dataUrlToFile(sourceDataUrl, fileName);
+  const formData = new FormData();
+  formData.set("image", sourceFile);
+  formData.set("mode", "trace");
+  formData.set("thresholdMode", "auto");
+  formData.set("invert", "false");
+  formData.set("normalizeLevels", "true");
+  formData.set("trimWhitespace", "true");
+  formData.set("preserveText", "false");
+  formData.set("recipe", "badge");
+  formData.set("backgroundStrategy", "cutout");
+
+  const response = await fetch("/api/admin/image/vectorize", {
+    method: "POST",
+    body: formData,
+  });
+  const payload = await response.json().catch(() => null) as RasterVectorizeResponse | { error?: string } | null;
+  if (!response.ok || !payload || !("svg" in payload) || typeof payload.svg !== "string" || payload.svg.length === 0) {
+    throw new Error(
+      (payload && "error" in payload && typeof payload.error === "string")
+        ? payload.error
+        : "PNG cutout vectorization failed.",
+    );
+  }
+  return payload.svg;
 }
 
 
@@ -375,6 +556,8 @@ function inferTemplateMaterial(
   editingTemplate: ProductTemplate | undefined,
   flatLookupMatch: FlatBedItem | null,
   flatLookupResult: FlatItemLookupResponse | null,
+  resolvedMaterialSlug: string,
+  resolvedMaterialLabel: string,
   materialProfileId: string,
 ): Pick<ProductTemplate, "materialSlug" | "materialLabel"> {
   if (flatLookupMatch) {
@@ -388,6 +571,13 @@ function inferTemplateMaterial(
     return {
       materialSlug: flatLookupResult.material,
       materialLabel: flatLookupResult.materialLabel,
+    };
+  }
+
+  if (resolvedMaterialSlug || resolvedMaterialLabel) {
+    return {
+      materialSlug: resolvedMaterialSlug || editingTemplate?.materialSlug,
+      materialLabel: resolvedMaterialLabel || editingTemplate?.materialLabel,
     };
   }
 
@@ -425,7 +615,10 @@ function parseCapacityOzValue(value: string | null | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props) {
+export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Props>(function TemplateCreateForm(
+  { onSave, onCancel, editingTemplate, showActions = true }: Props,
+  ref,
+) {
   type TemplateLaserType = ProductTemplate["laserType"] | "";
   type TemplateProductType = ProductTemplate["productType"] | "";
   const isEdit = Boolean(editingTemplate);
@@ -433,9 +626,42 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     () => (editingTemplate ? getEngravableDimensions(editingTemplate) : null),
     [editingTemplate],
   );
+  const editingMatchedProfile = React.useMemo(() => {
+    if (!editingTemplate || editingTemplate.productType === "flat") return null;
+    const profileId = findTumblerProfileIdForBrandModel({
+      brand: editingTemplate.brand,
+      model: editingTemplate.name,
+      capacityOz: parseCapacityOzValue(editingTemplate.capacity),
+    });
+    return profileId ? getTumblerProfileById(profileId) : null;
+  }, [editingTemplate]);
   const editingHasExplicitMargins =
     editingTemplate?.dimensions.topMarginMm != null ||
     editingTemplate?.dimensions.bottomMarginMm != null;
+  const editingBodyDiameterMm =
+    editingTemplate?.productType === "flat"
+      ? 0
+      : (editingTemplate ? getTemplateBodyDiameterMm(editingTemplate) : 0);
+  const editingTopOuterDiameterMm =
+    editingTemplate?.productType === "flat"
+      ? 0
+      : (
+          editingTemplate
+            ? (getTemplateTopOuterDiameterMm(editingTemplate) ??
+              editingMatchedProfile?.topDiameterMm ??
+              getTemplateBodyDiameterMm(editingTemplate))
+            : 0
+        );
+  const editingBaseDiameterMm =
+    editingTemplate?.productType === "flat"
+      ? 0
+      : (
+          editingTemplate
+            ? (getTemplateBaseDiameterMm(editingTemplate) ??
+              editingMatchedProfile?.bottomDiameterMm ??
+              getTemplateBodyDiameterMm(editingTemplate))
+            : 0
+        );
 
   // ── Product identity ─────────────────────────────────────────────
   const [name, setName] = React.useState(editingTemplate?.name ?? "");
@@ -447,6 +673,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [productType, setProductType] = React.useState<TemplateProductType>(
     editingTemplate?.productType ?? ""
   );
+  const [resolvedMaterialSlug, setResolvedMaterialSlug] = React.useState(editingTemplate?.materialSlug ?? "");
+  const [resolvedMaterialLabel, setResolvedMaterialLabel] = React.useState(editingTemplate?.materialLabel ?? "");
 
   // ── Files ────────────────────────────────────────────────────────
   const [thumbDataUrl, setThumbDataUrl] = React.useState(editingTemplate?.thumbnailDataUrl ?? "");
@@ -462,6 +690,9 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     editingTemplate?.productPhotoFullUrl ? "Saved product photo" : null,
   );
   const [productPhotoFullUrl, setProductPhotoFullUrl] = React.useState(editingTemplate?.productPhotoFullUrl ?? "");
+  const [manufacturerLogoStamp, setManufacturerLogoStamp] = React.useState(
+    editingTemplate?.manufacturerLogoStamp,
+  );
 
   // ── Auto-detect ──────────────────────────────────────────────────
   const [detecting, setDetecting] = React.useState(false);
@@ -474,8 +705,15 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [flatLookupMatch, setFlatLookupMatch] = React.useState<FlatBedItem | null>(null);
   const [lookupError, setLookupError] = React.useState<string | null>(null);
   const [lookupDebugImageUrl, setLookupDebugImageUrl] = React.useState("");
+  const [batchImportUrl, setBatchImportUrl] = React.useState("");
+  const [isBatchImporting, setIsBatchImporting] = React.useState(false);
+  const [batchImportStatus, setBatchImportStatus] = React.useState<string | null>(null);
+  const [batchImportError, setBatchImportError] = React.useState<string | null>(null);
+  const [batchImportSummary, setBatchImportSummary] = React.useState<CatalogBatchImportSummary | null>(null);
   const [smartLookupApplied, setSmartLookupApplied] = React.useState(false);
   const clearLookupState = React.useCallback((options?: { keepInput?: boolean; clearFamilyKey?: boolean }) => {
+    autoZoneSignatureRef.current = "";
+    bodyOutlineSeedSignatureRef.current = "";
     setLookupResult(null);
     setFlatLookupResult(null);
     setFlatLookupMatch(null);
@@ -490,7 +728,9 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   }, []);
 
   // ── Dimensions ───────────────────────────────────────────────────
-  const [diameterMm, setDiameterMm] = React.useState(editingTemplate?.dimensions.diameterMm ?? 0);
+  const [diameterMm, setDiameterMm] = React.useState(editingBodyDiameterMm);
+  const [topOuterDiameterMm, setTopOuterDiameterMm] = React.useState(editingTopOuterDiameterMm);
+  const [baseDiameterMm, setBaseDiameterMm] = React.useState(editingBaseDiameterMm);
   const [flatWidthMm, setFlatWidthMm] = React.useState(
     editingTemplate?.productType === "flat" ? editingTemplate.dimensions.templateWidthMm : 0,
   );
@@ -524,6 +764,54 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [overallHeightMm, setOverallHeightMm] = React.useState(
     editingTemplate?.dimensions.overallHeightMm ?? derivedEditingDims?.totalHeightMm ?? 0,
   );
+  const [bodyTopFromOverallMm, setBodyTopFromOverallMm] = React.useState(
+    editingTemplate?.dimensions.bodyTopFromOverallMm ?? derivedEditingDims?.bodyTopOffsetMm ?? 0,
+  );
+  const [bodyBottomFromOverallMm, setBodyBottomFromOverallMm] = React.useState(
+    editingTemplate?.dimensions.bodyBottomFromOverallMm ??
+      (
+        derivedEditingDims?.bodyBottomOffsetMm ??
+        (editingTemplate?.dimensions.overallHeightMm != null && editingTemplate?.dimensions.bottomMarginMm != null
+          ? editingTemplate.dimensions.overallHeightMm - editingTemplate.dimensions.bottomMarginMm
+          : 0)
+      ),
+  );
+  const [lidSeamFromOverallMm, setLidSeamFromOverallMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.lidSeamFromOverallMm,
+  );
+  const [silverBandBottomFromOverallMm, setSilverBandBottomFromOverallMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.silverBandBottomFromOverallMm,
+  );
+  const [handleTopFromOverallMm, setHandleTopFromOverallMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleTopFromOverallMm,
+  );
+  const [handleBottomFromOverallMm, setHandleBottomFromOverallMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleBottomFromOverallMm,
+  );
+  const [handleReachMm, setHandleReachMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleReachMm,
+  );
+  const [shoulderDiameterMm, setShoulderDiameterMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.shoulderDiameterMm,
+  );
+  const [taperUpperDiameterMm, setTaperUpperDiameterMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.taperUpperDiameterMm,
+  );
+  const [taperLowerDiameterMm, setTaperLowerDiameterMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.taperLowerDiameterMm,
+  );
+  const [bevelDiameterMm, setBevelDiameterMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.bevelDiameterMm,
+  );
+  const [bodyOutlineProfile, setBodyOutlineProfile] = React.useState<EditableBodyOutline | undefined>(
+    resolveReferencePaths(editingTemplate?.dimensions).bodyOutline ?? undefined,
+  );
+  const [referencePaths, setReferencePaths] = React.useState<ReferencePaths>(
+    resolveReferencePaths(editingTemplate?.dimensions),
+  );
+  const [referenceLayerState, setReferenceLayerState] = React.useState<ReferenceLayerState>(
+    resolveReferenceLayerState(editingTemplate?.dimensions),
+  );
   const [topMarginMm, setTopMarginMm] = React.useState(
     editingTemplate?.dimensions.topMarginMm ?? derivedEditingDims?.topMarginMm ?? 0,
   );
@@ -537,8 +825,15 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     if (!trimmedLookupPath || trimmedLookupPath !== trimmedActivePath) return null;
     return flatLookupResult;
   }, [flatLookupResult, glbPath, productType]);
-  const [referencePhotoScalePct, setReferencePhotoScalePct] = React.useState(
-    editingTemplate?.dimensions.referencePhotoScalePct ?? 100,
+  const legacyReferencePhotoScalePct = editingTemplate?.dimensions.referencePhotoScalePct ?? 100;
+  const [referencePhotoWidthScalePct, setReferencePhotoWidthScalePct] = React.useState(
+    editingTemplate?.dimensions.referencePhotoWidthScalePct ?? legacyReferencePhotoScalePct,
+  );
+  const [referencePhotoHeightScalePct, setReferencePhotoHeightScalePct] = React.useState(
+    editingTemplate?.dimensions.referencePhotoHeightScalePct ?? legacyReferencePhotoScalePct,
+  );
+  const [referencePhotoLockAspect, setReferencePhotoLockAspect] = React.useState(
+    editingTemplate?.dimensions.referencePhotoLockAspect ?? true,
   );
   const [referencePhotoOffsetXPct, setReferencePhotoOffsetXPct] = React.useState(
     editingTemplate?.dimensions.referencePhotoOffsetXPct ?? 0,
@@ -584,10 +879,35 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     return {
       overallHeightMm: overallHeightMm > 0 ? round2(overallHeightMm) : round2(printHeightMm),
       diameterMm: round2(diameterMm),
+      topDiameterMm: topOuterDiameterMm > 0 ? round2(topOuterDiameterMm) : undefined,
+      bottomDiameterMm: baseDiameterMm > 0 ? round2(baseDiameterMm) : undefined,
+      bodyTopOffsetMm: overallHeightMm > 0 ? round2(Math.max(0, bodyTopFromOverallMm)) : undefined,
+      bodyHeightMm:
+        overallHeightMm > 0
+          ? round2(Math.max(0, bodyBottomFromOverallMm - bodyTopFromOverallMm))
+          : undefined,
       printableHeightMm: round2(printHeightMm),
       printableTopOffsetMm: topMarginMm > 0 ? round2(topMarginMm) : undefined,
     };
-  }, [productType, diameterMm, printHeightMm, overallHeightMm, topMarginMm]);
+  }, [
+    productType,
+    diameterMm,
+    topOuterDiameterMm,
+    baseDiameterMm,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    printHeightMm,
+    overallHeightMm,
+    topMarginMm,
+  ]);
+
+  React.useEffect(() => {
+    setReferencePaths((current) => createReferencePaths({
+      bodyOutline: bodyOutlineProfile ?? current.bodyOutline,
+      lidProfile: current.lidProfile,
+      silverProfile: current.silverProfile,
+    }));
+  }, [bodyOutlineProfile]);
   const preferGeneratedFlatPreview =
     productType === "flat" &&
     Boolean(glbPath.trim()) &&
@@ -607,18 +927,74 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [frequency, setFrequency] = React.useState(editingTemplate?.laserSettings.frequency ?? scopedDefaults.frequency);
   const [lineInterval, setLineInterval] = React.useState(editingTemplate?.laserSettings.lineInterval ?? scopedDefaults.lineInterval);
   const [materialProfileId, setMaterialProfileId] = React.useState(editingTemplate?.laserSettings.materialProfileId ?? "");
-  const [rotaryPresetId, setRotaryPresetId] = React.useState(editingTemplate?.laserSettings.rotaryPresetId ?? "");
+  const materialProfileTouchedRef = React.useRef(Boolean(editingTemplate?.laserSettings.materialProfileId));
+
+  const applyMaterialProfileSettings = React.useCallback((
+    nextMaterialProfileId: string,
+    nextLaserType?: TemplateLaserType | null,
+    nextProductType?: TemplateProductType | null,
+  ) => {
+    setMaterialProfileId(nextMaterialProfileId);
+    if (!nextMaterialProfileId) return;
+
+    const materialProfile = getMaterialProfileById(nextMaterialProfileId);
+    if (!materialProfile) return;
+
+    const resolvedProductType = (nextProductType || productType || "tumbler") as ProductTemplate["productType"];
+    const resolvedLaserType = (nextLaserType || materialProfile.laserType) as ProductTemplate["laserType"];
+    if (!nextLaserType) {
+      setLaserType(materialProfile.laserType);
+    }
+    const scoped = getDefaultLaserSettings(resolvedProductType, resolvedLaserType);
+
+    setPower(materialProfile.powerPct);
+    setSpeed(materialProfile.speedMmS);
+    setLineInterval(lineIntervalFromLpi(materialProfile.lpi));
+    setFrequency(scoped.frequency);
+  }, [productType]);
+
+  const applyResolvedDrinkwareMaterial = React.useCallback((args: {
+    laserType?: TemplateLaserType | null;
+    productType?: TemplateProductType | null;
+    explicitFinishType?: TumblerFinish | null;
+    materialSlug?: string | null;
+    materialLabel?: string | null;
+    bodyColorHex?: string | null;
+    rimColorHex?: string | null;
+    textHints?: Array<string | null | undefined>;
+  }) => {
+    const materialSetup = resolveTumblerMaterialSetup({
+      laserType: (args.laserType || null) as ProductTemplate["laserType"] | null,
+      explicitFinishType: args.explicitFinishType ?? null,
+      materialSlug: args.materialSlug ?? null,
+      materialLabel: args.materialLabel ?? null,
+      bodyColorHex: args.bodyColorHex ?? null,
+      rimColorHex: args.rimColorHex ?? null,
+      textHints: args.textHints,
+    });
+
+    if (materialSetup.laserType) {
+      setLaserType(materialSetup.laserType);
+    }
+    setResolvedMaterialSlug(materialSetup.materialSlug ?? "");
+    setResolvedMaterialLabel(materialSetup.materialLabel ?? "");
+    applyMaterialProfileSettings(
+      materialSetup.materialProfileId ?? "",
+      materialSetup.laserType,
+      args.productType ?? productType,
+    );
+  }, [applyMaterialProfileSettings, productType]);
 
   // When product type or laser type changes, update laser settings to new scoped defaults
   // (only for new templates — edits keep their values)
   React.useEffect(() => {
-    if (isEdit || !productType || !laserType) return;
+    if (isEdit || !productType || !laserType || materialProfileId) return;
     const defaults = getDefaultLaserSettings(productType, laserType);
     setPower(defaults.power);
     setSpeed(defaults.speed);
     setFrequency(defaults.frequency);
     setLineInterval(defaults.lineInterval);
-  }, [productType, laserType, isEdit]);
+  }, [productType, laserType, isEdit, materialProfileId]);
 
   // ── Tumbler mapping ─────────────────────────────────────────────
   const [tumblerMapping, setTumblerMapping] = React.useState<TumblerMapping | undefined>(
@@ -628,7 +1004,27 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const handleAutoSampleColors = React.useCallback((nextBody: string, nextRim: string) => {
     setBodyColorHex((prev) => (prev === nextBody ? prev : nextBody));
     setRimColorHex((prev) => (prev === nextRim ? prev : nextRim));
-  }, []);
+    if (!materialProfileTouchedRef.current && productType && productType !== "flat") {
+      applyResolvedDrinkwareMaterial({
+        laserType,
+        productType,
+        materialSlug: resolvedMaterialSlug || null,
+        materialLabel: resolvedMaterialLabel || null,
+        bodyColorHex: nextBody,
+        rimColorHex: nextRim,
+        textHints: [name, brand, capacity],
+      });
+    }
+  }, [
+    applyResolvedDrinkwareMaterial,
+    brand,
+    capacity,
+    laserType,
+    name,
+    productType,
+    resolvedMaterialLabel,
+    resolvedMaterialSlug,
+  ]);
 
   const validateGlbPath = React.useCallback(async (candidate: string) => {
     const trimmed = candidate.trim();
@@ -697,29 +1093,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       setPreviewLoadError(null);
       return;
     }
-
-    let cancelled = false;
+    setPreviewModelFile(null);
     setPreviewLoadError(null);
-
-    fetch(trimmed)
-      .then((res) => {
-        if (!res.ok) throw new Error(`Preview could not load ${trimmed}`);
-        return res.blob();
-      })
-      .then((blob) => {
-        if (cancelled) return;
-        const filename = trimmed.split("/").pop() ?? "model.glb";
-        setPreviewModelFile(new File([blob], filename, { type: blob.type || "model/gltf-binary" }));
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setPreviewModelFile(null);
-        setPreviewLoadError(err instanceof Error ? err.message : "Preview could not load model.");
-      });
-
-    return () => {
-      cancelled = true;
-    };
   }, [glbPath]);
 
   // ── Front / Back face photos ──────────────────────────────────
@@ -729,11 +1104,28 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [backOriginalUrl, setBackOriginalUrl] = React.useState("");
   const [frontCleanUrl, setFrontCleanUrl] = React.useState("");
   const [backCleanUrl, setBackCleanUrl] = React.useState("");
+  const [bodyReferencePhotoDataUrl, setBodyReferencePhotoDataUrl] = React.useState("");
   const [frontBgStatus, setFrontBgStatus] = React.useState<"idle" | "processing" | "done" | "failed">("idle");
   const [backBgStatus, setBackBgStatus] = React.useState<"idle" | "processing" | "done" | "failed">("idle");
   const [frontUseOriginal, setFrontUseOriginal] = React.useState(false);
   const [backUseOriginal, setBackUseOriginal] = React.useState(false);
   const [mirrorForBack, setMirrorForBack] = React.useState(true);
+  const autoZoneSignatureRef = React.useRef<string>("");
+  const bodyOutlineSeedSignatureRef = React.useRef<string>("");
+  const manufacturerLogoSignatureRef = React.useRef<string>("");
+  const activeReferencePhotoDataUrl = React.useMemo(
+    () => bodyReferencePhotoDataUrl || frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl || "",
+    [bodyReferencePhotoDataUrl, frontCleanUrl, frontPhotoDataUrl, productPhotoFullUrl],
+  );
+
+  React.useEffect(() => {
+    if (frontCleanUrl) {
+      setBodyReferencePhotoDataUrl(frontCleanUrl);
+      return;
+    }
+    if (frontPhotoDataUrl || productPhotoFullUrl) return;
+    setBodyReferencePhotoDataUrl("");
+  }, [frontCleanUrl, frontPhotoDataUrl, productPhotoFullUrl]);
 
   // Auto-mirror front photo as back when mirrorForBack is enabled
   React.useEffect(() => {
@@ -748,8 +1140,264 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     return () => { cancelled = true; };
   }, [mirrorForBack, frontPhotoDataUrl]);
 
+  React.useEffect(() => {
+    if (productType === "flat" || overallHeightMm <= 0 || diameterMm <= 0) {
+      bodyOutlineSeedSignatureRef.current = "";
+      return;
+    }
+
+    const fitDebug = lookupResult?.fitDebug ?? null;
+    const canSeedFromFitDebug = Boolean(fitDebug && fitDebug.profilePoints.length > 1);
+    const seedPhotoDataUrl = frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl || "";
+    const canSeedFromPhotoVector = Boolean(seedPhotoDataUrl);
+    if (!canSeedFromPhotoVector && !canSeedFromFitDebug) return;
+
+    const signature = JSON.stringify({
+      seedMode: canSeedFromPhotoVector ? "photo-vector" : "fit-debug",
+      fitDebugSource: fitDebug
+        ? `${fitDebug.sourceImageUrl}:${fitDebug.imageWidthPx}x${fitDebug.imageHeightPx}:${fitDebug.fullTopPx}:${fitDebug.fullBottomPx}:${fitDebug.bodyTopPx}:${fitDebug.bodyBottomPx}`
+        : "",
+      seedPhotoDataUrl: canSeedFromPhotoVector ? seedPhotoDataUrl : "",
+      overallHeightMm: round2(overallHeightMm),
+      bodyTopFromOverallMm: round2(bodyTopFromOverallMm),
+      bodyBottomFromOverallMm: round2(bodyBottomFromOverallMm),
+      diameterMm: round2(diameterMm),
+      topOuterDiameterMm: round2(topOuterDiameterMm),
+      baseDiameterMm: round2(baseDiameterMm),
+      shoulderDiameterMm: round2(shoulderDiameterMm ?? 0),
+      taperUpperDiameterMm: round2(taperUpperDiameterMm ?? 0),
+      taperLowerDiameterMm: round2(taperLowerDiameterMm ?? 0),
+      bevelDiameterMm: round2(bevelDiameterMm ?? 0),
+    });
+
+    const hasSeededContour = (bodyOutlineProfile?.directContour?.length ?? 0) > 20;
+    if (editingTemplate && hasSeededContour) return;
+    if (bodyOutlineSeedSignatureRef.current === signature && hasSeededContour) return;
+    bodyOutlineSeedSignatureRef.current = signature;
+
+    let cancelled = false;
+    const seedBodyOutlineFromSvgCutout = async () => {
+      try {
+        if (canSeedFromPhotoVector && seedPhotoDataUrl) {
+          const cleanDataUrl = frontCleanUrl || await removeBackgroundForOutlineSeed(seedPhotoDataUrl, "body-outline-seed.png");
+          if (!cancelled) {
+            setBodyReferencePhotoDataUrl(cleanDataUrl);
+          }
+          const svgText = await vectorizeOutlineSeedSvg(cleanDataUrl, "body-outline-seed.png");
+          const { outline } = createEditableBodyOutlineFromSeedSvgText({
+            svgText,
+            overallHeightMm,
+            bodyTopFromOverallMm,
+            bodyBottomFromOverallMm,
+            diameterMm,
+            topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
+            side: "right",
+          });
+          if (cancelled) return;
+          setBodyOutlineProfile(outline);
+          setReferencePaths((current) => createReferencePaths({
+            bodyOutline: outline,
+            lidProfile: current.lidProfile,
+            silverProfile: current.silverProfile,
+          }));
+          return;
+        }
+
+        if (!fitDebug) return;
+        const outline = createEditableBodyOutline({
+          overallHeightMm,
+          bodyTopFromOverallMm,
+          bodyBottomFromOverallMm,
+          diameterMm,
+          topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
+          baseDiameterMm: baseDiameterMm > 0 ? baseDiameterMm : undefined,
+          shoulderDiameterMm,
+          taperUpperDiameterMm,
+          taperLowerDiameterMm,
+          bevelDiameterMm,
+          fitDebug,
+        });
+        if (cancelled) return;
+        setBodyOutlineProfile(outline);
+        setReferencePaths((current) => createReferencePaths({
+          bodyOutline: outline,
+          lidProfile: current.lidProfile,
+          silverProfile: current.silverProfile,
+        }));
+      } catch {
+        if (!cancelled) {
+          bodyOutlineSeedSignatureRef.current = "";
+        }
+      }
+    };
+
+    void seedBodyOutlineFromSvgCutout();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeReferencePhotoDataUrl,
+    bodyBottomFromOverallMm,
+    bodyOutlineProfile,
+    bodyTopFromOverallMm,
+    bevelDiameterMm,
+    baseDiameterMm,
+    diameterMm,
+    frontPhotoDataUrl,
+    frontCleanUrl,
+    lookupResult?.fitDebug,
+    overallHeightMm,
+    productPhotoFullUrl,
+    productType,
+    shoulderDiameterMm,
+    taperLowerDiameterMm,
+    taperUpperDiameterMm,
+    topOuterDiameterMm,
+  ]);
+
+  React.useEffect(() => {
+    if (productType === "flat") {
+      autoZoneSignatureRef.current = "";
+      manufacturerLogoSignatureRef.current = "";
+      setManufacturerLogoStamp(undefined);
+      return;
+    }
+
+    const sourcePhotoUrl = frontPhotoDataUrl || productPhotoFullUrl;
+    if (!sourcePhotoUrl || overallHeightMm <= 0) {
+      manufacturerLogoSignatureRef.current = "";
+      setManufacturerLogoStamp(undefined);
+      return;
+    }
+
+    const signature = JSON.stringify({
+      version: MANUFACTURER_LOGO_STAMP_ALGO_VERSION,
+      sourcePhotoUrl,
+      overallHeightMm: round2(overallHeightMm),
+      topMarginMm: round2(topMarginMm),
+      bottomMarginMm: round2(bottomMarginMm),
+      brand: brand.trim().toLowerCase(),
+      lookupImageUrl: lookupResult?.imageUrl ?? "",
+      fitDebugSource: lookupResult?.fitDebug?.sourceImageUrl ?? "",
+      fitDebugSize: lookupResult?.fitDebug
+        ? `${lookupResult.fitDebug.imageWidthPx}x${lookupResult.fitDebug.imageHeightPx}:${lookupResult.fitDebug.fullTopPx}:${lookupResult.fitDebug.fullBottomPx}`
+        : "",
+    });
+
+    if (manufacturerLogoSignatureRef.current === signature) return;
+    manufacturerLogoSignatureRef.current = signature;
+
+    let cancelled = false;
+    const stampSource = lookupResult?.imageUrl || productPhotoFullUrl ? "lookup-photo" : "front-photo";
+    const extractStamp = async () => {
+      const directStamp = await extractManufacturerLogoStamp({
+        photoDataUrl: sourcePhotoUrl,
+        overallHeightMm,
+        brand: brand.trim() || lookupResult?.brand || undefined,
+        topMarginMm,
+        bottomMarginMm,
+        fitDebug: lookupResult?.fitDebug ?? null,
+        source: stampSource,
+      });
+      if (directStamp) return directStamp;
+
+      const fallbackImageUrl = lookupResult?.fitDebug?.sourceImageUrl || lookupResult?.imageUrl;
+      if (!fallbackImageUrl) return null;
+
+      try {
+        const fallbackDataUrl = await fetchImageUrlAsDataUrl(fallbackImageUrl);
+        return await extractManufacturerLogoStamp({
+          photoDataUrl: fallbackDataUrl,
+          overallHeightMm,
+          brand: brand.trim() || lookupResult?.brand || undefined,
+          topMarginMm,
+          bottomMarginMm,
+          fitDebug: lookupResult?.fitDebug ?? null,
+          source: "lookup-photo",
+        });
+      } catch {
+        return null;
+      }
+    };
+
+    extractStamp()
+      .then((stamp) => {
+        if (cancelled) return;
+        setManufacturerLogoStamp(stamp ?? undefined);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setManufacturerLogoStamp(undefined);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    brand,
+    bottomMarginMm,
+    frontPhotoDataUrl,
+    lookupResult?.brand,
+    lookupResult?.fitDebug,
+    lookupResult?.imageUrl,
+    overallHeightMm,
+    productPhotoFullUrl,
+    productType,
+    topMarginMm,
+  ]);
+
+  React.useEffect(() => {
+    if (productType === "flat") {
+      autoZoneSignatureRef.current = "";
+      return;
+    }
+
+    const autoZone = deriveEngravableZoneFromFitDebug({
+      overallHeightMm,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    });
+    if (!autoZone || overallHeightMm <= 0) {
+      autoZoneSignatureRef.current = "";
+      return;
+    }
+
+    const signature = JSON.stringify({
+      overallHeightMm: round2(overallHeightMm),
+      sourceImageUrl: lookupResult?.fitDebug?.sourceImageUrl ?? "",
+      imageSize: lookupResult?.fitDebug
+        ? `${lookupResult.fitDebug.imageWidthPx}x${lookupResult.fitDebug.imageHeightPx}`
+        : "",
+      bounds: lookupResult?.fitDebug
+        ? `${lookupResult.fitDebug.fullTopPx}:${lookupResult.fitDebug.fullBottomPx}:${lookupResult.fitDebug.rimBottomPx}:${lookupResult.fitDebug.bodyBottomPx}`
+        : "",
+      bodyTopFromOverallMm: autoZone.bodyTopFromOverallMm,
+      bodyBottomFromOverallMm: autoZone.bodyBottomFromOverallMm,
+      bodyHeightMm: autoZone.bodyHeightMm,
+      topMarginMm: autoZone.topMarginMm,
+      bottomMarginMm: autoZone.bottomMarginMm,
+      printHeightMm: autoZone.printHeightMm,
+    });
+
+    if (autoZoneSignatureRef.current === signature) return;
+    autoZoneSignatureRef.current = signature;
+
+    setBodyTopFromOverallMm(autoZone.bodyTopFromOverallMm);
+    setBodyBottomFromOverallMm(autoZone.bodyBottomFromOverallMm);
+    setLidSeamFromOverallMm(undefined);
+    setSilverBandBottomFromOverallMm(undefined);
+    setTopMarginMm(autoZone.topMarginMm);
+    setBottomMarginMm(autoZone.bottomMarginMm);
+    setPrintHeightMm(autoZone.printHeightMm);
+  }, [lookupResult?.fitDebug, overallHeightMm, productType]);
+
   // ── Validation ───────────────────────────────────────────────────
   const [errors, setErrors] = React.useState<string[]>([]);
+  const errorSummaryRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (errors.length === 0) return;
+    errorSummaryRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [errors]);
 
   /** Handle product image selection — store file for auto-detect, generate thumbnail + full-res */
   const handleProductImage = React.useCallback(async (file: File) => {
@@ -770,6 +1418,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     setProductImageLabel(null);
     setThumbDataUrl("");
     setProductPhotoFullUrl("");
+    autoZoneSignatureRef.current = "";
+    bodyOutlineSeedSignatureRef.current = "";
+    manufacturerLogoSignatureRef.current = "";
+    setManufacturerLogoStamp(undefined);
     setDetectResult(null);
     setDetectError(null);
   }, []);
@@ -853,13 +1505,29 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       capacityOz: args.capacityOz,
     });
     const matchedProfile = profileId ? getTumblerProfileById(profileId) : null;
+    const resolvedBodyDiameterMm = resolveBodyReferenceDiameterMm({
+      outsideDiameterMm: args.outsideDiameterMm,
+      topDiameterMm: args.topDiameterMm,
+      bottomDiameterMm: args.bottomDiameterMm,
+      fallbackOutsideDiameterMm: matchedProfile?.outsideDiameterMm ?? null,
+    });
+    const resolvedTopOuterDiameterMm =
+      args.topDiameterMm ??
+      matchedProfile?.topDiameterMm ??
+      resolvedBodyDiameterMm;
+    const resolvedBaseDiameterMm =
+      args.bottomDiameterMm ??
+      matchedProfile?.bottomDiameterMm ??
+      resolvedBodyDiameterMm;
 
-    if (args.outsideDiameterMm) {
-      setDiameterMm(round2(args.outsideDiameterMm));
-    } else if (matchedProfile?.outsideDiameterMm) {
-      setDiameterMm(round2(matchedProfile.outsideDiameterMm));
-    } else if (args.topDiameterMm && args.bottomDiameterMm) {
-      setDiameterMm(round2((args.topDiameterMm + args.bottomDiameterMm) / 2));
+    if (resolvedBodyDiameterMm) {
+      setDiameterMm(round2(resolvedBodyDiameterMm));
+    }
+    if (resolvedTopOuterDiameterMm) {
+      setTopOuterDiameterMm(round2(resolvedTopOuterDiameterMm));
+    }
+    if (resolvedBaseDiameterMm) {
+      setBaseDiameterMm(round2(resolvedBaseDiameterMm));
     }
 
     if (args.usableHeightMm) {
@@ -876,6 +1544,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       const usable = matchedProfile.usableHeightMm;
       const topM = matchedProfile.guideBand?.upperGrooveYmm ?? round2((oh - usable) / 2);
       const bottomM = round2(Math.max(0, oh - usable - topM));
+      setBodyTopFromOverallMm(topM);
+      setBodyBottomFromOverallMm(round2(oh - bottomM));
       setTopMarginMm(topM);
       setBottomMarginMm(bottomM);
       if (matchedProfile.shapeType === "tapered") {
@@ -884,6 +1554,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         if (top && bottom) {
           setTaperCorrection(top < bottom ? "top-narrow" : "bottom-narrow");
         }
+      } else {
+        setTaperCorrection("none");
       }
       return;
     }
@@ -894,11 +1566,19 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     if (args.overallHeightMm && args.usableHeightMm) {
       const topM = round2((args.overallHeightMm - args.usableHeightMm) / 2);
       const bottomM = round2(Math.max(0, args.overallHeightMm - args.usableHeightMm - topM));
+      setBodyTopFromOverallMm(topM);
+      setBodyBottomFromOverallMm(round2(args.overallHeightMm - bottomM));
       setTopMarginMm(topM);
       setBottomMarginMm(bottomM);
     }
-    if (args.topDiameterMm && args.bottomDiameterMm && args.topDiameterMm !== args.bottomDiameterMm) {
-      setTaperCorrection(args.topDiameterMm < args.bottomDiameterMm ? "top-narrow" : "bottom-narrow");
+    if (
+      resolvedTopOuterDiameterMm &&
+      resolvedBaseDiameterMm &&
+      resolvedTopOuterDiameterMm !== resolvedBaseDiameterMm
+    ) {
+      setTaperCorrection(resolvedTopOuterDiameterMm < resolvedBaseDiameterMm ? "top-narrow" : "bottom-narrow");
+    } else {
+      setTaperCorrection("none");
     }
   }, []);
 
@@ -976,6 +1656,18 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     if (draft.capacity !== undefined && draft.capacity !== null) setCapacity(draft.capacity);
     if (draft.laserType) setLaserType(draft.laserType);
     if (draft.productType) setProductType(draft.productType);
+    if (draft.materialSlug !== undefined) {
+      setResolvedMaterialSlug(draft.materialSlug ?? "");
+    }
+    if (draft.materialLabel !== undefined) {
+      setResolvedMaterialLabel(draft.materialLabel ?? "");
+    }
+    materialProfileTouchedRef.current = false;
+    applyMaterialProfileSettings(
+      draft.materialProfileId ?? "",
+      draft.laserType,
+      draft.productType,
+    );
 
     if (draft.glbPath !== undefined) {
       const nextGlbPath = draft.glbPath ?? "";
@@ -986,10 +1678,37 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
     if (draft.productType === "flat") {
       setDiameterMm(0);
+      setTopOuterDiameterMm(0);
+      setBaseDiameterMm(0);
       setTumblerMapping(undefined);
       setHandleArcDeg(0);
       setTaperCorrection("none");
       setOverallHeightMm(draftDims?.overallHeightMm ?? 0);
+      setBodyTopFromOverallMm(draftDims?.bodyTopFromOverallMm ?? 0);
+      setBodyBottomFromOverallMm(
+        draftDims?.bodyBottomFromOverallMm ??
+          (
+            draftDims?.overallHeightMm != null && draftDims?.bottomMarginMm != null
+              ? round2(draftDims.overallHeightMm - draftDims.bottomMarginMm)
+              : 0
+          ),
+      );
+      setLidSeamFromOverallMm(draftDims?.lidSeamFromOverallMm ?? undefined);
+      setSilverBandBottomFromOverallMm(draftDims?.silverBandBottomFromOverallMm ?? undefined);
+      setHandleTopFromOverallMm(draftDims?.handleTopFromOverallMm ?? undefined);
+      setHandleBottomFromOverallMm(draftDims?.handleBottomFromOverallMm ?? undefined);
+      setHandleReachMm(draftDims?.handleReachMm ?? undefined);
+      setShoulderDiameterMm(draftDims?.shoulderDiameterMm ?? undefined);
+      setTaperUpperDiameterMm(draftDims?.taperUpperDiameterMm ?? undefined);
+      setTaperLowerDiameterMm(draftDims?.taperLowerDiameterMm ?? undefined);
+      setBevelDiameterMm(draftDims?.bevelDiameterMm ?? undefined);
+      setBodyOutlineProfile(draftDims?.referencePaths?.bodyOutline ?? draftDims?.bodyOutlineProfile ?? undefined);
+      setReferencePaths(createReferencePaths({
+        bodyOutline: draftDims?.referencePaths?.bodyOutline ?? draftDims?.bodyOutlineProfile ?? null,
+        lidProfile: draftDims?.referencePaths?.lidProfile ?? null,
+        silverProfile: draftDims?.referencePaths?.silverProfile ?? null,
+      }));
+      setReferenceLayerState(cloneReferenceLayerState(draftDims?.referenceLayerState ?? null));
       setTopMarginMm(draftDims?.topMarginMm ?? 0);
       setBottomMarginMm(draftDims?.bottomMarginMm ?? 0);
 
@@ -1014,9 +1733,16 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         brand: draft.brand ?? result.tumblerLookupResult?.brand,
         model: result.tumblerLookupResult?.model,
         capacityOz: result.tumblerLookupResult?.capacityOz ?? parseCapacityOzValue(draft.capacity),
-        outsideDiameterMm: draftDims?.diameterMm ?? result.tumblerLookupResult?.dimensions.outsideDiameterMm,
-        topDiameterMm: result.tumblerLookupResult?.dimensions.topDiameterMm,
-        bottomDiameterMm: result.tumblerLookupResult?.dimensions.bottomDiameterMm,
+        outsideDiameterMm:
+          draftDims?.bodyDiameterMm ??
+          draftDims?.diameterMm ??
+          result.tumblerLookupResult?.dimensions.outsideDiameterMm,
+        topDiameterMm:
+          draftDims?.topOuterDiameterMm ??
+          result.tumblerLookupResult?.dimensions.topDiameterMm,
+        bottomDiameterMm:
+          draftDims?.baseDiameterMm ??
+          result.tumblerLookupResult?.dimensions.bottomDiameterMm,
         overallHeightMm: draftDims?.overallHeightMm ?? result.tumblerLookupResult?.dimensions.overallHeightMm,
         usableHeightMm: draftDims?.printHeightMm ?? result.tumblerLookupResult?.dimensions.usableHeightMm,
       });
@@ -1030,6 +1756,68 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       if (typeof draftDims?.overallHeightMm === "number") {
         setOverallHeightMm(round2(draftDims.overallHeightMm));
       }
+      if (typeof draftDims?.bodyTopFromOverallMm === "number") {
+        setBodyTopFromOverallMm(round2(draftDims.bodyTopFromOverallMm));
+      } else if (typeof draftDims?.topMarginMm === "number") {
+        setBodyTopFromOverallMm(round2(draftDims.topMarginMm));
+      }
+      if (typeof draftDims?.bodyBottomFromOverallMm === "number") {
+        setBodyBottomFromOverallMm(round2(draftDims.bodyBottomFromOverallMm));
+      } else if (typeof draftDims?.overallHeightMm === "number" && typeof draftDims?.bottomMarginMm === "number") {
+        setBodyBottomFromOverallMm(round2(draftDims.overallHeightMm - draftDims.bottomMarginMm));
+      }
+      if (typeof draftDims?.lidSeamFromOverallMm === "number") {
+        setLidSeamFromOverallMm(round2(draftDims.lidSeamFromOverallMm));
+      } else {
+        setLidSeamFromOverallMm(undefined);
+      }
+      if (typeof draftDims?.silverBandBottomFromOverallMm === "number") {
+        setSilverBandBottomFromOverallMm(round2(draftDims.silverBandBottomFromOverallMm));
+      } else {
+        setSilverBandBottomFromOverallMm(undefined);
+      }
+      if (typeof draftDims?.handleTopFromOverallMm === "number") {
+        setHandleTopFromOverallMm(round2(draftDims.handleTopFromOverallMm));
+      } else {
+        setHandleTopFromOverallMm(undefined);
+      }
+      if (typeof draftDims?.handleBottomFromOverallMm === "number") {
+        setHandleBottomFromOverallMm(round2(draftDims.handleBottomFromOverallMm));
+      } else {
+        setHandleBottomFromOverallMm(undefined);
+      }
+      if (typeof draftDims?.handleReachMm === "number") {
+        setHandleReachMm(round2(draftDims.handleReachMm));
+      } else {
+        setHandleReachMm(undefined);
+      }
+      if (typeof draftDims?.shoulderDiameterMm === "number") {
+        setShoulderDiameterMm(round2(draftDims.shoulderDiameterMm));
+      } else {
+        setShoulderDiameterMm(undefined);
+      }
+      if (typeof draftDims?.taperUpperDiameterMm === "number") {
+        setTaperUpperDiameterMm(round2(draftDims.taperUpperDiameterMm));
+      } else {
+        setTaperUpperDiameterMm(undefined);
+      }
+      if (typeof draftDims?.taperLowerDiameterMm === "number") {
+        setTaperLowerDiameterMm(round2(draftDims.taperLowerDiameterMm));
+      } else {
+        setTaperLowerDiameterMm(undefined);
+      }
+      if (typeof draftDims?.bevelDiameterMm === "number") {
+        setBevelDiameterMm(round2(draftDims.bevelDiameterMm));
+      } else {
+        setBevelDiameterMm(undefined);
+      }
+      setBodyOutlineProfile(draftDims?.referencePaths?.bodyOutline ?? draftDims?.bodyOutlineProfile ?? undefined);
+      setReferencePaths(createReferencePaths({
+        bodyOutline: draftDims?.referencePaths?.bodyOutline ?? draftDims?.bodyOutlineProfile ?? null,
+        lidProfile: draftDims?.referencePaths?.lidProfile ?? null,
+        silverProfile: draftDims?.referencePaths?.silverProfile ?? null,
+      }));
+      setReferenceLayerState(cloneReferenceLayerState(draftDims?.referenceLayerState ?? null));
       if (typeof draftDims?.topMarginMm === "number") {
         setTopMarginMm(round2(draftDims.topMarginMm));
       }
@@ -1039,8 +1827,14 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       if (typeof draftDims?.printHeightMm === "number") {
         setPrintHeightMm(round2(draftDims.printHeightMm));
       }
+      if (draftDims?.bodyColorHex) {
+        setBodyColorHex(draftDims.bodyColorHex);
+      }
+      if (draftDims?.rimColorHex) {
+        setRimColorHex(draftDims.rimColorHex);
+      }
     }
-  }, [applyFacePhotoFile, applyProfileOrDimensions, applyResolvedProductPhotoUrl, handleProductImage, resolveLookupPhotoUrl]);
+  }, [applyFacePhotoFile, applyMaterialProfileSettings, applyProfileOrDimensions, applyResolvedProductPhotoUrl, handleProductImage, resolveLookupPhotoUrl]);
 
   const handleItemLookup = async () => {
     const raw = lookupInput.trim();
@@ -1064,6 +1858,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           setBrand(result.brand ?? "");
           setCapacity("");
           setDiameterMm(0);
+          setTopOuterDiameterMm(0);
+          setBaseDiameterMm(0);
           setFlatWidthMm(round2(result.widthMm));
           setFlatThicknessMm(round2(result.thicknessMm));
           setFlatFamilyKey(result.familyKey);
@@ -1104,6 +1900,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           setBrand("");
           setCapacity("");
           setDiameterMm(0);
+          setTopOuterDiameterMm(0);
+          setBaseDiameterMm(0);
           setFlatWidthMm(round2(matchedItem.widthMm));
           setFlatThicknessMm(round2(matchedItem.thicknessMm));
           setFlatFamilyKey(inferFlatFamilyKey({ label: matchedItem.label }));
@@ -1134,8 +1932,25 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       );
       setProductType(inferredProductType);
       setGlbPath(result.glbPath || "");
+      setGlbFileName(result.glbPath ? (result.glbPath.split("/").pop() ?? null) : null);
+      if (result.bodyColorHex) setBodyColorHex(result.bodyColorHex);
+      if (result.rimColorHex) setRimColorHex(result.rimColorHex);
+      if (inferredProductType !== "flat" && !materialProfileTouchedRef.current) {
+        applyResolvedDrinkwareMaterial({
+          laserType,
+          productType: inferredProductType,
+          bodyColorHex: result.bodyColorHex ?? bodyColorHex,
+          rimColorHex: result.rimColorHex ?? rimColorHex,
+          textHints: [raw, result.title, result.brand, result.model],
+        });
+      }
 
       if (inferredProductType !== "flat") {
+        const matchedProfile = result.matchedProfileId ? getTumblerProfileById(result.matchedProfileId) : null;
+        const resolvedOverallHeightMm =
+          result.dimensions.overallHeightMm ??
+          matchedProfile?.overallHeightMm ??
+          null;
         applyProfileOrDimensions({
           brand: result.brand,
           model: result.model,
@@ -1143,9 +1958,20 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           outsideDiameterMm: result.dimensions.outsideDiameterMm,
           topDiameterMm: result.dimensions.topDiameterMm,
           bottomDiameterMm: result.dimensions.bottomDiameterMm,
-          overallHeightMm: result.dimensions.overallHeightMm,
+          overallHeightMm: resolvedOverallHeightMm,
           usableHeightMm: result.dimensions.usableHeightMm,
         });
+        const autoZone = deriveEngravableZoneFromFitDebug({
+          overallHeightMm: resolvedOverallHeightMm,
+          fitDebug: result.fitDebug ?? null,
+        });
+        if (autoZone) {
+          setBodyTopFromOverallMm(autoZone.bodyTopFromOverallMm);
+          setBodyBottomFromOverallMm(autoZone.bodyBottomFromOverallMm);
+          setTopMarginMm(autoZone.topMarginMm);
+          setBottomMarginMm(autoZone.bottomMarginMm);
+          setPrintHeightMm(autoZone.printHeightMm);
+        }
       }
 
       if (result.imageUrl) {
@@ -1190,6 +2016,42 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     }
   };
 
+  const handleCatalogBatchImport = async () => {
+    const trimmedUrl = batchImportUrl.trim();
+    if (!trimmedUrl) {
+      setBatchImportError("Paste an official collection or category URL first.");
+      return;
+    }
+
+    setBatchImportError(null);
+    setBatchImportSummary(null);
+    setBatchImportStatus("Discovering product styles...");
+    setIsBatchImporting(true);
+
+    try {
+      const summary = await importCatalogTemplates({
+        sourceUrl: trimmedUrl,
+        onProgress: (message) => setBatchImportStatus(message),
+      });
+      setBatchImportSummary(summary);
+      setBatchImportStatus(
+        [
+          `Imported ${summary.createdCount + summary.updatedCount} ${summary.providerLabel} styles from ${summary.styleCount} discovered.`,
+          summary.createdCount > 0 ? `${summary.createdCount} new` : null,
+          summary.updatedCount > 0 ? `${summary.updatedCount} updated` : null,
+          summary.failedCount > 0 ? `${summary.failedCount} failed` : null,
+        ].filter(Boolean).join(" | "),
+      );
+    } catch (error) {
+      setBatchImportError(
+        error instanceof Error ? error.message : "Batch import failed.",
+      );
+      setBatchImportStatus(null);
+    } finally {
+      setIsBatchImporting(false);
+    }
+  };
+
   /** Run auto-detect on the uploaded product image */
   const handleAutoDetect = async () => {
     if (!productImageFile) return;
@@ -1210,10 +2072,6 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       if (parts.length > 0) setName(parts.join(" "));
       if (sug.brand) setBrand(sug.brand);
       if (sug.capacityOz) setCapacity(`${sug.capacityOz}oz`);
-      // Dimensions
-      if (draft.outsideDiameterMm) setDiameterMm(round2(draft.outsideDiameterMm));
-      if (draft.usableHeightMm) setPrintHeightMm(round2(draft.usableHeightMm));
-      else if (draft.templateHeightMm) setPrintHeightMm(round2(draft.templateHeightMm));
       // Handle arc: prefer profile-specific value, fall back to 90 if hasHandle
       const profileId = findTumblerProfileIdForBrandModel({
         brand: sug.brand,
@@ -1221,6 +2079,25 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         capacityOz: sug.capacityOz,
       });
       const matchedProfile = profileId ? getTumblerProfileById(profileId) : null;
+      const resolvedBodyDiameterMm = resolveBodyReferenceDiameterMm({
+        outsideDiameterMm: draft.outsideDiameterMm,
+        topDiameterMm: draft.topDiameterMm,
+        bottomDiameterMm: draft.bottomDiameterMm,
+        fallbackOutsideDiameterMm: matchedProfile?.outsideDiameterMm ?? null,
+      });
+      if (resolvedBodyDiameterMm) {
+        setDiameterMm(resolvedBodyDiameterMm);
+      }
+      const resolvedTopOuterDiameterMm = matchedProfile?.topDiameterMm ?? draft.topDiameterMm ?? resolvedBodyDiameterMm ?? 0;
+      if (resolvedTopOuterDiameterMm > 0) {
+        setTopOuterDiameterMm(round2(resolvedTopOuterDiameterMm));
+      }
+      const resolvedBaseDiameterMm = matchedProfile?.bottomDiameterMm ?? draft.bottomDiameterMm ?? resolvedBodyDiameterMm ?? 0;
+      if (resolvedBaseDiameterMm > 0) {
+        setBaseDiameterMm(round2(resolvedBaseDiameterMm));
+      }
+      if (draft.usableHeightMm) setPrintHeightMm(round2(draft.usableHeightMm));
+      else if (draft.templateHeightMm) setPrintHeightMm(round2(draft.templateHeightMm));
       const profileArc = getProfileHandleArcDeg(matchedProfile);
       if (matchedProfile) {
         setHandleArcDeg(profileArc);
@@ -1235,6 +2112,21 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       if (detectedProductType !== "flat") {
         setFlatFamilyKey("");
       }
+      if (detectedProductType !== "flat" && !materialProfileTouchedRef.current) {
+        applyResolvedDrinkwareMaterial({
+          laserType,
+          productType: detectedProductType,
+          explicitFinishType: response.analysis.finishType ?? null,
+          bodyColorHex,
+          rimColorHex,
+          textHints: [
+            productImageFile.name,
+            sug.brand,
+            sug.model,
+            ...(response.analysis.notes ?? []),
+          ],
+        });
+      }
       // Taper
       if (sug.topDiameterMm && sug.bottomDiameterMm && sug.topDiameterMm !== sug.bottomDiameterMm) {
         setTaperCorrection(sug.topDiameterMm < sug.bottomDiameterMm ? "top-narrow" : "bottom-narrow");
@@ -1247,6 +2139,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         const usable = matchedProfile.usableHeightMm;
         const topM = matchedProfile.guideBand?.upperGrooveYmm ?? round2((oh - usable) / 2);
         const bottomM = round2(Math.max(0, oh - usable - topM));
+        setBodyTopFromOverallMm(topM);
+        setBodyBottomFromOverallMm(round2(oh - bottomM));
         setTopMarginMm(topM);
         setBottomMarginMm(bottomM);
       } else if (sug.overallHeightMm && sug.usableHeightMm) {
@@ -1254,6 +2148,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         setOverallHeightMm(round2(oh));
         const topM = round2((oh - sug.usableHeightMm) / 2);
         const bottomM = round2(Math.max(0, oh - sug.usableHeightMm - topM));
+        setBodyTopFromOverallMm(topM);
+        setBodyBottomFromOverallMm(round2(oh - bottomM));
         setTopMarginMm(topM);
         setBottomMarginMm(bottomM);
       }
@@ -1320,14 +2216,22 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = React.useCallback(async () => {
     const errs: string[] = [];
     if (!name.trim()) errs.push("Product name is required.");
     if (!laserType) errs.push("Laser type is required.");
     if (!productType) errs.push("Product type is required.");
     if (productType === "flat" && flatWidthMm <= 0) errs.push("Template width must be > 0 for flat products.");
-    if (productType && productType !== "flat" && diameterMm <= 0) errs.push("Diameter must be > 0 for non-flat products.");
+    if (productType && productType !== "flat" && diameterMm <= 0) errs.push("Body / wrap diameter must be > 0 for non-flat products.");
     if (printHeightMm <= 0) errs.push("Print height must be > 0.");
+    if (
+      productType &&
+      productType !== "flat" &&
+      overallHeightMm > 0 &&
+      (bodyBottomFromOverallMm <= bodyTopFromOverallMm || bodyBottomFromOverallMm > overallHeightMm)
+    ) {
+      errs.push("Body top/bottom reference is invalid. Re-run lookup or adjust the body bounds.");
+    }
     if (glbPath.trim()) {
       const glbOk = await verifyCurrentGlbPath({ clearOnMissing: false });
       if (!glbOk) errs.push("3D model path is missing or invalid.");
@@ -1343,6 +2247,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       editingTemplate,
       flatLookupMatch,
       flatLookupResult,
+      resolvedMaterialSlug,
+      resolvedMaterialLabel,
       materialProfileId,
     );
     const template: ProductTemplate = {
@@ -1359,6 +2265,9 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       glbPath,
       dimensions: {
         diameterMm,
+        bodyDiameterMm: productType === "flat" || diameterMm <= 0 ? undefined : diameterMm,
+        topOuterDiameterMm: productType === "flat" || topOuterDiameterMm <= 0 ? undefined : topOuterDiameterMm,
+        baseDiameterMm: productType === "flat" || baseDiameterMm <= 0 ? undefined : baseDiameterMm,
         printHeightMm,
         templateWidthMm,
         flatThicknessMm: productType === "flat" && flatThicknessMm > 0 ? flatThicknessMm : undefined,
@@ -1372,9 +2281,74 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         handleArcDeg,
         taperCorrection,
         overallHeightMm: overallHeightMm > 0 ? overallHeightMm : undefined,
+        bodyTopFromOverallMm:
+          productType === "flat" || !Number.isFinite(bodyTopFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, bodyTopFromOverallMm)),
+        bodyBottomFromOverallMm:
+          productType === "flat" || !Number.isFinite(bodyBottomFromOverallMm)
+            ? undefined
+            : round2(Math.max(bodyTopFromOverallMm, bodyBottomFromOverallMm)),
+        lidSeamFromOverallMm:
+          productType === "flat" || !Number.isFinite(lidSeamFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, lidSeamFromOverallMm ?? 0)),
+        silverBandBottomFromOverallMm:
+          productType === "flat" || !Number.isFinite(silverBandBottomFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, silverBandBottomFromOverallMm ?? 0)),
+        handleTopFromOverallMm:
+          productType === "flat" || !Number.isFinite(handleTopFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, handleTopFromOverallMm ?? 0)),
+        handleBottomFromOverallMm:
+          productType === "flat" || !Number.isFinite(handleBottomFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, handleBottomFromOverallMm ?? 0)),
+        handleReachMm:
+          productType === "flat" || !Number.isFinite(handleReachMm)
+            ? undefined
+            : round2(Math.max(0, handleReachMm ?? 0)),
+        shoulderDiameterMm:
+          productType === "flat" || !Number.isFinite(shoulderDiameterMm)
+            ? undefined
+            : round2(Math.max(0, shoulderDiameterMm ?? 0)),
+        taperUpperDiameterMm:
+          productType === "flat" || !Number.isFinite(taperUpperDiameterMm)
+            ? undefined
+            : round2(Math.max(0, taperUpperDiameterMm ?? 0)),
+        taperLowerDiameterMm:
+          productType === "flat" || !Number.isFinite(taperLowerDiameterMm)
+            ? undefined
+            : round2(Math.max(0, taperLowerDiameterMm ?? 0)),
+        bevelDiameterMm:
+          productType === "flat" || !Number.isFinite(bevelDiameterMm)
+            ? undefined
+            : round2(Math.max(0, bevelDiameterMm ?? 0)),
+        bodyOutlineProfile: productType === "flat" ? undefined : (referencePaths.bodyOutline ?? bodyOutlineProfile),
+        referencePaths: productType === "flat"
+          ? undefined
+          : createReferencePaths({
+              bodyOutline: referencePaths.bodyOutline ?? bodyOutlineProfile ?? null,
+              lidProfile: referencePaths.lidProfile,
+              silverProfile: referencePaths.silverProfile,
+            }),
+        referenceLayerState: productType === "flat" ? undefined : cloneReferenceLayerState(referenceLayerState),
+        bodyHeightMm:
+          productType === "flat" || !Number.isFinite(bodyBottomFromOverallMm - bodyTopFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, bodyBottomFromOverallMm - bodyTopFromOverallMm)),
         topMarginMm: Number.isFinite(topMarginMm) ? topMarginMm : undefined,
         bottomMarginMm: Number.isFinite(bottomMarginMm) ? bottomMarginMm : undefined,
-        referencePhotoScalePct: Number.isFinite(referencePhotoScalePct) ? referencePhotoScalePct : undefined,
+        referencePhotoScalePct:
+          Number.isFinite(referencePhotoWidthScalePct) &&
+          Number.isFinite(referencePhotoHeightScalePct) &&
+          Math.abs(referencePhotoWidthScalePct - referencePhotoHeightScalePct) < 0.1
+            ? referencePhotoWidthScalePct
+            : undefined,
+        referencePhotoWidthScalePct: Number.isFinite(referencePhotoWidthScalePct) ? referencePhotoWidthScalePct : undefined,
+        referencePhotoHeightScalePct: Number.isFinite(referencePhotoHeightScalePct) ? referencePhotoHeightScalePct : undefined,
+        referencePhotoLockAspect,
         referencePhotoOffsetXPct: Number.isFinite(referencePhotoOffsetXPct) ? referencePhotoOffsetXPct : undefined,
         referencePhotoOffsetYPct: Number.isFinite(referencePhotoOffsetYPct) ? referencePhotoOffsetYPct : undefined,
         referencePhotoAnchorY,
@@ -1388,7 +2362,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         frequency,
         lineInterval,
         materialProfileId,
-        rotaryPresetId,
+        rotaryPresetId: "",
       },
       createdAt: editingTemplate?.createdAt ?? now,
       updatedAt: now,
@@ -1396,6 +2370,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       tumblerMapping: productType === "flat" ? undefined : tumblerMapping,
       frontPhotoDataUrl: frontPhotoDataUrl || undefined,
       backPhotoDataUrl: backPhotoDataUrl || undefined,
+      manufacturerLogoStamp: productType === "flat" ? undefined : manufacturerLogoStamp,
     };
 
     if (isEdit) {
@@ -1404,10 +2379,88 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       saveTemplate(template);
     }
     onSave(template);
-  };
+  }, [
+    backPhotoDataUrl,
+    bodyColorHex,
+    bodyBottomFromOverallMm,
+    bodyOutlineProfile,
+    bodyTopFromOverallMm,
+    bottomMarginMm,
+    brand,
+    capacity,
+    diameterMm,
+    editingTemplate,
+    flatFamilyKey,
+    flatLookupMatch,
+    flatLookupResult,
+    flatThicknessMm,
+    flatWidthMm,
+    frontPhotoDataUrl,
+    frequency,
+    glbPath,
+    handleArcDeg,
+    isEdit,
+    laserType,
+    lineInterval,
+    manufacturerLogoStamp,
+    materialProfileId,
+    name,
+    onSave,
+    overallHeightMm,
+    power,
+    printHeightMm,
+    productPhotoFullUrl,
+    productType,
+    referenceLayerState,
+    referencePaths,
+    referencePhotoAnchorY,
+    referencePhotoCenterMode,
+    referencePhotoHeightScalePct,
+    referencePhotoLockAspect,
+    referencePhotoOffsetXPct,
+    referencePhotoOffsetYPct,
+    referencePhotoWidthScalePct,
+    resolvedMaterialLabel,
+    resolvedMaterialSlug,
+    rimColorHex,
+    handleBottomFromOverallMm,
+    handleReachMm,
+    shoulderDiameterMm,
+    taperUpperDiameterMm,
+    taperLowerDiameterMm,
+    bevelDiameterMm,
+    handleTopFromOverallMm,
+    lidSeamFromOverallMm,
+    silverBandBottomFromOverallMm,
+    speed,
+    taperCorrection,
+    templateWidthMm,
+    thumbDataUrl,
+    topOuterDiameterMm,
+    baseDiameterMm,
+    topMarginMm,
+    tumblerMapping,
+    verifyCurrentGlbPath,
+  ]);
+
+  React.useImperativeHandle(ref, () => ({
+    save: () => {
+      void handleSave();
+    },
+  }), [handleSave]);
 
   return (
     <div className={styles.form}>
+      {errors.length > 0 && (
+        <div ref={errorSummaryRef} className={styles.errorSummary} role="alert" aria-live="assertive">
+          <div className={styles.errorSummaryTitle}>Can&apos;t save template yet</div>
+          <div className={styles.errorSummaryList}>
+            {errors.map((err) => (
+              <div key={err} className={styles.errorSummaryItem}>{err}</div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Smart lookup</div>
         <SmartTemplateLookupPanel
@@ -1661,6 +2714,96 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                 debug={flatLookupResult.traceDebug}
                 imageUrl={lookupDebugImageUrl}
               />
+            )}
+          </div>
+        )}
+
+        {productType && productType !== "flat" && (
+          <div className={styles.lookupBlock}>
+            <div className={styles.lookupHeader}>
+              <div>
+                <div className={styles.lookupTitle}>Catalog batch upload</div>
+                <div className={styles.lookupHint}>
+                  Paste an official collection or category URL to create one template per product style, not one per color.
+                </div>
+              </div>
+            </div>
+            <form
+              className={styles.lookupRow}
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!isBatchImporting && batchImportUrl.trim()) {
+                  void handleCatalogBatchImport();
+                }
+              }}
+            >
+              <input
+                className={styles.textInput}
+                type="url"
+                value={batchImportUrl}
+                onChange={(e) => setBatchImportUrl(e.target.value)}
+                placeholder="https://www.stanley1913.com/collections/adventure-quencher-travel-tumblers"
+              />
+              <button
+                type="button"
+                className={styles.detectBtn}
+                onClick={() => void handleCatalogBatchImport()}
+                disabled={isBatchImporting || !batchImportUrl.trim()}
+              >
+                {isBatchImporting ? "Importing..." : "Batch upload"}
+              </button>
+            </form>
+            <div className={styles.lookupAssistText} role="status" aria-live="polite">
+              {isBatchImporting
+                ? batchImportStatus ?? "Importing catalog styles into templates."
+                : "Current live provider support is Stanley 1913 official catalog URLs. The workflow is provider-based so more catalogs can use this same screen later."}
+            </div>
+
+            {batchImportStatus && !isBatchImporting && (
+              <div className={styles.batchImportStatus}>{batchImportStatus}</div>
+            )}
+
+            {batchImportError && (
+              <div className={styles.detectErrorBanner}>{batchImportError}</div>
+            )}
+
+            {batchImportSummary && (
+              <div className={styles.lookupSummary}>
+                <div className={styles.lookupSummaryHeader}>
+                  <div className={styles.lookupSummaryTitle}>
+                    Imported {batchImportSummary.createdCount + batchImportSummary.updatedCount} {batchImportSummary.providerLabel} styles
+                  </div>
+                  <div className={styles.lookupBadgeRow}>
+                    <span className={styles.lookupBadgePrimary}>Style-level import</span>
+                    <span className={styles.lookupBadgeMuted}>{batchImportSummary.providerLabel}</span>
+                  </div>
+                </div>
+                <div className={styles.lookupSummaryLine}>
+                  {batchImportSummary.styleCount} discovered from the source catalog. Colors stay attached to each style card as swatches.
+                </div>
+                <div className={styles.lookupMetrics}>
+                  <span>{batchImportSummary.createdCount} new</span>
+                  <span>{batchImportSummary.updatedCount} updated</span>
+                  {batchImportSummary.failedCount > 0 && (
+                    <span>{batchImportSummary.failedCount} failed</span>
+                  )}
+                </div>
+                {batchImportSummary.failedNames.length > 0 && (
+                  <div className={styles.lookupNotice}>
+                    Failed: {batchImportSummary.failedNames.slice(0, 5).join(", ")}
+                    {batchImportSummary.failedNames.length > 5 ? "..." : ""}
+                  </div>
+                )}
+                <div className={styles.lookupRow}>
+                  <button
+                    type="button"
+                    className={styles.lookupResetBtn}
+                    onClick={onCancel}
+                  >
+                    View imported templates
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -2035,24 +3178,25 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           </div>
         )}
 
-        {(previewModelFile || liveFlatPreview || previewLoadError) && (
+        {(glbPath.trim() || previewModelFile || liveFlatPreview || previewLoadError) && (
           <div className={styles.fieldRow}>
             <label className={styles.fieldLabel}>Preview</label>
             <div className={styles.modelPreviewBlock}>
               <div className={styles.modelPreviewMeta}>
                 <span className={styles.modelPreviewMode}>
-                  {previewModelFile ? "GLB preview" : "Generated flat preview"}
+                  {(glbPath.trim() || previewModelFile) ? "GLB preview" : "Generated flat preview"}
                 </span>
-                {!previewModelFile && liveFlatPreview && (
+                {!glbPath.trim() && !previewModelFile && liveFlatPreview && (
                   <span className={styles.modelPreviewDims}>
                     {liveFlatPreview.widthMm} × {liveFlatPreview.heightMm} × {liveFlatPreview.thicknessMm} mm
                   </span>
                 )}
               </div>
               <div className={styles.modelPreviewViewport}>
-                {previewModelFile || liveFlatPreview ? (
+                {glbPath.trim() || previewModelFile || liveFlatPreview ? (
                   <ModelViewer
                     file={previewModelFile}
+                    modelUrl={glbPath.trim() || undefined}
                     flatPreview={
                       preferGeneratedFlatPreview
                         ? liveFlatPreview
@@ -2066,6 +3210,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                     tumblerMapping={tumblerMapping}
                     bodyTintColor={productType === "flat" ? undefined : bodyColorHex}
                     rimTintColor={productType === "flat" ? undefined : rimColorHex}
+                    manufacturerLogoStamp={productType === "flat" ? undefined : manufacturerLogoStamp}
                   />
                 ) : (
                   <div className={styles.modelPreviewEmpty}>Preview unavailable</div>
@@ -2085,12 +3230,12 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>
-            {productType === "flat" ? "Template width (mm) *" : "Diameter (mm) *"}
+            {productType === "flat" ? "Template width (mm) *" : "Visible / outer diameter (mm) *"}
           </label>
           <input
             className={styles.numInput}
             type="number"
-            value={productType === "flat" ? (flatWidthMm || "") : (diameterMm || "")}
+            value={productType === "flat" ? (flatWidthMm || "") : ((topOuterDiameterMm || diameterMm) || "")}
             step={0.1}
             onChange={(e) => {
               const next = Number(e.target.value) || 0;
@@ -2098,10 +3243,63 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                 setFlatWidthMm(next);
                 return;
               }
-              setDiameterMm(next);
+              setTopOuterDiameterMm(next);
+              if (diameterMm <= 0) {
+                setDiameterMm(next);
+              }
             }}
           />
         </div>
+
+        {productType && productType !== "flat" && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Body / wrap diameter (mm) *</label>
+            <input
+              className={styles.numInput}
+              type="number"
+              value={diameterMm || ""}
+              step={0.1}
+              min={0}
+              onChange={(e) => {
+                const next = Number(e.target.value) || 0;
+                const shouldSyncBase = baseDiameterMm <= 0 || Math.abs(baseDiameterMm - diameterMm) < 0.01;
+                setDiameterMm(next);
+                if (shouldSyncBase) setBaseDiameterMm(next);
+              }}
+            />
+            <span className={styles.fieldHint}>Used for wrap-width math and body-span fitting</span>
+          </div>
+        )}
+
+        {productType && productType !== "flat" && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Top outer diameter (mm)</label>
+            <input
+              className={styles.numInput}
+              type="number"
+              value={topOuterDiameterMm || ""}
+              step={0.1}
+              min={0}
+              onChange={(e) => setTopOuterDiameterMm(Number(e.target.value) || 0)}
+            />
+            <span className={styles.fieldHint}>Used for the lid/rim outer size and visible preview fit</span>
+          </div>
+        )}
+
+        {productType && productType !== "flat" && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Base diameter (mm)</label>
+            <input
+              className={styles.numInput}
+              type="number"
+              value={baseDiameterMm || ""}
+              step={0.1}
+              min={0}
+              onChange={(e) => setBaseDiameterMm(Number(e.target.value) || 0)}
+            />
+            <span className={styles.fieldHint}>Used for the lower foot / taper width</span>
+          </div>
+        )}
 
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>Print height (mm) *</label>
@@ -2172,35 +3370,109 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       </div>
 
       {/* ── Engravable zone editor ──────────────────────────────── */}
-      {productType && productType !== "flat" && frontPhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
+      {productType && productType !== "flat" && activeReferencePhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
         <div className={styles.section}>
-          <div className={styles.sectionTitle}>Engravable zone</div>
+          <div className={styles.sectionTitle}>Body reference</div>
           <EngravableZoneEditor
-            photoDataUrl={frontPhotoDataUrl}
+            photoDataUrl={activeReferencePhotoDataUrl}
             overallHeightMm={overallHeightMm}
-            topMarginMm={topMarginMm}
-            bottomMarginMm={bottomMarginMm}
+            bodyTopFromOverallMm={bodyTopFromOverallMm}
+            bodyBottomFromOverallMm={bodyBottomFromOverallMm}
+            lidSeamFromOverallMm={lidSeamFromOverallMm}
+            silverBandBottomFromOverallMm={silverBandBottomFromOverallMm}
             diameterMm={diameterMm}
-            photoScalePct={referencePhotoScalePct}
+            bodyWrapDiameterMm={diameterMm}
+            topOuterDiameterMm={topOuterDiameterMm}
+            baseDiameterMm={baseDiameterMm}
+            photoWidthScalePct={referencePhotoWidthScalePct}
+            photoHeightScalePct={referencePhotoHeightScalePct}
+            photoLockAspect={referencePhotoLockAspect}
             photoOffsetXPct={referencePhotoOffsetXPct}
             photoOffsetYPct={referencePhotoOffsetYPct}
             photoAnchorY={referencePhotoAnchorY}
             photoCenterMode={referencePhotoCenterMode}
             bodyColorHex={bodyColorHex}
             rimColorHex={rimColorHex}
-            onChange={(top, bottom) => {
-              setTopMarginMm(top);
-              setBottomMarginMm(bottom);
-              // Keep printHeightMm in sync
-              const eng = round2(overallHeightMm - top - bottom);
-              if (eng > 0) setPrintHeightMm(eng);
+            fitDebug={lookupResult?.fitDebug ?? null}
+            outlineProfile={bodyOutlineProfile}
+            referencePaths={referencePaths}
+            referenceLayerState={referenceLayerState}
+            onChange={(bodyTop, bodyBottom) => {
+              setBodyTopFromOverallMm(bodyTop);
+              setBodyBottomFromOverallMm(bodyBottom);
             }}
-            onPhotoScaleChange={setReferencePhotoScalePct}
+            onLidSeamChange={setLidSeamFromOverallMm}
+            onSilverBandBottomChange={setSilverBandBottomFromOverallMm}
+            handleTopFromOverallMm={handleTopFromOverallMm}
+            handleBottomFromOverallMm={handleBottomFromOverallMm}
+            handleReachMm={handleReachMm}
+            shoulderDiameterMm={shoulderDiameterMm}
+            taperUpperDiameterMm={taperUpperDiameterMm}
+            taperLowerDiameterMm={taperLowerDiameterMm}
+            bevelDiameterMm={bevelDiameterMm}
+            onHandleTopChange={setHandleTopFromOverallMm}
+            onHandleBottomChange={setHandleBottomFromOverallMm}
+            onHandleReachChange={setHandleReachMm}
+            onShoulderDiameterChange={setShoulderDiameterMm}
+            onTaperUpperDiameterChange={setTaperUpperDiameterMm}
+            onTaperLowerDiameterChange={setTaperLowerDiameterMm}
+            onBevelDiameterChange={setBevelDiameterMm}
+            onPhotoWidthScaleChange={setReferencePhotoWidthScalePct}
+            onPhotoHeightScaleChange={setReferencePhotoHeightScalePct}
+            onPhotoLockAspectChange={setReferencePhotoLockAspect}
             onPhotoOffsetXChange={setReferencePhotoOffsetXPct}
             onPhotoOffsetYChange={setReferencePhotoOffsetYPct}
             onPhotoAnchorYChange={setReferencePhotoAnchorY}
             onPhotoCenterModeChange={setReferencePhotoCenterMode}
             onColorsChange={handleAutoSampleColors}
+            onDiameterChange={(nextDiameter) => {
+              setDiameterMm(round2(nextDiameter));
+            }}
+            onTopOuterDiameterChange={(nextDiameter) => {
+              setTopOuterDiameterMm(round2(nextDiameter));
+            }}
+            onBaseDiameterChange={(nextDiameter) => {
+              setBaseDiameterMm(round2(nextDiameter));
+            }}
+            onBaseDiameterDerived={(nextDiameter) => {
+              setBaseDiameterMm(round2(nextDiameter));
+            }}
+            onOutlineProfileChange={(nextProfile) => {
+              setBodyOutlineProfile(nextProfile);
+              const derived = deriveDimensionsFromEditableBodyOutline(nextProfile);
+              if (typeof derived.bodyTopFromOverallMm === "number") {
+                setBodyTopFromOverallMm(round2(derived.bodyTopFromOverallMm));
+              }
+              if (typeof derived.bodyBottomFromOverallMm === "number") {
+                setBodyBottomFromOverallMm(round2(derived.bodyBottomFromOverallMm));
+              }
+              if (typeof derived.diameterMm === "number") {
+                setDiameterMm(round2(derived.diameterMm));
+              }
+              if (typeof derived.topOuterDiameterMm === "number") {
+                setTopOuterDiameterMm(round2(derived.topOuterDiameterMm));
+              }
+              if (typeof derived.baseDiameterMm === "number") {
+                setBaseDiameterMm(round2(derived.baseDiameterMm));
+              }
+              if (typeof derived.shoulderDiameterMm === "number") {
+                setShoulderDiameterMm(round2(derived.shoulderDiameterMm));
+              }
+              if (typeof derived.taperUpperDiameterMm === "number") {
+                setTaperUpperDiameterMm(round2(derived.taperUpperDiameterMm));
+              }
+              if (typeof derived.taperLowerDiameterMm === "number") {
+                setTaperLowerDiameterMm(round2(derived.taperLowerDiameterMm));
+              }
+              if (typeof derived.bevelDiameterMm === "number") {
+                setBevelDiameterMm(round2(derived.bevelDiameterMm));
+              }
+            }}
+            onReferencePathsChange={(nextPaths) => {
+              setReferencePaths(nextPaths);
+              setBodyOutlineProfile(nextPaths.bodyOutline ?? undefined);
+            }}
+            onReferenceLayerStateChange={setReferenceLayerState}
           />
         </div>
       )}
@@ -2263,7 +3535,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           <select
             className={styles.selectInput}
             value={materialProfileId}
-            onChange={(e) => setMaterialProfileId(e.target.value)}
+            onChange={(e) => {
+              materialProfileTouchedRef.current = e.target.value.trim().length > 0;
+              applyMaterialProfileSettings(e.target.value, laserType, productType);
+            }}
           >
             <option value="">None</option>
             {KNOWN_MATERIAL_PROFILES.map((p) => (
@@ -2274,21 +3549,6 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           </select>
         </div>
 
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Rotary preset</label>
-          <select
-            className={styles.selectInput}
-            value={rotaryPresetId}
-            onChange={(e) => setRotaryPresetId(e.target.value)}
-          >
-            <option value="">None</option>
-            {DEFAULT_ROTARY_PLACEMENT_PRESETS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
 
       {/* ── Errors ────────────────────────────────────────────────── */}
@@ -2301,14 +3561,16 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       )}
 
       {/* ── Buttons ───────────────────────────────────────────────── */}
-      <div className={styles.btnRow}>
-        <button type="button" className={styles.cancelBtn} onClick={onCancel}>
-          Cancel
-        </button>
-        <button type="button" className={styles.saveBtn} onClick={handleSave}>
-          {isEdit ? "Save changes" : "Save template"}
-        </button>
-      </div>
+      {showActions ? (
+        <div className={styles.btnRow}>
+          <button type="button" className={styles.cancelBtn} onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className={styles.saveBtn} onClick={() => void handleSave()}>
+            {isEdit ? "Save changes" : "Save template"}
+          </button>
+        </div>
+      ) : null}
 
       {/* ── Tumbler mapping wizard modal ── */}
       {showMappingWizard && glbPath && productType && productType !== "flat" && (
@@ -2329,6 +3591,6 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       )}
     </div>
   );
-}
+});
 
 

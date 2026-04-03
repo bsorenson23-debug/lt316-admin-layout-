@@ -3,10 +3,36 @@
   padding: 12px 0;
 }
 
+.editorToolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.pillButton {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-normal);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pillButtonActive {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+  color: var(--text-primary);
+}
+
 .editorRow {
   display: flex;
   gap: 16px;
   align-items: flex-start;
+}
+
+.editorRowExpanded {
+  gap: 20px;
 }
 
 /* ── Photo container (relative positioning root) ───────────────── */
@@ -21,6 +47,47 @@
   user-select: none;
   display: flex;
   justify-content: center;
+}
+
+.photoContainerExpanded {
+  box-shadow: 0 0 0 1px var(--border-normal);
+}
+
+.dimensionOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.dimensionLine {
+  stroke: var(--info);
+  stroke-width: 1;
+  fill: none;
+  opacity: 0.95;
+}
+
+.dimensionExtension {
+  stroke: var(--info-border);
+  stroke-width: 1;
+  fill: none;
+  opacity: 0.6;
+  stroke-dasharray: 3 3;
+}
+
+.dimensionMarker {
+  fill: var(--info);
+}
+
+.dimensionText {
+  fill: var(--info);
+  font-size: 10px;
+  font-family: monospace;
+  paint-order: stroke;
+  stroke: var(--bg-base);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 
 .bodyFrame {
@@ -38,6 +105,15 @@
   pointer-events: none;
 }
 
+.bodyCenterLine {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  border-left: 1px dashed rgba(80, 160, 220, 0.55);
+  z-index: 3;
+  pointer-events: none;
+}
+
 .productPhoto {
   display: block;
   object-fit: contain;
@@ -45,6 +121,330 @@
   position: absolute;
   top: 0;
   z-index: 1;
+}
+
+.traceOverlay {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+  overflow: visible;
+}
+
+.pathEditorToolbar {
+  position: absolute;
+  top: 8px;
+  left: 250px;
+  right: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  z-index: 6;
+}
+
+.referenceLayersPanel {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 230px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 6;
+}
+
+.referenceLayerRow {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border-normal);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, black);
+}
+
+.referenceLayerRowActive {
+  border-color: var(--accent);
+}
+
+.referenceLayerSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.referenceLayerSwatchBody {
+  background: color-mix(in srgb, var(--accent) 78%, var(--warning));
+}
+
+.referenceLayerSwatchLid {
+  background: var(--info);
+}
+
+.referenceLayerSwatchSilver {
+  background: var(--warning);
+}
+
+.referenceLayerLabel {
+  color: var(--text-primary);
+  font-size: 11px;
+  min-width: 0;
+}
+
+.hiddenFileInput {
+  display: none;
+}
+
+.editorToolBtn {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-normal);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, black);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.editorToolBtnActive {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.editorToolBtnPrimary {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+  color: var(--text-primary);
+}
+
+.editorToolBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pathEditorHint {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-normal);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, black);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.outlineTransformBar {
+  position: absolute;
+  top: 46px;
+  left: 250px;
+  right: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-normal);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, black);
+  z-index: 6;
+}
+
+.transformField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.transformField input {
+  width: 68px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-normal);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.segmentedControl {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.outlineImportError {
+  position: absolute;
+  top: 96px;
+  left: 250px;
+  right: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+  color: var(--error);
+  font-size: 12px;
+  z-index: 6;
+}
+
+.pathEditorOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: visible;
+}
+
+.referenceLayerPath {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.82;
+}
+
+.referenceLayerPathBody {
+  stroke: color-mix(in srgb, var(--accent) 78%, var(--warning));
+  stroke-dasharray: 4 2;
+}
+
+.referenceLayerPathLid {
+  stroke: var(--info);
+  stroke-dasharray: 3 2;
+}
+
+.referenceLayerPathSilver {
+  stroke: var(--warning);
+  stroke-dasharray: 3 2;
+}
+
+.referenceLayerPathActive {
+  opacity: 1;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--bg-base) 88%, transparent));
+}
+
+.pathEditorSegmentHit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.pathEditorSegmentHitActive {
+  stroke: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.pathEditorHandleLine {
+  stroke: var(--info);
+  stroke-width: 1;
+  opacity: 0.9;
+}
+
+.pathEditorHandleNode {
+  fill: var(--info);
+  stroke: var(--bg-base);
+  stroke-width: 1;
+  cursor: move;
+}
+
+.pathEditorHandleNodeActive {
+  fill: var(--warning);
+}
+
+.pathEditorPoint {
+  fill: color-mix(in srgb, var(--accent) 84%, white);
+  stroke: var(--bg-base);
+  stroke-width: 1.5;
+  cursor: move;
+}
+
+.pathEditorPointSelected {
+  fill: var(--warning);
+}
+
+.pathEditorPointCustom {
+  fill: var(--success);
+}
+
+.traceBodyOutline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 1;
+}
+
+.traceBodyOutlineRaw {
+  fill: none;
+  stroke: var(--error);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.38;
+}
+
+.traceBodyOutlineMeasured {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 78%, var(--warning));
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 4 2;
+  opacity: 0.96;
+}
+
+.traceBaseMask {
+  fill: var(--bg-base);
+  opacity: 0.98;
+}
+
+.traceLidSeam {
+  stroke: var(--info);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  opacity: 0.95;
+}
+
+.traceSilverBand {
+  fill: var(--warning-bg);
+  stroke: var(--warning);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  opacity: 0.95;
+}
+
+.traceHandleOutline {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 52%, var(--info) 48%);
+  stroke-width: 1.7;
+  opacity: 1;
+}
+
+.traceHandleHole {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent-hover) 56%, var(--info));
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  opacity: 0.92;
+}
+
+.traceNode {
+  stroke-width: 1;
+  opacity: 0.98;
+}
+
+.traceNodeLid {
+  fill: var(--info);
+  stroke: var(--bg-base);
+}
+
+.traceNodeSilver {
+  fill: var(--warning);
+  stroke: var(--bg-base);
+}
+
+.traceNodeHandle {
+  fill: var(--success);
+  stroke: var(--bg-base);
 }
 
 /* ── Dead zones (non-engravable, red tint) ─────────────────────── */
@@ -60,24 +460,142 @@
 /* ── Engravable zone highlight ─────────────────────────────────── */
 .engravableZone {
   position: absolute;
-  border-top: 1px dashed rgba(80, 200, 120, 0.4);
-  border-bottom: 1px dashed rgba(80, 200, 120, 0.4);
-  background: rgba(80, 200, 120, 0.06);
+  border-top: 1px dashed rgba(80, 200, 120, 0.24);
+  border-bottom: 1px dashed rgba(80, 200, 120, 0.24);
+  background: rgba(80, 200, 120, 0.025);
   z-index: 2;
   pointer-events: none;
-  border-left: 1px solid rgba(80, 200, 120, 0.15);
-  border-right: 1px solid rgba(80, 200, 120, 0.15);
+  border-left: 1px solid rgba(80, 200, 120, 0.08);
+  border-right: 1px solid rgba(80, 200, 120, 0.08);
+}
+
+.straightWallZone {
+  position: absolute;
+  background: rgba(80, 200, 120, 0.045);
+  border-top: 1px solid rgba(80, 200, 120, 0.1);
+  border-bottom: 1px solid rgba(80, 200, 120, 0.12);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.transitionZone {
+  position: absolute;
+  background: rgba(80, 200, 120, 0.012);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.guideLine {
+  position: absolute;
+  height: 1px;
+  border-top: 1px dashed rgba(80, 200, 120, 0.26);
+  z-index: 3;
+  pointer-events: none;
+}
+
+.guideLineLabel {
+  position: absolute;
+  right: 4px;
+  top: -14px;
+  font-size: 9px;
+  font-family: monospace;
+  color: rgba(120, 230, 150, 0.95);
+  white-space: nowrap;
+  text-shadow: 0 0 4px var(--bg-base), 0 0 8px var(--bg-base);
+}
+
+.placementGuide {
+  position: absolute;
+  height: 1px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.lidPlacementGuide {
+  border-top: 1px dashed var(--info);
+}
+
+.coatingPlacementGuide {
+  border-top: 1px dashed var(--warning);
+}
+
+.handlePlacementGuide {
+  border-top: 1px dashed color-mix(in srgb, var(--success) 72%, var(--info));
+}
+
+.placementGuideLabel {
+  position: absolute;
+  left: 4px;
+  top: -14px;
+  font-size: 9px;
+  font-family: monospace;
+  color: var(--text-primary);
+  white-space: nowrap;
+  text-shadow: 0 0 4px var(--bg-base), 0 0 8px var(--bg-base);
 }
 
 /* ── Drag lines ────────────────────────────────────────────────── */
+.guideNode {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 1px solid var(--bg-base);
+  border-radius: 999px;
+  appearance: none;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  cursor: ns-resize;
+  pointer-events: auto;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  transition: transform 100ms ease, box-shadow 100ms ease;
+}
+
+.guideNode:hover,
+.guideNodeActive {
+  transform: translate(-50%, -50%) scale(1.12);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 4px rgba(255, 255, 255, 0.06);
+}
+
+.guideNodeLid {
+  background: var(--info);
+}
+
+.guideNodeSilver {
+  background: var(--warning);
+}
+
+.guideNodeBody {
+  background: var(--success);
+}
+
+.guideNodeHandleOutline {
+  background: color-mix(in srgb, var(--accent) 52%, var(--info) 48%);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.guideNodeHandleReach {
+  cursor: ew-resize;
+}
+
+.guideNodeOutlineWidth {
+  cursor: ew-resize;
+}
+
+.guideNodeProfile {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 .dragLine {
   position: absolute;
-  height: 3px;
-  background: var(--success);
+  height: 1px;
+  border-top: 1px solid var(--success);
+  background: transparent;
   z-index: 4;
   cursor: ns-resize;
-  transform: translateY(-1px);
-  transition: background 100ms;
+  transform: translateY(0);
+  transition: border-color 100ms;
 }
 
 .dragLine::before {
@@ -91,11 +609,11 @@
 
 .dragLine:hover,
 .dragLineActive {
-  background: var(--accent);
+  border-top-color: var(--accent);
 }
 
 .dragLineBottom {
-  transform: translateY(-2px);
+  transform: translateY(0);
 }
 
 /* ── Drag line label ───────────────────────────────────────────── */
@@ -157,6 +675,25 @@
   color: var(--text-primary);
 }
 
+.readoutInputWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.readoutInput {
+  width: 82px;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-normal);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  padding: 4px 6px;
+  font-size: 11px;
+  font-family: monospace;
+  text-align: right;
+}
+
 .readoutHighlight {
   padding: 3px 6px;
   background: var(--success-bg);
@@ -179,6 +716,12 @@
   color: var(--text-dim);
   font-style: italic;
   margin-top: 4px;
+}
+
+.guideHint {
+  font-size: 9px;
+  color: var(--success);
+  margin-top: 2px;
 }
 
 .colorSwatchGroup {
@@ -216,6 +759,53 @@
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border-subtle);
+}
+
+.lockToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.lockToggle input {
+  margin: 0;
+}
+
+.dimensionGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dimensionField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dimensionInputRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dimensionInput {
+  width: 100%;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-normal);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.dimensionUnit {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: monospace;
 }
 
 .sliderHeader {
