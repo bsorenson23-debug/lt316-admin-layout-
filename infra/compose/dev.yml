@@ -4,6 +4,8 @@ services:
       context: ../..
       dockerfile: Dockerfile
       target: dev
+    working_dir: /workspace
+    command: ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", "3000"]
     environment:
       NODE_ENV: development
       NEXT_TELEMETRY_DISABLED: "1"
@@ -26,6 +28,8 @@ services:
       context: ../../services/asset-pipeline
       dockerfile: Dockerfile
       target: dev
+    working_dir: /srv
+    command: ["npm", "run", "dev"]
     environment:
       NODE_ENV: development
       JOB_STORAGE_ROOT: /data/jobs
