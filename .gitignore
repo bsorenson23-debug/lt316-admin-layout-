@@ -43,12 +43,17 @@ next-env.d.ts
 # dev server logs
 .localhost3000.err.log
 .localhost3000.out.log
+dev-server.err.log
+dev-server.out.log
+.next-dev.pid
+.playwright-browsers/
 
 # editor
 .vscode/
 
 # temp
 /tmp/
+/tmp/audit/
 /.tools/
 /inkscape-extract/
 /inkscape-*.log
@@ -62,3 +67,4 @@ next-env.d.ts
 /services/asset-pipeline/dist/
 /storage/pipeline-jobs/*
 !/storage/pipeline-jobs/.gitkeep
+/storage/svg-library/

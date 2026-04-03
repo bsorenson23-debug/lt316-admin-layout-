@@ -1,5 +1,6 @@
 FROM node:20-alpine AS base
 WORKDIR /srv
+RUN apk add --no-cache fontconfig ttf-dejavu ttf-freefont
 
 FROM base AS deps
 COPY package.json package-lock.json* ./

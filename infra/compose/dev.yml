@@ -1,0 +1,44 @@
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: dev
+    environment:
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+      ASSET_PIPELINE_URL: http://asset-pipeline:3100
+      LT316_SVG_LIBRARY_DIR: /workspace/storage/svg-library
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../..:/workspace
+      - web_node_modules:/workspace/node_modules
+      - web_next:/workspace/.next
+    depends_on:
+      asset-pipeline:
+        condition: service_started
+
+  asset-pipeline:
+    build:
+      context: ../../services/asset-pipeline
+      dockerfile: Dockerfile
+      target: dev
+    environment:
+      NODE_ENV: development
+      JOB_STORAGE_ROOT: /data/jobs
+      PORT: "3100"
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3100/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - ../../services/asset-pipeline:/srv
+      - asset_pipeline_node_modules:/srv/node_modules
+      - ../../storage/pipeline-jobs:/data/jobs
