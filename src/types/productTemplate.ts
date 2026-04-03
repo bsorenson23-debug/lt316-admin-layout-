@@ -1,5 +1,61 @@
+export type EditableOutlinePointType = "corner" | "smooth";
+export type ReferenceLayerKey = "bodyOutline" | "lidProfile" | "silverProfile";
+
+export interface EditableOutlineHandle {
+  x: number;
+  y: number;
+}
+
+export interface EditableBodyOutlinePoint {
+  id: string;
+  x: number;
+  y: number;
+  inHandle?: EditableOutlineHandle | null;
+  outHandle?: EditableOutlineHandle | null;
+  pointType: EditableOutlinePointType;
+  role?: "topOuter" | "body" | "shoulder" | "upperTaper" | "lowerTaper" | "bevel" | "base" | "custom";
+}
+
+export interface EditableBodyOutlineContourPoint {
+  x: number;
+  y: number;
+}
+
+export interface EditableBodyOutline {
+  closed: boolean;
+  version: 1;
+  points: EditableBodyOutlinePoint[];
+  /**
+   * High-fidelity closed contour derived from the imported SVG/cutout rows.
+   * Used for preview rendering so the visible outline matches the source cutout
+   * more closely than the simplified mirrored control profile.
+   */
+  directContour?: EditableBodyOutlineContourPoint[];
+}
+
+export interface ReferencePaths {
+  bodyOutline: EditableBodyOutline | null;
+  lidProfile: EditableBodyOutline | null;
+  silverProfile: EditableBodyOutline | null;
+}
+
+export interface ReferenceLayerState {
+  activeLayer: ReferenceLayerKey;
+  visibility: Record<ReferenceLayerKey, boolean>;
+  locked: Record<ReferenceLayerKey, boolean>;
+}
+
 export interface ProductTemplateDimensions {
+  /** Canonical wrap/body diameter used for circumference math and cylindrical placement. */
   diameterMm: number;
+  /** Explicit alias for diameterMm when the style needs body and top diameters separated. */
+  bodyDiameterMm?: number;
+  /** Outer diameter at the top/lid seat. */
+  topOuterDiameterMm?: number;
+  /** Outer diameter at the base/foot. */
+  baseDiameterMm?: number;
+  /** Optional inner mouth diameter when known from a source catalog. */
+  mouthInnerDiameterMm?: number;
   printHeightMm: number;
   templateWidthMm: number; // computed: Math.PI * diameterMm
   /** Flat-item body thickness used for generated 3D preview (mm) */
@@ -10,12 +66,48 @@ export interface ProductTemplateDimensions {
   taperCorrection: "none" | "top-narrow" | "bottom-narrow";
   /** Total product height including non-engravable areas (mm) */
   overallHeightMm?: number;
+  /** Distance from the overall top to the physical tumbler body top, excluding lid/straw (mm). */
+  bodyTopFromOverallMm?: number;
+  /** Distance from the overall top to the physical tumbler body bottom (mm). */
+  bodyBottomFromOverallMm?: number;
+  /** Lid seam / rotary grab reference measured from the overall top (mm). */
+  lidSeamFromOverallMm?: number;
+  /** Bottom edge of the non-powder-coated silver band measured from the overall top (mm). */
+  silverBandBottomFromOverallMm?: number;
+  /** Top edge of the handle silhouette measured from the overall top (mm). */
+  handleTopFromOverallMm?: number;
+  /** Bottom edge of the handle silhouette measured from the overall top (mm). */
+  handleBottomFromOverallMm?: number;
+  /** Horizontal reach of the handle silhouette from the body edge to the outermost handle edge (mm). */
+  handleReachMm?: number;
+  /** Width at the shoulder break where the straight wall transitions into the lower taper (mm). */
+  shoulderDiameterMm?: number;
+  /** Width at the upper taper control point (mm). */
+  taperUpperDiameterMm?: number;
+  /** Width at the lower taper control point (mm). */
+  taperLowerDiameterMm?: number;
+  /** Width at the bevel start just above the flat base (mm). */
+  bevelDiameterMm?: number;
+  /** Editable mirrored body-outline profile used to drive GLB body generation. */
+  bodyOutlineProfile?: EditableBodyOutline;
+  /** Multi-layer body reference paths for body, lid, and silver/powder guides. */
+  referencePaths?: ReferencePaths;
+  /** Editor-layer state for body reference paths. */
+  referenceLayerState?: ReferenceLayerState;
+  /** Physical tumbler body height excluding lid/straw (mm). */
+  bodyHeightMm?: number;
   /** Top non-engravable margin — lid seat / rim (mm) */
   topMarginMm?: number;
   /** Bottom non-engravable margin — base taper (mm) */
   bottomMarginMm?: number;
   /** Template editor-only scale for the reference photo (percent) */
   referencePhotoScalePct?: number;
+  /** Template editor-only width scale for the reference photo (percent, relative to the auto-sized baseline). */
+  referencePhotoWidthScalePct?: number;
+  /** Template editor-only height scale for the reference photo (percent, relative to the auto-sized baseline). */
+  referencePhotoHeightScalePct?: number;
+  /** Template editor-only lock for keeping width and height adjustments in sync. */
+  referencePhotoLockAspect?: boolean;
   /** Template editor-only vertical nudge for the reference photo (percent of editor height) */
   referencePhotoOffsetYPct?: number;
   /** Template editor-only horizontal nudge for the reference photo (percent of editor width) */
@@ -60,6 +152,39 @@ export interface TumblerMapping {
   calibrationRotation?: number;
 }
 
+export interface ManufacturerLogoStampPlacement {
+  /** Horizontal offset from the mapped front-center in mm. Positive = viewer-right. */
+  offsetXMm: number;
+  /** Vertical center from the overall tumbler top in mm. */
+  centerYFromTopMm: number;
+  /** Physical logo width in mm. */
+  widthMm: number;
+  /** Physical logo height in mm. */
+  heightMm: number;
+}
+
+export interface ManufacturerLogoStamp {
+  /** Transparent PNG data URL extracted from the lookup/front product photo. */
+  dataUrl: string;
+  /** Placement solved from the source product photo. */
+  placement: ManufacturerLogoStampPlacement;
+  /** Where the logo extraction came from. */
+  source: "lookup-photo" | "front-photo";
+  /** Brand name associated with the extracted logo, when known. */
+  brand?: string;
+}
+
+export interface ProductTemplateColorOption {
+  /** Stable variant key from the source catalog. */
+  id: string;
+  /** User-facing color label, e.g. "Daffodil". */
+  label: string;
+  /** Remote swatch or product image used to render the color button. */
+  swatchImageUrl?: string;
+  /** Variant URL that represents this color on the source catalog. */
+  variantUrl?: string;
+}
+
 export interface ProductTemplate {
   id: string; // crypto.randomUUID()
   name: string; // "YETI Rambler 40oz"
@@ -83,10 +208,26 @@ export interface ProductTemplate {
   frontPhotoDataUrl?: string;
   /** Straight-on photo of the back face — base64 data URL */
   backPhotoDataUrl?: string;
+  /** Manufacturer logo extracted from the clean product photo and stamped onto the 3D preview. */
+  manufacturerLogoStamp?: ManufacturerLogoStamp;
+  /** Available catalog colors for this style; used for style-level selection without duplicating templates per color. */
+  availableColors?: ProductTemplateColorOption[];
 }
 
 export interface ProductTemplateStore {
   templates: ProductTemplate[];
   lastUpdated: string;
   deletedBuiltInIds?: string[];
+}
+
+export function getTemplateBodyDiameterMm(template: Pick<ProductTemplate, "dimensions">): number {
+  return template.dimensions.bodyDiameterMm ?? template.dimensions.diameterMm;
+}
+
+export function getTemplateTopOuterDiameterMm(template: Pick<ProductTemplate, "dimensions">): number | undefined {
+  return template.dimensions.topOuterDiameterMm;
+}
+
+export function getTemplateBaseDiameterMm(template: Pick<ProductTemplate, "dimensions">): number | undefined {
+  return template.dimensions.baseDiameterMm;
 }

@@ -1,8 +1,12 @@
 import type { SmartTemplateLookupResponse } from "@/types/smartTemplateLookup";
+import type { TumblerFinish } from "@/types/materials";
+import type { ProductTemplate } from "@/types/productTemplate";
 
 interface SmartTemplateLookupArgs {
   lookupInput?: string;
   image?: File | null;
+  laserTypeOverride?: ProductTemplate["laserType"] | "";
+  finishTypeOverride?: TumblerFinish | "";
 }
 
 export async function smartTemplateLookup(
@@ -16,6 +20,12 @@ export async function smartTemplateLookup(
   }
   if (args.image) {
     formData.set("image", args.image);
+  }
+  if (args.laserTypeOverride) {
+    formData.set("laserTypeOverride", args.laserTypeOverride);
+  }
+  if (args.finishTypeOverride) {
+    formData.set("finishTypeOverride", args.finishTypeOverride);
   }
 
   const res = await fetch("/api/admin/template/smart-lookup", {

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runSmartTemplateLookup } from "@/server/template/runSmartTemplateLookup";
+import type { TumblerFinish } from "@/types/materials";
+import type { ProductTemplate } from "@/types/productTemplate";
 
 export const runtime = "nodejs";
 
@@ -10,9 +12,27 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const lookupInputValue = formData.get("lookupInput");
     const imageValue = formData.get("image");
+    const laserTypeOverrideValue = formData.get("laserTypeOverride");
+    const finishTypeOverrideValue = formData.get("finishTypeOverride");
 
     const lookupInput = typeof lookupInputValue === "string" ? lookupInputValue.trim() : "";
     const image = imageValue instanceof File ? imageValue : null;
+    const laserTypeOverride =
+      laserTypeOverrideValue === "co2" ||
+      laserTypeOverrideValue === "fiber" ||
+      laserTypeOverrideValue === "diode"
+        ? laserTypeOverrideValue
+        : null;
+    const finishTypeOverride = (
+      finishTypeOverrideValue === "powder-coat" ||
+      finishTypeOverrideValue === "raw-stainless" ||
+      finishTypeOverrideValue === "painted" ||
+      finishTypeOverrideValue === "anodized" ||
+      finishTypeOverrideValue === "chrome-plated" ||
+      finishTypeOverrideValue === "matte-finish"
+    )
+      ? finishTypeOverrideValue
+      : null;
 
     if (!lookupInput && !image) {
       return NextResponse.json(
@@ -43,6 +63,8 @@ export async function POST(request: NextRequest) {
       imageBytes,
       mimeType: image?.type,
       fileName: image?.name,
+      laserTypeOverride: laserTypeOverride as ProductTemplate["laserType"] | null,
+      finishTypeOverride: finishTypeOverride as TumblerFinish | null,
     });
 
     return NextResponse.json(result);

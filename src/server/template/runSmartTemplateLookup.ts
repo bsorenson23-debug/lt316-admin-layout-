@@ -3,9 +3,12 @@ import {
   getProfileHandleArcDeg,
   getTumblerProfileById,
 } from "@/data/tumblerProfiles";
+import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
 import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
+import { deriveEngravableZoneFromFitDebug } from "@/lib/engravableDimensions";
 import { lookupFlatItem } from "@/server/flatbed/lookupFlatItem";
 import { runFlatBedAutoDetect } from "@/server/flatbed/runFlatBedAutoDetect";
+import { ensureGeneratedTumblerGlb } from "@/server/tumbler/generateTumblerModel";
 import { lookupTumblerItem } from "@/server/tumbler/lookupTumblerItem";
 import { runTumblerAutoSize } from "@/server/tumbler/runTumblerAutoSize";
 import type { FlatBedAutoDetectResponse } from "@/server/flatbed/runFlatBedAutoDetect";
@@ -14,6 +17,7 @@ import type {
   SmartTemplateLookupPrompt,
   SmartTemplateLookupResponse,
 } from "@/types/smartTemplateLookup";
+import type { TumblerFinish } from "@/types/materials";
 import type { ProductTemplate } from "@/types/productTemplate";
 import type { TumblerAutoSizeResponse } from "@/types/tumblerAutoSize";
 
@@ -22,6 +26,8 @@ export interface RunSmartTemplateLookupInput {
   imageBytes?: Uint8Array;
   mimeType?: string;
   fileName?: string;
+  laserTypeOverride?: ProductTemplate["laserType"] | null;
+  finishTypeOverride?: TumblerFinish | null;
 }
 
 function round2(value: number): number {
@@ -99,6 +105,96 @@ function inferTumblerFinish(value: string): { materialSlug: string; materialLabe
   return null;
 }
 
+function materialFromFinishType(
+  finishType: TumblerFinish | null | undefined,
+): { materialSlug: string; materialLabel: string; laserType: ProductTemplate["laserType"] | null } | null {
+  switch (finishType) {
+    case "powder-coat":
+      return { materialSlug: "powder-coat", materialLabel: "Powder Coat", laserType: "co2" };
+    case "raw-stainless":
+      return { materialSlug: "stainless-steel", materialLabel: "Stainless Steel", laserType: "fiber" };
+    case "painted":
+      return { materialSlug: "painted-metal", materialLabel: "Painted Metal", laserType: "co2" };
+    case "anodized":
+      return { materialSlug: "anodized-aluminum", materialLabel: "Anodized Aluminum", laserType: "fiber" };
+    case "chrome-plated":
+      return { materialSlug: "painted-metal", materialLabel: "Chrome-Plated Metal", laserType: "co2" };
+    case "matte-finish":
+      return { materialSlug: "painted-metal", materialLabel: "Matte Finish Metal", laserType: "co2" };
+    default:
+      return null;
+  }
+}
+
+function inferFinishTypeFromMaterial(args: {
+  materialSlug?: string | null;
+  materialLabel?: string | null;
+  finishTypeOverride?: TumblerFinish | null;
+}): TumblerFinish | null {
+  if (args.finishTypeOverride) return args.finishTypeOverride;
+
+  const normalized = normalizeText(`${args.materialSlug ?? ""} ${args.materialLabel ?? ""}`);
+  if (!normalized) return null;
+  if (/\bpowder\b/.test(normalized)) return "powder-coat";
+  if (/\bstainless\b|\buncoated\b|\bsteel\b/.test(normalized)) return "raw-stainless";
+  if (/\banodized\b/.test(normalized)) return "anodized";
+  if (/\bchrome\b/.test(normalized)) return "chrome-plated";
+  if (/\bmatte\b/.test(normalized)) return "matte-finish";
+  if (/\bpainted\b|\bpaint\b/.test(normalized)) return "painted";
+  return null;
+}
+
+function pickPreferredMaterialProfile(
+  laserType: ProductTemplate["laserType"] | null | undefined,
+  finishType: TumblerFinish | null | undefined,
+): { id: string; label: string } | null {
+  if (!laserType || !finishType) return null;
+
+  const matches = KNOWN_MATERIAL_PROFILES.filter((profile) => (
+    profile.laserType === laserType && profile.finishType === finishType
+  ));
+  if (matches.length === 0) return null;
+
+  const preferredWattage = laserType === "co2"
+    ? "50W"
+    : "20W";
+  const preferred = matches.find((profile) => profile.label.includes(preferredWattage)) ?? matches[0];
+
+  return { id: preferred.id, label: preferred.label };
+}
+
+function resolveMaterialSetup(args: {
+  laserType: ProductTemplate["laserType"] | null;
+  materialSlug?: string | null;
+  materialLabel?: string | null;
+  finishTypeOverride?: TumblerFinish | null;
+}): {
+  laserType: ProductTemplate["laserType"] | null;
+  materialSlug: string | null;
+  materialLabel: string | null;
+  materialFinishType: TumblerFinish | null;
+  materialProfileId: string | null;
+  materialProfileLabel: string | null;
+} {
+  const materialFinishType = inferFinishTypeFromMaterial({
+    materialSlug: args.materialSlug,
+    materialLabel: args.materialLabel,
+    finishTypeOverride: args.finishTypeOverride,
+  });
+  const finishMaterial = materialFromFinishType(materialFinishType);
+  const resolvedLaserType = args.laserType ?? finishMaterial?.laserType ?? null;
+  const materialProfile = pickPreferredMaterialProfile(resolvedLaserType, materialFinishType);
+
+  return {
+    laserType: resolvedLaserType,
+    materialSlug: args.materialSlug ?? finishMaterial?.materialSlug ?? null,
+    materialLabel: args.materialLabel ?? finishMaterial?.materialLabel ?? null,
+    materialFinishType,
+    materialProfileId: materialProfile?.id ?? null,
+    materialProfileLabel: materialProfile?.label ?? null,
+  };
+}
+
 function inferFlatLaserType(args: {
   materialSlug?: string | null;
   materialLabel?: string | null;
@@ -127,6 +223,54 @@ function inferFlatLaserType(args: {
 function averageDiameterMm(topDiameterMm: number | null | undefined, bottomDiameterMm: number | null | undefined): number | null {
   if (typeof topDiameterMm === "number" && Number.isFinite(topDiameterMm) && typeof bottomDiameterMm === "number" && Number.isFinite(bottomDiameterMm)) {
     return round2((topDiameterMm + bottomDiameterMm) / 2);
+  }
+  return null;
+}
+
+function resolveBodyReferenceDiameterMm(args: {
+  outsideDiameterMm?: number | null;
+  topDiameterMm?: number | null;
+  bottomDiameterMm?: number | null;
+  fallbackOutsideDiameterMm?: number | null;
+}): number | null {
+  const outside = typeof args.outsideDiameterMm === "number" && Number.isFinite(args.outsideDiameterMm)
+    ? args.outsideDiameterMm
+    : null;
+  const top = typeof args.topDiameterMm === "number" && Number.isFinite(args.topDiameterMm)
+    ? args.topDiameterMm
+    : null;
+  const bottom = typeof args.bottomDiameterMm === "number" && Number.isFinite(args.bottomDiameterMm)
+    ? args.bottomDiameterMm
+    : null;
+  const fallbackOutside = typeof args.fallbackOutsideDiameterMm === "number" && Number.isFinite(args.fallbackOutsideDiameterMm)
+    ? args.fallbackOutsideDiameterMm
+    : null;
+  const topBottomDelta = top != null && bottom != null
+    ? Math.abs(top - bottom)
+    : null;
+  const taperedAverage = averageDiameterMm(top, bottom);
+  const looksLikeSyntheticAverage = (
+    outside != null &&
+    taperedAverage != null &&
+    topBottomDelta != null &&
+    topBottomDelta > 3 &&
+    Math.abs(outside - taperedAverage) < 0.75
+  );
+
+  if (fallbackOutside != null && (outside == null || looksLikeSyntheticAverage)) {
+    return round2(fallbackOutside);
+  }
+  if (outside != null) {
+    return round2(outside);
+  }
+  if (top != null && bottom != null && Math.abs(top - bottom) <= 3) {
+    return round2((top + bottom) / 2);
+  }
+  if (top != null && bottom == null) {
+    return round2(top);
+  }
+  if (bottom != null && top == null) {
+    return round2(bottom);
   }
   return null;
 }
@@ -350,6 +494,8 @@ function inferMaterialLabelFromSlug(slug: string | null | undefined): string | n
 function buildPrompts(args: {
   category: SmartTemplateLookupCategory;
   laserType: ProductTemplate["laserType"] | null;
+  materialSlug: string | null;
+  materialProfileId: string | null;
   glbPath: string | null;
   matchedProfileId: string | null;
   matchedFlatItemId: string | null;
@@ -368,18 +514,19 @@ function buildPrompts(args: {
   if (!args.laserType) {
     prompts.push("choose-laser-type");
   }
-  prompts.push("choose-material-profile");
+  if (!args.materialProfileId && !args.materialSlug) {
+    prompts.push("choose-material-profile");
+  }
 
   if (args.category === "flat") {
     if (!args.glbPath || args.flatLookup?.requiresReview) {
       prompts.push("choose-model");
     }
   } else if (args.category !== "unknown") {
-    prompts.push("choose-rotary-preset");
     if (!args.glbPath) {
       prompts.push("choose-model");
     }
-    if (!args.matchedProfileId || args.glbPath) {
+    if (args.glbPath && !args.matchedProfileId) {
       prompts.push("map-tumbler");
     }
   }
@@ -482,15 +629,21 @@ export async function runSmartTemplateLookup(
 
   if (categoryChoice.category === "flat") {
     const matchedItem = flatAuto?.matchedItem ?? null;
-    const materialSlug = flatLookup?.material ?? matchedItem?.material ?? flatAuto?.vision.material ?? null;
-    const materialLabel =
+    const baseMaterialSlug = flatLookup?.material ?? matchedItem?.material ?? flatAuto?.vision.material ?? null;
+    const baseMaterialLabel =
       flatLookup?.materialLabel ??
       matchedItem?.materialLabel ??
       inferMaterialLabelFromSlug(flatAuto?.vision.material ?? null);
-    const laserType = inferFlatLaserType({
-      materialSlug,
-      materialLabel,
+    const inferredFlatLaserType = inferFlatLaserType({
+      materialSlug: baseMaterialSlug,
+      materialLabel: baseMaterialLabel,
       label: flatLookup?.label ?? matchedItem?.label ?? flatAuto?.vision.label ?? trimmedLookupInput,
+    });
+    const materialSetup = resolveMaterialSetup({
+      laserType: input.laserTypeOverride ?? inferredFlatLaserType,
+      materialSlug: baseMaterialSlug,
+      materialLabel: baseMaterialLabel,
+      finishTypeOverride: input.finishTypeOverride,
     });
 
     const widthMm = flatLookup?.widthMm ?? matchedItem?.widthMm ?? flatAuto?.vision.widthMm ?? null;
@@ -512,6 +665,9 @@ export async function runSmartTemplateLookup(
 
     if (!glbPath) warnings.push("No 3D model was resolved. Choose or upload a model before production use.");
     if (flatLookup?.isProxy) warnings.push("The current 3D model is a proxy family shape. Replace it before final production.");
+    if (materialSetup.materialSlug && !materialSetup.materialProfileId && materialSetup.laserType) {
+      warnings.push("Material was inferred, but no default material preset matched this laser and finish. Review laser settings before saving.");
+    }
 
     return {
       sourceType,
@@ -525,10 +681,13 @@ export async function runSmartTemplateLookup(
         name: (flatLookup?.label ?? matchedItem?.label ?? flatAuto?.vision.label ?? trimmedLookupInput) || null,
         brand: flatLookup?.brand ?? null,
         capacity: null,
-        laserType,
+        laserType: materialSetup.laserType,
         productType: "flat",
-        materialSlug,
-        materialLabel,
+        materialSlug: materialSetup.materialSlug,
+        materialLabel: materialSetup.materialLabel,
+        materialFinishType: materialSetup.materialFinishType,
+        materialProfileId: materialSetup.materialProfileId,
+        materialProfileLabel: materialSetup.materialProfileLabel,
         productPhotoUrl: flatLookup?.imageUrl ?? null,
         productPhotoLabel: flatLookup?.imageUrl ? "Lookup product photo" : null,
         glbPath,
@@ -541,7 +700,9 @@ export async function runSmartTemplateLookup(
       },
       nextPrompts: buildPrompts({
         category: "flat",
-        laserType,
+        laserType: materialSetup.laserType,
+        materialSlug: materialSetup.materialSlug,
+        materialProfileId: materialSetup.materialProfileId,
         glbPath,
         matchedProfileId: null,
         matchedFlatItemId: flatLookup?.matchedItemId ?? matchedItem?.id ?? null,
@@ -574,25 +735,6 @@ export async function runSmartTemplateLookup(
     tumblerAuto?.suggestion.notes.join(" "),
   ].filter(Boolean).join(" "));
 
-  const diameterMm =
-    tumblerLookup?.dimensions.outsideDiameterMm ??
-    matchedProfile?.outsideDiameterMm ??
-    tumblerAuto?.suggestion.outsideDiameterMm ??
-    averageDiameterMm(
-      tumblerLookup?.dimensions.topDiameterMm ?? tumblerAuto?.suggestion.topDiameterMm ?? matchedProfile?.topDiameterMm ?? null,
-      tumblerLookup?.dimensions.bottomDiameterMm ?? tumblerAuto?.suggestion.bottomDiameterMm ?? matchedProfile?.bottomDiameterMm ?? null,
-    );
-  const printHeightMm =
-    tumblerLookup?.dimensions.usableHeightMm ??
-    matchedProfile?.usableHeightMm ??
-    tumblerAuto?.suggestion.usableHeightMm ??
-    tumblerAuto?.calculation.templateHeightMm ??
-    null;
-  const overallHeightMm =
-    tumblerLookup?.dimensions.overallHeightMm ??
-    matchedProfile?.overallHeightMm ??
-    tumblerAuto?.suggestion.overallHeightMm ??
-    null;
   const topDiameterMm =
     tumblerLookup?.dimensions.topDiameterMm ??
     tumblerAuto?.suggestion.topDiameterMm ??
@@ -602,6 +744,26 @@ export async function runSmartTemplateLookup(
     tumblerLookup?.dimensions.bottomDiameterMm ??
     tumblerAuto?.suggestion.bottomDiameterMm ??
     matchedProfile?.bottomDiameterMm ??
+    null;
+  const diameterMm = resolveBodyReferenceDiameterMm({
+    outsideDiameterMm:
+      tumblerLookup?.dimensions.outsideDiameterMm ??
+      tumblerAuto?.suggestion.outsideDiameterMm ??
+      null,
+    topDiameterMm,
+    bottomDiameterMm,
+    fallbackOutsideDiameterMm: matchedProfile?.outsideDiameterMm ?? null,
+  });
+  let printHeightMm =
+    tumblerLookup?.dimensions.usableHeightMm ??
+    matchedProfile?.usableHeightMm ??
+    tumblerAuto?.suggestion.usableHeightMm ??
+    tumblerAuto?.calculation.templateHeightMm ??
+    null;
+  const overallHeightMm =
+    tumblerLookup?.dimensions.overallHeightMm ??
+    matchedProfile?.overallHeightMm ??
+    tumblerAuto?.suggestion.overallHeightMm ??
     null;
 
   let topMarginMm: number | null = null;
@@ -622,18 +784,25 @@ export async function runSmartTemplateLookup(
   const drinkwareCategory = categoryChoice.category === "unknown"
     ? categoryChoice.drinkwareSubtype
     : categoryChoice.category;
-  const laserType = finishInference?.laserType ?? null;
+  const materialSetup = resolveMaterialSetup({
+    laserType: input.laserTypeOverride ?? finishInference?.laserType ?? null,
+    materialSlug: finishInference?.materialSlug ?? null,
+    materialLabel: finishInference?.materialLabel ?? null,
+    finishTypeOverride: input.finishTypeOverride ?? tumblerAuto?.analysis.finishType ?? null,
+  });
   const dimensionsResolved = hasResolvedDrinkwareDimensions({ diameterMm, printHeightMm });
   const requiresReview =
     categoryChoice.confidence < 0.76 ||
-    !dimensionsResolved ||
-    !matchedProfileId;
+    !dimensionsResolved;
 
   if (!matchedProfileId) {
     warnings.push("No internal tumbler profile matched exactly. Confirm the dimensions before saving.");
   }
   if (!tumblerLookup?.glbPath) {
     warnings.push("No tumbler model was resolved. Choose or upload a GLB before mapping orientation.");
+  }
+  if (materialSetup.materialSlug && !materialSetup.materialProfileId && materialSetup.laserType) {
+    warnings.push("Material was inferred, but no default material preset matched this laser and finish. Review laser settings before saving.");
   }
 
   const templateName = buildDrinkwareName({
@@ -653,6 +822,37 @@ export async function runSmartTemplateLookup(
     typeof topDiameterMm === "number" && typeof bottomDiameterMm === "number" && topDiameterMm !== bottomDiameterMm
       ? topDiameterMm < bottomDiameterMm ? "top-narrow" : "bottom-narrow"
       : "none";
+  const generatedPreview = input.imageBytes
+    ? await ensureGeneratedTumblerGlb({
+        profileId: matchedProfileId ?? null,
+        name: templateName,
+        brand: tumblerLookup?.brand ?? tumblerAuto?.suggestion.brand ?? matchedProfile?.brand ?? null,
+        model: tumblerLookup?.model ?? tumblerAuto?.suggestion.model ?? matchedProfile?.model ?? null,
+        capacityOz: tumblerLookup?.capacityOz ?? tumblerAuto?.suggestion.capacityOz ?? matchedProfile?.capacityOz ?? null,
+        hasHandle: matchedProfile?.hasHandle ?? tumblerAuto?.suggestion.hasHandle ?? null,
+        dimensions: {
+          overallHeightMm,
+          outsideDiameterMm: diameterMm,
+          topDiameterMm,
+          bottomDiameterMm,
+          usableHeightMm: printHeightMm,
+        },
+        imageBuffer: input.imageBytes,
+        mimeType: input.mimeType ?? null,
+      })
+    : null;
+  const resolvedGlbPath = generatedPreview?.glbPath || tumblerLookup?.glbPath || null;
+  const resolvedBodyColorHex = generatedPreview?.bodyColorHex ?? tumblerLookup?.bodyColorHex ?? null;
+  const resolvedRimColorHex = generatedPreview?.rimColorHex ?? tumblerLookup?.rimColorHex ?? null;
+  const autoZone = deriveEngravableZoneFromFitDebug({
+    overallHeightMm,
+    fitDebug: generatedPreview?.fitDebug ?? tumblerLookup?.fitDebug ?? null,
+  });
+  if (autoZone) {
+    topMarginMm = autoZone.topMarginMm;
+    bottomMarginMm = autoZone.bottomMarginMm;
+    printHeightMm = autoZone.printHeightMm;
+  }
 
   return {
     sourceType,
@@ -669,30 +869,53 @@ export async function runSmartTemplateLookup(
         typeof (tumblerLookup?.capacityOz ?? tumblerAuto?.suggestion.capacityOz ?? matchedProfile?.capacityOz ?? null) === "number"
           ? `${tumblerLookup?.capacityOz ?? tumblerAuto?.suggestion.capacityOz ?? matchedProfile?.capacityOz}oz`
           : null,
-      laserType,
+      laserType: materialSetup.laserType,
       productType: categoryChoice.category === "unknown" ? drinkwareCategory : categoryChoice.category,
-      materialSlug: finishInference?.materialSlug ?? null,
-      materialLabel: finishInference?.materialLabel ?? null,
+      materialSlug: materialSetup.materialSlug,
+      materialLabel: materialSetup.materialLabel,
+      materialFinishType: materialSetup.materialFinishType,
+      materialProfileId: materialSetup.materialProfileId,
+      materialProfileLabel: materialSetup.materialProfileLabel,
       productPhotoUrl: tumblerLookup?.imageUrl ?? null,
       productPhotoLabel: inferTumblerPhotoLabel(tumblerLookup),
       backPhotoUrl: tumblerLookup?.backImageUrl ?? null,
       backPhotoLabel: inferTumblerBackPhotoLabel(tumblerLookup),
-      glbPath: tumblerLookup?.glbPath ?? null,
+      glbPath: resolvedGlbPath,
       dimensions: {
         diameterMm: typeof diameterMm === "number" ? round2(diameterMm) : null,
+        bodyDiameterMm: typeof diameterMm === "number" ? round2(diameterMm) : null,
+        topOuterDiameterMm:
+          typeof topDiameterMm === "number"
+            ? round2(topDiameterMm)
+            : typeof diameterMm === "number"
+              ? round2(diameterMm)
+              : null,
+        baseDiameterMm:
+          typeof bottomDiameterMm === "number"
+            ? round2(bottomDiameterMm)
+            : typeof diameterMm === "number"
+              ? round2(diameterMm)
+              : null,
         printHeightMm: typeof printHeightMm === "number" ? round2(printHeightMm) : null,
         templateWidthMm: typeof templateWidthMm === "number" ? round2(templateWidthMm) : null,
         handleArcDeg,
         taperCorrection,
         overallHeightMm: typeof overallHeightMm === "number" ? round2(overallHeightMm) : null,
+        bodyTopFromOverallMm: autoZone?.bodyTopFromOverallMm ?? null,
+        bodyBottomFromOverallMm: autoZone?.bodyBottomFromOverallMm ?? null,
+        bodyHeightMm: autoZone?.bodyHeightMm ?? null,
         topMarginMm,
         bottomMarginMm,
+        bodyColorHex: resolvedBodyColorHex,
+        rimColorHex: resolvedRimColorHex,
       },
     },
     nextPrompts: buildPrompts({
       category: categoryChoice.category === "unknown" ? drinkwareCategory : categoryChoice.category,
-      laserType,
-      glbPath: tumblerLookup?.glbPath ?? null,
+      laserType: materialSetup.laserType,
+      materialSlug: materialSetup.materialSlug,
+      materialProfileId: materialSetup.materialProfileId,
+      glbPath: resolvedGlbPath,
       matchedProfileId: matchedProfileId ?? null,
       matchedFlatItemId: flatLookup?.matchedItemId ?? null,
       dimensionsResolved,

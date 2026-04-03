@@ -71,6 +71,18 @@ const PRODUCT_IMAGE_BACK_TOKENS = [
   "backside",
 ];
 
+const STANLEY_FETCH_HEADERS = {
+  "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+  "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "accept-language": "en-US,en;q=0.9",
+} as const;
+
+const GENERIC_FETCH_HEADERS = {
+  "user-agent": "Mozilla/5.0 (compatible; lt316-admin/1.0)",
+} as const;
+
+const LOOKUP_FETCH_RETRY_LIMIT = 4;
+
 type HandleOrientation = "left" | "right" | "none" | "unknown";
 
 interface ProductImageCandidateAnalysis {
@@ -791,12 +803,44 @@ async function pickFallbackGlbPath(args: {
   brand: string | null;
   model: string | null;
   hasHandle: boolean | null;
+  dimensions: TumblerItemLookupDimensions | null;
   imageUrl?: string | null;
   imageUrls?: string[];
-}): Promise<{ glbPath: string; fitDebug: TumblerItemLookupFitDebug | null }> {
-  if (args.matchedProfileId === "stanley-iceflow-30") {
+}): Promise<{
+  glbPath: string;
+  fitDebug: TumblerItemLookupFitDebug | null;
+  bodyColorHex: string | null;
+  rimColorHex: string | null;
+}> {
+  const canGenerate =
+    Boolean(args.matchedProfileId) ||
+    Boolean(
+      args.dimensions &&
+      typeof args.dimensions.overallHeightMm === "number" &&
+      Number.isFinite(args.dimensions.overallHeightMm) &&
+      args.dimensions.overallHeightMm > 0 &&
+      (
+        (typeof args.dimensions.outsideDiameterMm === "number" &&
+          Number.isFinite(args.dimensions.outsideDiameterMm) &&
+          args.dimensions.outsideDiameterMm > 0) ||
+        (typeof args.dimensions.topDiameterMm === "number" &&
+          Number.isFinite(args.dimensions.topDiameterMm) &&
+          args.dimensions.topDiameterMm > 0) ||
+        (typeof args.dimensions.bottomDiameterMm === "number" &&
+          Number.isFinite(args.dimensions.bottomDiameterMm) &&
+          args.dimensions.bottomDiameterMm > 0)
+      )
+    );
+
+  if (canGenerate) {
     try {
-      const generated = await ensureGeneratedTumblerGlb(args.matchedProfileId, {
+      const generated = await ensureGeneratedTumblerGlb({
+        profileId: args.matchedProfileId,
+        brand: args.brand,
+        model: args.model,
+        capacityOz: args.capacityOz,
+        hasHandle: args.hasHandle,
+        dimensions: args.dimensions ?? undefined,
         imageUrl: args.imageUrl,
         imageUrls: args.imageUrls,
       });
@@ -804,7 +848,7 @@ async function pickFallbackGlbPath(args: {
         return generated;
       }
     } catch (error) {
-      console.warn("[lookupTumblerItem] generated Stanley model failed:", error);
+      console.warn("[lookupTumblerItem] generated tumbler model failed:", error);
     }
   }
 
@@ -816,11 +860,21 @@ async function pickFallbackGlbPath(args: {
 
   for (const candidate of candidates) {
     if (await glbAssetExists(candidate)) {
-      return { glbPath: candidate, fitDebug: null };
+      return {
+        glbPath: candidate,
+        fitDebug: null,
+        bodyColorHex: null,
+        rimColorHex: null,
+      };
     }
   }
 
-  return { glbPath: "", fitDebug: null };
+  return {
+    glbPath: "",
+    fitDebug: null,
+    bodyColorHex: null,
+    rimColorHex: null,
+  };
 }
 
 function buildSources(url: string | null, kind: TumblerSourceLink["kind"], title: string | null): TumblerSourceLink[] {
@@ -835,18 +889,35 @@ function buildSources(url: string | null, kind: TumblerSourceLink["kind"], title
 }
 
 async function fetchPage(url: string): Promise<{ html: string; finalUrl: string }> {
-  const response = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; lt316-admin/1.0)" },
-    cache: "no-store",
-    signal: AbortSignal.timeout(10_000),
-  });
+  const headers = /stanley1913\.com/i.test(url) ? STANLEY_FETCH_HEADERS : GENERIC_FETCH_HEADERS;
+  let lastStatus = 0;
 
-  if (!response.ok) {
-    throw new Error(`Lookup fetch failed (${response.status})`);
+  for (let attempt = 0; attempt < LOOKUP_FETCH_RETRY_LIMIT; attempt += 1) {
+    const response = await fetch(url, {
+      headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(20_000),
+    });
+
+    if (response.ok) {
+      const html = await response.text();
+      return { html, finalUrl: response.url || url };
+    }
+
+    lastStatus = response.status;
+    const shouldRetry = response.status === 429 || response.status >= 500;
+    if (!shouldRetry || attempt === LOOKUP_FETCH_RETRY_LIMIT - 1) {
+      throw new Error(`Lookup fetch failed (${response.status})`);
+    }
+
+    const retryAfterHeader = response.headers.get("retry-after");
+    const retryAfterSeconds = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : NaN;
+    const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+      ? retryAfterSeconds * 1000
+      : (attempt + 1) * 1500;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
-
-  const html = await response.text();
-  return { html, finalUrl: response.url || url };
+  throw new Error(`Lookup fetch failed (${lastStatus || "unknown"})`);
 }
 
 export async function lookupTumblerItem(args: {
@@ -922,7 +993,7 @@ export async function lookupTumblerItem(args: {
     );
     if (scrapedDims?.overallHeightMm) {
       notes.push(
-        `Official or retailer page dimensions were found, but the internal profile remains the geometry source until a dedicated GLB generator is added.`
+        `Official or retailer page dimensions were found and will be used to refine the generated tumbler model when possible.`
       );
     }
 
@@ -932,6 +1003,13 @@ export async function lookupTumblerItem(args: {
       brand: matchedProfile.brand,
       model: matchedProfile.model,
       hasHandle: matchedProfile.hasHandle,
+      dimensions: {
+        overallHeightMm: scrapedDims?.overallHeightMm ?? matchedProfile.overallHeightMm,
+        outsideDiameterMm: scrapedDims?.outsideDiameterMm ?? matchedProfile.outsideDiameterMm ?? null,
+        topDiameterMm: scrapedDims?.topDiameterMm ?? matchedProfile.topDiameterMm ?? null,
+        bottomDiameterMm: scrapedDims?.bottomDiameterMm ?? matchedProfile.bottomDiameterMm ?? null,
+        usableHeightMm: scrapedDims?.usableHeightMm ?? matchedProfile.usableHeightMm,
+      },
       imageUrl: selectedImageUrl,
       imageUrls,
     });
@@ -948,6 +1026,8 @@ export async function lookupTumblerItem(args: {
       imageUrl: selectedImageUrl,
       backImageUrl: selectedBackImageUrl,
       imageUrls,
+      bodyColorHex: fallbackAsset.bodyColorHex,
+      rimColorHex: fallbackAsset.rimColorHex,
       fitDebug: fallbackAsset.fitDebug,
       dimensions: {
         overallHeightMm: matchedProfile.overallHeightMm,
@@ -985,6 +1065,7 @@ export async function lookupTumblerItem(args: {
     brand,
     model,
     hasHandle: brand === "Stanley" ? true : null,
+    dimensions: safeDims,
     imageUrl: selectedImageUrl,
     imageUrls,
   });
@@ -1001,6 +1082,8 @@ export async function lookupTumblerItem(args: {
     imageUrl: selectedImageUrl,
     backImageUrl: selectedBackImageUrl,
     imageUrls,
+    bodyColorHex: fallbackAsset.bodyColorHex,
+    rimColorHex: fallbackAsset.rimColorHex,
     fitDebug: fallbackAsset.fitDebug,
     dimensions: {
       overallHeightMm: safeDims.overallHeightMm,

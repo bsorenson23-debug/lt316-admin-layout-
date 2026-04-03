@@ -1,5 +1,6 @@
 import type { FlatItemLookupResponse } from "./flatItemLookup";
-import type { ProductTemplate } from "./productTemplate";
+import type { TumblerFinish } from "./materials";
+import type { EditableBodyOutline, ProductTemplate, ReferenceLayerState, ReferencePaths } from "./productTemplate";
 import type { TumblerItemLookupResponse } from "./tumblerItemLookup";
 
 export type SmartTemplateLookupSourceType = "image" | "url" | "text" | "mixed";
@@ -17,6 +18,10 @@ export type SmartTemplateLookupPrompt =
 
 export interface SmartTemplateLookupDimensionsDraft {
   diameterMm?: number | null;
+  bodyDiameterMm?: number | null;
+  topOuterDiameterMm?: number | null;
+  baseDiameterMm?: number | null;
+  mouthInnerDiameterMm?: number | null;
   printHeightMm?: number | null;
   templateWidthMm?: number | null;
   flatThicknessMm?: number | null;
@@ -24,8 +29,25 @@ export interface SmartTemplateLookupDimensionsDraft {
   handleArcDeg?: number | null;
   taperCorrection?: ProductTemplate["dimensions"]["taperCorrection"] | null;
   overallHeightMm?: number | null;
+  bodyTopFromOverallMm?: number | null;
+  bodyBottomFromOverallMm?: number | null;
+  lidSeamFromOverallMm?: number | null;
+  silverBandBottomFromOverallMm?: number | null;
+  handleTopFromOverallMm?: number | null;
+  handleBottomFromOverallMm?: number | null;
+  handleReachMm?: number | null;
+  shoulderDiameterMm?: number | null;
+  taperUpperDiameterMm?: number | null;
+  taperLowerDiameterMm?: number | null;
+  bevelDiameterMm?: number | null;
+  bodyOutlineProfile?: EditableBodyOutline | null;
+  referencePaths?: ReferencePaths | null;
+  referenceLayerState?: ReferenceLayerState | null;
+  bodyHeightMm?: number | null;
   topMarginMm?: number | null;
   bottomMarginMm?: number | null;
+  bodyColorHex?: string | null;
+  rimColorHex?: string | null;
 }
 
 export interface SmartTemplateLookupDraft {
@@ -36,6 +58,9 @@ export interface SmartTemplateLookupDraft {
   productType?: ProductTemplate["productType"] | null;
   materialSlug?: string | null;
   materialLabel?: string | null;
+  materialFinishType?: TumblerFinish | null;
+  materialProfileId?: string | null;
+  materialProfileLabel?: string | null;
   productPhotoUrl?: string | null;
   productPhotoLabel?: string | null;
   backPhotoUrl?: string | null;

@@ -21,11 +21,26 @@ export type SvgLibraryArtworkType =
   | "line-art"
   | "unknown";
 
+export type SvgLibrarySide =
+  | "front"
+  | "back"
+  | "wrap"
+  | "left"
+  | "right"
+  | "unknown";
+
 export type SvgLibraryReviewState =
   | "pending-analysis"
   | "pending-review"
   | "approved"
   | "rejected";
+
+export type SvgLibraryWorkflowStatus =
+  | "inbox"
+  | "needs-repair"
+  | "needs-review"
+  | "approved"
+  | "archived";
 
 export type SvgLibrarySource =
   | "filename"
@@ -56,12 +71,24 @@ export interface SvgLibraryClassification {
   matchedOrderIds: string[];
 }
 
+export interface SvgLibrarySmartNaming {
+  businessName: string | null;
+  projectName: string | null;
+  side: SvgLibrarySide;
+  versionLabel: string;
+  suggestedName: string;
+  suggestedFolderPath: string | null;
+  confidence: number;
+  reasons: string[];
+}
+
 export interface SvgLibraryEntry {
   id: string;
   name: string;
   originalFileName: string;
   sourceRelativePath: string | null;
   sourceFolderLabel: string | null;
+  libraryFolderPath: string | null;
   checksumSha256: string;
   originalSvgPath: string;
   sanitizedSvgPath: string;
@@ -73,6 +100,8 @@ export interface SvgLibraryEntry {
   laserReady: boolean;
   laserWarnings: string[];
   classification: SvgLibraryClassification;
+  smartNaming: SvgLibrarySmartNaming;
+  workflowStatus: SvgLibraryWorkflowStatus;
   createdAt: string;
   updatedAt: string;
   svgText: string;
@@ -87,6 +116,17 @@ export interface SvgLibraryEntryCreateInput {
 
 export interface SvgLibraryEntryImportInput extends SvgLibraryEntryCreateInput {
   originalFileName?: string;
+}
+
+export interface SvgLibraryEntryUpdateInput {
+  id: string;
+  name?: string;
+  svgText?: string;
+  libraryFolderPath?: string | null;
+  workflowStatus?: SvgLibraryWorkflowStatus;
+  reviewState?: SvgLibraryReviewState;
+  applySuggestedName?: boolean;
+  applySuggestedFolderPath?: boolean;
 }
 
 export interface SvgLibraryImportRejected {

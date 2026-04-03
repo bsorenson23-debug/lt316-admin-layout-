@@ -8,11 +8,16 @@ import type {
   SvgLibraryEntryImportInput,
   SvgLibraryImportRejected,
   SvgLibraryImportResult,
+  SvgLibraryReviewState,
+  SvgLibraryWorkflowStatus,
 } from "../../types/svgLibrary.ts";
 import {
   analyzeSvgMarkup,
   buildInitialClassification,
+  buildSmartNamingPlan,
+  countDrawableElements,
   inferSourceFolderLabel,
+  resolveWorkflowStatus,
   sanitizeSvgForLibrary,
 } from "./libraryMeta.ts";
 
@@ -35,6 +40,9 @@ interface LegacySvgLibraryEntry {
   createdAt: string;
   updatedAt: string;
 }
+
+const SVG_DOCUMENT_PATTERN =
+  /^\s*(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!doctype\s+svg[^>]*>\s*)?<svg[\s>]/i;
 
 function resolveSvgLibraryRoot() {
   return process.env.LT316_SVG_LIBRARY_DIR
@@ -89,9 +97,38 @@ function sanitizeRelativePath(relativePath?: string | null): string | null {
   return segments.length > 0 ? segments.join("/") : null;
 }
 
+function sanitizeLibraryFolderPath(folderPath?: string | null): string | null {
+  if (!folderPath) return null;
+  const segments = folderPath
+    .split(/[\\/]+|\s\/\s/g)
+    .map((segment) => segment.trim().replace(/[<>:"|?*\u0000-\u001F]+/g, "-"))
+    .filter((segment) => segment && segment !== "." && segment !== "..");
+
+  return segments.length > 0 ? segments.join(" / ") : null;
+}
+
 function assertSvgText(svgText: string) {
-  if (!svgText || !svgText.includes("<svg")) {
+  if (!svgText || !SVG_DOCUMENT_PATTERN.test(svgText)) {
     throw new Error("Invalid SVG content");
+  }
+}
+
+function buildEmptySvgMessage(fileName?: string | null) {
+  const lower = (fileName ?? "").toLowerCase();
+  if (
+    lower.endsWith(".ai")
+    || lower.endsWith(".eps")
+    || lower.endsWith(".ps")
+    || lower.endsWith(".pdf")
+  ) {
+    return "Converted file has no visible paths or shapes. Save it as SVG or PDF-compatible AI/PDF and import again.";
+  }
+  return "SVG has no visible paths or shapes.";
+}
+
+function assertDrawableSvg(svgText: string, fileName?: string | null) {
+  if (countDrawableElements(svgText) === 0) {
+    throw new Error(buildEmptySvgMessage(fileName));
   }
 }
 
@@ -167,8 +204,41 @@ async function hydrateEntry(
   record: SvgLibraryStoredRecord,
 ): Promise<SvgLibraryEntry> {
   const svgText = await readFile(toAbsolutePath(layout, record.sanitizedSvgPath), "utf8");
+  assertSvgText(svgText);
+  assertDrawableSvg(svgText, record.originalFileName);
+  const { laserReady, laserWarnings } = analyzeSvgMarkup(svgText);
+  const classification = record.classification ?? buildInitialClassification({
+    name: record.name,
+    relativePath: record.sourceRelativePath,
+    svgText,
+  });
+  const smartNaming = record.smartNaming ?? buildSmartNamingPlan({
+    name: record.name,
+    relativePath: record.sourceRelativePath,
+    svgText,
+    classification,
+  });
+  const libraryFolderPath = sanitizeLibraryFolderPath(record.libraryFolderPath ?? null);
+  const workflowStatus = resolveWorkflowStatus({
+    laserReady,
+    currentName: record.name,
+    libraryFolderPath,
+    smartNaming,
+    classification,
+    forcedStatus: record.workflowStatus ?? null,
+  });
+
   return {
     ...record,
+    classification:
+      workflowStatus === "approved" && classification.reviewState !== "rejected"
+        ? { ...classification, reviewState: "approved" }
+        : classification,
+    smartNaming,
+    libraryFolderPath,
+    workflowStatus,
+    laserReady,
+    laserWarnings,
     svgText,
   };
 }
@@ -194,10 +264,13 @@ async function persistSvgLibraryEntry(args: {
   svgText: string;
   relativePath?: string | null;
   originalFileName?: string;
+  libraryFolderPath?: string | null;
   tags?: string[];
   createdAt?: string;
   uploadedAt?: string;
   lastUsedAt?: string | null;
+  workflowStatus?: SvgLibraryWorkflowStatus;
+  reviewState?: SvgLibraryReviewState;
 }): Promise<SvgLibraryEntry> {
   const id = args.id ?? randomUUID();
   const createdAt = args.createdAt ?? new Date().toISOString();
@@ -205,20 +278,44 @@ async function persistSvgLibraryEntry(args: {
   const originalFileName = sanitizeEntryName(args.originalFileName ?? args.name);
   const name = sanitizeEntryName(args.name);
   const relativePath = sanitizeRelativePath(args.relativePath);
+  const libraryFolderPath = sanitizeLibraryFolderPath(args.libraryFolderPath);
 
   assertSvgText(args.svgText);
 
   const sanitizedSvgText = sanitizeSvgForLibrary(args.svgText);
   assertSvgText(sanitizedSvgText);
+  assertDrawableSvg(sanitizedSvgText, args.originalFileName ?? args.name);
 
   const assetPaths = toAssetPaths(id);
   const checksumSha256 = computeChecksum(sanitizedSvgText);
-  const classification = buildInitialClassification({
+  const baseClassification = buildInitialClassification({
     name,
     relativePath,
     svgText: sanitizedSvgText,
   });
+  const classification = {
+    ...baseClassification,
+    reviewState:
+      args.reviewState
+      ?? (args.workflowStatus === "approved" && baseClassification.reviewState !== "rejected"
+        ? "approved"
+        : baseClassification.reviewState),
+  };
+  const smartNaming = buildSmartNamingPlan({
+    name,
+    relativePath,
+    svgText: sanitizedSvgText,
+    classification,
+  });
   const { laserReady, laserWarnings } = analyzeSvgMarkup(sanitizedSvgText);
+  const workflowStatus = resolveWorkflowStatus({
+    laserReady,
+    currentName: name,
+    libraryFolderPath,
+    smartNaming,
+    classification,
+    forcedStatus: args.workflowStatus ?? null,
+  });
   const { thumbnailPath, previewPath } = await writeThumbnailArtifacts(args.layout, id, sanitizedSvgText);
   const updatedAt = new Date().toISOString();
 
@@ -231,6 +328,7 @@ async function persistSvgLibraryEntry(args: {
     originalFileName,
     sourceRelativePath: relativePath,
     sourceFolderLabel: inferSourceFolderLabel(relativePath),
+    libraryFolderPath,
     checksumSha256,
     originalSvgPath: assetPaths.originalSvgPath,
     sanitizedSvgPath: assetPaths.sanitizedSvgPath,
@@ -241,7 +339,12 @@ async function persistSvgLibraryEntry(args: {
     tags: Array.isArray(args.tags) ? [...new Set(args.tags.map((tag) => tag.trim()).filter(Boolean))] : [],
     laserReady,
     laserWarnings,
-    classification,
+    classification:
+      workflowStatus === "approved" && classification.reviewState !== "rejected"
+        ? { ...classification, reviewState: "approved" }
+        : classification,
+    smartNaming,
+    workflowStatus,
     createdAt,
     updatedAt,
   };
@@ -297,7 +400,22 @@ async function migrateLegacyEntries(layout: SvgLibraryLayout) {
 export async function listSvgLibraryEntries(): Promise<SvgLibraryEntry[]> {
   const layout = await ensureSvgLibraryDir();
   const records = await listStoredRecords(layout);
-  return Promise.all(records.map((record) => hydrateEntry(layout, record)));
+  const hydratedEntries = await Promise.all(
+    records.map(async (record) => {
+      try {
+        return await hydrateEntry(layout, record);
+      } catch (error) {
+        console.warn("[svg-library:list] skipping invalid entry", {
+          id: record.id,
+          name: record.name,
+          error: error instanceof Error ? error.message : "Invalid SVG content",
+        });
+        return null;
+      }
+    }),
+  );
+
+  return hydratedEntries.filter((entry): entry is SvgLibraryEntry => entry !== null);
 }
 
 export async function createSvgLibraryEntry(
@@ -376,7 +494,15 @@ export async function clearSvgLibrary(): Promise<void> {
 
 export async function updateSvgLibraryEntry(
   id: string,
-  patch: { name?: string; svgText?: string },
+  patch: {
+    name?: string;
+    svgText?: string;
+    libraryFolderPath?: string | null;
+    workflowStatus?: SvgLibraryWorkflowStatus;
+    reviewState?: SvgLibraryReviewState;
+    applySuggestedName?: boolean;
+    applySuggestedFolderPath?: boolean;
+  },
 ): Promise<SvgLibraryEntry | null> {
   const layout = await ensureSvgLibraryDir();
   const existing = await readStoredRecord(layout, id);
@@ -385,17 +511,35 @@ export async function updateSvgLibraryEntry(
   }
 
   const svgText = patch.svgText ?? await readFile(toAbsolutePath(layout, existing.sanitizedSvgPath), "utf8");
+  const smartNaming = existing.smartNaming ?? buildSmartNamingPlan({
+    name: existing.name,
+    relativePath: existing.sourceRelativePath,
+    svgText,
+    classification: existing.classification ?? buildInitialClassification({
+      name: existing.name,
+      relativePath: existing.sourceRelativePath,
+      svgText,
+    }),
+  });
+  const nextName = patch.name
+    ?? (patch.applySuggestedName ? smartNaming.suggestedName : existing.name);
+  const nextLibraryFolderPath = patch.libraryFolderPath !== undefined
+    ? patch.libraryFolderPath
+    : (patch.applySuggestedFolderPath ? smartNaming.suggestedFolderPath : existing.libraryFolderPath ?? null);
 
   return persistSvgLibraryEntry({
     layout,
     id,
-    name: patch.name ?? existing.name,
+    name: nextName,
     originalFileName: existing.originalFileName,
     svgText,
     relativePath: existing.sourceRelativePath,
+    libraryFolderPath: nextLibraryFolderPath,
     tags: existing.tags,
     createdAt: existing.createdAt,
     uploadedAt: existing.uploadedAt,
     lastUsedAt: existing.lastUsedAt,
+    workflowStatus: patch.workflowStatus,
+    reviewState: patch.reviewState,
   });
 }

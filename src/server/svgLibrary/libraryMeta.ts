@@ -3,7 +3,10 @@ import type {
   SvgLibraryClassification,
   SvgLibraryItemType,
   SvgLibraryReviewState,
+  SvgLibrarySide,
+  SvgLibrarySmartNaming,
   SvgLibrarySource,
+  SvgLibraryWorkflowStatus,
 } from "../../types/svgLibrary.ts";
 
 const GENERIC_FOLDER_NAMES = new Set([
@@ -23,6 +26,20 @@ const GENERIC_FOLDER_NAMES = new Set([
   "unknown",
   "new",
   "incoming",
+]);
+
+const GENERIC_PROJECT_NAMES = new Set([
+  ...GENERIC_FOLDER_NAMES,
+  "front",
+  "back",
+  "wrap",
+  "left",
+  "right",
+  "final",
+  "export",
+  "exports",
+  "proof",
+  "proofs",
 ]);
 
 interface PatternRule<T> {
@@ -117,12 +134,49 @@ const ARTWORK_TYPE_RULES: PatternRule<SvgLibraryArtworkType>[] = [
   },
 ];
 
+const SIDE_RULES: PatternRule<SvgLibrarySide>[] = [
+  {
+    value: "front",
+    patterns: [/\bfront\b/i, /\bprimary\b/i],
+    reason: "Matched front-side keywords",
+  },
+  {
+    value: "back",
+    patterns: [/\bback\b/i, /\breverse\b/i, /\bopposite\b/i],
+    reason: "Matched back-side keywords",
+  },
+  {
+    value: "wrap",
+    patterns: [/\bwrap\b/i, /\bfull[\s_-]*wrap\b/i, /\baround\b/i],
+    reason: "Matched wrap keywords",
+  },
+  {
+    value: "left",
+    patterns: [/\bleft\b/i],
+    reason: "Matched left-side keywords",
+  },
+  {
+    value: "right",
+    patterns: [/\bright\b/i],
+    reason: "Matched right-side keywords",
+  },
+];
+
 function clampConfidence(value: number) {
   return Math.max(0, Math.min(1, Number(value.toFixed(2))));
 }
 
 function normalizeWhitespace(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function normalizeWords(value: string) {
+  return normalizeWhitespace(
+    value
+      .replace(/\.[a-z0-9]+$/i, "")
+      .replace(/[_]+/g, " ")
+      .replace(/-/g, " "),
+  );
 }
 
 function decodeXmlEntities(value: string) {
@@ -144,6 +198,46 @@ function findFirstRuleMatch<T>(
     }
   }
   return null;
+}
+
+function stripExtension(value: string) {
+  return value.replace(/\.[^.]+$/i, "");
+}
+
+function slugifySegment(value: string | null | undefined, fallback: string) {
+  const normalized = normalizeWords(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
+function formatFolderLabel(value: string | null | undefined, fallback: string) {
+  const normalized = normalizeWords(value ?? "");
+  return normalized || fallback;
+}
+
+function formatItemTypeLabel(value: SvgLibraryItemType) {
+  if (value === "unknown") return "Unknown Item";
+  return value
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatSideLabel(side: SvgLibrarySide) {
+  if (side === "unknown") return "Unsorted";
+  return side.charAt(0).toUpperCase() + side.slice(1);
+}
+
+function normalizeFolderPath(value: string | null | undefined) {
+  if (!value) return null;
+  return value
+    .split(/[\\/]+|\s\/\s/g)
+    .map((segment) => normalizeWords(segment))
+    .filter(Boolean)
+    .join(" / ");
 }
 
 export function sanitizeSvgForLibrary(svgText: string): string {
@@ -174,31 +268,32 @@ export function extractSvgText(svgText: string): string[] {
   return [...seen].slice(0, 12);
 }
 
+export function countDrawableElements(svgText: string): number {
+  return [...svgText.matchAll(/<(path|rect|circle|ellipse|line|polyline|polygon|image|use|text|tspan)\b/gi)].length;
+}
+
 export function analyzeSvgMarkup(svgText: string): {
   laserReady: boolean;
   laserWarnings: string[];
 } {
-  const shapeCount = [...svgText.matchAll(/<(path|rect|circle|ellipse|line|polyline|polygon)\b/gi)].length;
+  const shapeCount = countDrawableElements(svgText);
   const hasText = /<(text|tspan)\b/i.test(svgText);
   const hasStroke = /\bstroke\s*=\s*["'](?!none\b)[^"']+["']/i.test(svgText) || /\bstroke\s*:\s*(?!none\b)[^;]+/i.test(svgText);
   const hasFill = /\bfill\s*=\s*["'](?!none\b|transparent\b)[^"']+["']/i.test(svgText) || /\bfill\s*:\s*(?!none\b|transparent\b)[^;]+/i.test(svgText);
 
   const laserWarnings: string[] = [];
-  if (hasFill) {
-    laserWarnings.push("Has filled shapes - review stroke-only output before cutting.");
-  }
   if (hasText) {
     laserWarnings.push("Contains text elements - convert text to paths before final export.");
   }
-  if (!hasStroke && shapeCount > 0) {
-    laserWarnings.push("No visible strokes detected.");
+  if (!hasStroke && !hasFill && shapeCount > 0) {
+    laserWarnings.push("No visible fill or stroke detected.");
   }
   if (shapeCount === 0) {
     laserWarnings.push("No vector shape elements found.");
   }
 
   return {
-    laserReady: !hasFill && !hasText && hasStroke && shapeCount > 0,
+    laserReady: !hasText && (hasStroke || hasFill) && shapeCount > 0,
     laserWarnings,
   };
 }
@@ -227,6 +322,193 @@ function inferBusinessName(relativePath?: string | null): string | null {
   if (!/[a-z]/i.test(topLevelFolder)) return null;
 
   return topLevelFolder;
+}
+
+function inferSide(args: {
+  name: string;
+  relativePath?: string | null;
+  svgText: string;
+}): { side: SvgLibrarySide; reason: string | null } {
+  const match = findFirstRuleMatch(
+    [args.name, args.relativePath ?? "", ...extractSvgText(args.svgText)]
+      .filter(Boolean)
+      .join(" "),
+    SIDE_RULES,
+  );
+
+  return {
+    side: match?.value ?? "unknown",
+    reason: match?.reason ?? null,
+  };
+}
+
+function inferProjectName(args: {
+  name: string;
+  relativePath?: string | null;
+  businessName: string | null;
+}): string | null {
+  const relativeSegments = (args.relativePath ?? "")
+    .split(/[\\/]+/)
+    .map((segment) => normalizeWords(segment))
+    .filter(Boolean);
+
+  const folderCandidates = relativeSegments.slice(0, -1).reverse();
+  const baseName = normalizeWords(stripExtension(args.name));
+  const candidates = [...folderCandidates, baseName];
+
+  for (const candidate of candidates) {
+    const normalized = candidate.toLowerCase();
+    if (!candidate) continue;
+    if (normalized === normalizeWords(args.businessName ?? "").toLowerCase()) continue;
+    if (GENERIC_PROJECT_NAMES.has(normalized)) continue;
+    return candidate;
+  }
+
+  return baseName || null;
+}
+
+function inferVersionLabel(name: string) {
+  const baseName = stripExtension(name);
+  const explicitMatch = baseName.match(/\b(?:v|ver|version)[\s_-]*(\d+)\b/i);
+  if (explicitMatch) {
+    return `v${explicitMatch[1]}`;
+  }
+
+  const revisionMatch = baseName.match(/\brev[\s_-]*([a-z0-9]+)\b/i);
+  if (revisionMatch) {
+    return `rev-${revisionMatch[1].toLowerCase()}`;
+  }
+
+  const numericTailMatch = baseName.match(/(?:^|[\s_-])(\d{1,2})$/);
+  if (numericTailMatch) {
+    return `v${numericTailMatch[1]}`;
+  }
+
+  return "v1";
+}
+
+export function buildSmartNamingPlan(args: {
+  name: string;
+  relativePath?: string | null;
+  svgText: string;
+  classification: SvgLibraryClassification;
+}): SvgLibrarySmartNaming {
+  const businessName = args.classification.businessName ?? inferBusinessName(args.relativePath);
+  const projectName = inferProjectName({
+    name: args.name,
+    relativePath: args.relativePath,
+    businessName,
+  });
+  const sideMatch = inferSide(args);
+  const versionLabel = inferVersionLabel(args.name);
+  const itemSlug = args.classification.itemType === "unknown"
+    ? "unknown-item"
+    : slugifySegment(args.classification.itemType, "unknown-item");
+  const artworkSlug = args.classification.artworkType === "unknown"
+    ? "artwork"
+    : slugifySegment(args.classification.artworkType, "artwork");
+  const sideSlug = sideMatch.side === "unknown" ? "unknown-side" : sideMatch.side;
+  const suggestedName = [
+    slugifySegment(businessName, "general"),
+    slugifySegment(projectName ?? stripExtension(args.name), "artwork"),
+    itemSlug,
+    sideSlug,
+    artworkSlug,
+    versionLabel,
+  ].join("__") + ".svg";
+
+  const suggestedFolderPath = normalizeFolderPath([
+    formatFolderLabel(businessName, "Unassigned"),
+    formatItemTypeLabel(args.classification.itemType),
+    formatFolderLabel(projectName ?? stripExtension(args.name), "Untitled"),
+    formatSideLabel(sideMatch.side),
+  ].join(" / "));
+
+  const reasons: string[] = [];
+  if (businessName) {
+    reasons.push(`Business folder suggests "${businessName}"`);
+  }
+  if (projectName) {
+    reasons.push(`Project label derived from "${projectName}"`);
+  }
+  if (sideMatch.reason) {
+    reasons.push(sideMatch.reason);
+  }
+  if (args.classification.itemType !== "unknown") {
+    reasons.push(`Item type suggests "${formatItemTypeLabel(args.classification.itemType)}"`);
+  }
+  if (args.classification.artworkType !== "unknown") {
+    reasons.push(`Artwork classified as "${args.classification.artworkType}"`);
+  }
+  if (reasons.length === 0) {
+    reasons.push("Generated from the imported filename and folder structure");
+  }
+
+  let confidence = 0.16;
+  if (businessName) confidence += 0.24;
+  if (projectName) confidence += 0.14;
+  if (sideMatch.side !== "unknown") confidence += 0.12;
+  if (args.classification.itemType !== "unknown") confidence += 0.14;
+  if (args.classification.artworkType !== "unknown") confidence += 0.08;
+
+  return {
+    businessName,
+    projectName,
+    side: sideMatch.side,
+    versionLabel,
+    suggestedName,
+    suggestedFolderPath,
+    confidence: clampConfidence(confidence),
+    reasons,
+  };
+}
+
+export function resolveWorkflowStatus(args: {
+  laserReady: boolean;
+  currentName: string;
+  libraryFolderPath?: string | null;
+  smartNaming: SvgLibrarySmartNaming;
+  classification: SvgLibraryClassification;
+  forcedStatus?: SvgLibraryWorkflowStatus | null;
+}): SvgLibraryWorkflowStatus {
+  if (!args.laserReady) {
+    return "needs-repair";
+  }
+
+  if (args.forcedStatus === "archived") {
+    return "archived";
+  }
+
+  const normalizedCurrentName = args.currentName.trim().toLowerCase();
+  const nameApproved = normalizedCurrentName === args.smartNaming.suggestedName.toLowerCase();
+  const currentFolderPath = normalizeFolderPath(args.libraryFolderPath);
+  const suggestedFolderPath = normalizeFolderPath(args.smartNaming.suggestedFolderPath);
+  const folderApproved = currentFolderPath === suggestedFolderPath;
+
+  if (args.forcedStatus === "approved" && nameApproved && folderApproved) {
+    return "approved";
+  }
+  if (args.forcedStatus === "inbox") {
+    return "inbox";
+  }
+  if (args.forcedStatus === "needs-review") {
+    return "needs-review";
+  }
+
+  const hasSmartSignals =
+    args.classification.reviewState !== "pending-analysis"
+    || args.smartNaming.confidence >= 0.28
+    || args.smartNaming.reasons.length > 0;
+
+  if (nameApproved && folderApproved && args.classification.reviewState === "approved") {
+    return "approved";
+  }
+
+  if (hasSmartSignals) {
+    return "needs-review";
+  }
+
+  return "inbox";
 }
 
 function toReviewState(hasSignals: boolean): SvgLibraryReviewState {

@@ -44,6 +44,9 @@ test("bulk import preserves folder metadata and generates preview assets", async
     assert.equal(entry.classification.businessName, "Acme");
     assert.equal(entry.classification.itemType, "tumbler");
     assert.equal(entry.classification.artworkType, "logo");
+    assert.equal(entry.smartNaming.suggestedName, "acme__drinkware__tumbler__unknown-side__logo__v1.svg");
+    assert.equal(entry.smartNaming.suggestedFolderPath, "Acme / Tumbler / Drinkware / Unsorted");
+    assert.equal(entry.workflowStatus, "needs-review");
     assert.ok(entry.thumbnailPath);
     assert.ok(entry.previewPath);
 
@@ -78,6 +81,8 @@ test("listing migrates legacy flat JSON entries into the new storage layout", as
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.id, "legacy-entry");
     assert.equal(entries[0]?.name, "legacy-logo.svg");
+    assert.equal(entries[0]?.workflowStatus, "needs-review");
+    assert.ok(entries[0]?.smartNaming.suggestedName);
 
     const migratedRecordPath = path.join(root, "records", "legacy-entry.json");
     await access(migratedRecordPath);
