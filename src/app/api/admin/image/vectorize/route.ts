@@ -6,6 +6,7 @@ import type {
   RasterVectorizeBranchPreviews,
   RasterVectorizeResponse,
 } from "@/types/rasterVectorize";
+import { prepareRasterTraceInput } from "@/server/rasterVectorize/preprocess";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -39,6 +40,16 @@ function getAssetPipelineUrl(): string {
 
 function assetPipelineUrl(pathname: string): string {
   return `${getAssetPipelineUrl()}${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) {
+      return message;
+    }
+  }
+  return fallback;
 }
 
 function clampInt(value: string | null, fallback: number, min: number, max: number): number {
@@ -114,56 +125,6 @@ function basenameForTrace(fileName: string): string {
   return (trimmed || "upload").replace(/\.[^.]+$/, "").replace(/[^\w.\-]+/g, "-");
 }
 
-async function prepareTraceInputBuffer(
-  sourceBuffer: Buffer,
-  options: {
-    fileName: string;
-    maxDimension: number;
-  },
-): Promise<{ buffer: Buffer; contentType: string; fileName: string }> {
-  const metadata = await sharp(sourceBuffer, { limitInputPixels: false }).rotate().metadata();
-  const width = metadata.width ?? 0;
-  const height = metadata.height ?? 0;
-
-  if (width <= 0 || height <= 0) {
-    return {
-      buffer: sourceBuffer,
-      contentType: "image/png",
-      fileName: buildTraceInputFileName(options.fileName),
-    };
-  }
-
-  const longestSide = Math.max(width, height);
-  const targetDimension = Math.max(MIN_TRACE_MAX_DIMENSION, Math.min(MAX_TRACE_MAX_DIMENSION, options.maxDimension));
-  const shouldResize = longestSide !== targetDimension;
-
-  const pipeline = sharp(sourceBuffer, { limitInputPixels: false }).rotate();
-  if (shouldResize) {
-    pipeline.resize({
-      width: targetDimension,
-      height: targetDimension,
-      fit: "inside",
-      kernel: sharp.kernel.lanczos3,
-      withoutEnlargement: false,
-    });
-  }
-
-  const buffer = await pipeline
-    .png({
-      compressionLevel: 9,
-      adaptiveFiltering: true,
-      palette: false,
-    })
-    .withMetadata({ density: TRACE_INPUT_DENSITY })
-    .toBuffer();
-
-  return {
-    buffer,
-    contentType: "image/png",
-    fileName: buildTraceInputFileName(options.fileName),
-  };
-}
-
 function normalizeSoftness(turdSize: number, alphaMax: number, optTolerance: number): number {
   const turdScore = turdSize / 25;
   const cornerScore = alphaMax / 2;
@@ -187,6 +148,7 @@ function resolveSilhouetteDetailPreset(softness: number, invert: boolean): "tigh
 function buildImageDoctorRequestBody(options: {
   thresholdMode: "auto" | "manual";
   threshold: number;
+  autoThreshold: number | null;
   invert: boolean;
   turdSize: number;
   alphaMax: number;
@@ -245,11 +207,16 @@ function buildImageDoctorRequestBody(options: {
   sharpenSigma = Number(sharpenSigma.toFixed(2));
   rawBlurSigma = Number(rawBlurSigma.toFixed(2));
   const blurSigma = rawBlurSigma >= 0.3 ? rawBlurSigma : 0;
+  const resolvedThreshold = options.thresholdMode === "manual"
+    ? options.threshold
+    : options.autoThreshold;
 
   return {
     vectorSettings: {
       detailPreset,
-      ...(options.thresholdMode === "manual" ? { threshold: options.threshold } : {}),
+      ...(typeof resolvedThreshold === "number" && Number.isFinite(resolvedThreshold)
+        ? { threshold: resolvedThreshold }
+        : {}),
       contrast,
       brightnessOffset,
       sharpenSigma,
@@ -297,6 +264,191 @@ function storagePathToAssetPipelineUrl(storagePath: string): string {
 
   const [jobId, ...relative] = segments;
   return assetPipelineUrl(`/storage/${jobId}/${relative.join("/")}`);
+}
+
+type SilhouetteRow = {
+  y: number;
+  left: number;
+  right: number;
+  width: number;
+};
+
+function buildSilhouetteSvgPath(rows: SilhouetteRow[]): string {
+  if (rows.length === 0) {
+    throw new Error("Could not derive a silhouette outline.");
+  }
+
+  const leftPoints = rows.map((row) => `${row.left.toFixed(2)} ${row.y.toFixed(2)}`);
+  const rightPoints = [...rows]
+    .reverse()
+    .map((row) => `${row.right.toFixed(2)} ${row.y.toFixed(2)}`);
+
+  return `M ${leftPoints[0]} L ${leftPoints.slice(1).join(" L ")} L ${rightPoints.join(" L ")} Z`;
+}
+
+function chooseCentralSegment(mask: Uint8Array, width: number, y: number, centerX: number): { left: number; right: number } | null {
+  const segments: Array<{ left: number; right: number; width: number; distance: number }> = [];
+  let x = 0;
+  while (x < width) {
+    while (x < width && mask[(y * width) + x] === 0) {
+      x += 1;
+    }
+    if (x >= width) break;
+    const start = x;
+    while (x < width && mask[(y * width) + x] === 1) {
+      x += 1;
+    }
+    const end = x - 1;
+    const mid = (start + end) / 2;
+    segments.push({
+      left: start,
+      right: end,
+      width: (end - start) + 1,
+      distance: Math.abs(mid - centerX),
+    });
+  }
+
+  if (segments.length === 0) return null;
+
+  segments.sort((a, b) => {
+    const containsCenterA = a.left <= centerX && a.right >= centerX;
+    const containsCenterB = b.left <= centerX && b.right >= centerX;
+    if (containsCenterA !== containsCenterB) {
+      return containsCenterA ? -1 : 1;
+    }
+    if (Math.abs(a.distance - b.distance) > 0.001) {
+      return a.distance - b.distance;
+    }
+    return b.width - a.width;
+  });
+
+  const best = segments[0]!;
+  return { left: best.left, right: best.right };
+}
+
+function percentile(values: number[], fraction: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * fraction)));
+  return sorted[index] ?? 0;
+}
+
+function simplifyRows(rows: SilhouetteRow[], targetCount = 72): SilhouetteRow[] {
+  if (rows.length <= targetCount) {
+    return rows;
+  }
+
+  const result: SilhouetteRow[] = [];
+  for (let index = 0; index < targetCount; index += 1) {
+    const start = Math.floor((index / targetCount) * rows.length);
+    const end = Math.max(start + 1, Math.floor(((index + 1) / targetCount) * rows.length));
+    const slice = rows.slice(start, end);
+    const left = slice.reduce((sum, row) => sum + row.left, 0) / slice.length;
+    const right = slice.reduce((sum, row) => sum + row.right, 0) / slice.length;
+    const y = slice.reduce((sum, row) => sum + row.y, 0) / slice.length;
+    result.push({
+      y,
+      left,
+      right,
+      width: right - left,
+    });
+  }
+  return result;
+}
+
+async function runLocalPotraceFallback(args: {
+  imageBuffer: Buffer;
+  traceMode: RasterTraceMode;
+  outputColor: string;
+  thresholdMode: "auto" | "manual";
+  threshold: number;
+  autoThreshold: number | null;
+  invert: boolean;
+  turdSize: number;
+  alphaMax: number;
+  optTolerance: number;
+  posterizeSteps: number;
+}): Promise<RasterVectorizeResponse> {
+  const { data, info } = await sharp(args.imageBuffer, { limitInputPixels: false })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const threshold = clampInt(
+    String(args.thresholdMode === "manual" ? args.threshold : args.autoThreshold ?? 160),
+    160,
+    0,
+    255,
+  );
+  const centerX = (info.width - 1) / 2;
+  const hasUsefulAlpha = (() => {
+    let alphaPixels = 0;
+    for (let offset = 3; offset < data.length; offset += info.channels) {
+      if ((data[offset] ?? 255) < 245) {
+        alphaPixels += 1;
+      }
+    }
+    return alphaPixels > (info.width * info.height * 0.01);
+  })();
+
+  const mask = new Uint8Array(info.width * info.height);
+  for (let y = 0; y < info.height; y += 1) {
+    for (let x = 0; x < info.width; x += 1) {
+      const index = ((y * info.width) + x) * info.channels;
+      const red = data[index] ?? 0;
+      const green = data[index + 1] ?? red;
+      const blue = data[index + 2] ?? red;
+      const alpha = data[index + 3] ?? 255;
+      const luma = Math.round((0.2126 * red) + (0.7152 * green) + (0.0722 * blue));
+      const isForeground = hasUsefulAlpha
+        ? alpha > 20
+        : args.invert
+          ? luma >= threshold
+          : luma <= threshold;
+      mask[(y * info.width) + x] = isForeground ? 1 : 0;
+    }
+  }
+
+  const rows: SilhouetteRow[] = [];
+  for (let y = 0; y < info.height; y += 1) {
+    const segment = chooseCentralSegment(mask, info.width, y, centerX);
+    if (!segment) continue;
+    rows.push({
+      y,
+      left: segment.left,
+      right: segment.right,
+      width: (segment.right - segment.left) + 1,
+    });
+  }
+
+  if (rows.length === 0) {
+    throw new Error("Could not derive a local silhouette trace from the image.");
+  }
+
+  const maxWidth = percentile(rows.map((row) => row.width), 0.95);
+  const minKeepWidth = Math.max(6, maxWidth * 0.35);
+  const keptRows = rows.filter((row) => row.width >= minKeepWidth);
+  const activeRows = simplifyRows(keptRows.length >= 8 ? keptRows : rows);
+  const left = Math.min(...activeRows.map((row) => row.left));
+  const right = Math.max(...activeRows.map((row) => row.right));
+  const top = Math.min(...activeRows.map((row) => row.y));
+  const bottom = Math.max(...activeRows.map((row) => row.y));
+  const svgPath = buildSilhouetteSvgPath(activeRows);
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${info.width} ${info.height}" width="${info.width}" height="${info.height}">`,
+    `<path d="${svgPath}" fill="${args.outputColor}" stroke="none"/>`,
+    "</svg>",
+  ].join("");
+
+  return {
+    svg,
+    mode: args.traceMode,
+    pathCount: 1,
+    width: right - left,
+    height: bottom - top,
+    engine: "potrace",
+    branchPreviews: {},
+  };
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -842,9 +994,11 @@ export async function POST(req: NextRequest) {
   const thresholdMode = formString(formData, "thresholdMode") === "manual" ? "manual" : "auto";
   const invert = parseBoolean(formString(formData, "invert"), false);
   const threshold = clampInt(formString(formData, "threshold"), 160, 0, 255);
+  const normalizeLevels = parseBoolean(formString(formData, "normalizeLevels"), true);
   const turdSize = clampInt(formString(formData, "turdSize"), 0, 0, 25);
   const alphaMax = clampFloat(formString(formData, "alphaMax"), 0.35, 0, 2);
   const optTolerance = clampFloat(formString(formData, "optTolerance"), 0.05, 0.05, 1);
+  const posterizeSteps = clampInt(formString(formData, "posterizeSteps"), 4, 2, 8);
   const outputColor = sanitizeHexColor(formString(formData, "outputColor"), "#000000");
   const preserveText = parseBoolean(formString(formData, "preserveText"), true);
   const recipe = parseTraceRecipe(formString(formData, "recipe"));
@@ -856,111 +1010,139 @@ export async function POST(req: NextRequest) {
   );
 
   try {
-    const job = await fetchJson<AssetPipelineManifest>(assetPipelineUrl("/jobs"), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        input: imageFile.name,
-      }),
-    });
-
     const imageBuffer = Buffer.from(await imageFile.arrayBuffer());
-    const preparedTraceInput = await prepareTraceInputBuffer(imageBuffer, {
-      fileName: imageFile.name,
+    const preparedTraceInput = await prepareRasterTraceInput(imageBuffer, {
       maxDimension,
+      recipe,
+      preserveText,
+      normalizeLevels,
+      density: TRACE_INPUT_DENSITY,
     });
+    const traceInputFileName = buildTraceInputFileName(imageFile.name);
 
-    await fetchJson(assetPipelineUrl(`/jobs/${job.jobId}/raw-image?filename=${encodeURIComponent(preparedTraceInput.fileName)}`), {
-      method: "PUT",
-      headers: {
-        "content-type": preparedTraceInput.contentType,
-        "x-filename": preparedTraceInput.fileName,
-      },
-      body: new Uint8Array(preparedTraceInput.buffer),
-    });
+    try {
+      const job = await fetchJson<AssetPipelineManifest>(assetPipelineUrl("/jobs"), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          input: imageFile.name,
+        }),
+      });
 
-    await fetchJson(assetPipelineUrl(`/jobs/${job.jobId}/image-doctor`), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(
-        buildImageDoctorRequestBody({
-          thresholdMode,
-          threshold,
+      await fetchJson(assetPipelineUrl(`/jobs/${job.jobId}/raw-image?filename=${encodeURIComponent(traceInputFileName)}`), {
+        method: "PUT",
+        headers: {
+          "content-type": "image/png",
+          "x-filename": traceInputFileName,
+        },
+        body: new Uint8Array(preparedTraceInput.buffer),
+      });
+
+      await fetchJson(assetPipelineUrl(`/jobs/${job.jobId}/image-doctor`), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(
+          buildImageDoctorRequestBody({
+            thresholdMode,
+            threshold,
+            autoThreshold: preparedTraceInput.estimatedAutoThreshold,
+            invert,
+            turdSize,
+            alphaMax,
+            optTolerance,
+            preserveText,
+            recipe,
+          }),
+        ),
+      });
+
+      const vectorDoctor = await fetchJson<VectorDoctorResultPayload>(assetPipelineUrl(`/jobs/${job.jobId}/vector-doctor`), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+
+      const manifest = await fetchJson<AssetPipelineManifest>(assetPipelineUrl(`/jobs/${job.jobId}/vectorize`), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          trace: {
+            mode: traceMode,
+            recipe,
+            outputColor,
+            preserveText,
+            invert,
+            thresholdMode,
+            threshold,
+            turdSize,
+            alphaMax,
+            optTolerance,
+          },
+        }),
+      });
+
+      const selectedSvgPath = chooseManifestSvgPath(manifest, { traceMode, invert });
+      if (!selectedSvgPath) {
+        throw new Error("Asset pipeline completed, but no SVG output was produced.");
+      }
+
+      const svg = await fetchText(storagePathToAssetPipelineUrl(selectedSvgPath));
+
+      const viewBox = parseViewBox(svg);
+      const branchPreviews: RasterVectorizeBranchPreviews = {
+        colorPreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.colorPreview),
+        textPreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.textPreview),
+        arcTextPreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.arcTextPreview),
+        scriptTextPreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.scriptTextPreview),
+        shapePreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.shapePreview),
+        contourPreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.contourPreview),
+      };
+
+      const response: RasterVectorizeResponse = {
+        svg,
+        mode: traceMode,
+        pathCount: countPaths(svg),
+        width: viewBox?.width ?? 0,
+        height: viewBox?.height ?? 0,
+        engine: "asset-pipeline",
+        jobId: manifest.jobId,
+        sourcePath: selectedSvgPath,
+        branchPreviews,
+      };
+
+      return NextResponse.json(response);
+    } catch (assetPipelineError) {
+      console.warn(
+        "[vectorize] asset pipeline unavailable; falling back to local Potrace:",
+        getErrorMessage(assetPipelineError, String(assetPipelineError)),
+      );
+
+      const fallbackResponse = await runLocalPotraceFallback({
+        imageBuffer: Buffer.from(preparedTraceInput.buffer),
+        traceMode,
+        outputColor,
+        thresholdMode,
+        threshold,
+        autoThreshold: preparedTraceInput.estimatedAutoThreshold,
         invert,
         turdSize,
         alphaMax,
         optTolerance,
-        preserveText,
-        recipe,
-      }),
-      ),
-    });
+        posterizeSteps,
+      });
 
-    const vectorDoctor = await fetchJson<VectorDoctorResultPayload>(assetPipelineUrl(`/jobs/${job.jobId}/vector-doctor`), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: "{}",
-    });
-
-    const manifest = await fetchJson<AssetPipelineManifest>(assetPipelineUrl(`/jobs/${job.jobId}/vectorize`), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        trace: {
-          mode: traceMode,
-          recipe,
-          outputColor,
-          preserveText,
-          invert,
-          thresholdMode,
-          threshold,
-          turdSize,
-          alphaMax,
-          optTolerance,
-        },
-      }),
-    });
-
-    const selectedSvgPath = chooseManifestSvgPath(manifest, { traceMode, invert });
-    if (!selectedSvgPath) {
-      throw new Error("Asset pipeline completed, but no SVG output was produced.");
+      return NextResponse.json(fallbackResponse);
     }
-
-    const svg = await fetchText(storagePathToAssetPipelineUrl(selectedSvgPath));
-
-    const viewBox = parseViewBox(svg);
-    const branchPreviews: RasterVectorizeBranchPreviews = {
-      colorPreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.colorPreview),
-      textPreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.textPreview),
-      arcTextPreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.arcTextPreview),
-      scriptTextPreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.scriptTextPreview),
-      shapePreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.shapePreview),
-      contourPreview: await fetchStorageAsDataUrl(vectorDoctor.artifacts.contourPreview),
-    };
-
-    const response: RasterVectorizeResponse = {
-      svg,
-      mode: traceMode,
-      pathCount: countPaths(svg),
-      width: viewBox?.width ?? 0,
-      height: viewBox?.height ?? 0,
-      engine: "asset-pipeline",
-      jobId: manifest.jobId,
-      sourcePath: selectedSvgPath,
-      branchPreviews,
-    };
-
-    return NextResponse.json(response);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Vectorization failed";
+    const message = getErrorMessage(error, "Vectorization failed");
     console.error("[vectorize] error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }

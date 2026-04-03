@@ -4,6 +4,8 @@ import { readManifest, saveManifest, writeDebugFile } from "../lib/storage";
 const STAGE_TO_DEBUG_KEY: Record<Exclude<StageName, "created">, keyof JobManifest["debug"]> = {
   lookup: "lookup",
   "image-doctor": "doctor",
+  "color-regions": "colorRegions",
+  "vector-doctor": "vectorDoctor",
   vectorize: "vectorize",
   mesh: "mesh",
 };

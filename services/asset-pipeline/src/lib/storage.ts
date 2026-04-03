@@ -5,6 +5,7 @@ import type { JobManifest } from "../types/manifest";
 const JOB_STORAGE_ROOT = process.env.JOB_STORAGE_ROOT || "/data/jobs";
 const MANIFEST_FILE = "manifest.json";
 const JOB_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const PLACEHOLDER_DIR_NAME = "_placeholder";
 
 export class InvalidJobIdError extends Error {
   constructor(jobId: string) {
@@ -54,6 +55,18 @@ export function getJobDir(jobId: string): string {
   return resolveScopedPath(assertValidJobId(jobId));
 }
 
+export function getPlaceholderDir(): string {
+  return resolveScopedPath(PLACEHOLDER_DIR_NAME);
+}
+
+export function getPlaceholderFilePath(fileName: string): string {
+  return resolveScopedPath(PLACEHOLDER_DIR_NAME, fileName);
+}
+
+export function getPlaceholderMetadataPath(): string {
+  return resolveScopedPath(PLACEHOLDER_DIR_NAME, "placeholder.json");
+}
+
 export function getManifestPath(jobId: string): string {
   return resolveScopedPath(assertValidJobId(jobId), MANIFEST_FILE);
 }
@@ -82,12 +95,16 @@ export function getCleanImagesDir(jobId: string): string {
   return resolveScopedPath(assertValidJobId(jobId), "images", "clean");
 }
 
+export function getRegionImagesDir(jobId: string): string {
+  return resolveScopedPath(assertValidJobId(jobId), "images", "regions");
+}
+
 export function getJobFilePath(jobId: string, ...segments: string[]): string {
   return resolveScopedPath(assertValidJobId(jobId), ...segments);
 }
 
 export async function ensureStorageRoot(): Promise<void> {
-  await mkdir(getResolvedStorageRoot(), { recursive: true });
+  await ensureDirectories([getResolvedStorageRoot(), getPlaceholderDir()]);
 }
 
 export async function createJobDirectories(jobId: string): Promise<void> {
@@ -96,6 +113,7 @@ export async function createJobDirectories(jobId: string): Promise<void> {
     getImagesDir(jobId),
     getRawImagesDir(jobId),
     getCleanImagesDir(jobId),
+    getRegionImagesDir(jobId),
     getDebugDir(jobId),
   ]);
 }

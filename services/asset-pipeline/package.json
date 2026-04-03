@@ -9,7 +9,18 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@fontsource/alex-brush": "^5.2.8",
+    "@fontsource/allura": "^5.2.8",
+    "@fontsource/caveat": "^5.2.8",
+    "@fontsource/cookie": "^5.2.7",
+    "@fontsource/dancing-script": "^5.2.8",
+    "@fontsource/great-vibes": "^5.2.8",
+    "@fontsource/indie-flower": "^5.2.7",
+    "@fontsource/pacifico": "^5.2.7",
+    "@fontsource/sacramento": "^5.2.8",
     "express": "^4.21.2",
+    "potrace": "^2.1.8",
     "sharp": "^0.34.5"
   },
   "devDependencies": {

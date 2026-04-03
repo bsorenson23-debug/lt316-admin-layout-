@@ -24,11 +24,12 @@ Stage pipeline:
 - PUT /jobs/:id/raw-image
 - POST /jobs/:id/lookup
 - POST /jobs/:id/image-doctor
+- POST /jobs/:id/text-detect
 - POST /jobs/:id/vectorize
 - POST /jobs/:id/mesh
 - GET /storage/:jobId/*
 
-`GET /` serves a small internal browser test UI for the pipeline service. It lets you create a job, upload one raw image, run image-doctor, and preview the generated artifacts without using the main app. The page also accepts pasted clipboard images, so you do not have to save a file locally first.
+`GET /` serves a small internal browser test UI for the pipeline service. It lets you create a job, upload one raw image, run image-doctor, preview the generated artifacts, and run approximate text detection/replacement setup without using the main app. The page also accepts pasted clipboard images, so you do not have to save a file locally first.
 
 ### POST /jobs request body
 
@@ -94,6 +95,13 @@ Section B writes the following inspectable files:
   - updates `manifest.images.clean` with explicit artifact paths
   - returns `{ manifest, doctor }`
 
+- `POST /jobs/:id/text-detect`
+  - analyzes one job image with the internal browser UI text replacement tool
+  - accepts `{ "source": "preview" | "subject-clean" | "subject-transparent" | "raw" }`
+  - uses `ANTHROPIC_API_KEY` when configured
+  - writes `{jobId}/debug/text-detect.json`
+  - returns approximate text, font candidates, estimated size, angle, color, and notes
+
 - `PUT /jobs/:id/raw-image`
   - accepts one raw request body upload from the browser test UI
   - requires a `filename` query parameter or `x-filename` header
@@ -126,6 +134,7 @@ For v1, image-doctor processes the first supported file found in `images/raw`.
 
 `vector-input.png` is the output intended for the future vectorize stage.
 The browser test UI exposes separate tuning controls for `vector-input.png` and `silhouette-mask.png`, so you can keep a cleaner silhouette while pushing more or less detail into the vector prep image without re-uploading the raw source.
+The same UI also exposes a text detection panel for approximate font/style matching and a replacement SVG preview/download tool. That panel is intended for operator-assisted cleanup, not exact OCR-grade typography reconstruction.
 
 Background cleanup in v1 is optimized for clean white or near-white backgrounds.
 Busy or dark backgrounds may skip cleanup and preserve more of the original image.

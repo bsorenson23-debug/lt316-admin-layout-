@@ -13,6 +13,10 @@ async function start(): Promise<void> {
     res.type("html").send(renderHomePage());
   });
 
+  app.get("/favicon.ico", (_req, res) => {
+    res.status(204).end();
+  });
+
   app.get("/health", (_req, res) => {
     res.json({ ok: true, storageRoot: getStorageRoot() });
   });

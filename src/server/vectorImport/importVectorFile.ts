@@ -2,6 +2,7 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import { Helper as DxfHelper } from "dxf";
 import { getVectorFileExtension, normalizeImportedVectorName } from "../../lib/vectorImport.ts";
+import { countDrawableElements } from "../svgLibrary/libraryMeta.ts";
 
 export type DetectedVectorFormat =
   | "svg"
@@ -117,6 +118,15 @@ function looksLikePdf(buffer: Buffer): boolean {
 function assertSvgOutput(svgText: string, sourceName: string) {
   if (!SVG_MARKUP_RE.test(svgText)) {
     throw new Error(`Failed to convert ${sourceName} into SVG`);
+  }
+  if (countDrawableElements(svgText) === 0) {
+    const ext = getVectorFileExtension(sourceName);
+    if (ext === ".ai" || ext === ".eps" || ext === ".ps" || ext === ".pdf") {
+      throw new Error(
+        `${sourceName} converted into an empty SVG with no visible paths or shapes. Save it as SVG or PDF-compatible AI/PDF and import again.`,
+      );
+    }
+    throw new Error(`${sourceName} converted into an empty SVG with no visible paths or shapes.`);
   }
 }
 

@@ -28,11 +28,16 @@ export function createInitialManifest(
         sideRight: null,
       },
       clean: {},
+      regions: {
+        preview: null,
+        masks: [],
+      },
     },
     svg: {
       logo: null,
       silhouette: null,
       detail: null,
+      monochrome: null,
     },
     mesh: {
       glb: null,
@@ -41,6 +46,8 @@ export function createInitialManifest(
     debug: {
       lookup: null,
       doctor: null,
+      colorRegions: null,
+      vectorDoctor: null,
       vectorize: null,
       mesh: null,
     },
