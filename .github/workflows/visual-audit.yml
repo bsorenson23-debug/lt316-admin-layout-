@@ -12,7 +12,7 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -31,10 +31,14 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
 
+      - name: Build app
+        run: |
+          npm run build > build.log 2>&1
+
       - name: Start admin app
         run: |
-          npm run dev > app.log 2>&1 &
-          npx --yes wait-on http://127.0.0.1:3000/admin
+          npm run start -- --hostname 127.0.0.1 --port 3000 > app.log 2>&1 &
+          npx --yes wait-on http://127.0.0.1:3000/admin --timeout 120000 || (cat app.log && exit 1)
 
       - name: Run visual audit
         run: npm run audit:visual
@@ -47,4 +51,5 @@ jobs:
           path: |
             tmp/audit
             app.log
+            build.log
           if-no-files-found: warn
