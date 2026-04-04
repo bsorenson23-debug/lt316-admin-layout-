@@ -223,6 +223,13 @@ export function AdminLayoutShell() {
     const printableTopOffsetMm =
       templateEngravableDims?.topMarginMm ??
       Math.max(0, (overallHeightMm - printableHeightMm) / 2);
+    const bodyTopOffsetMm = printableTopOffsetMm;
+    const bodyHeightMm = printableHeightMm;
+    const lidSeamFromOverallMm = Math.max(2, Math.min(bodyTopOffsetMm * 0.35, 16));
+    const silverBandBottomFromOverallMm = Math.max(
+      lidSeamFromOverallMm + 1,
+      bodyTopOffsetMm,
+    );
     return {
       overallHeightMm,
       diameterMm: bedConfig.tumblerDiameterMm,
@@ -230,6 +237,10 @@ export function AdminLayoutShell() {
       bottomDiameterMm: bedConfig.tumblerBottomDiameterMm,
       printableHeightMm,
       printableTopOffsetMm,
+      bodyTopOffsetMm,
+      bodyHeightMm,
+      lidSeamFromOverallMm,
+      silverBandBottomFromOverallMm,
     };
   }, [isTumblerMode, bedConfig, templateEngravableDims]);
 

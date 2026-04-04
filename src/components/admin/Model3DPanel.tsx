@@ -375,6 +375,7 @@ export function Model3DPanel({
                 bodyTintColor={bodyTintColor}
                 rimTintColor={rimTintColor}
                 tumblerMapping={effectiveMapping}
+                showTemplateSurfaceZones={workspaceMode === "tumbler-wrap"}
               />
             </div>
 

@@ -73,6 +73,11 @@ interface Props {
   tumblerMapping?: TumblerMapping;
   bodyTintColor?: string;
   rimTintColor?: string;
+  showTemplateSurfaceZones?: boolean;
+  bodyTopOffsetMm?: number;
+  bodyHeightMm?: number;
+  lidSeamFromOverallMm?: number;
+  silverBandBottomFromOverallMm?: number;
   onReady?: (obj: THREE.Object3D) => void;
 }
 
@@ -211,6 +216,11 @@ export function YetiRambler40oz({
   tumblerMapping,
   bodyTintColor = "#1f2322",
   rimTintColor = "#cfd2d0",
+  showTemplateSurfaceZones = false,
+  bodyTopOffsetMm,
+  bodyHeightMm,
+  lidSeamFromOverallMm,
+  silverBandBottomFromOverallMm,
   onReady,
 }: Props) {
   const effectiveHandleArcDeg = tumblerMapping?.handleArcDeg ?? _handleArcDeg ?? 0;
@@ -456,6 +466,68 @@ export function YetiRambler40oz({
     };
   }, [baseBandMaterial]);
 
+  const overlayZoneConfig = useMemo(() => {
+    if (!showTemplateSurfaceZones || overallHeightMm <= 0) return null;
+
+    const fallbackBodyTop = Math.max(0, printableTopOffsetMm);
+    const fallbackBodyHeight = Math.max(1, printHeightMm);
+    const fallbackLidSeam = Math.max(2, Math.min(fallbackBodyTop * 0.35, 16));
+    const fallbackSilverBandBottom = Math.max(
+      fallbackLidSeam + 1,
+      Math.min(fallbackBodyTop, overallHeightMm),
+    );
+
+    const resolvedLidSeam = THREE.MathUtils.clamp(
+      lidSeamFromOverallMm ?? fallbackLidSeam,
+      0,
+      overallHeightMm - 1,
+    );
+    const resolvedSilverBandBottom = THREE.MathUtils.clamp(
+      silverBandBottomFromOverallMm ?? fallbackSilverBandBottom,
+      resolvedLidSeam + 0.8,
+      overallHeightMm,
+    );
+    const resolvedBodyTop = THREE.MathUtils.clamp(
+      bodyTopOffsetMm ?? resolvedSilverBandBottom ?? fallbackBodyTop,
+      resolvedSilverBandBottom,
+      overallHeightMm,
+    );
+    const resolvedBodyBottom = THREE.MathUtils.clamp(
+      resolvedBodyTop + (bodyHeightMm ?? fallbackBodyHeight),
+      resolvedBodyTop + 1,
+      overallHeightMm,
+    );
+
+    const mmToLocalY = (mmFromTop: number) =>
+      rimAnalysis.topY - (mmFromTop / (scaleFactorY > 0 ? scaleFactorY : 1));
+    const expandedRadius = bodyRadiusLocal + 0.32;
+    const bodyCenterY = (mmToLocalY(resolvedBodyTop) + mmToLocalY(resolvedBodyBottom)) / 2;
+    const bodyHeightLocal = (resolvedBodyBottom - resolvedBodyTop) / (scaleFactorY > 0 ? scaleFactorY : 1);
+    const silverCenterY = (mmToLocalY(resolvedLidSeam) + mmToLocalY(resolvedSilverBandBottom)) / 2;
+    const silverHeightLocal =
+      (resolvedSilverBandBottom - resolvedLidSeam) / (scaleFactorY > 0 ? scaleFactorY : 1);
+
+    return {
+      expandedRadius,
+      bodyCenterY,
+      bodyHeightLocal,
+      silverCenterY,
+      silverHeightLocal,
+    };
+  }, [
+    showTemplateSurfaceZones,
+    overallHeightMm,
+    printableTopOffsetMm,
+    printHeightMm,
+    bodyTopOffsetMm,
+    bodyHeightMm,
+    lidSeamFromOverallMm,
+    silverBandBottomFromOverallMm,
+    rimAnalysis.topY,
+    scaleFactorY,
+    bodyRadiusLocal,
+  ]);
+
   return (
     <group ref={groupRef} scale={[scaleFactorXz, scaleFactorY, scaleFactorXz]}>
       <mesh
@@ -479,6 +551,59 @@ export function YetiRambler40oz({
             fragmentShader={CYL_OVERLAY_FRAGMENT_SHADER}
           />
         </mesh>
+      )}
+
+      {overlayZoneConfig && (
+        <group renderOrder={4}>
+          <mesh
+            position={[0, overlayZoneConfig.bodyCenterY, 0]}
+            renderOrder={4}
+          >
+            <cylinderGeometry
+              args={[
+                overlayZoneConfig.expandedRadius,
+                overlayZoneConfig.expandedRadius,
+                overlayZoneConfig.bodyHeightLocal,
+                96,
+                1,
+                true,
+              ]}
+            />
+            <meshBasicMaterial
+              color="#3cbf67"
+              transparent
+              opacity={0.32}
+              side={THREE.DoubleSide}
+              depthWrite={false}
+              polygonOffset
+              polygonOffsetFactor={-5}
+            />
+          </mesh>
+          <mesh
+            position={[0, overlayZoneConfig.silverCenterY, 0]}
+            renderOrder={5}
+          >
+            <cylinderGeometry
+              args={[
+                overlayZoneConfig.expandedRadius + 0.08,
+                overlayZoneConfig.expandedRadius + 0.08,
+                overlayZoneConfig.silverHeightLocal,
+                96,
+                1,
+                true,
+              ]}
+            />
+            <meshBasicMaterial
+              color="#d7dde6"
+              transparent
+              opacity={0.34}
+              side={THREE.DoubleSide}
+              depthWrite={false}
+              polygonOffset
+              polygonOffsetFactor={-6}
+            />
+          </mesh>
+        </group>
       )}
     </group>
   );

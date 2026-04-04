@@ -60,6 +60,14 @@ export interface TumblerDimensions {
   printableHeightMm: number;
   /** Distance from mesh top to printable zone top in mm */
   printableTopOffsetMm?: number;
+  /** Powder-coated body start offset from mesh top in mm */
+  bodyTopOffsetMm?: number;
+  /** Powder-coated body span height in mm */
+  bodyHeightMm?: number;
+  /** Lid seam offset from mesh top in mm */
+  lidSeamFromOverallMm?: number;
+  /** Bottom of the top silver band, from mesh top in mm */
+  silverBandBottomFromOverallMm?: number;
 }
 
 /** Per-item rasterized texture for 3D Decal projection */
@@ -84,6 +92,8 @@ export interface ModelViewerProps {
   bodyTintColor?: string;
   /** Rim / engraved artwork tint */
   rimTintColor?: string;
+  /** Show template surface guide zones on supported tumbler templates */
+  showTemplateSurfaceZones?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -492,13 +502,13 @@ const KNOWN_MODELS: { match: string; key: string }[] = [
 ];
 
 function ModelByExtension({
-  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, rimTintColor, onReady,
+  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, rimTintColor, showTemplateSurfaceZones, onReady,
 }: {
   url: string; ext: string; dims?: TumblerDimensions | null; handleArcDeg?: number;
   placedItems?: PlacedItem[]; itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number; bedHeightMm?: number; glbPath?: string | null;
   sourceName?: string;
-  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; rimTintColor?: string; onReady?: OnReady;
+  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; rimTintColor?: string; showTemplateSurfaceZones?: boolean; onReady?: OnReady;
 }) {
   if (ext === "stl") return <StlMesh url={url} dims={dims} onReady={onReady} />;
   if (ext === "obj") return <ObjMesh url={url} dims={dims} onReady={onReady} />;
@@ -525,6 +535,11 @@ function ModelByExtension({
             tumblerMapping={tumblerMapping}
             bodyTintColor={bodyTintColor}
             rimTintColor={rimTintColor}
+            bodyTopOffsetMm={dims.bodyTopOffsetMm}
+            bodyHeightMm={dims.bodyHeightMm}
+            lidSeamFromOverallMm={dims.lidSeamFromOverallMm}
+            silverBandBottomFromOverallMm={dims.silverBandBottomFromOverallMm}
+            showTemplateSurfaceZones={!!showTemplateSurfaceZones}
             onReady={onReady}
           />
         </Suspense>
@@ -590,7 +605,7 @@ class CanvasErrorBoundary extends Component<
 // ---------------------------------------------------------------------------
 
 export default function ModelViewer({
-  file, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, bodyTintColor, rimTintColor,
+  file, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, bodyTintColor, rimTintColor, showTemplateSurfaceZones,
 }: ModelViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
@@ -688,6 +703,7 @@ export default function ModelViewer({
               tumblerMapping={tumblerMapping}
               bodyTintColor={bodyTintColor}
               rimTintColor={rimTintColor}
+              showTemplateSurfaceZones={showTemplateSurfaceZones}
               onReady={handleModelReady}
             />
           </Suspense>
@@ -738,5 +754,3 @@ export default function ModelViewer({
     </CanvasErrorBoundary>
   );
 }
-
-
