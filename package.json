@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint src/",
     "clean:local": "powershell -ExecutionPolicy Bypass -File ./scripts/clean-local-artifacts.ps1",
-    "setup:playwright": "powershell -ExecutionPolicy Bypass -File ./scripts/install-playwright-chrome.ps1",
+    "setup:playwright": "node ./scripts/setup-playwright.mjs",
     "audit:library": "powershell -ExecutionPolicy Bypass -File ./scripts/run-library-modal-audit.ps1",
     "audit:visual": "node ./scripts/visual-audit.mjs",
     "test:tumbler-auto-size": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/tumblerAutoSize.test.ts",

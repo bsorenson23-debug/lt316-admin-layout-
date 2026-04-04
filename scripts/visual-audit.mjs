@@ -1,64 +1,80 @@
-import { chromium } from '@playwright/test';
-import { mkdir, writeFile } from 'fs/promises';
-import path from 'path';
+import { mkdir } from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
 
-const OUT = './tmp/audit';
+import { launchChromium } from "./playwrightBrowser.mjs";
+
+const OUT = "./tmp/audit";
+const BASE_URL = process.env.VISUAL_AUDIT_BASE_URL ?? "http://127.0.0.1:3000";
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(repoRoot, ".playwright-browsers");
+
 await mkdir(OUT, { recursive: true });
 
-const browser = await chromium.launch({ headless: true });
+const browser = await launchChromium({ headless: true });
 const ctx = await browser.newContext({
   viewport: { width: 1440, height: 900 },
 });
 const page = await ctx.newPage();
 
-// Collect console errors
 const consoleErrors = [];
-page.on('console', msg => {
-  if (msg.type() === 'error') consoleErrors.push(msg.text());
+function isIgnorableConsoleError(message) {
+  return (
+    message.includes("/_next/webpack-hmr") &&
+    message.includes("WebSocket connection") &&
+    message.includes("ERR_INVALID_HTTP_RESPONSE")
+  );
+}
+
+page.on("console", (msg) => {
+  if (msg.type() === "error") {
+    const message = msg.text();
+    if (!isIgnorableConsoleError(message)) {
+      consoleErrors.push(message);
+    }
+  }
 });
 
-// Collect 404s
 const missing404s = [];
-page.on('response', res => {
-  if (res.status() === 404) missing404s.push(res.url());
+page.on("response", (res) => {
+  if (res.status() === 404) {
+    missing404s.push(res.url());
+  }
 });
 
 async function shot(name, note) {
   const file = path.join(OUT, `${name}.png`);
   await page.screenshot({ path: file, fullPage: false });
-  console.log(`[SHOT] ${name} — ${note}`);
+  console.log(`[SHOT] ${name} - ${note}`);
 }
 
 async function wait(ms) {
   await page.waitForTimeout(ms);
 }
 
-// ── 1. Initial load ──────────────────────────────────────────
-await page.goto('http://localhost:3000/admin', {
-  waitUntil: 'networkidle',
+await page.goto(`${BASE_URL}/admin`, {
+  waitUntil: "networkidle",
   timeout: 30000,
 });
 await wait(1500);
-await shot('01-initial-load', 'Fresh page load, no state');
+await shot("01-initial-load", "Fresh page load, no state");
 
-// ── 2. Flat Bed mode ─────────────────────────────────────────
-const flatBedBtn = page.locator('[class*="modeBtn"]', { hasText: 'Flat Bed' }).first();
+const flatBedBtn = page.locator('[class*="modeBtn"]', { hasText: "Flat Bed" }).first();
 if (await flatBedBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
   await flatBedBtn.click();
   await wait(500);
 }
-await shot('02-flat-bed-mode', 'Flat Bed tab active');
+await shot("02-flat-bed-mode", "Flat Bed tab active");
 
-// ── 3. Tumbler mode ──────────────────────────────────────────
-const tumblerBtn = page.locator('[class*="modeBtn"]', { hasText: 'Tumbler' }).first();
+const tumblerBtn = page.locator('[class*="modeBtn"]', { hasText: "Tumbler" }).first();
 if (await tumblerBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
   await tumblerBtn.click();
   await wait(800);
 }
-await shot('03-tumbler-mode', 'Tumbler tab active');
+await shot("03-tumbler-mode", "Tumbler tab active");
 
-// ── 4. Right panel tabs ──────────────────────────────────────
-const rightTabs = ['Workflow', 'Tools', 'Setup', 'Calibration'];
+const rightTabs = ["Workflow", "Tools", "Setup", "Calibration"];
 for (const tab of rightTabs) {
   const tabBtn = page.locator(`[role="tab"]:has-text("${tab}"), button:has-text("${tab}")`).first();
   if (await tabBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -70,30 +86,21 @@ for (const tab of rightTabs) {
   }
 }
 
-// Go back to Workflow tab
-const workflowTab = page.locator('button', { hasText: 'Workflow' }).first();
+const workflowTab = page.locator("button", { hasText: "Workflow" }).first();
 if (await workflowTab.isVisible({ timeout: 2000 }).catch(() => false)) {
   await workflowTab.click();
   await wait(400);
 }
 
-// ── 5. Pre-flight section ────────────────────────────────────
-await shot('05-preflight-initial', 'Pre-flight checklist initial state');
+await shot("05-preflight-initial", "Pre-flight checklist initial state");
 
-// Scroll pre-flight into view
 const preflight = page.locator('[class*="preflight"], [class*="preFlight"]').first();
 if (await preflight.isVisible({ timeout: 2000 }).catch(() => false)) {
   await preflight.scrollIntoViewIfNeeded();
-  await shot('05b-preflight-scrolled', 'Pre-flight scrolled into view');
+  await shot("05b-preflight-scrolled", "Pre-flight scrolled into view");
 }
 
-// ── 6. Click each pre-flight item ───────────────────────────
-const preflightItems = [
-  'Rotary preset',
-  'Cylinder diameter',
-  'Template dimensions',
-  'Top anchor calibrated',
-];
+const preflightItems = ["Rotary preset", "Cylinder diameter", "Template dimensions", "Top anchor calibrated"];
 for (const label of preflightItems) {
   const item = page.locator(`button:has-text("${label}")`).first();
   const isBtn = await item.isVisible({ timeout: 1500 }).catch(() => false);
@@ -101,11 +108,11 @@ for (const label of preflightItems) {
     await item.click();
     await wait(700);
     await shot(
-      `06-preflight-click-${label.toLowerCase().replace(/\s+/g, '-')}`,
+      `06-preflight-click-${label.toLowerCase().replace(/\s+/g, "-")}`,
       `After clicking preflight item: ${label}`
     );
-    // Navigate back to Workflow tab after each click
-    const wfTab = page.locator('button', { hasText: 'Workflow' }).first();
+
+    const wfTab = page.locator("button", { hasText: "Workflow" }).first();
     if (await wfTab.isVisible({ timeout: 1000 }).catch(() => false)) {
       await wfTab.click();
       await wait(400);
@@ -115,81 +122,74 @@ for (const label of preflightItems) {
   }
 }
 
-// ── 7. Left panel sections ───────────────────────────────────
-await shot('07-left-panel', 'Left panel full view');
+await shot("07-left-panel", "Left panel full view");
 
-// Scroll left panel to templates
-const templates = page.locator('text=TEMPLATES, text=Templates').first();
+const templates = page.locator("text=TEMPLATES, text=Templates").first();
 if (await templates.isVisible({ timeout: 2000 }).catch(() => false)) {
   await templates.scrollIntoViewIfNeeded();
-  await shot('07b-templates-section', 'Templates section');
+  await shot("07b-templates-section", "Templates section");
 }
 
-// ── 8. 3D Model Preview area ─────────────────────────────────
-const modelPreview = page.locator('text=3D MODEL PREVIEW, text=3D Model Preview').first();
+const modelPreview = page.locator("text=3D MODEL PREVIEW, text=3D Model Preview").first();
 if (await modelPreview.isVisible({ timeout: 2000 }).catch(() => false)) {
   await modelPreview.scrollIntoViewIfNeeded();
-  await shot('08-3d-model-preview', '3D model preview panel');
+  await shot("08-3d-model-preview", "3D model preview panel");
 }
 
-// ── 9. Material profile panel ────────────────────────────────
-const matProfile = page.locator('text=MATERIAL PROFILE').first();
+const matProfile = page.locator("text=MATERIAL PROFILE").first();
 if (await matProfile.isVisible({ timeout: 2000 }).catch(() => false)) {
   await matProfile.scrollIntoViewIfNeeded();
-  await shot('09-material-profile', 'Material profile section');
+  await shot("09-material-profile", "Material profile section");
 }
 
-// ── 10. Full right panel scroll ──────────────────────────────
 const rightPanel = page.locator('[class*="rightPanel"], [class*="right-panel"], aside').last();
 if (await rightPanel.isVisible({ timeout: 2000 }).catch(() => false)) {
-  await rightPanel.evaluate(el => el.scrollTo(0, 0));
-  await shot('10a-right-panel-top', 'Right panel scrolled to top');
-  await rightPanel.evaluate(el => el.scrollTo(0, el.scrollHeight));
+  await rightPanel.evaluate((el) => el.scrollTo(0, 0));
+  await shot("10a-right-panel-top", "Right panel scrolled to top");
+  await rightPanel.evaluate((el) => el.scrollTo(0, el.scrollHeight));
   await wait(300);
-  await shot('10b-right-panel-bottom', 'Right panel scrolled to bottom');
-  await rightPanel.evaluate(el => el.scrollTo(0, 0));
+  await shot("10b-right-panel-bottom", "Right panel scrolled to bottom");
+  await rightPanel.evaluate((el) => el.scrollTo(0, 0));
 }
 
-// ── 11. Export button state ──────────────────────────────────
 const exportBtn = page.locator('button:has-text("Export for LightBurn")').first();
 if (await exportBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
   await exportBtn.scrollIntoViewIfNeeded();
-  await shot('11-export-button', 'Export for LightBurn button state');
+  await shot("11-export-button", "Export for LightBurn button state");
 }
 
-// ── 12. Calibration page ─────────────────────────────────────
-await page.goto('http://localhost:3000/admin/calibration', {
-  waitUntil: 'networkidle',
-  timeout: 15000,
-}).catch(() => console.log('[SKIP] /admin/calibration not found'));
+await page
+  .goto(`${BASE_URL}/admin/calibration`, {
+    waitUntil: "networkidle",
+    timeout: 15000,
+  })
+  .catch(() => console.log("[SKIP] /admin/calibration not found"));
 await wait(1000);
-await shot('12-calibration-page', 'Calibration page');
+await shot("12-calibration-page", "Calibration page");
 
-// ── 13. Back to admin ────────────────────────────────────────
-await page.goto('http://localhost:3000/admin', {
-  waitUntil: 'networkidle',
+await page.goto(`${BASE_URL}/admin`, {
+  waitUntil: "networkidle",
   timeout: 15000,
 });
 await wait(1000);
 
-// ── REPORT ───────────────────────────────────────────────────
-console.log('\n===== AUDIT REPORT =====');
+console.log("\n===== AUDIT REPORT =====");
 
 if (consoleErrors.length > 0) {
-  console.log('\nCONSOLE ERRORS:');
-  [...new Set(consoleErrors)].forEach(e => console.log('  ✗', e));
+  console.log("\nCONSOLE ERRORS:");
+  [...new Set(consoleErrors)].forEach((error) => console.log("  x", error));
 } else {
-  console.log('\nConsole errors: none');
+  console.log("\nConsole errors: none");
 }
 
 if (missing404s.length > 0) {
-  console.log('\n404s:');
-  [...new Set(missing404s)].forEach(u => console.log('  ✗', u));
+  console.log("\n404s:");
+  [...new Set(missing404s)].forEach((url) => console.log("  x", url));
 } else {
-  console.log('404s: none');
+  console.log("404s: none");
 }
 
-console.log('\nScreenshots saved to:', OUT);
-console.log('========================\n');
+console.log("\nScreenshots saved to:", OUT);
+console.log("========================\n");
 
 await browser.close();

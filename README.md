@@ -43,7 +43,7 @@ Include build caches as well:
 powershell -ExecutionPolicy Bypass -File ./scripts/clean-local-artifacts.ps1 -IncludeBuildCache
 ```
 
-Install Playwright's local Chromium bundle into the repo cache:
+Install a browser for local visual audits. This reuses a preinstalled Chromium binary when available and only downloads a Playwright-managed bundle when needed:
 
 ```bash
 npm run setup:playwright
