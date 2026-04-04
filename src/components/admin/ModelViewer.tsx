@@ -79,6 +79,7 @@ export interface FlatPreviewDimensions {
 
 export interface ModelViewerProps {
   file?: File | null;
+  modelUrl?: string | null;
   flatPreview?: FlatPreviewDimensions | null;
   placedItems?: PlacedItem[];
   itemTextures?: Map<string, HTMLCanvasElement>;
@@ -90,6 +91,7 @@ export interface ModelViewerProps {
   glbPath?: string | null;
   /** Tumbler mapping from the wizard — orients the front face */
   tumblerMapping?: import("@/types/productTemplate").TumblerMapping;
+  manufacturerLogoStamp?: import("@/types/productTemplate").ManufacturerLogoStamp;
   /** Body tint hex color (e.g. "#b0b8c4" for stainless, "#1a1a2e" for matte black) */
   bodyTintColor?: string;
   /** Rim / engraved artwork tint */
@@ -1001,8 +1003,9 @@ class CanvasErrorBoundary extends Component<
 // ---------------------------------------------------------------------------
 
 export default function ModelViewer({
-  file, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, bodyTintColor, rimTintColor,
+  file, modelUrl, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, manufacturerLogoStamp, bodyTintColor, rimTintColor,
 }: ModelViewerProps) {
+  void manufacturerLogoStamp;
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
 
@@ -1028,7 +1031,7 @@ export default function ModelViewer({
   useEffect(() => {
     if (!file) {
       const frameId = window.requestAnimationFrame(() => {
-        setUrl(null);
+        setUrl(modelUrl ?? null);
         setModelBounds(null);
         setIsAutoRotating(false);
       });
@@ -1044,14 +1047,16 @@ export default function ModelViewer({
       window.cancelAnimationFrame(frameId);
       URL.revokeObjectURL(objectUrl);
     };
-  }, [file, tumblerDims]);
+  }, [file, modelUrl, tumblerDims]);
 
   const handleModelReady = useCallback((obj: THREE.Object3D) => {
     const box = new THREE.Box3().setFromObject(obj);
     if (!box.isEmpty()) setModelBounds(box);
   }, []);
 
-  const ext = file?.name.split(".").pop()?.toLowerCase() ?? "";
+  const ext = file?.name.split(".").pop()?.toLowerCase() ??
+    modelUrl?.split("?")[0]?.split(".").pop()?.toLowerCase() ??
+    "";
   const viewKey = flatPreview
     ? `flat:${flatPreview.widthMm}:${flatPreview.heightMm}:${flatPreview.thicknessMm}:${flatPreview.familyKey ?? ""}:${flatPreview.label ?? ""}`
     : (url ?? "");

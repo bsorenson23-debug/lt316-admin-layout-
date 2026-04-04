@@ -2116,7 +2116,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         applyResolvedDrinkwareMaterial({
           laserType,
           productType: detectedProductType,
-          explicitFinishType: response.analysis.finishType ?? null,
+          explicitFinishType: null,
           bodyColorHex,
           rimColorHex,
           textHints: [

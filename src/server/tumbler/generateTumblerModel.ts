@@ -64,6 +64,15 @@ type StanleyCandidateFit = StanleySilhouetteFit & {
 export type GeneratedTumblerGlbResult = {
   glbPath: string;
   fitDebug: TumblerItemLookupFitDebug | null;
+  bodyColorHex: string | null;
+  rimColorHex: string | null;
+};
+
+type EnsureGeneratedTumblerGlbInput = {
+  profileId?: string | null;
+  imageUrl?: string | null;
+  imageUrls?: string[];
+  [key: string]: unknown;
 };
 
 class NodeFileReader implements FileReaderLike {
@@ -569,6 +578,10 @@ async function fitStanleyIceFlow30FromImage(
   const overallTopYmm = profile.overallHeightMm / 2;
   const rimTopYmm = round2(overallTopYmm - (rimTop - fullTop) * profileFit.mmPerPxY);
   const rimBottomYmm = round2(overallTopYmm - (rimBottom - fullTop) * profileFit.mmPerPxY);
+  const referenceBandCenterYPx = Math.round(bodyTop + ((bodyBottom - bodyTop) * 0.22));
+  const referenceBandHeightPx = Math.max(12, Math.round((bodyBottom - bodyTop + 1) * 0.12));
+  const referenceBandTopPx = Math.max(bodyTop, referenceBandCenterYPx - Math.floor(referenceBandHeightPx / 2));
+  const referenceBandBottomPx = Math.min(bodyBottom, referenceBandTopPx + referenceBandHeightPx - 1);
   const centerOffsetScore = normalizeScore(1 - Math.abs(centerX - width / 2) / Math.max(1, width * 0.18));
   const portraitRatio = width / Math.max(1, height);
   const portraitScore = normalizeScore(1 - Math.abs(portraitRatio - 0.44) / 0.32);
@@ -607,6 +620,10 @@ async function fitStanleyIceFlow30FromImage(
     bodyBottomPx: bodyBottom,
     rimTopPx: rimTop,
     rimBottomPx: rimBottom,
+    referenceBandTopPx,
+    referenceBandBottomPx,
+    referenceBandCenterYPx,
+    referenceBandWidthPx: round2(maxCenterWidth),
     maxCenterWidthPx: round2(maxCenterWidth),
     referenceHalfWidthPx: round2(rimHalfWidthPx > 0 ? rimHalfWidthPx : maxCenterWidth / 2),
     fitScore,
@@ -788,21 +805,31 @@ async function writeGeneratedGlb(
 }
 
 export async function ensureGeneratedTumblerGlb(
-  profileId: string,
+  profileIdOrInput: string | EnsureGeneratedTumblerGlbInput,
   options?: { imageUrl?: string | null; imageUrls?: string[] },
 ) : Promise<GeneratedTumblerGlbResult> {
+  const profileId = typeof profileIdOrInput === "string"
+    ? profileIdOrInput
+    : profileIdOrInput.profileId ?? "";
+  const resolvedOptions = typeof profileIdOrInput === "string"
+    ? options
+    : {
+        imageUrl: profileIdOrInput.imageUrl ?? options?.imageUrl ?? null,
+        imageUrls: profileIdOrInput.imageUrls ?? options?.imageUrls ?? [],
+      };
+
   if (profileId !== "stanley-iceflow-30") {
-    return { glbPath: "", fitDebug: null };
+    return { glbPath: "", fitDebug: null, bodyColorHex: null, rimColorHex: null };
   }
 
   const profile = getTumblerProfileById(profileId);
-  if (!profile) return { glbPath: "", fitDebug: null };
+  if (!profile) return { glbPath: "", fitDebug: null, bodyColorHex: null, rimColorHex: null };
 
   let fit: StanleySilhouetteFit = buildFallbackBodyProfile(profile);
 
   const candidateImageUrls = [
-    ...(options?.imageUrls ?? []),
-    ...(options?.imageUrl ? [options.imageUrl] : []),
+    ...(resolvedOptions?.imageUrls ?? []),
+    ...(resolvedOptions?.imageUrl ? [resolvedOptions.imageUrl] : []),
   ].filter((value, index, array): value is string => Boolean(value) && array.indexOf(value) === index);
 
   if (candidateImageUrls.length > 0) {
@@ -820,5 +847,7 @@ export async function ensureGeneratedTumblerGlb(
   return {
     glbPath: await writeGeneratedGlb(fileName, buildStanleyIceFlow30Scene(profile, fit)),
     fitDebug: fit.fitDebug ?? null,
+    bodyColorHex: fit.bodyColorHex ?? null,
+    rimColorHex: fit.rimColorHex ?? null,
   };
 }

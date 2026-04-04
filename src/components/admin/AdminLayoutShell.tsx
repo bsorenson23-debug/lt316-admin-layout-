@@ -319,14 +319,14 @@ export function AdminLayoutShell() {
     let cancelled = false;
     void (async () => {
       try {
-        const assets = await fetchSvgLibraryAssets();
+        const result = await fetchSvgLibraryAssets();
         if (cancelled) return;
-        setSvgAssets(assets);
+        setSvgAssets(result.assets);
         setSelectedAssetId((prev) => {
-          if (prev && assets.some((asset) => asset.id === prev)) {
+          if (prev && result.assets.some((asset) => asset.id === prev)) {
             return prev;
           }
-          return assets[0]?.id ?? null;
+          return result.assets[0]?.id ?? null;
         });
         setUploadError(null);
       } catch (error) {

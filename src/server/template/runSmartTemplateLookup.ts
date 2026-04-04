@@ -788,7 +788,7 @@ export async function runSmartTemplateLookup(
     laserType: input.laserTypeOverride ?? finishInference?.laserType ?? null,
     materialSlug: finishInference?.materialSlug ?? null,
     materialLabel: finishInference?.materialLabel ?? null,
-    finishTypeOverride: input.finishTypeOverride ?? tumblerAuto?.analysis.finishType ?? null,
+    finishTypeOverride: input.finishTypeOverride ?? null,
   });
   const dimensionsResolved = hasResolvedDrinkwareDimensions({ diameterMm, printHeightMm });
   const requiresReview =

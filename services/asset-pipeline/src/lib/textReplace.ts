@@ -1,3 +1,5 @@
+import type { TextDetectionResult } from "./textDetect";
+
 export interface TextReplacementRequest {
   requestedMode: "auto" | "font-match" | "trace";
   replacementText: string | null;
@@ -16,7 +18,14 @@ export interface TextReplacementResult {
   debug: Record<string, unknown>;
 }
 
-export async function generateTextReplacement(): Promise<TextReplacementResult> {
+export async function generateTextReplacement(
+  imageBytes: Uint8Array,
+  detection: TextDetectionResult,
+  request: TextReplacementRequest,
+): Promise<TextReplacementResult> {
+  void imageBytes;
+  void detection;
+  void request;
   throw new Error(
     "Text replacement is referenced by this branch, but services/asset-pipeline/src/lib/textReplace.ts has not been implemented yet.",
   );

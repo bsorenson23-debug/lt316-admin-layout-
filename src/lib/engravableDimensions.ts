@@ -1,9 +1,10 @@
-import type { ProductTemplate } from "@/types/productTemplate";
+import type { ProductTemplate } from "../types/productTemplate.ts";
 import {
   findTumblerProfileIdForBrandModel,
   getTumblerProfileById,
   getProfileHandleArcDeg,
-} from "@/data/tumblerProfiles";
+} from "../data/tumblerProfiles.ts";
+import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
 
 // ---------------------------------------------------------------------------
 // Interface
@@ -24,6 +25,10 @@ export interface EngravableDimensions {
   bottomMarginMm: number;
   /** Engravable zone height = printHeightMm from template (mm) */
   engravableHeightMm: number;
+  /** Legacy alias for the body/engravable zone top measured from the overall top. */
+  bodyTopOffsetMm: number;
+  /** Legacy alias for the body/engravable zone bottom measured from the overall top. */
+  bodyBottomOffsetMm: number;
   /** Handle exclusion arc (degrees, 0 = no handle) */
   handleArcDeg: number;
   /** Physical handle width on the surface (mm) */
@@ -38,6 +43,69 @@ export interface EngravableDimensions {
    * Zero when margins are symmetric (e.g. YETI Rambler 40oz).
    */
   engravableOffsetY: number;
+}
+
+export interface DerivedEngravableZoneFromFitDebug {
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+  bodyHeightMm: number;
+  topMarginMm: number;
+  bottomMarginMm: number;
+  printHeightMm: number;
+  straightWallBottomYFromTopMm: number | null;
+  straightWallHeightMm: number | null;
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function pxToMmFromOverallTop(
+  px: number,
+  fitDebug: TumblerItemLookupFitDebug,
+  overallHeightMm: number,
+): number {
+  const fullHeightPx = fitDebug.fullBottomPx - fitDebug.fullTopPx;
+  if (!(fullHeightPx > 0)) return 0;
+  const ratio = (px - fitDebug.fullTopPx) / fullHeightPx;
+  return round2(clamp(ratio, 0, 1) * overallHeightMm);
+}
+
+function findStraightWallBottomFromProfile(args: {
+  overallHeightMm: number;
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+  fitDebug: TumblerItemLookupFitDebug;
+}): number | null {
+  const points = [...args.fitDebug.profilePoints]
+    .filter((point) => Number.isFinite(point.yPx) && Number.isFinite(point.radiusMm))
+    .sort((left, right) => left.yPx - right.yPx);
+  if (points.length < 4) return null;
+
+  const maxRadiusMm = Math.max(...points.map((point) => point.radiusMm));
+  const toleranceMm = Math.max(0.8, maxRadiusMm * 0.025);
+
+  let candidate: number | null = null;
+  for (let index = points.length - 2; index >= 1; index -= 1) {
+    const point = points[index];
+    const nextPoint = points[index + 1];
+    if (point.radiusMm >= maxRadiusMm - toleranceMm && nextPoint.radiusMm < maxRadiusMm - toleranceMm) {
+      candidate = round2(args.overallHeightMm / 2 - point.yMm);
+      break;
+    }
+  }
+
+  if (candidate == null) return null;
+
+  return round2(clamp(
+    candidate,
+    args.bodyTopFromOverallMm,
+    args.bodyBottomFromOverallMm,
+  ));
 }
 
 // ---------------------------------------------------------------------------
@@ -104,11 +172,54 @@ export function computeEngravableDimensions(opts: {
     topMarginMm: topMargin,
     bottomMarginMm: bottomMargin,
     engravableHeightMm: engH,
+    bodyTopOffsetMm: topMargin,
+    bodyBottomOffsetMm: totalH - bottomMargin,
     handleArcDeg: handleArc,
     handleWidthMm: handleWidth,
     printableArcDeg: printableArc,
     printableWidthMm: printableWidth,
     engravableOffsetY,
+  };
+}
+
+export function deriveEngravableZoneFromFitDebug(args: {
+  overallHeightMm: number | null | undefined;
+  fitDebug: TumblerItemLookupFitDebug | null | undefined;
+}): DerivedEngravableZoneFromFitDebug | null {
+  if (!args.fitDebug || !args.overallHeightMm || !Number.isFinite(args.overallHeightMm) || args.overallHeightMm <= 0) {
+    return null;
+  }
+
+  const overallHeightMm = args.overallHeightMm;
+  const fitDebug = args.fitDebug;
+  const bodyTopFromOverallMm = pxToMmFromOverallTop(fitDebug.bodyTopPx, fitDebug, overallHeightMm);
+  const bodyBottomFromOverallMm = pxToMmFromOverallTop(fitDebug.bodyBottomPx, fitDebug, overallHeightMm);
+  if (!(bodyBottomFromOverallMm > bodyTopFromOverallMm)) {
+    return null;
+  }
+
+  const bodyHeightMm = round2(bodyBottomFromOverallMm - bodyTopFromOverallMm);
+  const topMarginMm = round2(bodyTopFromOverallMm);
+  const bottomMarginMm = round2(Math.max(0, overallHeightMm - bodyBottomFromOverallMm));
+  const straightWallBottomYFromTopMm = findStraightWallBottomFromProfile({
+    overallHeightMm,
+    bodyTopFromOverallMm,
+    bodyBottomFromOverallMm,
+    fitDebug,
+  });
+  const straightWallHeightMm = straightWallBottomYFromTopMm == null
+    ? null
+    : round2(Math.max(0, straightWallBottomYFromTopMm - bodyTopFromOverallMm));
+
+  return {
+    bodyTopFromOverallMm,
+    bodyBottomFromOverallMm,
+    bodyHeightMm,
+    topMarginMm,
+    bottomMarginMm,
+    printHeightMm: bodyHeightMm,
+    straightWallBottomYFromTopMm,
+    straightWallHeightMm,
   };
 }
 
