@@ -34,3 +34,27 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Visual snapshots (Playwright)
+
+Run the visual snapshot audit with:
+
+```bash
+npm run audit:visual
+```
+
+This command captures screenshots to `tmp/audit/`.
+
+### Hosted runtime fallback behavior
+
+In locked-down hosted containers (including Codex web), Playwright can fail to launch when:
+
+- no preinstalled browser is available,
+- `PLAYWRIGHT_EXECUTABLE_PATH` is not set, and
+- browser download hosts are blocked.
+
+When that happens, the script exits cleanly and writes diagnostics to `tmp/audit/runtime-diagnostics.json`.
+
+### Reliable screenshot backend
+
+Use the **Visual Audit** GitHub Actions workflow (`.github/workflows/visual-audit.yml`) for a reliable hosted screenshot runner.

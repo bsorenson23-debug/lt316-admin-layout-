@@ -3,9 +3,51 @@ import { mkdir, writeFile } from 'fs/promises';
 import path from 'path';
 
 const OUT = './tmp/audit';
+const DIAG_FILE = path.join(OUT, 'runtime-diagnostics.json');
 await mkdir(OUT, { recursive: true });
 
-const browser = await chromium.launch({ headless: true });
+function diagnostics(error) {
+  return {
+    timestamp: new Date().toISOString(),
+    node: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    playwrightExecutablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH ?? null,
+    ci: Boolean(process.env.CI),
+    githubActions: Boolean(process.env.GITHUB_ACTIONS),
+    error: error
+      ? {
+          name: error.name,
+          message: error.message,
+        }
+      : null,
+  };
+}
+
+async function launchBrowser() {
+  try {
+    return await chromium.launch({ headless: true });
+  } catch (error) {
+    const payload = diagnostics(error);
+    await writeFile(DIAG_FILE, JSON.stringify(payload, null, 2), 'utf8');
+
+    console.warn('\n[visual-audit] Unable to launch Playwright Chromium.');
+    console.warn('[visual-audit] This runtime likely blocks browser downloads and has no preinstalled Playwright browser.');
+    console.warn(`[visual-audit] Diagnostics saved to ${DIAG_FILE}`);
+    console.warn('[visual-audit] Workarounds:');
+    console.warn('  1) Run this audit in GitHub Actions (recommended for hosted snapshots).');
+    console.warn('  2) Run in local/Docker where Playwright browsers are installed.');
+    console.warn('  3) Use a runtime that sets PLAYWRIGHT_EXECUTABLE_PATH.\n');
+
+    return null;
+  }
+}
+
+const browser = await launchBrowser();
+if (!browser) {
+  process.exit(0);
+}
+
 const ctx = await browser.newContext({
   viewport: { width: 1440, height: 900 },
 });
