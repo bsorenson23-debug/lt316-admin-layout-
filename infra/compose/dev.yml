@@ -6,6 +6,9 @@ services:
       target: dev
     working_dir: /workspace
     command: ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", "3000"]
+    env_file:
+      - path: ../../.env.local
+        required: false
     environment:
       NODE_ENV: development
       NEXT_TELEMETRY_DISABLED: "1"
@@ -30,6 +33,9 @@ services:
       target: dev
     working_dir: /srv
     command: ["npm", "run", "dev"]
+    env_file:
+      - path: ../../.env.local
+        required: false
     environment:
       NODE_ENV: development
       JOB_STORAGE_ROOT: /data/jobs
