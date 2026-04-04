@@ -48,3 +48,15 @@ Install a browser for local visual audits. This reuses a preinstalled Chromium b
 ```bash
 npm run setup:playwright
 ```
+
+Run the visual audit in a local or Docker-backed environment:
+
+```bash
+npm run audit:visual
+```
+
+If you run that from Codex web or another restricted container, the command now stops with a GitHub Actions fallback link instead of a Playwright download error. To force the direct local runner when you already have browser access, use:
+
+```bash
+npm run audit:visual:local
+```

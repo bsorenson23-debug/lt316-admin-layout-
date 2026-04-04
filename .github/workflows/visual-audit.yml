@@ -41,7 +41,7 @@ jobs:
           npx --yes wait-on http://127.0.0.1:3000/admin --timeout 120000 || (cat app.log && exit 1)
 
       - name: Run visual audit
-        run: npm run audit:visual
+        run: npm run audit:visual:local
 
       - name: Upload audit artifacts
         if: always()
