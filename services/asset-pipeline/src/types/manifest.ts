@@ -143,6 +143,7 @@ export interface VectorDoctorResultPayload {
   groupedRegions: Array<{
     id: string;
     role: string;
+    colorHex: string;
     pixelCount: number;
   }>;
   recipesByRegion: Array<{
