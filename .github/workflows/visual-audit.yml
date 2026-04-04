@@ -4,7 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - codex/image-doctor-cleanup-v1
+      - main
+  pull_request:
 
 permissions:
   contents: read

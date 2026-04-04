@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "child_process";
 import { accessSync, constants, readdirSync } from "fs";
+import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
@@ -12,6 +13,8 @@ const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH ?? path.join(repoRoot,
 const baseUrl = process.env.VISUAL_AUDIT_BASE_URL ?? "http://127.0.0.1:3000";
 const adminUrl = `${baseUrl.replace(/\/$/, "")}/admin`;
 const localAuditScript = path.join(scriptDir, "visual-audit.mjs");
+const auditOutDir = path.join(repoRoot, "tmp", "audit");
+const diagnosticsPath = path.join(auditOutDir, "runtime-diagnostics.json");
 
 process.env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
 
@@ -102,6 +105,12 @@ function printFallback(reasons) {
   console.error("npm run audit:visual:local");
 }
 
+async function writeRuntimeDiagnostics(payload) {
+  await mkdir(auditOutDir, { recursive: true });
+  await writeFile(diagnosticsPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  console.error(`[audit:visual] Wrote runtime diagnostics to ${diagnosticsPath}`);
+}
+
 async function main() {
   const reasons = [];
   const executablePath = resolveChromiumExecutablePath();
@@ -118,9 +127,32 @@ async function main() {
   }
 
   if (reasons.length > 0) {
+    await writeRuntimeDiagnostics({
+      ok: false,
+      generatedAt: new Date().toISOString(),
+      mode: "fallback",
+      adminUrl,
+      browsersPath,
+      executablePath,
+      reasons,
+      workflowUrl: getActionsWorkflowUrl(),
+      cwd: repoRoot,
+    });
     printFallback(reasons);
     process.exit(1);
   }
+
+  await writeRuntimeDiagnostics({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    mode: "local-browser",
+    adminUrl,
+    browsersPath,
+    executablePath,
+    reasons: [],
+    workflowUrl: getActionsWorkflowUrl(),
+    cwd: repoRoot,
+  });
 
   const child = spawn(process.execPath, [localAuditScript], {
     cwd: repoRoot,
