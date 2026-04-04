@@ -18,7 +18,22 @@ async function start(): Promise<void> {
   });
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true, storageRoot: getStorageRoot() });
+    const env = {
+      anthropicApiKeyConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
+      replicateApiTokenConfigured: Boolean(process.env.REPLICATE_API_TOKEN),
+    };
+
+    const warnings: string[] = [];
+    if (!env.anthropicApiKeyConfigured) {
+      warnings.push("ANTHROPIC_API_KEY is missing. Text detection and replacement endpoints will be unavailable.");
+    }
+
+    res.json({
+      ok: true,
+      storageRoot: getStorageRoot(),
+      env,
+      warnings,
+    });
   });
 
   app.use(jobsRouter);

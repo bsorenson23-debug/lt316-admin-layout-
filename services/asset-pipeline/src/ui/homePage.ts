@@ -48,6 +48,27 @@ export function renderHomePage(): string {
         color: var(--muted);
       }
 
+      .env-warnings {
+        margin-top: 0.9rem;
+        padding: 0.8rem 0.95rem;
+        border-radius: 10px;
+        border: 1px solid #e0b24a;
+        background: #fff7e7;
+        color: #7a4d00;
+        font-size: 0.88rem;
+        line-height: 1.45;
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .env-warnings strong {
+        color: #5e3c00;
+      }
+
+      .env-warnings.hidden {
+        display: none;
+      }
+
       .grid {
         display: grid;
         grid-template-columns: 340px minmax(0, 1fr);
@@ -291,6 +312,7 @@ export function renderHomePage(): string {
     <main>
       <h1>Asset Pipeline Test UI</h1>
       <p>Create a job, upload one raw image, reuse a temporary placeholder when needed, then inspect the generated artifacts in the browser.</p>
+      <div id="env-warnings" class="env-warnings hidden"></div>
 
       <div class="grid">
         <section class="panel stack">
@@ -664,7 +686,40 @@ export function renderHomePage(): string {
         replacementPreviewEmpty: document.getElementById('replacement-preview-empty'),
         replacementSvgOutput: document.getElementById('replacement-svg-output'),
         debugOutput: document.getElementById('debug-output'),
+        envWarnings: document.getElementById('env-warnings'),
       };
+
+      function renderEnvWarnings(lines) {
+        const warningLines = Array.isArray(lines) ? lines.filter(Boolean) : [];
+        if (warningLines.length === 0) {
+          el.envWarnings.classList.add('hidden');
+          el.envWarnings.innerHTML = '';
+          return;
+        }
+
+        el.envWarnings.classList.remove('hidden');
+        el.envWarnings.innerHTML =
+          '<strong>Runtime configuration warning</strong>' +
+          warningLines.map((line) => '<div>• ' + escapeHtml(line) + '</div>').join('');
+      }
+
+      async function refreshRuntimeWarnings() {
+        try {
+          const response = await fetch('/health');
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload.error || 'Health check failed.');
+          }
+
+          const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+          renderEnvWarnings(warnings);
+        } catch (error) {
+          renderEnvWarnings([
+            'Could not read runtime health state. Service warnings may be hidden.',
+          ]);
+          setStatus(error.message || 'Health check failed.', 'error');
+        }
+      }
 
       function setStatus(message, tone) {
         el.status.textContent = message || '';
@@ -1663,6 +1718,7 @@ export function renderHomePage(): string {
       refreshPlaceholder().catch((error) => {
         setStatus(error.message || 'Failed to load placeholder.', 'error');
       });
+      refreshRuntimeWarnings();
       clearVectorDoctorPanel('Run image-doctor, then vector-doctor to inspect protected trace branches.');
       clearVectorizePanel('Run vector-doctor, then vectorize to build SVG outputs.');
       clearReplacementPreview('Run text detection first.');

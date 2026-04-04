@@ -25,7 +25,7 @@ import { ColorRegionsInputError, runColorRegionsStage } from "../stages/color-re
 import { runLookupStage } from "../stages/lookup";
 import { ImageDoctorInputError, runImageDoctorStage } from "../stages/image-doctor";
 import { runVectorDoctorStage, VectorDoctorInputError } from "../stages/vector-doctor";
-import { runVectorizeStage } from "../stages/vectorize";
+import { runVectorizeStage, VectorizeInputError } from "../stages/vectorize";
 import { runMeshStage } from "../stages/mesh";
 import type {
   CreateJobRequestBody,
@@ -429,12 +429,24 @@ async function replaceJobRawImage(
 
 function handleJobError(res: Response, error: unknown, notFoundMessage: string): void {
   if (
+    error instanceof Error &&
+    error.message.includes("ANTHROPIC_API_KEY is not configured for text detection")
+  ) {
+    res.status(503).json({
+      error: "Service unavailable",
+      detail: error.message,
+    });
+    return;
+  }
+
+  if (
     error instanceof InvalidJobIdError ||
     error instanceof StorageScopeError ||
     error instanceof InvalidJobRequestError ||
     error instanceof ImageDoctorInputError ||
     error instanceof ColorRegionsInputError ||
-    error instanceof VectorDoctorInputError
+    error instanceof VectorDoctorInputError ||
+    error instanceof VectorizeInputError
   ) {
     res.status(400).json({
       error: "Invalid request",

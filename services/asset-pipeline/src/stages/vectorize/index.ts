@@ -717,6 +717,7 @@ export async function runVectorizeStage(
     "script-text-preview",
   ];
   const layers: TraceLayer[] = [];
+  const branchCoverage: Array<{ branch: VectorizeOutputKey; candidateColors: number; eligiblePixels: number }> = [];
 
   for (const branch of branchOutputs) {
     const branchStoragePath = parsedVectorDoctor.artifacts[
@@ -754,6 +755,16 @@ export async function runVectorizeStage(
     for (const colorHex of uniqueColors) {
       const colorMask = buildColorMask(colorPreviewImage, branchMask, colorHex);
       const pixelCount = countMaskPixels(colorMask);
+      const existingCoverage = branchCoverage.find((entry) => entry.branch === branch);
+      if (existingCoverage) {
+        existingCoverage.eligiblePixels += pixelCount;
+      } else {
+        branchCoverage.push({
+          branch,
+          candidateColors: uniqueColors.length,
+          eligiblePixels: pixelCount,
+        });
+      }
       if (pixelCount < 32) {
         continue;
       }
@@ -778,7 +789,12 @@ export async function runVectorizeStage(
   }
 
   if (layers.length === 0) {
-    throw new VectorizeInputError("Vectorize could not trace any SVG paths from the vector-doctor branches.");
+    const detail = branchCoverage
+      .map((entry) => `${entry.branch}:colors=${entry.candidateColors},pixels=${entry.eligiblePixels}`)
+      .join("; ");
+    throw new VectorizeInputError(
+      `Vectorize could not trace any SVG paths from the vector-doctor branches. Coverage: ${detail || "none"}.`,
+    );
   }
 
   const shapeThreshold = computeShapeThreshold(layers, options);
