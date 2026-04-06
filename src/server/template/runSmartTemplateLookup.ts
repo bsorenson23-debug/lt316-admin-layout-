@@ -263,6 +263,9 @@ function resolveBodyReferenceDiameterMm(args: {
   if (outside != null) {
     return round2(outside);
   }
+  if (top != null && bottom != null && Math.abs(top - bottom) > 3) {
+    return round2(top);
+  }
   if (top != null && bottom != null && Math.abs(top - bottom) <= 3) {
     return round2((top + bottom) / 2);
   }
@@ -462,10 +465,18 @@ function inferTumblerPhotoLabel(result: Awaited<ReturnType<typeof lookupTumblerI
 }
 
 function inferTumblerBackPhotoLabel(result: Awaited<ReturnType<typeof lookupTumblerItem>> | null): string | null {
-  if (!result?.backImageUrl) return null;
+  const selection = result?.productReferenceSet?.canonicalViewSelection;
+  if (!result?.backImageUrl || selection?.canonicalBackStatus !== "true-back") return null;
   const source = inferTumblerPhotoLabel(result);
   if (!source) return "Lookup opposite-side photo";
   return source.replace("product photo", "opposite-side photo");
+}
+
+function resolveStrictBackPhotoUrl(result: Awaited<ReturnType<typeof lookupTumblerItem>> | null): string | null {
+  const selection = result?.productReferenceSet?.canonicalViewSelection;
+  if (!result?.backImageUrl) return null;
+  if (selection?.canonicalBackStatus !== "true-back") return null;
+  return result.backImageUrl;
 }
 
 function inferMaterialLabelFromSlug(slug: string | null | undefined): string | null {
@@ -841,9 +852,28 @@ export async function runSmartTemplateLookup(
         mimeType: input.mimeType ?? null,
       })
     : null;
-  const resolvedGlbPath = generatedPreview?.glbPath || tumblerLookup?.glbPath || null;
+  const canPromoteFlatTraceModel =
+    !generatedPreview?.glbPath &&
+    (tumblerLookup?.modelStatus === "placeholder-model" || tumblerLookup?.modelStatus === "missing-model" || !tumblerLookup?.glbPath) &&
+    Boolean(flatLookup?.glbPath) &&
+    !flatLookup?.isProxy &&
+    flatLookup?.modelStrategy === "image-trace";
+  const resolvedGlbPath = generatedPreview?.glbPath || (canPromoteFlatTraceModel ? flatLookup?.glbPath ?? null : tumblerLookup?.glbPath) || null;
+  const resolvedGlbStatus =
+    generatedPreview?.glbPath
+      ? "verified-product-model"
+      : canPromoteFlatTraceModel
+        ? "verified-product-model"
+        : tumblerLookup?.modelStatus ?? (resolvedGlbPath ? "verified-product-model" : "missing-model");
+  const resolvedGlbSourceLabel =
+    generatedPreview?.glbPath
+      ? "Generated from uploaded product image"
+      : canPromoteFlatTraceModel
+        ? "Promoted product-specific traced model from product imagery"
+        : tumblerLookup?.modelSourceLabel ?? null;
   const resolvedBodyColorHex = generatedPreview?.bodyColorHex ?? tumblerLookup?.bodyColorHex ?? null;
   const resolvedRimColorHex = generatedPreview?.rimColorHex ?? tumblerLookup?.rimColorHex ?? null;
+  const strictBackPhotoUrl = resolveStrictBackPhotoUrl(tumblerLookup);
   const autoZone = deriveEngravableZoneFromFitDebug({
     overallHeightMm,
     fitDebug: generatedPreview?.fitDebug ?? tumblerLookup?.fitDebug ?? null,
@@ -878,9 +908,12 @@ export async function runSmartTemplateLookup(
       materialProfileLabel: materialSetup.materialProfileLabel,
       productPhotoUrl: tumblerLookup?.imageUrl ?? null,
       productPhotoLabel: inferTumblerPhotoLabel(tumblerLookup),
-      backPhotoUrl: tumblerLookup?.backImageUrl ?? null,
+      backPhotoUrl: strictBackPhotoUrl,
       backPhotoLabel: inferTumblerBackPhotoLabel(tumblerLookup),
+      productReferenceSet: tumblerLookup?.productReferenceSet ?? null,
       glbPath: resolvedGlbPath,
+      glbStatus: resolvedGlbStatus,
+      glbSourceLabel: resolvedGlbSourceLabel,
       dimensions: {
         diameterMm: typeof diameterMm === "number" ? round2(diameterMm) : null,
         bodyDiameterMm: typeof diameterMm === "number" ? round2(diameterMm) : null,

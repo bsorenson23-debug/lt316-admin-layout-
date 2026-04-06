@@ -1,10 +1,15 @@
 import type { ProductTemplate } from "../types/productTemplate.ts";
+import type { AxialSurfaceBand, PrintableSurfaceContract } from "../types/printableSurface.ts";
 import {
   findTumblerProfileIdForBrandModel,
   getTumblerProfileById,
   getProfileHandleArcDeg,
 } from "../data/tumblerProfiles.ts";
 import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
+import {
+  buildPrintableSurfaceResolution,
+  getPrintableSurfaceResolutionFromDimensions,
+} from "./printableSurface.ts";
 
 // ---------------------------------------------------------------------------
 // Interface
@@ -15,32 +20,43 @@ export interface EngravableDimensions {
   diameterMm: number;
   /** diameter / 2 */
   radiusMm: number;
-  /** π × diameter */
+  /** PI x diameter */
   circumferenceMm: number;
-  /** Full tumbler height — from profile or estimated (mm) */
+  /** Full tumbler height from profile or estimated (mm) */
   totalHeightMm: number;
-  /** Top non-engravable margin — lid seat / rim (mm) */
+  /** Legacy overall top margin to the body shell (mm) */
   topMarginMm: number;
-  /** Bottom non-engravable margin — base taper (mm) */
+  /** Legacy overall bottom margin below the body shell (mm) */
   bottomMarginMm: number;
-  /** Engravable zone height = printHeightMm from template (mm) */
+  /** Legacy body-shell height used by the alignment workspace (mm) */
   engravableHeightMm: number;
-  /** Legacy alias for the body/engravable zone top measured from the overall top. */
+  /** Legacy alias for the body shell top measured from the overall top. */
   bodyTopOffsetMm: number;
-  /** Legacy alias for the body/engravable zone bottom measured from the overall top. */
+  /** Legacy alias for the body shell bottom measured from the overall top. */
   bodyBottomOffsetMm: number;
+  /** Canonical printable-surface contract in absolute mm space. */
+  printableSurfaceContract: PrintableSurfaceContract;
+  /** Canonical normalized axial surface segmentation. */
+  axialSurfaceBands: AxialSurfaceBand[];
+  /** Printable top offset measured from the body-shell top. */
+  printableTopFromBodyTopMm: number;
+  /** Printable bottom offset measured from the body-shell top. */
+  printableBottomFromBodyTopMm: number;
+  /** Printable height inside the body shell. */
+  printableHeightMm: number;
+  /** True when auto band detection is weak and manual override should be surfaced. */
+  automaticPrintableDetectionWeak: boolean;
   /** Handle exclusion arc (degrees, 0 = no handle) */
   handleArcDeg: number;
   /** Physical handle width on the surface (mm) */
   handleWidthMm: number;
   /** 360 - handleArcDeg */
   printableArcDeg: number;
-  /** Printable wrap width = (printableArcDeg / 360) × circumference (mm) */
+  /** Printable wrap width = (printableArcDeg / 360) x circumference (mm) */
   printableWidthMm: number;
   /**
-   * Y offset of the engravable zone center from the mesh center (mm).
+   * Y offset of the body-shell center from the mesh center (mm).
    * Positive = zone is higher than mesh center.
-   * Zero when margins are symmetric (e.g. YETI Rambler 40oz).
    */
   engravableOffsetY: number;
 }
@@ -112,14 +128,6 @@ function findStraightWallBottomFromProfile(args: {
 // Low-level: compute from raw values (used by wizard/model components)
 // ---------------------------------------------------------------------------
 
-/**
- * Compute engravable dimensions from raw values.
- *
- * @param opts.totalHeightMm   Total mesh or tumbler height. If omitted,
- *                              defaults to printHeightMm (no margins).
- * @param opts.topMarginMm     Top non-engravable margin. If omitted,
- *                              margins are split evenly.
- */
 export function computeEngravableDimensions(opts: {
   diameterMm: number;
   printHeightMm: number;
@@ -127,58 +135,101 @@ export function computeEngravableDimensions(opts: {
   totalHeightMm?: number;
   topMarginMm?: number;
   bottomMarginMm?: number;
+  bodyTopFromOverallMm?: number;
+  bodyBottomFromOverallMm?: number;
+  printableSurfaceContract?: PrintableSurfaceContract;
+  axialSurfaceBands?: AxialSurfaceBand[];
+  automaticPrintableDetectionWeak?: boolean;
 }): EngravableDimensions {
-  const d = opts.diameterMm;
-  const r = d / 2;
-  const circ = Math.PI * d;
-  const totalH = opts.totalHeightMm ?? opts.printHeightMm;
+  const diameterMm = opts.diameterMm;
+  const radiusMm = diameterMm / 2;
+  const circumferenceMm = Math.PI * diameterMm;
+  const totalHeightMm = opts.totalHeightMm ?? opts.printHeightMm;
 
-  let engH = Math.max(0, opts.printHeightMm);
-  let topMargin = opts.topMarginMm ?? 0;
-  let bottomMargin = opts.bottomMarginMm ?? 0;
+  let bodyShellHeightMm = Math.max(0, opts.printHeightMm);
+  let topMarginMm = opts.topMarginMm ?? 0;
+  let bottomMarginMm = opts.bottomMarginMm ?? 0;
 
   if (Number.isFinite(opts.topMarginMm) && Number.isFinite(opts.bottomMarginMm)) {
-    topMargin = Math.max(0, opts.topMarginMm ?? 0);
-    bottomMargin = Math.max(0, opts.bottomMarginMm ?? 0);
-    engH = Math.max(0, totalH - topMargin - bottomMargin);
+    topMarginMm = Math.max(0, opts.topMarginMm ?? 0);
+    bottomMarginMm = Math.max(0, opts.bottomMarginMm ?? 0);
+    bodyShellHeightMm = Math.max(0, totalHeightMm - topMarginMm - bottomMarginMm);
   } else if (Number.isFinite(opts.topMarginMm)) {
-    topMargin = Math.max(0, opts.topMarginMm ?? 0);
-    engH = Math.min(engH, Math.max(0, totalH - topMargin));
-    bottomMargin = Math.max(0, totalH - engH - topMargin);
+    topMarginMm = Math.max(0, opts.topMarginMm ?? 0);
+    bodyShellHeightMm = Math.min(bodyShellHeightMm, Math.max(0, totalHeightMm - topMarginMm));
+    bottomMarginMm = Math.max(0, totalHeightMm - bodyShellHeightMm - topMarginMm);
   } else if (Number.isFinite(opts.bottomMarginMm)) {
-    bottomMargin = Math.max(0, opts.bottomMarginMm ?? 0);
-    engH = Math.min(engH, Math.max(0, totalH - bottomMargin));
-    topMargin = Math.max(0, totalH - engH - bottomMargin);
+    bottomMarginMm = Math.max(0, opts.bottomMarginMm ?? 0);
+    bodyShellHeightMm = Math.min(bodyShellHeightMm, Math.max(0, totalHeightMm - bottomMarginMm));
+    topMarginMm = Math.max(0, totalHeightMm - bodyShellHeightMm - bottomMarginMm);
   } else {
-    topMargin = Math.max(0, (totalH - engH) / 2);
-    bottomMargin = Math.max(0, totalH - engH - topMargin);
+    topMarginMm = Math.max(0, (totalHeightMm - bodyShellHeightMm) / 2);
+    bottomMarginMm = Math.max(0, totalHeightMm - bodyShellHeightMm - topMarginMm);
   }
 
-  const handleArc = opts.handleArcDeg;
-  const handleWidth = (handleArc / 360) * circ;
-  const printableArc = 360 - handleArc;
-  const printableWidth = (printableArc / 360) * circ;
+  const bodyTopOffsetMm = round2(
+    clamp(
+      Number.isFinite(opts.bodyTopFromOverallMm) ? (opts.bodyTopFromOverallMm ?? topMarginMm) : topMarginMm,
+      0,
+      totalHeightMm,
+    ),
+  );
+  const bodyBottomOffsetMm = round2(
+    clamp(
+      Number.isFinite(opts.bodyBottomFromOverallMm)
+        ? (opts.bodyBottomFromOverallMm ?? (bodyTopOffsetMm + bodyShellHeightMm))
+        : (bodyTopOffsetMm + bodyShellHeightMm),
+      bodyTopOffsetMm,
+      totalHeightMm,
+    ),
+  );
+  bodyShellHeightMm = round2(Math.max(0, bodyBottomOffsetMm - bodyTopOffsetMm));
 
-  // Mesh is bbox-centered at Y=0, so meshTop = totalH / 2.
-  // Engravable zone top = meshTop − topMargin = totalH/2 − topMargin
-  // Engravable zone center = engravableTop − engH/2
-  const engravableOffsetY = totalH / 2 - topMargin - engH / 2;
+  const printableSurfaceContract = opts.printableSurfaceContract ?? {
+    printableTopMm: bodyTopOffsetMm,
+    printableBottomMm: bodyBottomOffsetMm,
+    printableHeightMm: bodyShellHeightMm,
+    axialExclusions: [],
+    circumferentialExclusions: [],
+  };
+  const printableTopFromBodyTopMm = round2(
+    clamp(printableSurfaceContract.printableTopMm - bodyTopOffsetMm, 0, bodyShellHeightMm),
+  );
+  const printableBottomFromBodyTopMm = round2(
+    clamp(printableSurfaceContract.printableBottomMm - bodyTopOffsetMm, printableTopFromBodyTopMm, bodyShellHeightMm),
+  );
+  const printableHeightMm = round2(Math.max(0, printableBottomFromBodyTopMm - printableTopFromBodyTopMm));
+
+  const handleArcDeg = opts.handleArcDeg;
+  const handleWidthMm = (handleArcDeg / 360) * circumferenceMm;
+  const printableArcDeg = 360 - handleArcDeg;
+  const printableWidthMm = (printableArcDeg / 360) * circumferenceMm;
+
+  // Mesh is bbox-centered at Y=0, so meshTop = totalHeightMm / 2.
+  // Body shell top = meshTop - topMarginMm.
+  const engravableOffsetY = totalHeightMm / 2 - topMarginMm - bodyShellHeightMm / 2;
 
   return {
-    diameterMm: d,
-    radiusMm: r,
-    circumferenceMm: circ,
-    totalHeightMm: totalH,
-    topMarginMm: topMargin,
-    bottomMarginMm: bottomMargin,
-    engravableHeightMm: engH,
-    bodyTopOffsetMm: topMargin,
-    bodyBottomOffsetMm: totalH - bottomMargin,
-    handleArcDeg: handleArc,
-    handleWidthMm: handleWidth,
-    printableArcDeg: printableArc,
-    printableWidthMm: printableWidth,
-    engravableOffsetY,
+    diameterMm,
+    radiusMm,
+    circumferenceMm,
+    totalHeightMm,
+    topMarginMm: round2(topMarginMm),
+    bottomMarginMm: round2(bottomMarginMm),
+    engravableHeightMm: bodyShellHeightMm,
+    bodyTopOffsetMm,
+    bodyBottomOffsetMm,
+    printableSurfaceContract,
+    axialSurfaceBands: opts.axialSurfaceBands ?? [],
+    printableTopFromBodyTopMm,
+    printableBottomFromBodyTopMm,
+    printableHeightMm,
+    automaticPrintableDetectionWeak: Boolean(opts.automaticPrintableDetectionWeak),
+    handleArcDeg,
+    handleWidthMm: round2(handleWidthMm),
+    printableArcDeg: round2(printableArcDeg),
+    printableWidthMm: round2(printableWidthMm),
+    engravableOffsetY: round2(engravableOffsetY),
   };
 }
 
@@ -227,10 +278,6 @@ export function deriveEngravableZoneFromFitDebug(args: {
 // High-level: compute from a ProductTemplate (with profile lookup)
 // ---------------------------------------------------------------------------
 
-/**
- * Compute engravable dimensions from a ProductTemplate.
- * Looks up the tumbler profile for total height and groove data.
- */
 export function getEngravableDimensions(
   template: ProductTemplate,
 ): EngravableDimensions {
@@ -241,61 +288,111 @@ export function getEngravableDimensions(
   });
   const profile = profileId ? getTumblerProfileById(profileId) : null;
 
-  const handleArc = template.dimensions.handleArcDeg > 0
+  const handleArcDeg = template.dimensions.handleArcDeg > 0
     ? template.dimensions.handleArcDeg
     : getProfileHandleArcDeg(profile);
 
-  const explicitTotalH = template.dimensions.overallHeightMm;
-  const explicitPrintH = template.dimensions.printHeightMm;
-  const explicitTopM = template.dimensions.topMarginMm;
-  const explicitBottomM = template.dimensions.bottomMarginMm;
-  const profileTotalH = profile?.overallHeightMm;
-  const profileUsableH = profile?.usableHeightMm;
-  const profileTopM = profile?.guideBand?.upperGrooveYmm;
-  const profileLowerY = profile?.guideBand?.lowerGrooveYmm;
+  const explicitTotalHeightMm = template.dimensions.overallHeightMm;
+  const explicitBodyShellHeightMm = template.dimensions.printHeightMm;
+  const explicitTopMarginMm = template.dimensions.topMarginMm;
+  const explicitBottomMarginMm = template.dimensions.bottomMarginMm;
+  const explicitBodyTopMm = template.dimensions.bodyTopFromOverallMm;
+  const explicitBodyBottomMm = template.dimensions.bodyBottomFromOverallMm;
+  const profileTotalHeightMm = profile?.overallHeightMm;
+  const profileUsableHeightMm = profile?.usableHeightMm;
+  const profileTopMarginMm = profile?.guideBand?.upperGrooveYmm;
+  const profileLowerYmm = profile?.guideBand?.lowerGrooveYmm;
 
-  const totalH = explicitTotalH ?? profileTotalH ?? explicitPrintH;
-  const resolvedTotalH = totalH ?? 0;
-  const resolvedPrintH = explicitPrintH ?? 0;
-  const resolvedProfileTopM = profileTopM ?? 0;
-  const resolvedProfileLowerY = profileLowerY ?? resolvedTotalH;
-  const resolvedProfileUsableH = profileUsableH ?? resolvedTotalH;
+  const totalHeightMm = explicitTotalHeightMm ?? profileTotalHeightMm ?? explicitBodyShellHeightMm;
+  const resolvedTotalHeightMm = totalHeightMm ?? 0;
+  const resolvedBodyShellHeightMm = explicitBodyShellHeightMm ?? 0;
+  const resolvedProfileTopMarginMm = profileTopMarginMm ?? 0;
+  const resolvedProfileLowerYmm = profileLowerYmm ?? resolvedTotalHeightMm;
+  const resolvedProfileUsableHeightMm = profileUsableHeightMm ?? resolvedTotalHeightMm;
 
-  let printHeightMm = explicitPrintH;
-  let topMarginMm = explicitTopM;
-  let bottomMarginMm = explicitBottomM;
+  let bodyTopFromOverallMm = explicitBodyTopMm;
+  let bodyBottomFromOverallMm = explicitBodyBottomMm;
+  let bodyShellHeightMm = resolvedBodyShellHeightMm;
+  let topMarginMm = explicitTopMarginMm;
+  let bottomMarginMm = explicitBottomMarginMm;
 
-  if (Number.isFinite(explicitTopM) && Number.isFinite(explicitBottomM) && Number.isFinite(totalH)) {
-    printHeightMm = Math.max(0, resolvedTotalH - (explicitTopM ?? 0) - (explicitBottomM ?? 0));
-  } else if (
-    Number.isFinite(profileUsableH) &&
-    Number.isFinite(totalH) &&
-    (resolvedPrintH <= 0 || resolvedPrintH > resolvedTotalH + 0.5 || resolvedPrintH === resolvedTotalH)
+  if (
+    Number.isFinite(explicitBodyTopMm) &&
+    Number.isFinite(explicitBodyBottomMm) &&
+    Number.isFinite(totalHeightMm)
   ) {
-    printHeightMm = Math.min(resolvedProfileUsableH, resolvedTotalH);
-    topMarginMm = explicitTopM ?? profileTopM ?? Math.max(0, (resolvedTotalH - printHeightMm) / 2);
-    bottomMarginMm = explicitBottomM ?? Math.max(0, resolvedTotalH - printHeightMm - (topMarginMm ?? 0));
+    bodyTopFromOverallMm = explicitBodyTopMm;
+    bodyBottomFromOverallMm = explicitBodyBottomMm;
+    bodyShellHeightMm = Math.max(0, (explicitBodyBottomMm ?? 0) - (explicitBodyTopMm ?? 0));
+    topMarginMm = explicitTopMarginMm ?? explicitBodyTopMm ?? 0;
+    bottomMarginMm = explicitBottomMarginMm ?? Math.max(0, resolvedTotalHeightMm - (explicitBodyBottomMm ?? resolvedTotalHeightMm));
   } else if (
-    Number.isFinite(profileTopM) &&
-    Number.isFinite(profileLowerY) &&
-    Number.isFinite(totalH) &&
-    (resolvedPrintH <= 0 || (explicitTopM ?? resolvedProfileTopM) + resolvedPrintH > resolvedTotalH + 0.5)
+    Number.isFinite(explicitTopMarginMm) &&
+    Number.isFinite(explicitBottomMarginMm) &&
+    Number.isFinite(totalHeightMm)
   ) {
-    topMarginMm = resolvedProfileTopM;
-    bottomMarginMm = Math.max(0, resolvedTotalH - resolvedProfileLowerY);
-    printHeightMm = Math.max(0, resolvedProfileLowerY - resolvedProfileTopM);
-  } else if (Number.isFinite(totalH)) {
-    printHeightMm = Math.min(Math.max(0, resolvedPrintH), resolvedTotalH);
-    topMarginMm = explicitTopM ?? Math.max(0, (resolvedTotalH - printHeightMm) / 2);
-    bottomMarginMm = explicitBottomM ?? Math.max(0, resolvedTotalH - printHeightMm - (topMarginMm ?? 0));
+    bodyTopFromOverallMm = explicitTopMarginMm;
+    bodyBottomFromOverallMm = Math.max(explicitTopMarginMm ?? 0, resolvedTotalHeightMm - (explicitBottomMarginMm ?? 0));
+    bodyShellHeightMm = Math.max(0, (bodyBottomFromOverallMm ?? 0) - (bodyTopFromOverallMm ?? 0));
+    topMarginMm = explicitTopMarginMm ?? 0;
+    bottomMarginMm = explicitBottomMarginMm ?? 0;
+  } else if (
+    Number.isFinite(profileUsableHeightMm) &&
+    Number.isFinite(totalHeightMm) &&
+    (resolvedBodyShellHeightMm <= 0 || resolvedBodyShellHeightMm > resolvedTotalHeightMm + 0.5 || resolvedBodyShellHeightMm === resolvedTotalHeightMm)
+  ) {
+    bodyShellHeightMm = Math.min(resolvedProfileUsableHeightMm, resolvedTotalHeightMm);
+    bodyTopFromOverallMm = explicitTopMarginMm ?? profileTopMarginMm ?? Math.max(0, (resolvedTotalHeightMm - bodyShellHeightMm) / 2);
+    bodyBottomFromOverallMm = Math.max(bodyTopFromOverallMm ?? 0, (bodyTopFromOverallMm ?? 0) + bodyShellHeightMm);
+    topMarginMm = bodyTopFromOverallMm ?? 0;
+    bottomMarginMm = Math.max(0, resolvedTotalHeightMm - (bodyBottomFromOverallMm ?? resolvedTotalHeightMm));
+  } else if (
+    Number.isFinite(profileTopMarginMm) &&
+    Number.isFinite(profileLowerYmm) &&
+    Number.isFinite(totalHeightMm) &&
+    (resolvedBodyShellHeightMm <= 0 || (explicitTopMarginMm ?? resolvedProfileTopMarginMm) + resolvedBodyShellHeightMm > resolvedTotalHeightMm + 0.5)
+  ) {
+    bodyTopFromOverallMm = resolvedProfileTopMarginMm;
+    bodyBottomFromOverallMm = resolvedProfileLowerYmm;
+    bodyShellHeightMm = Math.max(0, resolvedProfileLowerYmm - resolvedProfileTopMarginMm);
+    topMarginMm = resolvedProfileTopMarginMm;
+    bottomMarginMm = Math.max(0, resolvedTotalHeightMm - resolvedProfileLowerYmm);
+  } else if (Number.isFinite(totalHeightMm)) {
+    bodyShellHeightMm = Math.min(Math.max(0, resolvedBodyShellHeightMm), resolvedTotalHeightMm);
+    bodyTopFromOverallMm = explicitTopMarginMm ?? Math.max(0, (resolvedTotalHeightMm - bodyShellHeightMm) / 2);
+    bodyBottomFromOverallMm = Math.max(bodyTopFromOverallMm ?? 0, (bodyTopFromOverallMm ?? 0) + bodyShellHeightMm);
+    topMarginMm = bodyTopFromOverallMm ?? 0;
+    bottomMarginMm = Math.max(0, resolvedTotalHeightMm - (bodyBottomFromOverallMm ?? resolvedTotalHeightMm));
   }
+
+  const printableSurface =
+    getPrintableSurfaceResolutionFromDimensions(
+      template.dimensions,
+      template.dimensions.canonicalDimensionCalibration,
+    ) ??
+    buildPrintableSurfaceResolution({
+      overallHeightMm: resolvedTotalHeightMm,
+      bodyTopFromOverallMm: bodyTopFromOverallMm ?? 0,
+      bodyBottomFromOverallMm: bodyBottomFromOverallMm ?? resolvedTotalHeightMm,
+      lidSeamFromOverallMm: template.dimensions.lidSeamFromOverallMm,
+      silverBandBottomFromOverallMm: template.dimensions.silverBandBottomFromOverallMm,
+      printableTopOverrideMm: template.dimensions.printableTopOverrideMm,
+      printableBottomOverrideMm: template.dimensions.printableBottomOverrideMm,
+      handleKeepOutStartMm: template.dimensions.canonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
+      handleKeepOutEndMm: template.dimensions.canonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
+    });
 
   return computeEngravableDimensions({
     diameterMm: template.dimensions.diameterMm,
-    printHeightMm,
-    handleArcDeg: handleArc,
-    totalHeightMm: totalH,
+    printHeightMm: Math.max(0, bodyShellHeightMm),
+    handleArcDeg,
+    totalHeightMm,
     topMarginMm,
     bottomMarginMm,
+    bodyTopFromOverallMm,
+    bodyBottomFromOverallMm,
+    printableSurfaceContract: printableSurface.printableSurfaceContract,
+    axialSurfaceBands: printableSurface.axialSurfaceBands,
+    automaticPrintableDetectionWeak: printableSurface.automaticDetectionWeak,
   });
 }

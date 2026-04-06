@@ -1,6 +1,16 @@
 import type { FlatItemLookupResponse } from "./flatItemLookup";
 import type { TumblerFinish } from "./materials";
-import type { EditableBodyOutline, ProductTemplate, ReferenceLayerState, ReferencePaths } from "./productTemplate";
+import type {
+  CanonicalBodyProfile,
+  CanonicalDimensionCalibration,
+  CanonicalHandleProfile,
+  EditableBodyOutline,
+  ProductReferenceSet,
+  ProductTemplate,
+  ReferenceLayerState,
+  ReferencePaths,
+} from "./productTemplate";
+import type { AxialSurfaceBand, PrintableSurfaceContract } from "./printableSurface";
 import type { TumblerItemLookupResponse } from "./tumblerItemLookup";
 
 export type SmartTemplateLookupSourceType = "image" | "url" | "text" | "mixed";
@@ -19,6 +29,7 @@ export type SmartTemplateLookupPrompt =
 export interface SmartTemplateLookupDimensionsDraft {
   diameterMm?: number | null;
   bodyDiameterMm?: number | null;
+  advancedGeometryOverridesUnlocked?: boolean | null;
   topOuterDiameterMm?: number | null;
   baseDiameterMm?: number | null;
   mouthInnerDiameterMm?: number | null;
@@ -36,6 +47,9 @@ export interface SmartTemplateLookupDimensionsDraft {
   handleTopFromOverallMm?: number | null;
   handleBottomFromOverallMm?: number | null;
   handleReachMm?: number | null;
+  canonicalHandleProfile?: CanonicalHandleProfile | null;
+  canonicalBodyProfile?: CanonicalBodyProfile | null;
+  canonicalDimensionCalibration?: CanonicalDimensionCalibration | null;
   shoulderDiameterMm?: number | null;
   taperUpperDiameterMm?: number | null;
   taperLowerDiameterMm?: number | null;
@@ -44,6 +58,10 @@ export interface SmartTemplateLookupDimensionsDraft {
   referencePaths?: ReferencePaths | null;
   referenceLayerState?: ReferenceLayerState | null;
   bodyHeightMm?: number | null;
+  axialSurfaceBands?: AxialSurfaceBand[] | null;
+  printableSurfaceContract?: PrintableSurfaceContract | null;
+  printableTopOverrideMm?: number | null;
+  printableBottomOverrideMm?: number | null;
   topMarginMm?: number | null;
   bottomMarginMm?: number | null;
   bodyColorHex?: string | null;
@@ -65,7 +83,10 @@ export interface SmartTemplateLookupDraft {
   productPhotoLabel?: string | null;
   backPhotoUrl?: string | null;
   backPhotoLabel?: string | null;
+  productReferenceSet?: ProductReferenceSet | null;
   glbPath?: string | null;
+  glbStatus?: ProductTemplate["glbStatus"] | null;
+  glbSourceLabel?: ProductTemplate["glbSourceLabel"] | null;
   dimensions?: SmartTemplateLookupDimensionsDraft;
 }
 
@@ -84,3 +105,20 @@ export interface SmartTemplateLookupResponse {
   flatLookupResult?: FlatItemLookupResponse | null;
   tumblerLookupResult?: TumblerItemLookupResponse | null;
 }
+
+export interface SmartTemplateLookupError {
+  code: string;
+  message: string;
+  detail?: string;
+}
+
+export type SmartTemplateLookupResult =
+  | {
+      ok: true;
+      data: SmartTemplateLookupResponse;
+      warnings?: string[];
+    }
+  | {
+      ok: false;
+      error: SmartTemplateLookupError;
+    };

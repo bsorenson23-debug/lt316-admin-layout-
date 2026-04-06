@@ -530,11 +530,18 @@
 }
 
 .modelPreviewViewport {
+  position: relative;
   height: 240px;
   border: 1px solid var(--border-normal);
   border-radius: var(--radius);
   background: var(--bg-input);
   overflow: hidden;
+}
+
+.modelPreviewOverlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 .modelPreviewEmpty {
@@ -550,6 +557,25 @@
 .modelPreviewNote {
   font-size: 10px;
   color: var(--warning);
+}
+.modelPreviewHint {
+  padding: 7px 10px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.modelPreviewCompareNote {
+  padding: 7px 10px;
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius);
+  background: var(--info-bg);
+  color: var(--info);
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 /* ── Auto-detect ──────────────────────────────────────────────── */
@@ -568,6 +594,10 @@
 
 .detectBtn:hover {
   background: var(--accent-dim);
+}
+.detectBtnActive {
+  background: var(--accent);
+  color: var(--bg-panel);
 }
 
 .detectBtn:disabled {
@@ -622,6 +652,55 @@
   color: var(--error);
 }
 
+.bodyReferenceLockedNotice {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--warning);
+}
+
+.surfaceContractSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  border: 1px solid var(--border-normal);
+}
+
+.surfaceContractSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 14px;
+}
+
+.surfaceContractMetricLabel {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.surfaceContractMetricValue {
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text-primary);
+}
+
+.surfaceContractSummaryNote {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.surfaceContractSummaryWarning {
+  color: var(--warning);
+}
+
 /* ── Error ─────────────────────────────────────────────────────── */
 .error {
   font-size: 11px;
@@ -650,6 +729,22 @@
 }
 
 .cancelBtn:hover {
+  background: var(--bg-hover);
+}
+
+.secondaryBtn {
+  margin-left: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.secondaryBtn:hover {
   background: var(--bg-hover);
 }
 

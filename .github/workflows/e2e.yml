@@ -20,8 +20,7 @@ jobs:
 
       - run: npm ci
       - run: npx playwright --version
-      - run: npx playwright test tests/smoke.spec.ts
-      - run: npx playwright test --reporter=html
+      - run: npx playwright test --reporter=line,html
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4

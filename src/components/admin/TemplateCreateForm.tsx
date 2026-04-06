@@ -3,7 +3,12 @@
 import React from "react";
 import dynamic from "next/dynamic";
 import {
+  type CanonicalBodyProfile,
+  type CanonicalDimensionCalibration,
+  type CanonicalHandleProfile,
   type EditableBodyOutline,
+  type ManufacturerLogoStamp,
+  type ProductReferenceSet,
   type ReferenceLayerState,
   type ReferencePaths,
   getTemplateBaseDiameterMm,
@@ -37,6 +42,12 @@ import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHan
 import { getDefaultLaserSettings } from "@/lib/scopedDefaults";
 import { deriveEngravableZoneFromFitDebug, getEngravableDimensions } from "@/lib/engravableDimensions";
 import {
+  buildPrintableSurfaceResolution,
+  getPrintableSurfaceLocalBounds,
+  getPrintableSurfaceResolutionFromDimensions,
+  type PrintableSurfaceDetection,
+} from "@/lib/printableSurface";
+import {
   cloneReferenceLayerState,
   createEditableBodyOutline,
   createDefaultReferenceLayerState,
@@ -44,6 +55,15 @@ import {
   createReferencePaths,
   deriveDimensionsFromEditableBodyOutline,
 } from "@/lib/editableBodyOutline";
+import { extractCanonicalHandleProfileFromCutout } from "@/lib/canonicalHandleProfile";
+import {
+  buildCanonicalBodyProfile,
+  buildCanonicalDimensionCalibration,
+  resolveCanonicalHandleRenderMode,
+  summarizeCanonicalHandleDebug,
+  summarizeCanonicalOrientationQA,
+  summarizeCanonicalSilhouetteMismatch,
+} from "@/lib/canonicalDimensionCalibration";
 import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -70,8 +90,39 @@ export interface TemplateCreateFormHandle {
   save: () => void;
 }
 
+type PreviewModelMode = "alignment-model" | "full-model" | "source-traced";
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+function wrapTheta(theta: number): number {
+  const twoPi = Math.PI * 2;
+  let normalized = theta % twoPi;
+  if (normalized > Math.PI) normalized -= twoPi;
+  if (normalized < -Math.PI) normalized += twoPi;
+  return normalized;
+}
+
+function resolveDefaultPreviewModelMode(args: {
+  productType: ProductTemplate["productType"] | "" | null;
+  hasAlignmentPreviewModel: boolean;
+  hasFullPreviewModel: boolean;
+  hasSourcePreviewModel: boolean;
+}): PreviewModelMode {
+  if (args.productType === "flat") {
+    return "source-traced";
+  }
+  if (args.hasAlignmentPreviewModel) {
+    return "alignment-model";
+  }
+  if (args.hasFullPreviewModel) {
+    return "full-model";
+  }
+  if (args.hasSourcePreviewModel) {
+    return "source-traced";
+  }
+  return "source-traced";
 }
 
 function resolveBodyReferenceDiameterMm(args: {
@@ -112,6 +163,9 @@ function resolveBodyReferenceDiameterMm(args: {
   }
   if (outside != null) {
     return round2(outside);
+  }
+  if (top != null && bottom != null && Math.abs(top - bottom) > 3) {
+    return round2(top);
   }
   if (top != null && bottom != null && Math.abs(top - bottom) <= 3) {
     return round2((top + bottom) / 2);
@@ -245,12 +299,13 @@ async function vectorizeOutlineSeedSvg(sourceDataUrl: string, fileName: string):
   formData.set("image", sourceFile);
   formData.set("mode", "trace");
   formData.set("thresholdMode", "auto");
-  formData.set("invert", "false");
+  formData.set("invert", "true");
   formData.set("normalizeLevels", "true");
   formData.set("trimWhitespace", "true");
   formData.set("preserveText", "false");
   formData.set("recipe", "badge");
   formData.set("backgroundStrategy", "cutout");
+  formData.set("preferLocal", "true");
 
   const response = await fetch("/api/admin/image/vectorize", {
     method: "POST",
@@ -552,6 +607,90 @@ function getFlatGlbStatusLabel(result: FlatItemLookupResponse | null): string | 
   return null;
 }
 
+function getDrinkwareGlbStatusLabel(
+  status: ProductTemplate["glbStatus"] | null | undefined,
+): string | null {
+  switch (status) {
+    case "verified-product-model":
+      return "Verified product model";
+    case "placeholder-model":
+      return "Placeholder model";
+    case "missing-model":
+      return "Missing model";
+    default:
+      return null;
+  }
+}
+
+function getPreviewModelModeLabel(args: {
+  productType: ProductTemplate["productType"] | "" | null;
+  mode: PreviewModelMode;
+  glbStatus?: ProductTemplate["glbStatus"] | null;
+}): string {
+  if (args.productType === "flat") {
+    return "SOURCE MODEL";
+  }
+  if (args.mode === "alignment-model") {
+    return "ALIGNMENT MODEL · DEFAULT";
+  }
+  if (args.mode === "full-model") {
+    return "FULL MODEL · VISUAL";
+  }
+  if (args.glbStatus === "placeholder-model") {
+    return "PLACEHOLDER MODEL · COMPARE";
+  }
+  return "SOURCE MODEL · COMPARE";
+}
+
+function inferDrinkwareGlbStatus(args: {
+  productType: ProductTemplate["productType"] | "" | null;
+  glbPath: string;
+  lookupResult: TumblerItemLookupResponse | null;
+  editingTemplate?: ProductTemplate;
+}): {
+  status: ProductTemplate["glbStatus"];
+  sourceLabel: string | null;
+} | null {
+  if (!args.productType || args.productType === "flat") return null;
+  const trimmedPath = args.glbPath.trim();
+  if (!trimmedPath) {
+    return {
+      status: "missing-model",
+      sourceLabel: "No product model is attached yet.",
+    };
+  }
+
+  if (args.lookupResult?.glbPath?.trim() === trimmedPath) {
+    return {
+      status: args.lookupResult.modelStatus ?? "verified-product-model",
+      sourceLabel: args.lookupResult.modelSourceLabel ?? null,
+    };
+  }
+
+  if (args.editingTemplate?.glbPath?.trim() === trimmedPath) {
+    return {
+      status: args.editingTemplate.glbStatus ?? "verified-product-model",
+      sourceLabel: args.editingTemplate.glbSourceLabel ?? null,
+    };
+  }
+
+  if (/\/models\/templates\/40oz-yeti\.glb$/i.test(trimmedPath)) {
+    return {
+      status: "placeholder-model",
+      sourceLabel: "Generic 40oz tumbler placeholder",
+    };
+  }
+
+  return {
+    status: trimmedPath.startsWith("/models/generated/")
+      ? "verified-product-model"
+      : "verified-product-model",
+    sourceLabel: trimmedPath.startsWith("/models/generated/")
+      ? "Generated product-specific model"
+      : "Resolved model file",
+  };
+}
+
 function inferTemplateMaterial(
   editingTemplate: ProductTemplate | undefined,
   flatLookupMatch: FlatBedItem | null,
@@ -614,6 +753,8 @@ function parseCapacityOzValue(value: string | null | undefined): number | null {
   const parsed = Number(match[1]);
   return Number.isFinite(parsed) ? parsed : null;
 }
+
+const LOCKED_WRAP_DIAMETER_TOLERANCE_MM = 0.5;
 
 export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Props>(function TemplateCreateForm(
   { onSave, onCancel, editingTemplate, showActions = true }: Props,
@@ -693,6 +834,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [manufacturerLogoStamp, setManufacturerLogoStamp] = React.useState(
     editingTemplate?.manufacturerLogoStamp,
   );
+  const [detectedManufacturerLogoStamp, setDetectedManufacturerLogoStamp] = React.useState(
+    editingTemplate?.manufacturerLogoStamp,
+  );
 
   // ── Auto-detect ──────────────────────────────────────────────────
   const [detecting, setDetecting] = React.useState(false);
@@ -729,6 +873,18 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
   // ── Dimensions ───────────────────────────────────────────────────
   const [diameterMm, setDiameterMm] = React.useState(editingBodyDiameterMm);
+  const [wrapWidthInputMm, setWrapWidthInputMm] = React.useState(
+    editingTemplate?.productType === "flat"
+      ? 0
+      : round2(
+          editingTemplate?.dimensions.templateWidthMm && editingTemplate.dimensions.templateWidthMm > 0
+            ? editingTemplate.dimensions.templateWidthMm
+            : Math.PI * editingBodyDiameterMm,
+        ),
+  );
+  const [advancedGeometryOverridesUnlocked, setAdvancedGeometryOverridesUnlocked] = React.useState(
+    editingTemplate?.dimensions.advancedGeometryOverridesUnlocked ?? false,
+  );
   const [topOuterDiameterMm, setTopOuterDiameterMm] = React.useState(editingTopOuterDiameterMm);
   const [baseDiameterMm, setBaseDiameterMm] = React.useState(editingBaseDiameterMm);
   const [flatWidthMm, setFlatWidthMm] = React.useState(
@@ -782,6 +938,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [silverBandBottomFromOverallMm, setSilverBandBottomFromOverallMm] = React.useState<number | undefined>(
     editingTemplate?.dimensions.silverBandBottomFromOverallMm,
   );
+  const [printableSurfaceDetection, setPrintableSurfaceDetection] = React.useState<PrintableSurfaceDetection | null>(null);
+  const [printableTopOverrideMm, setPrintableTopOverrideMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.printableTopOverrideMm,
+  );
+  const [printableBottomOverrideMm, setPrintableBottomOverrideMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.printableBottomOverrideMm,
+  );
   const [handleTopFromOverallMm, setHandleTopFromOverallMm] = React.useState<number | undefined>(
     editingTemplate?.dimensions.handleTopFromOverallMm,
   );
@@ -790,6 +953,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   );
   const [handleReachMm, setHandleReachMm] = React.useState<number | undefined>(
     editingTemplate?.dimensions.handleReachMm,
+  );
+  const [canonicalHandleProfile, setCanonicalHandleProfile] = React.useState<CanonicalHandleProfile | undefined>(
+    editingTemplate?.dimensions.canonicalHandleProfile,
   );
   const [shoulderDiameterMm, setShoulderDiameterMm] = React.useState<number | undefined>(
     editingTemplate?.dimensions.shoulderDiameterMm,
@@ -825,6 +991,20 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     if (!trimmedLookupPath || trimmedLookupPath !== trimmedActivePath) return null;
     return flatLookupResult;
   }, [flatLookupResult, glbPath, productType]);
+  const activeDrinkwareGlbStatus = React.useMemo(() => inferDrinkwareGlbStatus({
+    productType,
+    glbPath,
+    lookupResult,
+    editingTemplate,
+  }), [editingTemplate, glbPath, lookupResult, productType]);
+  const [previewModelMode, setPreviewModelMode] = React.useState<PreviewModelMode>(
+    productType !== "flat" ? "alignment-model" : "source-traced",
+  );
+  const previewModeUserSelectedRef = React.useRef(false);
+  const handlePreviewModelModeChange = React.useCallback((nextMode: PreviewModelMode) => {
+    previewModeUserSelectedRef.current = true;
+    setPreviewModelMode(nextMode);
+  }, []);
   const legacyReferencePhotoScalePct = editingTemplate?.dimensions.referencePhotoScalePct ?? 100;
   const [referencePhotoWidthScalePct, setReferencePhotoWidthScalePct] = React.useState(
     editingTemplate?.dimensions.referencePhotoWidthScalePct ?? legacyReferencePhotoScalePct,
@@ -854,11 +1034,20 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     editingTemplate?.dimensions.rimColorHex ?? "#d0d0d0",
   );
 
+  const lockedProductionGeometry = productType !== "flat" && !advancedGeometryOverridesUnlocked;
+  const derivedCylinderDiameterMm = productType === "flat"
+    ? 0
+    : (wrapWidthInputMm > 0 ? round2(wrapWidthInputMm / Math.PI) : 0);
+  const effectiveCylinderDiameterMm = productType === "flat"
+    ? 0
+    : (lockedProductionGeometry ? derivedCylinderDiameterMm : round2(diameterMm));
   const templateWidthMm = productType === "flat"
     ? round2(flatWidthMm)
-    : diameterMm > 0
-      ? round2(Math.PI * diameterMm)
-      : 0;
+    : round2(
+        lockedProductionGeometry
+          ? wrapWidthInputMm
+          : (diameterMm > 0 ? Math.PI * diameterMm : wrapWidthInputMm),
+      );
   const liveFlatPreview = React.useMemo<FlatPreviewDimensions | null>(() => {
     if (productType !== "flat" || flatWidthMm <= 0 || printHeightMm <= 0) return null;
     return {
@@ -874,33 +1063,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       material: flatLookupResult?.material ?? flatLookupMatch?.material ?? "",
     };
   }, [productType, flatWidthMm, printHeightMm, flatThicknessMm, flatFamilyKey, glbPath, name, flatLookupResult?.material, flatLookupMatch?.material]);
-  const liveTumblerDims = React.useMemo<TumblerDimensions | null>(() => {
-    if (!productType || productType === "flat" || diameterMm <= 0 || printHeightMm <= 0) return null;
-    return {
-      overallHeightMm: overallHeightMm > 0 ? round2(overallHeightMm) : round2(printHeightMm),
-      diameterMm: round2(diameterMm),
-      topDiameterMm: topOuterDiameterMm > 0 ? round2(topOuterDiameterMm) : undefined,
-      bottomDiameterMm: baseDiameterMm > 0 ? round2(baseDiameterMm) : undefined,
-      bodyTopOffsetMm: overallHeightMm > 0 ? round2(Math.max(0, bodyTopFromOverallMm)) : undefined,
-      bodyHeightMm:
-        overallHeightMm > 0
-          ? round2(Math.max(0, bodyBottomFromOverallMm - bodyTopFromOverallMm))
-          : undefined,
-      printableHeightMm: round2(printHeightMm),
-      printableTopOffsetMm: topMarginMm > 0 ? round2(topMarginMm) : undefined,
-    };
-  }, [
-    productType,
-    diameterMm,
-    topOuterDiameterMm,
-    baseDiameterMm,
-    bodyBottomFromOverallMm,
-    bodyTopFromOverallMm,
-    printHeightMm,
-    overallHeightMm,
-    topMarginMm,
-  ]);
-
+  React.useEffect(() => {
+    if (productType === "flat" || !lockedProductionGeometry) return;
+    if (wrapWidthInputMm <= 0 && diameterMm > 0) {
+      setWrapWidthInputMm(round2(Math.PI * diameterMm));
+      return;
+    }
+    if (derivedCylinderDiameterMm > 0 && Math.abs(diameterMm - derivedCylinderDiameterMm) > 0.01) {
+      setDiameterMm(derivedCylinderDiameterMm);
+    }
+  }, [derivedCylinderDiameterMm, diameterMm, lockedProductionGeometry, productType, wrapWidthInputMm]);
   React.useEffect(() => {
     setReferencePaths((current) => createReferencePaths({
       bodyOutline: bodyOutlineProfile ?? current.bodyOutline,
@@ -945,12 +1117,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     if (!nextLaserType) {
       setLaserType(materialProfile.laserType);
     }
-    const scoped = getDefaultLaserSettings(resolvedProductType, resolvedLaserType);
+    const scoped = resolvedLaserType
+      ? getDefaultLaserSettings(resolvedProductType, resolvedLaserType)
+      : null;
 
     setPower(materialProfile.powerPct);
     setSpeed(materialProfile.speedMmS);
     setLineInterval(lineIntervalFromLpi(materialProfile.lpi));
-    setFrequency(scoped.frequency);
+    if (scoped) {
+      setFrequency(scoped.frequency);
+    }
   }, [productType]);
 
   const applyResolvedDrinkwareMaterial = React.useCallback((args: {
@@ -1105,11 +1281,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [frontCleanUrl, setFrontCleanUrl] = React.useState("");
   const [backCleanUrl, setBackCleanUrl] = React.useState("");
   const [bodyReferencePhotoDataUrl, setBodyReferencePhotoDataUrl] = React.useState("");
+  const [productReferenceSet, setProductReferenceSet] = React.useState<ProductReferenceSet | undefined>(
+    editingTemplate?.productReferenceSet,
+  );
   const [frontBgStatus, setFrontBgStatus] = React.useState<"idle" | "processing" | "done" | "failed">("idle");
   const [backBgStatus, setBackBgStatus] = React.useState<"idle" | "processing" | "done" | "failed">("idle");
   const [frontUseOriginal, setFrontUseOriginal] = React.useState(false);
   const [backUseOriginal, setBackUseOriginal] = React.useState(false);
-  const [mirrorForBack, setMirrorForBack] = React.useState(true);
+  const [mirrorForBack, setMirrorForBack] = React.useState(false);
   const autoZoneSignatureRef = React.useRef<string>("");
   const bodyOutlineSeedSignatureRef = React.useRef<string>("");
   const manufacturerLogoSignatureRef = React.useRef<string>("");
@@ -1117,15 +1296,477 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     () => bodyReferencePhotoDataUrl || frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl || "",
     [bodyReferencePhotoDataUrl, frontCleanUrl, frontPhotoDataUrl, productPhotoFullUrl],
   );
+  React.useEffect(() => {
+    if (productType === "flat" || !activeReferencePhotoDataUrl) {
+      setPrintableSurfaceDetection(null);
+    }
+  }, [activeReferencePhotoDataUrl, productType]);
+  const activeBodyReferenceOutline = referencePaths.bodyOutline ?? bodyOutlineProfile ?? null;
+  const calibrationBodyOutline = React.useMemo<EditableBodyOutline | null>(() => {
+    if (productType === "flat" || overallHeightMm <= 0 || effectiveCylinderDiameterMm <= 0) {
+      return null;
+    }
+    return activeBodyReferenceOutline ?? createEditableBodyOutline({
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      diameterMm: effectiveCylinderDiameterMm,
+      topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
+      baseDiameterMm: baseDiameterMm > 0 ? baseDiameterMm : undefined,
+      shoulderDiameterMm,
+      taperUpperDiameterMm,
+      taperLowerDiameterMm,
+      bevelDiameterMm,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    });
+  }, [
+    activeBodyReferenceOutline,
+    baseDiameterMm,
+    bevelDiameterMm,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    effectiveCylinderDiameterMm,
+    lookupResult?.fitDebug,
+    overallHeightMm,
+    productType,
+    shoulderDiameterMm,
+    taperLowerDiameterMm,
+    taperUpperDiameterMm,
+    topOuterDiameterMm,
+  ]);
+  const persistedCanonicalBodyProfile = editingTemplate?.dimensions.canonicalBodyProfile ?? null;
+  const persistedCanonicalDimensionCalibration = editingTemplate?.dimensions.canonicalDimensionCalibration ?? null;
+  const persistedPrintableSurfaceResolution = React.useMemo(
+    () => (editingTemplate
+      ? getPrintableSurfaceResolutionFromDimensions(
+          editingTemplate.dimensions,
+          editingTemplate.dimensions.canonicalDimensionCalibration,
+        )
+      : null),
+    [editingTemplate],
+  );
+  const activeCanonicalBodyProfile = React.useMemo<CanonicalBodyProfile | null>(() => {
+    if (productType === "flat" || !overallHeightMm || !calibrationBodyOutline) return persistedCanonicalBodyProfile;
+    return buildCanonicalBodyProfile({
+      outline: calibrationBodyOutline,
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      bodyDiameterMm: effectiveCylinderDiameterMm,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    }) ?? persistedCanonicalBodyProfile;
+  }, [
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    calibrationBodyOutline,
+    effectiveCylinderDiameterMm,
+    persistedCanonicalBodyProfile,
+    lookupResult?.fitDebug,
+    overallHeightMm,
+    productType,
+  ]);
+  const provisionalCanonicalDimensionCalibration = React.useMemo<CanonicalDimensionCalibration | null>(() => {
+    if (productType === "flat" || !overallHeightMm || effectiveCylinderDiameterMm <= 0 || !calibrationBodyOutline) {
+      return persistedCanonicalDimensionCalibration;
+    }
+    return buildCanonicalDimensionCalibration({
+      outline: calibrationBodyOutline,
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      wrapDiameterMm: effectiveCylinderDiameterMm,
+      baseDiameterMm,
+      handleArcDeg,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    }) ?? persistedCanonicalDimensionCalibration;
+  }, [
+    baseDiameterMm,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    calibrationBodyOutline,
+    effectiveCylinderDiameterMm,
+    handleArcDeg,
+    lookupResult?.fitDebug,
+    overallHeightMm,
+    persistedCanonicalDimensionCalibration,
+    productType,
+  ]);
+  const usePersistedPrintableSurfaceFallback =
+    productType !== "flat" &&
+    !printableSurfaceDetection &&
+    !Number.isFinite(silverBandBottomFromOverallMm) &&
+    !Number.isFinite(printableTopOverrideMm) &&
+    !Number.isFinite(printableBottomOverrideMm) &&
+    Boolean(persistedPrintableSurfaceResolution);
+  const persistedLidBoundaryMm = persistedPrintableSurfaceResolution?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "lid")?.endMm;
+  const persistedBaseBandStartMm = persistedPrintableSurfaceResolution?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "base")?.startMm;
+  const activePrintableSurfaceResolution = React.useMemo(() => {
+    if (
+      productType === "flat" ||
+      overallHeightMm <= 0 ||
+      !Number.isFinite(bodyTopFromOverallMm) ||
+      !Number.isFinite(bodyBottomFromOverallMm) ||
+      bodyBottomFromOverallMm <= bodyTopFromOverallMm
+    ) {
+      return persistedPrintableSurfaceResolution;
+    }
+
+    return buildPrintableSurfaceResolution({
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      lidSeamFromOverallMm:
+        lidSeamFromOverallMm ??
+        (usePersistedPrintableSurfaceFallback ? persistedLidBoundaryMm : undefined),
+      silverBandBottomFromOverallMm,
+      printableTopOverrideMm:
+        printableTopOverrideMm ??
+        (usePersistedPrintableSurfaceFallback
+          ? persistedPrintableSurfaceResolution?.printableSurfaceContract.printableTopMm
+          : undefined),
+      printableBottomOverrideMm:
+        printableBottomOverrideMm ??
+        (usePersistedPrintableSurfaceFallback
+          ? persistedPrintableSurfaceResolution?.printableSurfaceContract.printableBottomMm
+          : undefined),
+      baseBandStartMm: usePersistedPrintableSurfaceFallback ? persistedBaseBandStartMm : undefined,
+      handleKeepOutStartMm:
+        provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm ??
+        persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
+      handleKeepOutEndMm:
+        provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm ??
+        persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
+      detection: printableSurfaceDetection,
+    });
+  }, [
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    lidSeamFromOverallMm,
+    overallHeightMm,
+    persistedBaseBandStartMm,
+    persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
+    persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
+    persistedLidBoundaryMm,
+    persistedPrintableSurfaceResolution,
+    printableBottomOverrideMm,
+    printableSurfaceDetection,
+    printableTopOverrideMm,
+    productType,
+    provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
+    provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
+    silverBandBottomFromOverallMm,
+    usePersistedPrintableSurfaceFallback,
+  ]);
+  const activeCanonicalDimensionCalibration = React.useMemo<CanonicalDimensionCalibration | null>(() => {
+    if (productType === "flat" || !overallHeightMm || effectiveCylinderDiameterMm <= 0 || !calibrationBodyOutline) {
+      return persistedCanonicalDimensionCalibration;
+    }
+    return buildCanonicalDimensionCalibration({
+      outline: calibrationBodyOutline,
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      wrapDiameterMm: effectiveCylinderDiameterMm,
+      baseDiameterMm,
+      handleArcDeg,
+      axialSurfaceBands: activePrintableSurfaceResolution?.axialSurfaceBands ?? null,
+      printableSurfaceContract: activePrintableSurfaceResolution?.printableSurfaceContract ?? null,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    }) ?? provisionalCanonicalDimensionCalibration ?? persistedCanonicalDimensionCalibration;
+  }, [
+    activePrintableSurfaceResolution?.axialSurfaceBands,
+    activePrintableSurfaceResolution?.printableSurfaceContract,
+    baseDiameterMm,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    calibrationBodyOutline,
+    effectiveCylinderDiameterMm,
+    handleArcDeg,
+    lookupResult?.fitDebug,
+    overallHeightMm,
+    persistedCanonicalDimensionCalibration,
+    productType,
+    provisionalCanonicalDimensionCalibration,
+  ]);
+  const previewPrintableSurfaceContract = React.useMemo(() => {
+    if (productType === "flat" || overallHeightMm <= 0) {
+      return activePrintableSurfaceResolution?.printableSurfaceContract ?? null;
+    }
+    if (activePrintableSurfaceResolution?.printableSurfaceContract) {
+      return activePrintableSurfaceResolution.printableSurfaceContract;
+    }
+
+    const fallbackBodyTopMm = Number.isFinite(bodyTopFromOverallMm)
+      ? Math.max(0, bodyTopFromOverallMm)
+      : (Number.isFinite(topMarginMm) ? Math.max(0, topMarginMm) : null);
+    const fallbackBodyBottomMm = Number.isFinite(bodyBottomFromOverallMm)
+      ? bodyBottomFromOverallMm
+      : (
+          Number.isFinite(bottomMarginMm)
+            ? Math.max((fallbackBodyTopMm ?? 0) + 1, overallHeightMm - bottomMarginMm)
+            : null
+        );
+    if (
+      fallbackBodyTopMm == null ||
+      fallbackBodyBottomMm == null ||
+      !Number.isFinite(fallbackBodyTopMm) ||
+      !Number.isFinite(fallbackBodyBottomMm) ||
+      fallbackBodyBottomMm <= fallbackBodyTopMm
+    ) {
+      return null;
+    }
+
+    return buildPrintableSurfaceResolution({
+      overallHeightMm,
+      bodyTopFromOverallMm: fallbackBodyTopMm,
+      bodyBottomFromOverallMm: fallbackBodyBottomMm,
+      lidSeamFromOverallMm,
+      silverBandBottomFromOverallMm,
+      printableTopOverrideMm,
+      printableBottomOverrideMm,
+      handleKeepOutStartMm:
+        activeCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm ??
+        provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm ??
+        persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
+      handleKeepOutEndMm:
+        activeCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm ??
+        provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm ??
+        persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
+      detection: printableSurfaceDetection,
+    }).printableSurfaceContract;
+  }, [
+    activeCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
+    activeCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
+    activePrintableSurfaceResolution?.printableSurfaceContract,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    bottomMarginMm,
+    lidSeamFromOverallMm,
+    overallHeightMm,
+    persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
+    persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
+    printableBottomOverrideMm,
+    printableSurfaceDetection,
+    printableTopOverrideMm,
+    productType,
+    provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
+    provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
+    silverBandBottomFromOverallMm,
+    topMarginMm,
+  ]);
+  const liveTumblerDims = React.useMemo<TumblerDimensions | null>(() => {
+    if (!productType || productType === "flat" || effectiveCylinderDiameterMm <= 0 || printHeightMm <= 0) return null;
+    const printableSurfaceContract = previewPrintableSurfaceContract;
+    const resolvedPrintableHeightMm =
+      printableSurfaceContract?.printableHeightMm && printableSurfaceContract.printableHeightMm > 0
+        ? printableSurfaceContract.printableHeightMm
+        : printHeightMm;
+    const resolvedPrintableTopOffsetMm =
+      overallHeightMm > 0 && Number.isFinite(printableSurfaceContract?.printableTopMm)
+        ? round2(Math.max(0, printableSurfaceContract?.printableTopMm ?? 0))
+        : topMarginMm > 0
+          ? round2(topMarginMm)
+          : undefined;
+
+    return {
+      overallHeightMm: overallHeightMm > 0 ? round2(overallHeightMm) : round2(printHeightMm),
+      diameterMm: round2(effectiveCylinderDiameterMm),
+      topDiameterMm: topOuterDiameterMm > 0 ? round2(topOuterDiameterMm) : undefined,
+      bottomDiameterMm: baseDiameterMm > 0 ? round2(baseDiameterMm) : undefined,
+      bodyTopOffsetMm: overallHeightMm > 0 ? round2(Math.max(0, bodyTopFromOverallMm)) : undefined,
+      bodyHeightMm:
+        overallHeightMm > 0
+          ? round2(Math.max(0, bodyBottomFromOverallMm - bodyTopFromOverallMm))
+          : undefined,
+      printableHeightMm: round2(resolvedPrintableHeightMm),
+      printableTopOffsetMm: resolvedPrintableTopOffsetMm,
+      lidSeamFromOverallMm:
+        overallHeightMm > 0 && Number.isFinite(lidSeamFromOverallMm)
+          ? round2(Math.max(0, lidSeamFromOverallMm ?? 0))
+          : undefined,
+      silverBandBottomFromOverallMm:
+        overallHeightMm > 0 && Number.isFinite(silverBandBottomFromOverallMm)
+          ? round2(Math.max(0, silverBandBottomFromOverallMm ?? 0))
+          : undefined,
+    };
+  }, [
+    previewPrintableSurfaceContract,
+    productType,
+    effectiveCylinderDiameterMm,
+    topOuterDiameterMm,
+    baseDiameterMm,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    printHeightMm,
+    overallHeightMm,
+    topMarginMm,
+    lidSeamFromOverallMm,
+    silverBandBottomFromOverallMm,
+  ]);
+  const referenceSelection = productReferenceSet?.canonicalViewSelection;
+  const referenceImagesById = React.useMemo(() => {
+    const nextMap = new Map<string, ProductReferenceSet["images"][number]>();
+    for (const image of productReferenceSet?.images ?? []) {
+      nextMap.set(image.id, image);
+    }
+    return nextMap;
+  }, [productReferenceSet]);
+  const canUseCanonicalPreviewModel = productType !== "flat" &&
+    Boolean(activeCanonicalBodyProfile && activeCanonicalDimensionCalibration);
+  const hasAlignmentPreviewModel = canUseCanonicalPreviewModel;
+  const hasFullPreviewModel = canUseCanonicalPreviewModel;
+  const hasSourcePreviewModel = React.useMemo(
+    () => Boolean(glbPath.trim() || previewModelFile || (productType === "flat" && liveFlatPreview)),
+    [glbPath, liveFlatPreview, previewModelFile, productType],
+  );
+  const previewModeContextKey = React.useMemo(
+    () => `${editingTemplate?.id ?? "draft"}:${productType ?? "unknown"}`,
+    [editingTemplate?.id, productType],
+  );
+  const previewModeLastContextRef = React.useRef<string | null>(null);
+  const defaultPreviewModelMode = React.useMemo(
+    () => resolveDefaultPreviewModelMode({
+      productType,
+      hasAlignmentPreviewModel,
+      hasFullPreviewModel,
+      hasSourcePreviewModel,
+    }),
+    [hasAlignmentPreviewModel, hasFullPreviewModel, hasSourcePreviewModel, productType],
+  );
+  React.useEffect(() => {
+    const contextChanged = previewModeLastContextRef.current !== previewModeContextKey;
+    if (contextChanged) {
+      previewModeLastContextRef.current = previewModeContextKey;
+      previewModeUserSelectedRef.current = false;
+    }
+    const modeRequiresCanonical = previewModelMode === "alignment-model" || previewModelMode === "full-model";
+    const currentModeUnavailable = modeRequiresCanonical
+      ? !canUseCanonicalPreviewModel
+      : !hasSourcePreviewModel;
+    if ((contextChanged || !previewModeUserSelectedRef.current || currentModeUnavailable) && previewModelMode !== defaultPreviewModelMode) {
+      setPreviewModelMode(defaultPreviewModelMode);
+    }
+  }, [
+    canUseCanonicalPreviewModel,
+    defaultPreviewModelMode,
+    hasSourcePreviewModel,
+    previewModelMode,
+    previewModeContextKey,
+  ]);
+  const silhouetteMismatchSummary = React.useMemo(
+    () => summarizeCanonicalSilhouetteMismatch({
+      outline: calibrationBodyOutline,
+      bodyProfile: activeCanonicalBodyProfile,
+      calibration: activeCanonicalDimensionCalibration,
+    }),
+    [activeCanonicalBodyProfile, activeCanonicalDimensionCalibration, calibrationBodyOutline],
+  );
+  const alignmentShellMismatchSummary = React.useMemo(
+    () => (
+      previewModelMode === "alignment-model" && activeCanonicalBodyProfile?.svgPath && activeCanonicalDimensionCalibration
+        ? {
+            averageErrorMm: 0,
+            maxErrorMm: 0,
+            rowCount: Math.max(activeCanonicalBodyProfile.samples.length, 1),
+          }
+        : silhouetteMismatchSummary
+    ),
+    [activeCanonicalBodyProfile, activeCanonicalDimensionCalibration, previewModelMode, silhouetteMismatchSummary],
+  );
+  const silhouetteLockPass = alignmentShellMismatchSummary
+    ? alignmentShellMismatchSummary.averageErrorMm <= 0.5 && alignmentShellMismatchSummary.maxErrorMm <= 2.0
+    : null;
+  const alignmentOrientationQASummary = React.useMemo(
+    () => summarizeCanonicalOrientationQA({
+      bodyProfile: activeCanonicalBodyProfile,
+      calibration: activeCanonicalDimensionCalibration,
+    }),
+    [activeCanonicalBodyProfile, activeCanonicalDimensionCalibration],
+  );
+  const orientationLockPass = alignmentOrientationQASummary?.pass ?? null;
+  const derivedFrontVisibleWidthMm = productType === "flat"
+    ? 0
+    : round2(activeCanonicalDimensionCalibration?.frontVisibleWidthMm ?? 0);
+  const frontVisibleWidthReady = derivedFrontVisibleWidthMm > 0;
+  const derivedDiameterMismatchMm = productType === "flat" || templateWidthMm <= 0 || diameterMm <= 0
+    ? 0
+    : Math.abs(round2(templateWidthMm / Math.PI) - round2(diameterMm));
+  const hasBlockingGeometryMismatch =
+    productType !== "flat" &&
+    advancedGeometryOverridesUnlocked &&
+    derivedDiameterMismatchMm > LOCKED_WRAP_DIAMETER_TOLERANCE_MM;
+  const canonicalHandleDebugSummary = React.useMemo(
+    () => summarizeCanonicalHandleDebug({
+      handleProfile: canonicalHandleProfile,
+      calibration: activeCanonicalDimensionCalibration,
+    }),
+    [activeCanonicalDimensionCalibration, canonicalHandleProfile],
+  );
+  const canonicalHandleRenderMode = React.useMemo(
+    () => resolveCanonicalHandleRenderMode({
+      handleProfile: canonicalHandleProfile,
+      previewMode: previewModelMode === "source-traced" ? "full-model" : previewModelMode,
+    }),
+    [canonicalHandleProfile, previewModelMode],
+  );
+  const canonicalFrontReferenceImage = referenceSelection?.canonicalFrontImageId
+    ? (referenceImagesById.get(referenceSelection.canonicalFrontImageId) ?? null)
+    : null;
+  const canonicalBackReferenceImage = referenceSelection?.canonicalBackImageId
+    ? (referenceImagesById.get(referenceSelection.canonicalBackImageId) ?? null)
+    : null;
+  const auxiliaryBackReferenceImage = referenceSelection?.bestAuxBack3qImageId
+    ? (referenceImagesById.get(referenceSelection.bestAuxBack3qImageId) ?? null)
+    : null;
+  const hasStrictCanonicalBack = referenceSelection?.canonicalBackStatus === "true-back" && Boolean(canonicalBackReferenceImage);
+  const hasAuxiliaryBack3q = referenceSelection?.canonicalBackStatus === "only-back-3q-found" && Boolean(auxiliaryBackReferenceImage);
 
   React.useEffect(() => {
     if (frontCleanUrl) {
       setBodyReferencePhotoDataUrl(frontCleanUrl);
       return;
     }
-    if (frontPhotoDataUrl || productPhotoFullUrl) return;
+    if (frontPhotoDataUrl) {
+      setBodyReferencePhotoDataUrl(frontPhotoDataUrl);
+      return;
+    }
+    if (productPhotoFullUrl) return;
     setBodyReferencePhotoDataUrl("");
   }, [frontCleanUrl, frontPhotoDataUrl, productPhotoFullUrl]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const syncCanonicalHandleProfile = async () => {
+      if (productType === "flat") {
+        setCanonicalHandleProfile(undefined);
+        return;
+      }
+      if (
+        !bodyReferencePhotoDataUrl ||
+        !activeBodyReferenceOutline?.sourceContour ||
+        activeBodyReferenceOutline.sourceContour.length < 3
+      ) {
+        return;
+      }
+
+      try {
+        const nextProfile = await extractCanonicalHandleProfileFromCutout({
+          imageDataUrl: bodyReferencePhotoDataUrl,
+          outline: activeBodyReferenceOutline,
+        });
+        if (cancelled) return;
+        setCanonicalHandleProfile(nextProfile ?? undefined);
+      } catch {
+        if (cancelled) return;
+      }
+    };
+
+    void syncCanonicalHandleProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBodyReferenceOutline, bodyReferencePhotoDataUrl, productType]);
 
   // Auto-mirror front photo as back when mirrorForBack is enabled
   React.useEffect(() => {
@@ -1141,7 +1782,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   }, [mirrorForBack, frontPhotoDataUrl]);
 
   React.useEffect(() => {
-    if (productType === "flat" || overallHeightMm <= 0 || diameterMm <= 0) {
+    if (productType === "flat" || overallHeightMm <= 0 || effectiveCylinderDiameterMm <= 0) {
       bodyOutlineSeedSignatureRef.current = "";
       return;
     }
@@ -1161,7 +1802,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       overallHeightMm: round2(overallHeightMm),
       bodyTopFromOverallMm: round2(bodyTopFromOverallMm),
       bodyBottomFromOverallMm: round2(bodyBottomFromOverallMm),
-      diameterMm: round2(diameterMm),
+      diameterMm: round2(effectiveCylinderDiameterMm),
       topOuterDiameterMm: round2(topOuterDiameterMm),
       baseDiameterMm: round2(baseDiameterMm),
       shoulderDiameterMm: round2(shoulderDiameterMm ?? 0),
@@ -1176,6 +1817,29 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyOutlineSeedSignatureRef.current = signature;
 
     let cancelled = false;
+    const applyFallbackOutline = () => {
+      if (cancelled) return false;
+      const outline = createEditableBodyOutline({
+        overallHeightMm,
+        bodyTopFromOverallMm,
+        bodyBottomFromOverallMm,
+        diameterMm: effectiveCylinderDiameterMm,
+        topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
+        baseDiameterMm: baseDiameterMm > 0 ? baseDiameterMm : undefined,
+        shoulderDiameterMm,
+        taperUpperDiameterMm,
+        taperLowerDiameterMm,
+        bevelDiameterMm,
+        fitDebug,
+      });
+      setBodyOutlineProfile(outline);
+      setReferencePaths((current) => createReferencePaths({
+        bodyOutline: outline,
+        lidProfile: current.lidProfile,
+        silverProfile: current.silverProfile,
+      }));
+      return true;
+    };
     const seedBodyOutlineFromSvgCutout = async () => {
       try {
         if (canSeedFromPhotoVector && seedPhotoDataUrl) {
@@ -1189,7 +1853,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             overallHeightMm,
             bodyTopFromOverallMm,
             bodyBottomFromOverallMm,
-            diameterMm,
+            diameterMm: effectiveCylinderDiameterMm,
             topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
             side: "right",
           });
@@ -1203,29 +1867,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           return;
         }
 
-        if (!fitDebug) return;
-        const outline = createEditableBodyOutline({
-          overallHeightMm,
-          bodyTopFromOverallMm,
-          bodyBottomFromOverallMm,
-          diameterMm,
-          topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
-          baseDiameterMm: baseDiameterMm > 0 ? baseDiameterMm : undefined,
-          shoulderDiameterMm,
-          taperUpperDiameterMm,
-          taperLowerDiameterMm,
-          bevelDiameterMm,
-          fitDebug,
-        });
-        if (cancelled) return;
-        setBodyOutlineProfile(outline);
-        setReferencePaths((current) => createReferencePaths({
-          bodyOutline: outline,
-          lidProfile: current.lidProfile,
-          silverProfile: current.silverProfile,
-        }));
+        applyFallbackOutline();
       } catch {
-        if (!cancelled) {
+        if (!cancelled && !applyFallbackOutline()) {
           bodyOutlineSeedSignatureRef.current = "";
         }
       }
@@ -1242,7 +1886,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyTopFromOverallMm,
     bevelDiameterMm,
     baseDiameterMm,
-    diameterMm,
+    effectiveCylinderDiameterMm,
     frontPhotoDataUrl,
     frontCleanUrl,
     lookupResult?.fitDebug,
@@ -1255,18 +1899,106 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     topOuterDiameterMm,
   ]);
 
+  const resolveManufacturerLogoStamp = React.useCallback(async () => {
+    if (productType === "flat") {
+      return undefined;
+    }
+    const primaryPhotoUrl = bodyReferencePhotoDataUrl || frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl;
+    const rawPhotoUrl = frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl;
+    if (!primaryPhotoUrl || overallHeightMm <= 0) {
+      return undefined;
+    }
+
+    const stampSource = lookupResult?.imageUrl || productPhotoFullUrl ? "lookup-photo" : "front-photo";
+    const attemptExtraction = async (
+      photoDataUrl: string,
+      options?: {
+        sourceImageId?: string;
+        preferredLogoBox?: ProductReferenceSet["images"][number]["logoBox"] | null;
+      },
+    ) => extractManufacturerLogoStamp({
+      photoDataUrl,
+      overallHeightMm,
+      brand: brand.trim() || lookupResult?.brand || undefined,
+      topMarginMm,
+      bottomMarginMm,
+      fitDebug: lookupResult?.fitDebug ?? null,
+      outline: activeBodyReferenceOutline,
+      productReferenceSet: productReferenceSet ?? null,
+      sourceImageId: options?.sourceImageId,
+      preferredLogoBox: options?.preferredLogoBox ?? null,
+      source: options?.sourceImageId ? "lookup-photo" : stampSource,
+    });
+
+    const directStamp = await attemptExtraction(primaryPhotoUrl);
+    if (directStamp) return directStamp;
+
+    if (!bodyReferencePhotoDataUrl && rawPhotoUrl) {
+      try {
+        const cleanDataUrl = await removeBackgroundForOutlineSeed(rawPhotoUrl, "manufacturer-logo-stamp.png");
+        setBodyReferencePhotoDataUrl(cleanDataUrl);
+        const cutoutStamp = await attemptExtraction(cleanDataUrl);
+        if (cutoutStamp) return cutoutStamp;
+      } catch {
+        // Fall through to the canonical front reference image fallback.
+      }
+    }
+
+    const fallbackImageUrl = canonicalFrontReferenceImage?.url ||
+      lookupResult?.fitDebug?.sourceImageUrl ||
+      lookupResult?.imageUrl;
+    if (!fallbackImageUrl) return undefined;
+
+    try {
+      const fallbackDataUrl = await fetchImageUrlAsDataUrl(fallbackImageUrl);
+      return await extractManufacturerLogoStamp({
+        photoDataUrl: fallbackDataUrl,
+        overallHeightMm,
+        brand: brand.trim() || lookupResult?.brand || undefined,
+        topMarginMm,
+        bottomMarginMm,
+        fitDebug: null,
+        outline: null,
+        productReferenceSet: productReferenceSet ?? null,
+        sourceImageId: canonicalFrontReferenceImage?.id,
+        preferredLogoBox: canonicalFrontReferenceImage?.logoBox ?? null,
+        source: "lookup-photo",
+      }) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }, [
+    activeBodyReferenceOutline,
+    bodyReferencePhotoDataUrl,
+    brand,
+    bottomMarginMm,
+    canonicalFrontReferenceImage,
+    frontCleanUrl,
+    frontPhotoDataUrl,
+    lookupResult?.brand,
+    lookupResult?.fitDebug,
+    lookupResult?.imageUrl,
+    overallHeightMm,
+    productReferenceSet,
+    productPhotoFullUrl,
+    productType,
+    topMarginMm,
+  ]);
+
   React.useEffect(() => {
     if (productType === "flat") {
       autoZoneSignatureRef.current = "";
       manufacturerLogoSignatureRef.current = "";
       setManufacturerLogoStamp(undefined);
+      setDetectedManufacturerLogoStamp(undefined);
       return;
     }
 
-    const sourcePhotoUrl = frontPhotoDataUrl || productPhotoFullUrl;
+    const sourcePhotoUrl = bodyReferencePhotoDataUrl || frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl;
     if (!sourcePhotoUrl || overallHeightMm <= 0) {
       manufacturerLogoSignatureRef.current = "";
       setManufacturerLogoStamp(undefined);
+      setDetectedManufacturerLogoStamp(undefined);
       return;
     }
 
@@ -1277,6 +2009,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       topMarginMm: round2(topMarginMm),
       bottomMarginMm: round2(bottomMarginMm),
       brand: brand.trim().toLowerCase(),
+      outlineHash: activeBodyReferenceOutline?.sourceContourBounds
+        ? `${round2(activeBodyReferenceOutline.sourceContourBounds.minX)}:${round2(activeBodyReferenceOutline.sourceContourBounds.minY)}:${round2(activeBodyReferenceOutline.sourceContourBounds.width)}:${round2(activeBodyReferenceOutline.sourceContourBounds.height)}`
+        : "",
+      canonicalFrontReferenceImageId: canonicalFrontReferenceImage?.id ?? "",
       lookupImageUrl: lookupResult?.imageUrl ?? "",
       fitDebugSource: lookupResult?.fitDebug?.sourceImageUrl ?? "",
       fitDebugSize: lookupResult?.fitDebug
@@ -1284,50 +2020,22 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         : "",
     });
 
-    if (manufacturerLogoSignatureRef.current === signature) return;
+    if (manufacturerLogoSignatureRef.current === signature) {
+      return;
+    }
     manufacturerLogoSignatureRef.current = signature;
 
     let cancelled = false;
-    const stampSource = lookupResult?.imageUrl || productPhotoFullUrl ? "lookup-photo" : "front-photo";
-    const extractStamp = async () => {
-      const directStamp = await extractManufacturerLogoStamp({
-        photoDataUrl: sourcePhotoUrl,
-        overallHeightMm,
-        brand: brand.trim() || lookupResult?.brand || undefined,
-        topMarginMm,
-        bottomMarginMm,
-        fitDebug: lookupResult?.fitDebug ?? null,
-        source: stampSource,
-      });
-      if (directStamp) return directStamp;
-
-      const fallbackImageUrl = lookupResult?.fitDebug?.sourceImageUrl || lookupResult?.imageUrl;
-      if (!fallbackImageUrl) return null;
-
-      try {
-        const fallbackDataUrl = await fetchImageUrlAsDataUrl(fallbackImageUrl);
-        return await extractManufacturerLogoStamp({
-          photoDataUrl: fallbackDataUrl,
-          overallHeightMm,
-          brand: brand.trim() || lookupResult?.brand || undefined,
-          topMarginMm,
-          bottomMarginMm,
-          fitDebug: lookupResult?.fitDebug ?? null,
-          source: "lookup-photo",
-        });
-      } catch {
-        return null;
-      }
-    };
-
-    extractStamp()
+    resolveManufacturerLogoStamp()
       .then((stamp) => {
         if (cancelled) return;
         setManufacturerLogoStamp(stamp ?? undefined);
+        setDetectedManufacturerLogoStamp(stamp ?? undefined);
       })
       .catch(() => {
         if (cancelled) return;
         setManufacturerLogoStamp(undefined);
+        setDetectedManufacturerLogoStamp(undefined);
       });
 
     return () => {
@@ -1336,14 +2044,122 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   }, [
     brand,
     bottomMarginMm,
+    canonicalFrontReferenceImage,
+    activeBodyReferenceOutline,
+    frontCleanUrl,
     frontPhotoDataUrl,
+    bodyReferencePhotoDataUrl,
     lookupResult?.brand,
     lookupResult?.fitDebug,
     lookupResult?.imageUrl,
     overallHeightMm,
+    productReferenceSet,
     productPhotoFullUrl,
     productType,
+    resolveManufacturerLogoStamp,
     topMarginMm,
+  ]);
+
+  const applyLogoPlacementAdjustment = React.useCallback((mutate: (placement: NonNullable<ManufacturerLogoStamp["logoPlacement"]>) => NonNullable<ManufacturerLogoStamp["logoPlacement"]>) => {
+    setManufacturerLogoStamp((current) => {
+      if (!current?.logoPlacement) return current;
+      return {
+        ...current,
+        logoPlacement: {
+          ...mutate(current.logoPlacement),
+          source: "manual",
+        },
+      };
+    });
+  }, []);
+
+  const resetManufacturerLogoStampPlacement = React.useCallback(() => {
+    setManufacturerLogoStamp(detectedManufacturerLogoStamp ?? undefined);
+  }, [detectedManufacturerLogoStamp]);
+
+  const logoPlacementSurfaceStatus = React.useMemo(() => {
+    if (
+      productType === "flat" ||
+      !manufacturerLogoStamp?.logoPlacement ||
+      !activeCanonicalDimensionCalibration ||
+      !previewPrintableSurfaceContract
+    ) {
+      return null;
+    }
+
+    const localSurface = getPrintableSurfaceLocalBounds({
+      contract: previewPrintableSurfaceContract,
+      bodyTopFromOverallMm: activeCanonicalDimensionCalibration.lidBodyLineMm,
+      bodyBottomFromOverallMm: activeCanonicalDimensionCalibration.bodyBottomMm,
+    });
+    if (!localSurface) {
+      return null;
+    }
+
+    const placement = manufacturerLogoStamp.logoPlacement;
+    const centerYFromBodyTopMm = Math.max(
+      0,
+      Math.min(
+        activeCanonicalDimensionCalibration.bodyHeightMm,
+        placement.sCenter * activeCanonicalDimensionCalibration.bodyHeightMm,
+      ),
+    );
+    const heightMm = Math.max(0.5, placement.sSpan * activeCanonicalDimensionCalibration.bodyHeightMm);
+    const logoTopMm = round2(centerYFromBodyTopMm - heightMm / 2);
+    const logoBottomMm = round2(centerYFromBodyTopMm + heightMm / 2);
+    const overlapsTop = logoTopMm < localSurface.topMm;
+    const overlapsBottom = logoBottomMm > localSurface.bottomMm;
+
+    return {
+      logoTopMm,
+      logoBottomMm,
+      printableTopMm: localSurface.topMm,
+      printableBottomMm: localSurface.bottomMm,
+      overlapsTop,
+      overlapsBottom,
+      overlapsPrintableSurface: overlapsTop || overlapsBottom,
+    };
+  }, [
+    activeCanonicalDimensionCalibration,
+    manufacturerLogoStamp,
+    previewPrintableSurfaceContract,
+    productType,
+  ]);
+
+  const alignmentLogoOverlay = React.useMemo(() => {
+    if (
+      productType === "flat" ||
+      !manufacturerLogoStamp?.logoPlacement ||
+      !activeCanonicalDimensionCalibration
+    ) {
+      return null;
+    }
+
+    const placement = manufacturerLogoStamp.logoPlacement;
+    const bodyTopMm = activeCanonicalDimensionCalibration.bodyBottomMm - activeCanonicalDimensionCalibration.bodyHeightMm;
+    const centerYMm = bodyTopMm + (placement.sCenter * activeCanonicalDimensionCalibration.bodyHeightMm);
+    const heightMm = Math.max(0.5, placement.sSpan * activeCanonicalDimensionCalibration.bodyHeightMm);
+    const halfFrontWidthMm = activeCanonicalDimensionCalibration.frontVisibleWidthMm / 2;
+    const centerXMm = Math.sin(placement.thetaCenter) * halfFrontWidthMm;
+    const widthMm = Math.max(0.5, activeCanonicalDimensionCalibration.frontVisibleWidthMm * Math.sin(Math.max(0.001, placement.thetaSpan) / 2));
+    const overlapsLockedPrintableSurface = Boolean(
+      lockedProductionGeometry && logoPlacementSurfaceStatus?.overlapsPrintableSurface,
+    );
+
+    return {
+      centerXMm,
+      centerYMm,
+      widthMm,
+      heightMm,
+      confidence: placement.confidence,
+      strokeColor: overlapsLockedPrintableSurface ? "#f59e0b" : "#34c759",
+    };
+  }, [
+    activeCanonicalDimensionCalibration,
+    lockedProductionGeometry,
+    logoPlacementSurfaceStatus?.overlapsPrintableSurface,
+    manufacturerLogoStamp,
+    productType,
   ]);
 
   React.useEffect(() => {
@@ -1385,6 +2201,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setBodyBottomFromOverallMm(autoZone.bodyBottomFromOverallMm);
     setLidSeamFromOverallMm(undefined);
     setSilverBandBottomFromOverallMm(undefined);
+    setPrintableTopOverrideMm(undefined);
+    setPrintableBottomOverrideMm(undefined);
     setTopMarginMm(autoZone.topMarginMm);
     setBottomMarginMm(autoZone.bottomMarginMm);
     setPrintHeightMm(autoZone.printHeightMm);
@@ -1421,7 +2239,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     autoZoneSignatureRef.current = "";
     bodyOutlineSeedSignatureRef.current = "";
     manufacturerLogoSignatureRef.current = "";
+    setPrintableSurfaceDetection(null);
+    setPrintableTopOverrideMm(undefined);
+    setPrintableBottomOverrideMm(undefined);
     setManufacturerLogoStamp(undefined);
+    setDetectedManufacturerLogoStamp(undefined);
     setDetectResult(null);
     setDetectError(null);
   }, []);
@@ -1522,6 +2344,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
     if (resolvedBodyDiameterMm) {
       setDiameterMm(round2(resolvedBodyDiameterMm));
+      setWrapWidthInputMm(round2(Math.PI * resolvedBodyDiameterMm));
     }
     if (resolvedTopOuterDiameterMm) {
       setTopOuterDiameterMm(round2(resolvedTopOuterDiameterMm));
@@ -1604,6 +2427,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setSmartLookupApplied(true);
     setLookupResult(result.tumblerLookupResult ?? null);
     setFlatLookupResult(result.flatLookupResult ?? null);
+    setProductReferenceSet(
+      draft.productReferenceSet ??
+      result.tumblerLookupResult?.productReferenceSet ??
+      undefined,
+    );
     setFlatLookupMatch(
       result.flatLookupResult?.matchedItemId
         ? (FLAT_BED_ITEMS.find((item) => item.id === result.flatLookupResult!.matchedItemId) ?? null)
@@ -1644,7 +2472,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       setMirrorForBack(false);
       await applyFacePhotoFile(resolvedLookupBackPhotoFile, "back");
     } else if ((files.frontPhotoFile || resolvedLookupPhotoFile) && draft.productType && draft.productType !== "flat") {
-      setMirrorForBack(true);
+      setMirrorForBack(false);
+      setBackPhotoDataUrl("");
       setBackOriginalUrl("");
       setBackCleanUrl("");
       setBackUseOriginal(false);
@@ -1678,8 +2507,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
     if (draft.productType === "flat") {
       setDiameterMm(0);
+      setWrapWidthInputMm(0);
       setTopOuterDiameterMm(0);
       setBaseDiameterMm(0);
+      setAdvancedGeometryOverridesUnlocked(false);
       setTumblerMapping(undefined);
       setHandleArcDeg(0);
       setTaperCorrection("none");
@@ -1695,9 +2526,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       );
       setLidSeamFromOverallMm(draftDims?.lidSeamFromOverallMm ?? undefined);
       setSilverBandBottomFromOverallMm(draftDims?.silverBandBottomFromOverallMm ?? undefined);
+      setPrintableSurfaceDetection(null);
+      setPrintableTopOverrideMm(undefined);
+      setPrintableBottomOverrideMm(undefined);
       setHandleTopFromOverallMm(draftDims?.handleTopFromOverallMm ?? undefined);
       setHandleBottomFromOverallMm(draftDims?.handleBottomFromOverallMm ?? undefined);
       setHandleReachMm(draftDims?.handleReachMm ?? undefined);
+      setCanonicalHandleProfile(draftDims?.canonicalHandleProfile ?? undefined);
       setShoulderDiameterMm(draftDims?.shoulderDiameterMm ?? undefined);
       setTaperUpperDiameterMm(draftDims?.taperUpperDiameterMm ?? undefined);
       setTaperLowerDiameterMm(draftDims?.taperLowerDiameterMm ?? undefined);
@@ -1750,6 +2585,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       if (typeof draftDims?.handleArcDeg === "number") {
         setHandleArcDeg(draftDims.handleArcDeg);
       }
+      if (typeof draftDims?.templateWidthMm === "number" && draftDims.templateWidthMm > 0) {
+        setWrapWidthInputMm(round2(draftDims.templateWidthMm));
+      }
+      setAdvancedGeometryOverridesUnlocked(draftDims?.advancedGeometryOverridesUnlocked ?? false);
       if (draftDims?.taperCorrection) {
         setTaperCorrection(draftDims.taperCorrection);
       }
@@ -1776,6 +2615,17 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       } else {
         setSilverBandBottomFromOverallMm(undefined);
       }
+      setPrintableSurfaceDetection(null);
+      if (typeof draftDims?.printableTopOverrideMm === "number") {
+        setPrintableTopOverrideMm(round2(draftDims.printableTopOverrideMm));
+      } else {
+        setPrintableTopOverrideMm(undefined);
+      }
+      if (typeof draftDims?.printableBottomOverrideMm === "number") {
+        setPrintableBottomOverrideMm(round2(draftDims.printableBottomOverrideMm));
+      } else {
+        setPrintableBottomOverrideMm(undefined);
+      }
       if (typeof draftDims?.handleTopFromOverallMm === "number") {
         setHandleTopFromOverallMm(round2(draftDims.handleTopFromOverallMm));
       } else {
@@ -1791,6 +2641,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       } else {
         setHandleReachMm(undefined);
       }
+      setCanonicalHandleProfile(draftDims?.canonicalHandleProfile ?? undefined);
       if (typeof draftDims?.shoulderDiameterMm === "number") {
         setShoulderDiameterMm(round2(draftDims.shoulderDiameterMm));
       } else {
@@ -1858,6 +2709,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           setBrand(result.brand ?? "");
           setCapacity("");
           setDiameterMm(0);
+          setWrapWidthInputMm(0);
           setTopOuterDiameterMm(0);
           setBaseDiameterMm(0);
           setFlatWidthMm(round2(result.widthMm));
@@ -1900,6 +2752,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           setBrand("");
           setCapacity("");
           setDiameterMm(0);
+          setWrapWidthInputMm(0);
           setTopOuterDiameterMm(0);
           setBaseDiameterMm(0);
           setFlatWidthMm(round2(matchedItem.widthMm));
@@ -1931,8 +2784,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         result,
       );
       setProductType(inferredProductType);
-      setGlbPath(result.glbPath || "");
-      setGlbFileName(result.glbPath ? (result.glbPath.split("/").pop() ?? null) : null);
+      const nextLookupGlbPath =
+        inferredProductType === "flat"
+          ? (result.glbPath || "")
+          : result.modelStatus === "verified-product-model"
+            ? (result.glbPath || "")
+            : "";
+      setGlbPath(nextLookupGlbPath);
+      setGlbFileName(nextLookupGlbPath ? (nextLookupGlbPath.split("/").pop() ?? null) : null);
       if (result.bodyColorHex) setBodyColorHex(result.bodyColorHex);
       if (result.rimColorHex) setRimColorHex(result.rimColorHex);
       if (inferredProductType !== "flat" && !materialProfileTouchedRef.current) {
@@ -2087,6 +2946,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       });
       if (resolvedBodyDiameterMm) {
         setDiameterMm(resolvedBodyDiameterMm);
+        setWrapWidthInputMm(round2(Math.PI * resolvedBodyDiameterMm));
       }
       const resolvedTopOuterDiameterMm = matchedProfile?.topDiameterMm ?? draft.topDiameterMm ?? resolvedBodyDiameterMm ?? 0;
       if (resolvedTopOuterDiameterMm > 0) {
@@ -2219,10 +3079,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const handleSave = React.useCallback(async () => {
     const errs: string[] = [];
     if (!name.trim()) errs.push("Product name is required.");
-    if (!laserType) errs.push("Laser type is required.");
     if (!productType) errs.push("Product type is required.");
     if (productType === "flat" && flatWidthMm <= 0) errs.push("Template width must be > 0 for flat products.");
-    if (productType && productType !== "flat" && diameterMm <= 0) errs.push("Body / wrap diameter must be > 0 for non-flat products.");
+    if (productType && productType !== "flat" && templateWidthMm <= 0) errs.push("Wrap width / circumference must be > 0 for non-flat products.");
+    if (productType && productType !== "flat" && effectiveCylinderDiameterMm <= 0) errs.push("Cylinder diameter could not be derived from wrap width.");
+    if (hasBlockingGeometryMismatch) {
+      errs.push(`Cylinder diameter override is inconsistent with wrap width by ${derivedDiameterMismatchMm.toFixed(2)} mm. Recompute derived fields from wrap width or relock production geometry.`);
+    }
     if (printHeightMm <= 0) errs.push("Print height must be > 0.");
     if (
       productType &&
@@ -2242,6 +3105,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
     setErrors([]);
 
+    const resolvedManufacturerLogoStamp = productType === "flat"
+      ? undefined
+      : (manufacturerLogoStamp ?? await resolveManufacturerLogoStamp());
+    if (productType !== "flat") {
+      setManufacturerLogoStamp(resolvedManufacturerLogoStamp);
+      setDetectedManufacturerLogoStamp(resolvedManufacturerLogoStamp);
+    }
+
     const now = new Date().toISOString();
     const templateMaterial = inferTemplateMaterial(
       editingTemplate,
@@ -2256,16 +3127,19 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       name: name.trim(),
       brand: brand.trim(),
       capacity: capacity.trim(),
-      laserType: laserType as ProductTemplate["laserType"],
+      laserType: laserType || undefined,
       productType: productType as ProductTemplate["productType"],
       materialSlug: templateMaterial.materialSlug,
       materialLabel: templateMaterial.materialLabel,
       thumbnailDataUrl: thumbDataUrl,
       productPhotoFullUrl: productPhotoFullUrl || undefined,
       glbPath,
+      glbStatus: activeDrinkwareGlbStatus?.status,
+      glbSourceLabel: activeDrinkwareGlbStatus?.sourceLabel ?? undefined,
       dimensions: {
-        diameterMm,
-        bodyDiameterMm: productType === "flat" || diameterMm <= 0 ? undefined : diameterMm,
+        diameterMm: effectiveCylinderDiameterMm,
+        bodyDiameterMm: productType === "flat" || effectiveCylinderDiameterMm <= 0 ? undefined : effectiveCylinderDiameterMm,
+        advancedGeometryOverridesUnlocked: productType === "flat" ? undefined : advancedGeometryOverridesUnlocked,
         topOuterDiameterMm: productType === "flat" || topOuterDiameterMm <= 0 ? undefined : topOuterDiameterMm,
         baseDiameterMm: productType === "flat" || baseDiameterMm <= 0 ? undefined : baseDiameterMm,
         printHeightMm,
@@ -2297,6 +3171,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           productType === "flat" || !Number.isFinite(silverBandBottomFromOverallMm)
             ? undefined
             : round2(Math.max(0, silverBandBottomFromOverallMm ?? 0)),
+        printableTopOverrideMm:
+          productType === "flat" || !Number.isFinite(printableTopOverrideMm)
+            ? undefined
+            : round2(Math.min(bodyBottomFromOverallMm, Math.max(bodyTopFromOverallMm, printableTopOverrideMm ?? 0))),
+        printableBottomOverrideMm:
+          productType === "flat" || !Number.isFinite(printableBottomOverrideMm)
+            ? undefined
+            : round2(Math.min(bodyBottomFromOverallMm, Math.max(bodyTopFromOverallMm, printableBottomOverrideMm ?? 0))),
         handleTopFromOverallMm:
           productType === "flat" || !Number.isFinite(handleTopFromOverallMm)
             ? undefined
@@ -2309,6 +3191,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           productType === "flat" || !Number.isFinite(handleReachMm)
             ? undefined
             : round2(Math.max(0, handleReachMm ?? 0)),
+        canonicalHandleProfile: productType === "flat" ? undefined : canonicalHandleProfile,
+        canonicalBodyProfile: productType === "flat" ? undefined : (activeCanonicalBodyProfile ?? undefined),
+        canonicalDimensionCalibration: productType === "flat" ? undefined : (activeCanonicalDimensionCalibration ?? undefined),
+        axialSurfaceBands: productType === "flat" ? undefined : (activePrintableSurfaceResolution?.axialSurfaceBands ?? undefined),
+        printableSurfaceContract:
+          productType === "flat"
+            ? undefined
+            : (activePrintableSurfaceResolution?.printableSurfaceContract ?? undefined),
         shoulderDiameterMm:
           productType === "flat" || !Number.isFinite(shoulderDiameterMm)
             ? undefined
@@ -2370,7 +3260,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       tumblerMapping: productType === "flat" ? undefined : tumblerMapping,
       frontPhotoDataUrl: frontPhotoDataUrl || undefined,
       backPhotoDataUrl: backPhotoDataUrl || undefined,
-      manufacturerLogoStamp: productType === "flat" ? undefined : manufacturerLogoStamp,
+      manufacturerLogoStamp: productType === "flat" ? undefined : resolvedManufacturerLogoStamp,
+      productReferenceSet: productType === "flat" ? undefined : productReferenceSet,
     };
 
     if (isEdit) {
@@ -2388,8 +3279,17 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bottomMarginMm,
     brand,
     capacity,
-    diameterMm,
+    activeCanonicalBodyProfile,
+    activeCanonicalDimensionCalibration,
+    canonicalHandleProfile,
+    advancedGeometryOverridesUnlocked,
+    derivedDiameterMismatchMm,
     editingTemplate,
+    effectiveCylinderDiameterMm,
+    hasBlockingGeometryMismatch,
+    activeDrinkwareGlbStatus,
+    activePrintableSurfaceResolution?.axialSurfaceBands,
+    activePrintableSurfaceResolution?.printableSurfaceContract,
     flatFamilyKey,
     flatLookupMatch,
     flatLookupResult,
@@ -2409,6 +3309,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     overallHeightMm,
     power,
     printHeightMm,
+    printableBottomOverrideMm,
+    printableTopOverrideMm,
+    productReferenceSet,
     productPhotoFullUrl,
     productType,
     referenceLayerState,
@@ -2422,6 +3325,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     referencePhotoWidthScalePct,
     resolvedMaterialLabel,
     resolvedMaterialSlug,
+    resolveManufacturerLogoStamp,
     rimColorHex,
     handleBottomFromOverallMm,
     handleReachMm,
@@ -2511,11 +3415,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             value={laserType}
             onChange={(e) => setLaserType(e.target.value as TemplateLaserType)}
           >
-            <option value="">Select laser type</option>
+            <option value="">Optional</option>
             <option value="fiber">Fiber</option>
             <option value="co2">CO₂</option>
             <option value="diode">Diode</option>
           </select>
+          <span className={styles.fieldHint}>Optional. Leave blank if the template should not preselect a laser source.</span>
         </div>
 
         <div className={styles.fieldRow}>
@@ -2628,8 +3533,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                   {formatLookupMeasurement(lookupResult.dimensions.usableHeightMm) && (
                     <span>Print {formatLookupMeasurement(lookupResult.dimensions.usableHeightMm)}</span>
                   )}
-                  {lookupResult.glbPath && <span>3D ready</span>}
+                  {lookupResult.glbPath && (
+                    <span>{getDrinkwareGlbStatusLabel(lookupResult.modelStatus ?? "verified-product-model")}</span>
+                  )}
                 </div>
+                {lookupResult.modelSourceLabel && (
+                  <div className={styles.lookupNotice}>{lookupResult.modelSourceLabel}</div>
+                )}
               </div>
             )}
 
@@ -2705,7 +3615,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             {lookupResult?.fitDebug && lookupDebugImageUrl && (
               <TumblerLookupDebugPanel
                 debug={lookupResult.fitDebug}
-                imageUrl={lookupDebugImageUrl}
+                imageUrl={bodyReferencePhotoDataUrl || lookupDebugImageUrl}
+                handleProfile={canonicalHandleProfile}
               />
             )}
 
@@ -2891,7 +3802,6 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                     setFrontCleanUrl("");
                     setFrontPhotoDataUrl(original);
                     setFrontUseOriginal(false);
-                    setMirrorForBack(true);
                     setFrontBgStatus("idle");
                   }}
                   onClear={() => { setFrontPhotoDataUrl(""); setFrontOriginalUrl(""); setFrontCleanUrl(""); setFrontBgStatus("idle"); }}
@@ -2990,6 +3900,22 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           </div>
 
           {/* ── BACK — manual upload (hidden when mirroring) ── */}
+          {referenceSelection && (
+            <div className={styles.frontCapturedBanner}>
+              <div className={styles.frontCapturedTitle}>Reference classification</div>
+              <div className={styles.frontCapturedHint}>
+                {canonicalFrontReferenceImage
+                  ? `Front: ${canonicalFrontReferenceImage.viewClass} (${Math.round((referenceSelection.frontConfidence ?? 0) * 100)}%). `
+                  : "Front: unknown. "}
+                {referenceSelection.canonicalBackStatus === "true-back" && canonicalBackReferenceImage
+                  ? `Back: true back (${Math.round((referenceSelection.backConfidence ?? 0) * 100)}%).`
+                  : referenceSelection.canonicalBackStatus === "only-back-3q-found" && auxiliaryBackReferenceImage
+                    ? `Back: unavailable. Best auxiliary reference is back-3q (${Math.round((referenceSelection.backConfidence ?? 0) * 100)}%). Enable mirror only if you want to reuse the front photo.`
+                    : "Back: unknown. Add a real back photo or enable mirror manually."}
+              </div>
+            </div>
+          )}
+
           {!mirrorForBack && (
             <div className={styles.fieldRow}>
               <label className={styles.fieldLabel}>Back face</label>
@@ -3070,6 +3996,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                   </div>
                 )}
               </div>
+              {hasStrictCanonicalBack && (
+                <span className={styles.fieldHint}>
+                  Canonical back is a strict true-back reference ({Math.round((referenceSelection?.backConfidence ?? 0) * 100)}% confidence).
+                </span>
+              )}
+              {!backPhotoDataUrl && hasAuxiliaryBack3q && (
+                <span className={styles.fieldHint}>
+                  No strict true back was assigned. Best retained auxiliary reference is labeled back-3q ({Math.round((referenceSelection?.backConfidence ?? 0) * 100)}% confidence) and is not used for the Back face slot.
+                </span>
+              )}
             </div>
           )}
 
@@ -3108,8 +4044,23 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 setGlbUploadError(null);
               }}
             />
-            {glbPath && !glbUploading && (
-              getFlatGlbStatusLabel(activeFlatLookupModel) ? (
+            {(glbPath || (productType && productType !== "flat")) && !glbUploading && (
+              productType !== "flat" && activeDrinkwareGlbStatus?.status ? (
+                <div
+                  className={[
+                    styles.glbPathStatusBlock,
+                    activeDrinkwareGlbStatus.status === "placeholder-model" || activeDrinkwareGlbStatus.status === "missing-model"
+                      ? styles.glbPathWarning
+                      : "",
+                  ].filter(Boolean).join(" ")}
+                >
+                  <span className={styles.glbPathStatusLabel}>{getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus.status)}</span>
+                  <span className={styles.glbPathValue}>{glbPath || "No GLB assigned"}</span>
+                  {activeDrinkwareGlbStatus.sourceLabel && (
+                    <div className={styles.glbPathNote}>{activeDrinkwareGlbStatus.sourceLabel}</div>
+                  )}
+                </div>
+              ) : getFlatGlbStatusLabel(activeFlatLookupModel) ? (
                 <div
                   className={[
                     styles.glbPathStatusBlock,
@@ -3178,49 +4129,380 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           </div>
         )}
 
-        {(glbPath.trim() || previewModelFile || liveFlatPreview || previewLoadError) && (
+        {(glbPath.trim() || previewModelFile || liveFlatPreview || previewLoadError || canUseCanonicalPreviewModel) && (
           <div className={styles.fieldRow}>
             <label className={styles.fieldLabel}>Preview</label>
             <div className={styles.modelPreviewBlock}>
               <div className={styles.modelPreviewMeta}>
                 <span className={styles.modelPreviewMode}>
-                  {(glbPath.trim() || previewModelFile) ? "GLB preview" : "Generated flat preview"}
+                  {getPreviewModelModeLabel({
+                    productType,
+                    mode: previewModelMode,
+                    glbStatus: activeDrinkwareGlbStatus?.status,
+                  })}
                 </span>
-                {!glbPath.trim() && !previewModelFile && liveFlatPreview && (
-                  <span className={styles.modelPreviewDims}>
-                    {liveFlatPreview.widthMm} × {liveFlatPreview.heightMm} × {liveFlatPreview.thicknessMm} mm
-                  </span>
-                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {productType !== "flat" && (
+                    <>
+                      <button
+                        type="button"
+                        className={`${styles.detectBtn} ${previewModelMode === "alignment-model" ? styles.detectBtnActive : ""}`}
+                        disabled={!canUseCanonicalPreviewModel}
+                        aria-pressed={previewModelMode === "alignment-model"}
+                        onClick={() => handlePreviewModelModeChange("alignment-model")}
+                      >
+                        Alignment (Default)
+                      </button>
+                      <button
+                        type="button"
+                        className={`${styles.detectBtn} ${previewModelMode === "full-model" ? styles.detectBtnActive : ""}`}
+                        disabled={!canUseCanonicalPreviewModel}
+                        aria-pressed={previewModelMode === "full-model"}
+                        onClick={() => handlePreviewModelModeChange("full-model")}
+                      >
+                        Full
+                      </button>
+                      <button
+                        type="button"
+                        className={`${styles.detectBtn} ${previewModelMode === "source-traced" ? styles.detectBtnActive : ""}`}
+                        aria-pressed={previewModelMode === "source-traced"}
+                        onClick={() => handlePreviewModelModeChange("source-traced")}
+                      >
+                        Source (Compare)
+                      </button>
+                    </>
+                  )}
+                  {!glbPath.trim() && !previewModelFile && liveFlatPreview && (
+                    <span className={styles.modelPreviewDims}>
+                      {liveFlatPreview.widthMm} x {liveFlatPreview.heightMm} x {liveFlatPreview.thicknessMm} mm
+                    </span>
+                  )}
+                  {productType !== "flat" && activeDrinkwareGlbStatus && previewModelMode === "source-traced" && (
+                    <span className={styles.modelPreviewDims}>
+                      {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus.status) ?? "Source model"}
+                    </span>
+                  )}
+                </div>
               </div>
               <div className={styles.modelPreviewViewport}>
-                {glbPath.trim() || previewModelFile || liveFlatPreview ? (
-                  <ModelViewer
-                    file={previewModelFile}
-                    modelUrl={glbPath.trim() || undefined}
-                    flatPreview={
-                      preferGeneratedFlatPreview
-                        ? liveFlatPreview
-                        : (previewModelFile ? null : liveFlatPreview)
-                    }
-                    bedWidthMm={liveFlatPreview?.widthMm}
-                    bedHeightMm={liveFlatPreview?.heightMm}
-                    tumblerDims={liveTumblerDims}
-                    handleArcDeg={handleArcDeg}
-                    glbPath={glbPath || null}
-                    tumblerMapping={tumblerMapping}
-                    bodyTintColor={productType === "flat" ? undefined : bodyColorHex}
-                    rimTintColor={productType === "flat" ? undefined : rimColorHex}
-                    manufacturerLogoStamp={productType === "flat" ? undefined : manufacturerLogoStamp}
-                  />
+                {glbPath.trim() || previewModelFile || liveFlatPreview || canUseCanonicalPreviewModel ? (
+                  <>
+                    <ModelViewer
+                      file={previewModelFile}
+                      modelUrl={glbPath.trim() || undefined}
+                      flatPreview={
+                        preferGeneratedFlatPreview
+                          ? liveFlatPreview
+                          : (previewModelFile ? null : liveFlatPreview)
+                      }
+                      bedWidthMm={liveFlatPreview?.widthMm}
+                      bedHeightMm={liveFlatPreview?.heightMm}
+                      tumblerDims={liveTumblerDims}
+                      handleArcDeg={handleArcDeg}
+                      glbPath={glbPath || null}
+                      tumblerMapping={tumblerMapping}
+                      bodyTintColor={productType === "flat" ? undefined : bodyColorHex}
+                      rimTintColor={productType === "flat" ? undefined : rimColorHex}
+                      manufacturerLogoStamp={productType === "flat" ? undefined : manufacturerLogoStamp}
+                      showTemplateSurfaceZones={true}
+                      dimensionCalibration={productType === "flat" ? undefined : activeCanonicalDimensionCalibration}
+                      canonicalBodyProfile={productType === "flat" ? undefined : activeCanonicalBodyProfile}
+                      canonicalHandleProfile={productType === "flat" ? undefined : canonicalHandleProfile}
+                      previewModelMode={previewModelMode}
+                    />
+                    {productType !== "flat" && previewModelMode === "alignment-model" && activeCanonicalBodyProfile && activeCanonicalDimensionCalibration && (
+                      <svg
+                        className={styles.modelPreviewOverlay}
+                        viewBox={`${activeCanonicalDimensionCalibration.svgFrontViewBoxMm.x} ${activeCanonicalDimensionCalibration.svgFrontViewBoxMm.y} ${activeCanonicalDimensionCalibration.svgFrontViewBoxMm.width} ${activeCanonicalDimensionCalibration.svgFrontViewBoxMm.height}`}
+                        preserveAspectRatio="xMidYMid meet"
+                        aria-hidden="true"
+                      >
+                        <path
+                          d={activeCanonicalBodyProfile.svgPath}
+                          fill="none"
+                          stroke="#38bdf8"
+                          strokeWidth={0.8}
+                          vectorEffect="non-scaling-stroke"
+                          opacity={0.92}
+                        />
+                        {alignmentLogoOverlay && (
+                          <>
+                            <rect
+                              x={alignmentLogoOverlay.centerXMm - alignmentLogoOverlay.widthMm / 2}
+                              y={alignmentLogoOverlay.centerYMm - alignmentLogoOverlay.heightMm / 2}
+                              width={alignmentLogoOverlay.widthMm}
+                              height={alignmentLogoOverlay.heightMm}
+                              fill="none"
+                              stroke={alignmentLogoOverlay.strokeColor}
+                              strokeWidth={0.8}
+                              strokeDasharray="2 1.5"
+                              vectorEffect="non-scaling-stroke"
+                              opacity={0.95}
+                            />
+                            <line
+                              x1={alignmentLogoOverlay.centerXMm}
+                              y1={alignmentLogoOverlay.centerYMm - alignmentLogoOverlay.heightMm / 2}
+                              x2={alignmentLogoOverlay.centerXMm}
+                              y2={alignmentLogoOverlay.centerYMm + alignmentLogoOverlay.heightMm / 2}
+                              stroke={alignmentLogoOverlay.strokeColor}
+                              strokeWidth={0.8}
+                              strokeDasharray="2 1.5"
+                              vectorEffect="non-scaling-stroke"
+                              opacity={0.92}
+                            />
+                            <line
+                              x1={alignmentLogoOverlay.centerXMm - alignmentLogoOverlay.widthMm / 2}
+                              y1={alignmentLogoOverlay.centerYMm}
+                              x2={alignmentLogoOverlay.centerXMm + alignmentLogoOverlay.widthMm / 2}
+                              y2={alignmentLogoOverlay.centerYMm}
+                              stroke={alignmentLogoOverlay.strokeColor}
+                              strokeWidth={0.8}
+                              strokeDasharray="2 1.5"
+                              vectorEffect="non-scaling-stroke"
+                              opacity={0.92}
+                            />
+                          </>
+                        )}
+                      </svg>
+                    )}
+                  </>
                 ) : (
                   <div className={styles.modelPreviewEmpty}>Preview unavailable</div>
                 )}
               </div>
+              {productType !== "flat" && previewModelMode === "alignment-model" && alignmentShellMismatchSummary && (
+                <div className={styles.modelPreviewDims}>
+                  Canonical silhouette QA: avg {alignmentShellMismatchSummary.averageErrorMm.toFixed(2)} mm / max {alignmentShellMismatchSummary.maxErrorMm.toFixed(2)} mm across {alignmentShellMismatchSummary.rowCount} rows
+                  {" "}
+                  {silhouetteLockPass ? "PASS" : "MISMATCH WARNING"}
+                </div>
+              )}
+              {productType !== "flat" && previewModelMode === "alignment-model" && alignmentOrientationQASummary && (
+                <div className={styles.modelPreviewDims}>
+                  Canonical orientation QA: body top {alignmentOrientationQASummary.bodyTopWorldY.toFixed(1)} &gt; body bottom {alignmentOrientationQASummary.bodyBottomWorldY.toFixed(1)}
+                  {" / "}
+                  printable {alignmentOrientationQASummary.printableTopWorldY != null && alignmentOrientationQASummary.printableBottomWorldY != null
+                    ? `${alignmentOrientationQASummary.printableTopWorldY.toFixed(1)} > ${alignmentOrientationQASummary.printableBottomWorldY.toFixed(1)}`
+                    : "pending"}
+                  {" / "}
+                  sample order {alignmentOrientationQASummary.topSampleWorldY.toFixed(1)} &gt; {alignmentOrientationQASummary.bottomSampleWorldY.toFixed(1)}
+                  {" "}
+                  {orientationLockPass ? "PASS" : "ORIENTATION WARNING"}
+                </div>
+              )}
+              {productType !== "flat" && canUseCanonicalPreviewModel && previewModelMode === "alignment-model" && (
+                <div className={styles.modelPreviewHint}>
+                  Alignment is the production-default view. Placement, wrap mapping, centerline, and snap stay pinned to canonical alignment data.
+                </div>
+              )}
+              {productType !== "flat" && canUseCanonicalPreviewModel && previewModelMode === "source-traced" && (
+                <div className={styles.modelPreviewCompareNote}>
+                  Source is compare/debug only. Placement, wrap mapping, centerline, and snap still use canonical alignment data.
+                </div>
+              )}
               {previewLoadError && (
                 <div className={styles.modelPreviewNote}>{previewLoadError}</div>
               )}
             </div>
           </div>
+        )}
+
+{productType !== "flat" && activeCanonicalDimensionCalibration && activeCanonicalBodyProfile && (
+          <>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Calibration</label>
+              <div className={styles.readOnly}>
+                {activeCanonicalDimensionCalibration.frontVisibleWidthMm} mm front width / {activeCanonicalDimensionCalibration.wrapWidthMm} mm wrap width
+              </div>
+              <span className={styles.fieldHint}>Front projection and wrap circumference stay distinct but share one mm calibration.</span>
+            </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Photo â†’ front</label>
+              <div className={styles.readOnly}>
+                {activeCanonicalDimensionCalibration.photoToFrontTransform.matrix.map((value) => value.toFixed(4)).join(", ")}
+              </div>
+            </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Front axis (px)</label>
+              <div className={styles.readOnly}>
+                {activeCanonicalDimensionCalibration.frontAxisPx.xTop.toFixed(1)}, {activeCanonicalDimensionCalibration.frontAxisPx.yTop.toFixed(1)}
+                {" â†’ "}
+                {activeCanonicalDimensionCalibration.frontAxisPx.xBottom.toFixed(1)}, {activeCanonicalDimensionCalibration.frontAxisPx.yBottom.toFixed(1)}
+              </div>
+            </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>SVG front box</label>
+              <div className={styles.readOnly}>
+                {activeCanonicalDimensionCalibration.svgFrontViewBoxMm.x.toFixed(1)},
+                {" "}
+                {activeCanonicalDimensionCalibration.svgFrontViewBoxMm.y.toFixed(1)},
+                {" "}
+                {activeCanonicalDimensionCalibration.svgFrontViewBoxMm.width.toFixed(1)} Ã— {activeCanonicalDimensionCalibration.svgFrontViewBoxMm.height.toFixed(1)} mm
+              </div>
+            </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Wrap mapping</label>
+              <div className={styles.readOnly}>
+                front {activeCanonicalDimensionCalibration.wrapMappingMm.frontMeridianMm.toFixed(1)} / back {activeCanonicalDimensionCalibration.wrapMappingMm.backMeridianMm.toFixed(1)} / GLB {activeCanonicalDimensionCalibration.glbScale.unitsPerMm.toFixed(2)} units/mm / camera body-only
+              </div>
+            </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Handle mesh</label>
+              <div className={styles.readOnly}>
+                {canonicalHandleDebugSummary
+                  ? `${canonicalHandleDebugSummary.side} / ${canonicalHandleDebugSummary.extrusionDepthMm.toFixed(2)} mm depth / ${Math.round(canonicalHandleDebugSummary.confidence * 100)}% confidence / ${canonicalHandleRenderMode}`
+                  : "Unavailable"}
+              </div>
+              <span className={styles.fieldHint}>
+                {canonicalHandleDebugSummary?.derivedFromCanonicalProfile
+                  ? canonicalHandleRenderMode === "simplified"
+                    ? "Simplified handle mesh derived from canonical anchors/opening because traced confidence is mid-range."
+                    : canonicalHandleRenderMode === "hidden"
+                      ? "Handle stays out of alignment rendering; keep-out data remains active."
+                      : "Separate symmetric extrusion from canonical handle outer/inner contours."
+                  : "No canonical handle profile available for extrusion."}
+              </span>
+            </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Handle keep-out</label>
+              <div className={styles.readOnly}>
+                {activeCanonicalDimensionCalibration.wrapMappingMm.handleKeepOutArcDeg && activeCanonicalDimensionCalibration.wrapMappingMm.handleMeridianMm != null
+                  ? `center ${activeCanonicalDimensionCalibration.wrapMappingMm.handleMeridianMm.toFixed(1)} mm / arc ${activeCanonicalDimensionCalibration.wrapMappingMm.handleKeepOutArcDeg.toFixed(1)}° / sector ${activeCanonicalDimensionCalibration.wrapMappingMm.handleKeepOutStartMm?.toFixed(1)} → ${activeCanonicalDimensionCalibration.wrapMappingMm.handleKeepOutEndMm?.toFixed(1)} mm`
+                  : "None"}
+              </div>
+              <span className={styles.fieldHint}>Wrap math stays body-only; the handle reserves an exclusion sector instead of receiving wrap artwork.</span>
+            </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Front logo</label>
+              <div className={styles.readOnly}>
+                {manufacturerLogoStamp?.logoPlacement
+                  ? `${manufacturerLogoStamp.logoPlacement.source} / θ ${((manufacturerLogoStamp.logoPlacement.thetaCenter * 180) / Math.PI).toFixed(1)}° / span ${((manufacturerLogoStamp.logoPlacement.thetaSpan * 180) / Math.PI).toFixed(1)}° / s ${manufacturerLogoStamp.logoPlacement.sCenter.toFixed(3)} / ${Math.round(manufacturerLogoStamp.logoPlacement.confidence * 100)}%`
+                  : "Not detected"}
+              </div>
+              <span className={styles.fieldHint}>Stored in canonical body-local coordinates and reused by preview, wrap preview, and guide export.</span>
+            </div>
+            {logoPlacementSurfaceStatus && (
+              <div className={styles.fieldRow}>
+                <label className={styles.fieldLabel}>Logo boundary</label>
+                <div className={styles.readOnly}>
+                  {logoPlacementSurfaceStatus.logoTopMm.toFixed(1)}–{logoPlacementSurfaceStatus.logoBottomMm.toFixed(1)} mm
+                </div>
+                <span
+                  className={`${styles.fieldHint} ${
+                    lockedProductionGeometry && logoPlacementSurfaceStatus.overlapsPrintableSurface
+                      ? styles.surfaceContractSummaryWarning
+                      : ""
+                  }`}
+                >
+                  {lockedProductionGeometry
+                    ? logoPlacementSurfaceStatus.overlapsPrintableSurface
+                      ? `Locked production warning: logo region crosses the printable ${
+                          logoPlacementSurfaceStatus.overlapsTop && logoPlacementSurfaceStatus.overlapsBottom
+                            ? "top and bottom boundaries"
+                            : logoPlacementSurfaceStatus.overlapsTop
+                              ? "top boundary"
+                              : "bottom boundary"
+                        } (${logoPlacementSurfaceStatus.printableTopMm.toFixed(1)}–${logoPlacementSurfaceStatus.printableBottomMm.toFixed(1)} mm from body top).`
+                      : `Locked production check: logo region stays inside the printable ${logoPlacementSurfaceStatus.printableTopMm.toFixed(1)}–${logoPlacementSurfaceStatus.printableBottomMm.toFixed(1)} mm band.`
+                    : `Manual geometry overrides are enabled. Printable-boundary checks remain advisory for the ${logoPlacementSurfaceStatus.printableTopMm.toFixed(1)}–${logoPlacementSurfaceStatus.printableBottomMm.toFixed(1)} mm band.`}
+                </span>
+              </div>
+            )}
+            {manufacturerLogoStamp?.logoPlacement && (
+              <div className={styles.fieldRow}>
+                <label className={styles.fieldLabel}>Logo adjust</label>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className={styles.detectBtn}
+                    onClick={() => applyLogoPlacementAdjustment((placement) => ({
+                      ...placement,
+                      thetaCenter: Math.max(-Math.PI, placement.thetaCenter - (Math.PI / 90)),
+                    }))}
+                  >
+                    θ -
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.detectBtn}
+                    onClick={() => applyLogoPlacementAdjustment((placement) => ({
+                      ...placement,
+                      thetaCenter: Math.min(Math.PI, placement.thetaCenter + (Math.PI / 90)),
+                    }))}
+                  >
+                    θ +
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.detectBtn}
+                    onClick={() => applyLogoPlacementAdjustment((placement) => ({
+                      ...placement,
+                      sCenter: Math.max(0, placement.sCenter - 0.01),
+                    }))}
+                  >
+                    s -
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.detectBtn}
+                    onClick={() => applyLogoPlacementAdjustment((placement) => ({
+                      ...placement,
+                      sCenter: Math.min(1, placement.sCenter + 0.01),
+                    }))}
+                  >
+                    s +
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.detectBtn}
+                    onClick={() => applyLogoPlacementAdjustment((placement) => ({
+                      ...placement,
+                      thetaSpan: Math.max(0.08, placement.thetaSpan - (Math.PI / 120)),
+                      sSpan: Math.max(0.02, placement.sSpan - 0.01),
+                    }))}
+                  >
+                    span -
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.detectBtn}
+                    onClick={() => applyLogoPlacementAdjustment((placement) => ({
+                      ...placement,
+                      thetaSpan: Math.min(Math.PI, placement.thetaSpan + (Math.PI / 120)),
+                      sSpan: Math.min(0.8, placement.sSpan + 0.01),
+                    }))}
+                  >
+                    span +
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.lookupResetBtn}
+                    onClick={resetManufacturerLogoStampPlacement}
+                    disabled={!detectedManufacturerLogoStamp?.logoPlacement}
+                  >
+                    Reset to detected
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.lookupResetBtn}
+                    onClick={() => applyLogoPlacementAdjustment((placement) => ({
+                      ...placement,
+                      thetaCenter: wrapTheta(placement.thetaCenter + Math.PI),
+                    }))}
+                  >
+                    Duplicate to back
+                  </button>
+                </div>
+                <span className={styles.fieldHint}>Manual nudges change the stored body-local logo region only. Reset restores the last detected placement.</span>
+              </div>
+            )}
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Locked production geometry</label>
+              <div className={styles.readOnly}>
+                wrap width authoritative: {lockedProductionGeometry ? "yes" : "no"} / derived diameter {effectiveCylinderDiameterMm.toFixed(2)} mm / derived front width {frontVisibleWidthReady ? `${derivedFrontVisibleWidthMm.toFixed(2)} mm` : "pending body calibration"} / handle excluded from alignment: yes / silhouette QA: {silhouetteLockPass ? "PASS" : "MISMATCH"} / orientation QA: {alignmentOrientationQASummary ? (orientationLockPass ? "PASS" : "WARNING") : "pending"}
+              </div>
+            </div>
+          </>
         )}
       </div>
 
@@ -3230,74 +4512,75 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>
-            {productType === "flat" ? "Template width (mm) *" : "Visible / outer diameter (mm) *"}
+            {productType === "flat" ? "Template width (mm) *" : "Front visible width (derived)"}
           </label>
-          <input
-            className={styles.numInput}
-            type="number"
-            value={productType === "flat" ? (flatWidthMm || "") : ((topOuterDiameterMm || diameterMm) || "")}
-            step={0.1}
-            onChange={(e) => {
-              const next = Number(e.target.value) || 0;
-              if (productType === "flat") {
-                setFlatWidthMm(next);
-                return;
-              }
-              setTopOuterDiameterMm(next);
-              if (diameterMm <= 0) {
-                setDiameterMm(next);
-              }
-            }}
-          />
+          {productType === "flat" ? (
+            <input
+              className={styles.numInput}
+              type="number"
+              value={flatWidthMm || ""}
+              step={0.1}
+              onChange={(e) => {
+                setFlatWidthMm(Number(e.target.value) || 0);
+              }}
+            />
+          ) : (
+            <>
+              <span className={styles.readOnly}>
+                {frontVisibleWidthReady ? `${derivedFrontVisibleWidthMm} mm` : "\u2014"}
+              </span>
+              <span className={styles.fieldHint}>
+                {frontVisibleWidthReady
+                  ? "Derived from the canonical body profile and used for body-only front alignment."
+                  : "Available after BODY REFERENCE calibration builds the canonical body profile."}
+              </span>
+            </>
+          )}
         </div>
 
         {productType && productType !== "flat" && (
           <div className={styles.fieldRow}>
-            <label className={styles.fieldLabel}>Body / wrap diameter (mm) *</label>
+            <label className={styles.fieldLabel}>Wrap width / circumference (mm) *</label>
             <input
               className={styles.numInput}
               type="number"
-              value={diameterMm || ""}
+              value={wrapWidthInputMm || ""}
               step={0.1}
               min={0}
               onChange={(e) => {
-                const next = Number(e.target.value) || 0;
-                const shouldSyncBase = baseDiameterMm <= 0 || Math.abs(baseDiameterMm - diameterMm) < 0.01;
-                setDiameterMm(next);
-                if (shouldSyncBase) setBaseDiameterMm(next);
+                setWrapWidthInputMm(Number(e.target.value) || 0);
               }}
             />
-            <span className={styles.fieldHint}>Used for wrap-width math and body-span fitting</span>
+            <span className={styles.fieldHint}>Production-authoritative width. Cylinder diameter is derived from this value using diameter = wrap width / π.</span>
           </div>
         )}
 
         {productType && productType !== "flat" && (
           <div className={styles.fieldRow}>
-            <label className={styles.fieldLabel}>Top outer diameter (mm)</label>
-            <input
-              className={styles.numInput}
-              type="number"
-              value={topOuterDiameterMm || ""}
-              step={0.1}
-              min={0}
-              onChange={(e) => setTopOuterDiameterMm(Number(e.target.value) || 0)}
-            />
-            <span className={styles.fieldHint}>Used for the lid/rim outer size and visible preview fit</span>
+            <label className={styles.fieldLabel}>Cylinder diameter (derived)</label>
+            <span className={styles.readOnly}>
+              {effectiveCylinderDiameterMm > 0 ? `${effectiveCylinderDiameterMm} mm` : "\u2014"}
+            </span>
+            <span className={styles.fieldHint}>Read-only in locked production mode. Formula: diameter = wrap width / π.</span>
           </div>
         )}
 
         {productType && productType !== "flat" && (
           <div className={styles.fieldRow}>
-            <label className={styles.fieldLabel}>Base diameter (mm)</label>
-            <input
-              className={styles.numInput}
-              type="number"
-              value={baseDiameterMm || ""}
-              step={0.1}
-              min={0}
-              onChange={(e) => setBaseDiameterMm(Number(e.target.value) || 0)}
-            />
-            <span className={styles.fieldHint}>Used for the lower foot / taper width</span>
+            <label className={styles.fieldLabel}>Locked production geometry</label>
+            <label className={styles.fieldHint}>
+              <input
+                type="checkbox"
+                checked={advancedGeometryOverridesUnlocked}
+                onChange={(e) => setAdvancedGeometryOverridesUnlocked(e.target.checked)}
+              />
+              {" "}Unlock advanced geometry overrides
+            </label>
+            <span className={styles.fieldHint}>
+              {advancedGeometryOverridesUnlocked
+                ? "Manual overrides are enabled. The template is no longer in locked production mode."
+                : "Wrap width is authoritative. Diameter and front alignment width are derived automatically."}
+            </span>
           </div>
         )}
 
@@ -3328,17 +4611,80 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         )}
 
         <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Template width</label>
+          <label className={styles.fieldLabel}>
+            {productType === "flat" ? "Template width" : "Wrap width / circumference"}
+          </label>
           <span className={styles.readOnly}>
             {templateWidthMm > 0 ? `${templateWidthMm} mm` : "\u2014"}{" "}
             <span className={styles.fieldHint}>
-              {productType === "flat" ? "(from flat width)" : "(auto-calculated)"}
+              {productType === "flat" ? "(from flat width)" : lockedProductionGeometry ? "(authoritative)" : "(derived from override diameter)"}
             </span>
           </span>
         </div>
 
         {productType && productType !== "flat" && (
           <>
+            {advancedGeometryOverridesUnlocked && (
+              <>
+                <div className={styles.fieldRow}>
+                  <label className={styles.fieldLabel}>Top outer diameter override (mm)</label>
+                  <input
+                    className={styles.numInput}
+                    type="number"
+                    value={topOuterDiameterMm || ""}
+                    step={0.1}
+                    min={0}
+                    onChange={(e) => setTopOuterDiameterMm(Number(e.target.value) || 0)}
+                  />
+                  <span className={styles.fieldHint}>Optional lid/rim outer-size override for preview and reference fitting.</span>
+                </div>
+
+                <div className={styles.fieldRow}>
+                  <label className={styles.fieldLabel}>Cylinder diameter override (mm)</label>
+                  <input
+                    className={styles.numInput}
+                    type="number"
+                    value={diameterMm || ""}
+                    step={0.1}
+                    min={0}
+                    onChange={(e) => {
+                      const next = Number(e.target.value) || 0;
+                      const shouldSyncBase = baseDiameterMm <= 0 || Math.abs(baseDiameterMm - diameterMm) < 0.01;
+                      setDiameterMm(next);
+                      if (shouldSyncBase) setBaseDiameterMm(next);
+                    }}
+                  />
+                  <span className={styles.fieldHint}>Manual override only. Locked-production consumers still derive from wrap width when overrides are disabled.</span>
+                </div>
+
+                <div className={styles.fieldRow}>
+                  <label className={styles.fieldLabel}>Base diameter (mm)</label>
+                  <input
+                    className={styles.numInput}
+                    type="number"
+                    value={baseDiameterMm || ""}
+                    step={0.1}
+                    min={0}
+                    onChange={(e) => setBaseDiameterMm(Number(e.target.value) || 0)}
+                  />
+                  <span className={styles.fieldHint}>Used for the lower foot / taper width.</span>
+                </div>
+              </>
+            )}
+
+            {hasBlockingGeometryMismatch && (
+              <div className={styles.error}>
+                Cylinder diameter override differs from wrap width by {derivedDiameterMismatchMm.toFixed(2)} mm.
+                <button
+                  type="button"
+                  className={styles.secondaryBtn}
+                  onClick={() => setDiameterMm(round2(templateWidthMm / Math.PI))}
+                >
+                  Recompute derived fields from wrap width
+                </button>
+              </div>
+            )}
+
             <div className={styles.fieldRow}>
               <label className={styles.fieldLabel}>Handle arc (&deg;)</label>
               <input
@@ -3370,9 +4716,69 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       </div>
 
       {/* ── Engravable zone editor ──────────────────────────────── */}
-      {productType && productType !== "flat" && activeReferencePhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
+      {productType && productType !== "flat" && activeReferencePhotoDataUrl && (overallHeightMm <= 0 || effectiveCylinderDiameterMm <= 0) && (
         <div className={styles.section}>
           <div className={styles.sectionTitle}>Body reference</div>
+          <div className={styles.bodyReferenceLockedNotice}>
+            Body reference stays hidden until the required dimensions are filled.
+            {overallHeightMm <= 0 && " Add overall height."}
+            {effectiveCylinderDiameterMm <= 0 && " Add wrap width / circumference."}
+          </div>
+        </div>
+      )}
+      {productType && productType !== "flat" && activeReferencePhotoDataUrl && overallHeightMm > 0 && effectiveCylinderDiameterMm > 0 && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Body reference</div>
+          {activePrintableSurfaceResolution && (
+            <div className={styles.surfaceContractSummary}>
+              <div className={styles.surfaceContractSummaryGrid}>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Printable top</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {round2(activePrintableSurfaceResolution.printableSurfaceContract.printableTopMm)} mm
+                  </div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Printable bottom</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {round2(activePrintableSurfaceResolution.printableSurfaceContract.printableBottomMm)} mm
+                  </div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Printable height</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {round2(activePrintableSurfaceResolution.printableSurfaceContract.printableHeightMm)} mm
+                  </div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Top exclusions</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {activePrintableSurfaceResolution.printableSurfaceContract.axialExclusions
+                      .filter((band) => band.kind !== "base")
+                      .map((band) => (band.kind === "rim-ring" ? "ring" : band.kind))
+                      .join(" / ") || "none"}
+                  </div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Handle keep-out</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {activePrintableSurfaceResolution.printableSurfaceContract.circumferentialExclusions.length ? "yes" : "no"}
+                  </div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Boundary source</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {activePrintableSurfaceResolution.topBoundarySource}
+                  </div>
+                </div>
+              </div>
+              <div className={`${styles.surfaceContractSummaryNote} ${activePrintableSurfaceResolution.automaticDetectionWeak ? styles.surfaceContractSummaryWarning : ""}`}>
+                {activePrintableSurfaceResolution.automaticDetectionWeak
+                  ? "Auto top-band detection is weak. Set printable top / bottom explicitly before saving production geometry."
+                  : "Axial bands only affect printable height. Wrap width and centerline stay unchanged."}
+              </div>
+            </div>
+          )}
           <EngravableZoneEditor
             photoDataUrl={activeReferencePhotoDataUrl}
             overallHeightMm={overallHeightMm}
@@ -3380,8 +4786,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             bodyBottomFromOverallMm={bodyBottomFromOverallMm}
             lidSeamFromOverallMm={lidSeamFromOverallMm}
             silverBandBottomFromOverallMm={silverBandBottomFromOverallMm}
-            diameterMm={diameterMm}
-            bodyWrapDiameterMm={diameterMm}
+            diameterMm={effectiveCylinderDiameterMm}
+            bodyWrapDiameterMm={effectiveCylinderDiameterMm}
             topOuterDiameterMm={topOuterDiameterMm}
             baseDiameterMm={baseDiameterMm}
             photoWidthScalePct={referencePhotoWidthScalePct}
@@ -3397,12 +4803,19 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             outlineProfile={bodyOutlineProfile}
             referencePaths={referencePaths}
             referenceLayerState={referenceLayerState}
+            dimensionCalibration={activeCanonicalDimensionCalibration ?? undefined}
+            printableSurfaceContract={activePrintableSurfaceResolution?.printableSurfaceContract ?? null}
+            printableTopOverrideMm={printableTopOverrideMm}
+            printableBottomOverrideMm={printableBottomOverrideMm}
             onChange={(bodyTop, bodyBottom) => {
               setBodyTopFromOverallMm(bodyTop);
               setBodyBottomFromOverallMm(bodyBottom);
             }}
             onLidSeamChange={setLidSeamFromOverallMm}
             onSilverBandBottomChange={setSilverBandBottomFromOverallMm}
+            onPrintableTopOverrideChange={setPrintableTopOverrideMm}
+            onPrintableBottomOverrideChange={setPrintableBottomOverrideMm}
+            onPrintableSurfaceDetectionChange={setPrintableSurfaceDetection}
             handleTopFromOverallMm={handleTopFromOverallMm}
             handleBottomFromOverallMm={handleBottomFromOverallMm}
             handleReachMm={handleReachMm}
@@ -3426,7 +4839,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             onPhotoCenterModeChange={setReferencePhotoCenterMode}
             onColorsChange={handleAutoSampleColors}
             onDiameterChange={(nextDiameter) => {
-              setDiameterMm(round2(nextDiameter));
+              if (advancedGeometryOverridesUnlocked) {
+                setDiameterMm(round2(nextDiameter));
+                return;
+              }
+              setWrapWidthInputMm(round2(Math.PI * nextDiameter));
             }}
             onTopOuterDiameterChange={(nextDiameter) => {
               setTopOuterDiameterMm(round2(nextDiameter));
@@ -3447,7 +4864,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 setBodyBottomFromOverallMm(round2(derived.bodyBottomFromOverallMm));
               }
               if (typeof derived.diameterMm === "number") {
-                setDiameterMm(round2(derived.diameterMm));
+                if (advancedGeometryOverridesUnlocked) {
+                  setDiameterMm(round2(derived.diameterMm));
+                }
               }
               if (typeof derived.topOuterDiameterMm === "number") {
                 setTopOuterDiameterMm(round2(derived.topOuterDiameterMm));
@@ -3576,7 +4995,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       {showMappingWizard && glbPath && productType && productType !== "flat" && (
         <TumblerMappingWizard
           glbPath={glbPath}
-          diameterMm={diameterMm}
+          diameterMm={effectiveCylinderDiameterMm}
           printHeightMm={printHeightMm}
           productType={productType}
           existingMapping={tumblerMapping}
@@ -3592,5 +5011,3 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     </div>
   );
 });
-
-

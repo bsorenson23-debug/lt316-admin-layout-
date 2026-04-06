@@ -62,6 +62,8 @@ export function computeAlignmentPatch(
     engravableZone?.handleCenterX ??
     getWrapHandleCenter(bedConfig.width) ??
     (bedConfig.width / 2);
+  const safeCenterY = engravableZone ? engravableZone.y + engravableZone.height / 2 : bedConfig.height / 2;
+  const safeUpperY = engravableZone ? engravableZone.y + engravableZone.height * 0.35 : bedConfig.height * 0.35;
 
   if (mode === "fit-bed") {
     const fitX = safeDiv(bedConfig.width, artwork.width);
@@ -142,25 +144,25 @@ export function computeAlignmentPatch(
   // Tumbler-wrap: place opposite logo (back face at w * 1/4), upper third
   if (mode === "opposite-logo") {
     nextX += backCenterX - artworkCenterX;
-    nextY += bedConfig.height * 0.35 - artworkCenterY;
+    nextY += safeUpperY - artworkCenterY;
   }
 
   // Tumbler-wrap: center artwork on the FRONT face (w * 3/4)
   if (mode === "center-on-front") {
     nextX += frontCenterX - artworkCenterX;
-    nextY += bedConfig.height / 2 - artworkCenterY;
+    nextY += safeCenterY - artworkCenterY;
   }
 
     // Tumbler-wrap: right of handle — 15% offset right of handle center
     if (mode === "right-of-handle") {
     nextX += (handleCenterX + bedConfig.width * 0.08) - artworkCenterX;
-      nextY += bedConfig.height / 2 - artworkCenterY;
+      nextY += safeCenterY - artworkCenterY;
     }
 
     // Tumbler-wrap: left of handle — 15% offset left of handle center
     if (mode === "left-of-handle") {
     nextX += (handleCenterX - bedConfig.width * 0.08) - artworkCenterX;
-      nextY += bedConfig.height / 2 - artworkCenterY;
+      nextY += safeCenterY - artworkCenterY;
     }
 
   // Tumbler-wrap: fill engravable zone if available, otherwise full bed
@@ -182,7 +184,7 @@ export function computeAlignmentPatch(
   // Tumbler-wrap: back side — centered on back face (w / 4)
   if (mode === "back-side") {
     nextX += backCenterX - artworkCenterX;
-    nextY += bedConfig.height / 2 - artworkCenterY;
+    nextY += safeCenterY - artworkCenterY;
   }
 
   return { x: nextX, y: nextY };

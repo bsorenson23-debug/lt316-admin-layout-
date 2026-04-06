@@ -738,7 +738,7 @@ export function LaserBedWorkspace({
   }, [pan, zoom, bedOffsetX, bedOffsetY, basePxPerMm]);
 
   // ── Click on bed ──────────────────────────────────────────────────────────
-  const handleBedClick = useCallback((_e: KonvaEventObject<MouseEvent>) => {
+  const handleBedClick = useCallback(() => {
     if (isPanningRef.current) return;
     const stage = stageRef.current;
     if (!stage) return;
@@ -747,8 +747,8 @@ export function LaserBedWorkspace({
     let { x: xMm, y: yMm } = pointerToBedMm(pointer);
     if (showTwoSidedCrosshairs) {
       // Snap to FRONT (center) if click is within 20% of bed width
-      const frontX = getWrapFrontCenter(bedConfig.width, handleArcDeg);
-      const centerY = bedConfig.height / 2;
+      const frontX = engravableZone?.frontCenterX ?? getWrapFrontCenter(bedConfig.width, handleArcDeg);
+      const centerY = engravableZone ? engravableZone.y + engravableZone.height / 2 : bedConfig.height / 2;
       const snapR = bedConfig.width * 0.20;
       if (Math.hypot(xMm - frontX, yMm - centerY) <= snapR) {
         xMm = frontX;
@@ -756,7 +756,7 @@ export function LaserBedWorkspace({
       }
     }
     onPlaceAsset(xMm, yMm);
-  }, [isPlacementArmed, placementAsset, pointerToBedMm, onPlaceAsset, onSelectItem, showTwoSidedCrosshairs, bedConfig, handleArcDeg]);
+  }, [isPlacementArmed, placementAsset, pointerToBedMm, onPlaceAsset, onSelectItem, showTwoSidedCrosshairs, bedConfig, handleArcDeg, engravableZone]);
 
   // ── Grid lines ────────────────────────────────────────────────────────────
   const gridLines = useMemo(() => {
@@ -818,7 +818,7 @@ export function LaserBedWorkspace({
       }
     }
     return els;
-  }, [bedConfig.gridSpacing, bedConfig.width, bedConfig.height, basePxPerMm, bedPxW, bedPxH, showTwoSidedCrosshairs]);
+  }, [bedConfig.gridSpacing, bedConfig.width, bedConfig.height, basePxPerMm, bedPxH, showTwoSidedCrosshairs]);
 
   // ── Tumbler guides ────────────────────────────────────────────────────────
   const showGuideBands = shouldRenderTumblerGuideBand(bedConfig);
@@ -884,13 +884,110 @@ export function LaserBedWorkspace({
     if (!showTwoSidedCrosshairs) return null;
     const wrapW = bedConfig.width;
     const layout = getTumblerWrapLayout(handleArcDeg);
-    const handleCenterXPx = layout.handleCenterRatio == null ? null : (wrapW * layout.handleCenterRatio) * basePxPerMm;
-    const frontXPx = (wrapW * layout.frontCenterRatio) * basePxPerMm;
-    const backXPx = layout.backCenterRatio == null ? null : (wrapW * layout.backCenterRatio) * basePxPerMm;
+    const frontXPx = (engravableZone?.frontCenterX ?? (wrapW * layout.frontCenterRatio)) * basePxPerMm;
+    const backXPx = engravableZone?.backCenterX != null
+      ? engravableZone.backCenterX * basePxPerMm
+      : (layout.backCenterRatio == null ? null : (wrapW * layout.backCenterRatio) * basePxPerMm);
+    const leftQuarterXPx = engravableZone?.leftQuarterX != null ? engravableZone.leftQuarterX * basePxPerMm : null;
+    const rightQuarterXPx = engravableZone?.rightQuarterX != null ? engravableZone.rightQuarterX * basePxPerMm : null;
+    const handleCenterXPx = engravableZone?.handleCenterX != null
+      ? engravableZone.handleCenterX * basePxPerMm
+      : (layout.handleCenterRatio == null ? null : (wrapW * layout.handleCenterRatio) * basePxPerMm);
+    const keepOutStartXPx = engravableZone?.handleKeepOutStartX != null ? engravableZone.handleKeepOutStartX * basePxPerMm : null;
+    const keepOutEndXPx = engravableZone?.handleKeepOutEndX != null ? engravableZone.handleKeepOutEndX * basePxPerMm : null;
+    const keepOutWraps = Boolean(engravableZone?.handleKeepOutWraps);
+    const logoCenterXPx = engravableZone?.logoCenterX != null ? engravableZone.logoCenterX * basePxPerMm : null;
+    const logoCenterYPx = engravableZone?.logoCenterY != null ? engravableZone.logoCenterY * basePxPerMm : null;
+    const logoWidthPx = engravableZone?.logoWidth != null ? engravableZone.logoWidth * basePxPerMm : null;
+    const logoHeightPx = engravableZone?.logoHeight != null ? engravableZone.logoHeight * basePxPerMm : null;
+    const logoWraps = Boolean(engravableZone?.logoWraps);
+    const logoConfidence = engravableZone?.logoConfidence ?? null;
+    const printableTopYPx = engravableZone?.printableTopY != null ? engravableZone.printableTopY * basePxPerMm : null;
+    const printableBottomYPx = engravableZone?.printableBottomY != null ? engravableZone.printableBottomY * basePxPerMm : null;
+    const lidBoundaryYPx = engravableZone?.lidBoundaryY != null ? engravableZone.lidBoundaryY * basePxPerMm : null;
+    const rimBoundaryYPx = engravableZone?.rimBoundaryY != null ? engravableZone.rimBoundaryY * basePxPerMm : null;
 
     return (
       <Group listening={false}>
+        <Text
+          x={8}
+          y={6}
+          text="Body-only wrap space"
+          fontSize={9}
+          fontFamily="system-ui, sans-serif"
+          fill="rgba(200,220,255,0.5)"
+        />
+        {keepOutStartXPx != null && keepOutEndXPx != null && (
+          <>
+            {keepOutWraps ? (
+              <>
+                <Rect x={0} y={0} width={keepOutEndXPx} height={bedPxH} fill="rgba(217,107,95,0.12)" />
+                <Rect x={keepOutStartXPx} y={0} width={Math.max(0, bedPxW - keepOutStartXPx)} height={bedPxH} fill="rgba(217,107,95,0.12)" />
+              </>
+            ) : (
+              <Rect
+                x={Math.min(keepOutStartXPx, keepOutEndXPx)}
+                y={0}
+                width={Math.abs(keepOutEndXPx - keepOutStartXPx)}
+                height={bedPxH}
+                fill="rgba(217,107,95,0.12)"
+              />
+            )}
+          </>
+        )}
         {/* ── HANDLE CENTER LINE — orange dashed at grid center ── */}
+        {printableTopYPx != null && (
+          <>
+            <Line
+              points={[0, printableTopYPx, bedPxW, printableTopYPx]}
+              stroke="rgba(32,201,151,0.82)"
+              strokeWidth={1.5}
+              dash={[10, 4]}
+            />
+            <Text
+              x={8}
+              y={Math.max(6, printableTopYPx - 14)}
+              text="printable top"
+              fontSize={9}
+              fontFamily="system-ui, sans-serif"
+              fill="rgba(32,201,151,0.88)"
+            />
+          </>
+        )}
+        {printableBottomYPx != null && (
+          <>
+            <Line
+              points={[0, printableBottomYPx, bedPxW, printableBottomYPx]}
+              stroke="rgba(32,201,151,0.82)"
+              strokeWidth={1.5}
+              dash={[10, 4]}
+            />
+            <Text
+              x={8}
+              y={Math.max(6, printableBottomYPx - 14)}
+              text="printable bottom"
+              fontSize={9}
+              fontFamily="system-ui, sans-serif"
+              fill="rgba(32,201,151,0.88)"
+            />
+          </>
+        )}
+        {lidBoundaryYPx != null && (
+          <Line
+            points={[0, lidBoundaryYPx, bedPxW, lidBoundaryYPx]}
+            stroke="rgba(240,193,93,0.62)"
+            strokeWidth={1}
+            dash={[4, 4]}
+          />
+        )}
+        {rimBoundaryYPx != null && (
+          <Line
+            points={[0, rimBoundaryYPx, bedPxW, rimBoundaryYPx]}
+            stroke="rgba(240,193,93,0.78)"
+            strokeWidth={1}
+            dash={[6, 4]}
+          />
+        )}
         {handleCenterXPx != null && (
           <>
             <Line
@@ -964,6 +1061,97 @@ export function LaserBedWorkspace({
         )}
 
         {/* ── Seam lines — both edges (wrap start/end) ── */}
+        {leftQuarterXPx != null && (
+          <Line
+            points={[leftQuarterXPx, 0, leftQuarterXPx, bedPxH]}
+            stroke="rgba(255,255,255,0.12)"
+            strokeWidth={1}
+            dash={[4, 6]}
+          />
+        )}
+        {rightQuarterXPx != null && (
+          <Line
+            points={[rightQuarterXPx, 0, rightQuarterXPx, bedPxH]}
+            stroke="rgba(255,255,255,0.12)"
+            strokeWidth={1}
+            dash={[4, 6]}
+          />
+        )}
+        {keepOutStartXPx != null && (
+          <Line
+            points={[keepOutStartXPx, 0, keepOutStartXPx, bedPxH]}
+            stroke="rgba(217,107,95,0.75)"
+            strokeWidth={1.5}
+            dash={[8, 5]}
+          />
+        )}
+        {keepOutEndXPx != null && (
+          <Line
+            points={[keepOutEndXPx, 0, keepOutEndXPx, bedPxH]}
+            stroke="rgba(217,107,95,0.75)"
+            strokeWidth={1.5}
+            dash={[8, 5]}
+          />
+        )}
+        {logoCenterXPx != null && logoCenterYPx != null && logoWidthPx != null && logoHeightPx != null && (
+          <>
+            {logoWraps ? (
+              <>
+                <Rect
+                  x={0}
+                  y={Math.max(0, logoCenterYPx - logoHeightPx / 2)}
+                  width={Math.max(0, logoCenterXPx + logoWidthPx / 2)}
+                  height={logoHeightPx}
+                  stroke="rgba(52,199,89,0.78)"
+                  strokeWidth={1.5}
+                  dash={[6, 4]}
+                />
+                <Rect
+                  x={Math.max(0, logoCenterXPx - logoWidthPx / 2)}
+                  y={Math.max(0, logoCenterYPx - logoHeightPx / 2)}
+                  width={Math.max(0, bedPxW - Math.max(0, logoCenterXPx - logoWidthPx / 2))}
+                  height={logoHeightPx}
+                  stroke="rgba(52,199,89,0.78)"
+                  strokeWidth={1.5}
+                  dash={[6, 4]}
+                />
+              </>
+            ) : (
+              <Rect
+                x={logoCenterXPx - logoWidthPx / 2}
+                y={logoCenterYPx - logoHeightPx / 2}
+                width={logoWidthPx}
+                height={logoHeightPx}
+                stroke="rgba(52,199,89,0.78)"
+                strokeWidth={1.5}
+                dash={[6, 4]}
+              />
+            )}
+            <Line
+              points={[logoCenterXPx, Math.max(0, logoCenterYPx - logoHeightPx / 2), logoCenterXPx, Math.min(bedPxH, logoCenterYPx + logoHeightPx / 2)]}
+              stroke="rgba(52,199,89,0.72)"
+              strokeWidth={1.2}
+              dash={[4, 4]}
+            />
+            <Line
+              points={[Math.max(0, logoCenterXPx - logoWidthPx / 2), logoCenterYPx, Math.min(bedPxW, logoCenterXPx + logoWidthPx / 2), logoCenterYPx]}
+              stroke="rgba(52,199,89,0.72)"
+              strokeWidth={1.2}
+              dash={[4, 4]}
+            />
+            <Text
+              x={logoCenterXPx - 60}
+              y={Math.max(8, logoCenterYPx - logoHeightPx / 2 - 14)}
+              text={`logo ${Math.round((logoConfidence ?? 0) * 100)}%`}
+              fontSize={9}
+              fontFamily="system-ui, sans-serif"
+              fill="rgba(52,199,89,0.8)"
+              width={120}
+              align="center"
+            />
+          </>
+        )}
+
         <Line
           points={[0, 0, 0, bedPxH]}
           stroke="rgba(255,255,255,0.15)"
@@ -990,7 +1178,7 @@ export function LaserBedWorkspace({
           fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.35)" width={64} align="right" />
       </Group>
     );
-  }, [showTwoSidedCrosshairs, bedConfig.width, bedPxW, bedPxH, basePxPerMm, handleArcDeg]);
+  }, [showTwoSidedCrosshairs, bedConfig.width, bedPxW, bedPxH, basePxPerMm, handleArcDeg, engravableZone]);
 
   // ── BedMockup position calc ───────────────────────────────────────────────
   const mockupImageProps = useMemo(() => {

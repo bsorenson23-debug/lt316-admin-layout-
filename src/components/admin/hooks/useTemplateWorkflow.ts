@@ -5,6 +5,7 @@ import type { ProductTemplate } from "@/types/productTemplate";
 import type { ActiveMaterialSettings } from "../MaterialProfilePanel";
 import type { BedMockupConfig, FlatBedItemOverlay } from "../LaserBedWorkspace";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
+import { getPrintableSurfaceResolutionFromDimensions } from "@/lib/printableSurface";
 import { updateTemplate } from "@/lib/templateStorage";
 import { getTumblerWrapLayout } from "@/utils/tumblerWrapLayout";
 
@@ -29,6 +30,7 @@ interface TemplateWorkflowParams {
   setBgRemovalStatus: Dispatch<SetStateAction<BgRemovalStatus>>;
   setEngravableZone: Dispatch<SetStateAction<import("@/types/admin").EngravableZone | null>>;
   setToastMessage: Dispatch<SetStateAction<string | null>>;
+  bumpModelViewerResetKey: () => void;
   buildMaterialSettings: BuildMaterialSettings;
 }
 
@@ -49,6 +51,7 @@ export function useTemplateWorkflow({
   setBgRemovalStatus,
   setEngravableZone,
   setToastMessage,
+  bumpModelViewerResetKey,
   buildMaterialSettings,
 }: TemplateWorkflowParams) {
   const handleMaterialProfileSelection = useCallback((profileId: string) => {
@@ -61,6 +64,17 @@ export function useTemplateWorkflow({
     const isRotary = template.productType === "tumbler" || template.productType === "mug" || template.productType === "bottle";
     const mode: WorkspaceMode = isRotary ? "tumbler-wrap" : "flat-bed";
     const dims = isRotary ? getEngravableDimensions(template) : null;
+    const printableSurface = isRotary
+      ? getPrintableSurfaceResolutionFromDimensions(
+          template.dimensions,
+          template.dimensions.canonicalDimensionCalibration,
+        )
+      : null;
+    const workspaceHeightMm = dims?.engravableHeightMm ?? template.dimensions.printHeightMm;
+    const usableHeightMm =
+      dims?.printableHeightMm ??
+      printableSurface?.printableSurfaceContract.printableHeightMm ??
+      workspaceHeightMm;
     const materialProfileId = template.laserSettings.materialProfileId ?? "";
     const rotaryPresetId = template.laserSettings.rotaryPresetId ?? "";
 
@@ -69,16 +83,16 @@ export function useTemplateWorkflow({
         ...prev,
         workspaceMode: mode,
         tumblerDiameterMm: template.dimensions.diameterMm,
-        tumblerPrintableHeightMm: dims?.engravableHeightMm ?? template.dimensions.printHeightMm,
+        tumblerPrintableHeightMm: workspaceHeightMm,
         tumblerTemplateWidthMm: template.dimensions.templateWidthMm,
-        tumblerTemplateHeightMm: dims?.engravableHeightMm ?? template.dimensions.printHeightMm,
+        tumblerTemplateHeightMm: workspaceHeightMm,
         tumblerOverallHeightMm:
           template.dimensions.overallHeightMm ??
           dims?.totalHeightMm,
         ...(isRotary
           ? {
               tumblerOutsideDiameterMm: template.dimensions.diameterMm,
-              tumblerUsableHeightMm: dims?.engravableHeightMm ?? template.dimensions.printHeightMm,
+              tumblerUsableHeightMm: usableHeightMm,
             }
           : {
               flatWidth: template.dimensions.templateWidthMm,
@@ -90,6 +104,7 @@ export function useTemplateWorkflow({
     handleMaterialProfileSelection(materialProfileId);
     setSelectedRotaryPresetId(rotaryPresetId);
     setRotaryAutoPlacementEnabled(isRotary && Boolean(rotaryPresetId));
+    bumpModelViewerResetKey();
     setSelectedTemplate(template);
     setMockupConfig(null);
     setFlatBedItemOverlay(null);
@@ -100,10 +115,11 @@ export function useTemplateWorkflow({
     // Compute engravable safe zone for rotary products.
     if (isRotary) {
       const fullWrapW = dims?.circumferenceMm ?? template.dimensions.templateWidthMm;
+      const wrapMapping = template.dimensions.canonicalDimensionCalibration?.wrapMappingMm;
       const layout = getTumblerWrapLayout(template.dimensions.handleArcDeg);
-      const frontCenterX = fullWrapW * layout.frontCenterRatio;
-      const backCenterX = layout.backCenterRatio == null ? null : fullWrapW * layout.backCenterRatio;
-      const handleCenterX = layout.handleCenterRatio == null ? null : fullWrapW * layout.handleCenterRatio;
+      const frontCenterX = wrapMapping?.frontMeridianMm ?? (fullWrapW * layout.frontCenterRatio);
+      const backCenterX = wrapMapping?.backMeridianMm ?? (layout.backCenterRatio == null ? null : fullWrapW * layout.backCenterRatio);
+      const handleCenterX = wrapMapping?.handleMeridianMm ?? (layout.handleCenterRatio == null ? null : fullWrapW * layout.handleCenterRatio);
 
       let zoneW = Math.max(0, Math.min(dims?.printableWidthMm ?? fullWrapW, fullWrapW));
       if (zoneW <= 0) zoneW = fullWrapW;
@@ -112,16 +128,42 @@ export function useTemplateWorkflow({
         zoneX = 0;
         zoneW = fullWrapW;
       }
-
-      const zoneY = 0;
-      const zoneH = Math.min(dims?.engravableHeightMm ?? template.dimensions.printHeightMm, template.dimensions.printHeightMm);
-      setEngravableZone({ x: zoneX, y: zoneY, width: zoneW, height: zoneH, frontCenterX, backCenterX, handleCenterX });
+      const bodyTopMm = template.dimensions.bodyTopFromOverallMm ??
+        template.dimensions.canonicalDimensionCalibration?.lidBodyLineMm ??
+        0;
+      const lidBoundaryY = printableSurface?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "lid")?.endMm;
+      const rimBoundaryY = printableSurface?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "rim-ring")?.endMm;
+      const zoneY = dims?.printableTopFromBodyTopMm ?? 0;
+      const zoneH = dims?.printableHeightMm ?? Math.min(dims?.engravableHeightMm ?? template.dimensions.printHeightMm, template.dimensions.printHeightMm);
+      setEngravableZone({
+        x: zoneX,
+        y: zoneY,
+        width: zoneW,
+        height: zoneH,
+        printableTopY: zoneY,
+        printableBottomY: (dims?.printableBottomFromBodyTopMm ?? (zoneY + zoneH)),
+        lidBoundaryY: lidBoundaryY != null ? Math.max(0, lidBoundaryY - bodyTopMm) : null,
+        rimBoundaryY: rimBoundaryY != null ? Math.max(0, rimBoundaryY - bodyTopMm) : null,
+        printableDetectionWeak: dims?.automaticPrintableDetectionWeak,
+        frontCenterX,
+        backCenterX,
+        leftQuarterX: wrapMapping?.leftQuarterMm ?? null,
+        rightQuarterX: wrapMapping?.rightQuarterMm ?? null,
+        handleCenterX,
+        handleKeepOutStartX: wrapMapping?.handleKeepOutStartMm ?? null,
+        handleKeepOutEndX: wrapMapping?.handleKeepOutEndMm ?? null,
+        handleKeepOutWraps:
+          wrapMapping?.handleKeepOutStartMm != null &&
+          wrapMapping?.handleKeepOutEndMm != null &&
+          wrapMapping.handleKeepOutStartMm > wrapMapping.handleKeepOutEndMm,
+      });
     } else {
       setEngravableZone(null);
     }
 
     setToastMessage(`${template.name} loaded. Place your artwork.`);
   }, [
+    bumpModelViewerResetKey,
     handleMaterialProfileSelection,
     normalizeBedConfig,
     setBedConfig,

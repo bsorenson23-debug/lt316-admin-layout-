@@ -3,14 +3,20 @@ import assert from "node:assert/strict";
 import { DEFAULT_BED_CONFIG } from "../types/admin.ts";
 import type { RotaryPlacementPreset } from "../types/export.ts";
 import {
+  buildLightBurnAlignmentGuidePayload,
   buildLightBurnExportArtifacts,
   buildLightBurnExportPayload,
   buildLightBurnSetupSummary,
+  collectHandleKeepOutWarnings,
+  collectLogoPrintableSurfaceWarnings,
+  collectPrintableSurfaceWarnings,
   buildLt316Sidecar,
+  collectLogoKeepOutWarnings,
   getLightBurnExportOrigin,
   getRecommendedCircumference,
   getRecommendedRotaryDiameter,
   getRotaryExportOrigin,
+  mapLogoPlacementToWrapRegion,
 } from "./tumblerExportPlacement.ts";
 
 const PRESET: RotaryPlacementPreset = {
@@ -290,4 +296,300 @@ test("setup summary includes required compact fields", () => {
   assert.match(summary, /Rotary mode: chuck/);
   assert.match(summary, /Origin X: 118\.20 mm/);
   assert.match(summary, /Origin Y: 32\.00 mm/);
+});
+
+test("alignment guide payload uses canonical wrap mapping", () => {
+  const guidePayload = buildLightBurnAlignmentGuidePayload({
+    workspaceMode: "tumbler-wrap",
+    templateWidthMm: 345.58,
+    templateHeightMm: 240,
+    calibration: {
+      units: "mm",
+      totalHeightMm: 297,
+      bodyHeightMm: 240,
+      lidBodyLineMm: 30,
+      bodyBottomMm: 270,
+      wrapDiameterMm: 110,
+      baseDiameterMm: 78.7,
+      wrapWidthMm: 345.58,
+      frontVisibleWidthMm: 110,
+      frontAxisPx: { xTop: 120, yTop: 10, xBottom: 120, yBottom: 260 },
+      photoToFrontTransform: { type: "affine", matrix: [1, 0, 0, 0, 1, 0] },
+      svgFrontViewBoxMm: { x: -55, y: 0, width: 110, height: 297 },
+      wrapMappingMm: {
+        frontMeridianMm: 259.19,
+        backMeridianMm: 86.4,
+        leftQuarterMm: 172.79,
+        rightQuarterMm: 345.58 * 0.0,
+        handleMeridianMm: 86.4,
+        handleKeepOutArcDeg: 90,
+        handleKeepOutWidthMm: 86.4,
+        handleKeepOutStartMm: 43.2,
+        handleKeepOutEndMm: 129.6,
+      },
+      printableSurfaceContract: {
+        printableTopMm: 48,
+        printableBottomMm: 258,
+        printableHeightMm: 210,
+        axialExclusions: [
+          { kind: "lid", startMm: 0, endMm: 36 },
+          { kind: "rim-ring", startMm: 36, endMm: 48 },
+        ],
+        circumferentialExclusions: [
+          { kind: "handle", startMm: 43.2, endMm: 129.6, wraps: false },
+        ],
+      },
+      axialSurfaceBands: [
+        { id: "lid-1", kind: "lid", sStart: 0, sEnd: 0.12, printable: false, confidence: 0.9 },
+        { id: "rim-1", kind: "rim-ring", sStart: 0.12, sEnd: 0.16, printable: false, confidence: 0.9 },
+      ],
+      glbScale: { unitsPerMm: 1 },
+    },
+  });
+
+  assert.ok(guidePayload);
+  assert.equal(guidePayload?.lines.find((line) => line.kind === "front-meridian")?.xMm, 259.19);
+  assert.equal(guidePayload?.keepOutRegion?.startMm, 43.2);
+  assert.equal(guidePayload?.lines.find((line) => line.kind === "printable-top")?.orientation, "horizontal");
+  assert.equal(guidePayload?.lines.find((line) => line.kind === "printable-top")?.yMm, 18);
+  assert.equal(guidePayload?.lines.find((line) => line.kind === "printable-bottom")?.yMm, 228);
+  assert.equal(guidePayload?.bodyOnlyWrapSpace, true);
+  assert.equal(guidePayload?.wrapWidthAuthoritative, true);
+});
+
+test("logo placement maps from canonical theta/s into wrap coordinates", () => {
+  const logoRegion = mapLogoPlacementToWrapRegion({
+    templateWidthMm: 345.58,
+    templateHeightMm: 240,
+    calibration: {
+      units: "mm",
+      totalHeightMm: 297,
+      bodyHeightMm: 240,
+      lidBodyLineMm: 30,
+      bodyBottomMm: 270,
+      wrapDiameterMm: 110,
+      baseDiameterMm: 78.7,
+      wrapWidthMm: 345.58,
+      frontVisibleWidthMm: 110,
+      frontAxisPx: { xTop: 120, yTop: 10, xBottom: 120, yBottom: 260 },
+      photoToFrontTransform: { type: "affine", matrix: [1, 0, 0, 0, 1, 0] },
+      svgFrontViewBoxMm: { x: -55, y: 0, width: 110, height: 297 },
+      wrapMappingMm: {
+        frontMeridianMm: 259.19,
+        backMeridianMm: 86.4,
+        leftQuarterMm: 172.79,
+        rightQuarterMm: 0,
+        handleMeridianMm: 86.4,
+        handleKeepOutArcDeg: 90,
+        handleKeepOutWidthMm: 86.4,
+        handleKeepOutStartMm: 43.2,
+        handleKeepOutEndMm: 129.6,
+      },
+      glbScale: { unitsPerMm: 1 },
+    },
+    stamp: {
+      dataUrl: "data:image/png;base64,abc",
+      source: "front-photo",
+      placement: {
+        offsetXMm: 0,
+        centerYFromTopMm: 100,
+        widthMm: 30,
+        heightMm: 20,
+      },
+      logoPlacement: {
+        source: "uploaded-image",
+        thetaCenter: 0,
+        thetaSpan: 0.4,
+        sCenter: 0.35,
+        sSpan: 0.12,
+        confidence: 0.91,
+      },
+      orientationLandmarks: {
+        thetaFront: 0,
+        thetaBack: Math.PI,
+        confidence: 0.8,
+      },
+    },
+  });
+
+  assert.ok(logoRegion);
+  assert.equal(logoRegion?.centerXMm, 259.19);
+  assert.equal(logoRegion?.centerYMm, 84);
+  assert.equal(logoRegion?.source, "uploaded-image");
+});
+
+test("locked production export warns when artwork crosses handle keep-out sector", () => {
+  const warnings = collectHandleKeepOutWarnings({
+    wrapWidthMm: 345.58,
+    lockedProductionGeometry: true,
+    calibration: {
+      units: "mm",
+      totalHeightMm: 297,
+      bodyHeightMm: 240,
+      lidBodyLineMm: 30,
+      bodyBottomMm: 270,
+      wrapDiameterMm: 110,
+      baseDiameterMm: 78.7,
+      wrapWidthMm: 345.58,
+      frontVisibleWidthMm: 110,
+      frontAxisPx: { xTop: 120, yTop: 10, xBottom: 120, yBottom: 260 },
+      photoToFrontTransform: { type: "affine", matrix: [1, 0, 0, 0, 1, 0] },
+      svgFrontViewBoxMm: { x: -55, y: 0, width: 110, height: 297 },
+      wrapMappingMm: {
+        frontMeridianMm: 259.19,
+        backMeridianMm: 86.4,
+        leftQuarterMm: 172.79,
+        rightQuarterMm: 0,
+        handleMeridianMm: 86.4,
+        handleKeepOutArcDeg: 90,
+        handleKeepOutWidthMm: 86.4,
+        handleKeepOutStartMm: 43.2,
+        handleKeepOutEndMm: 129.6,
+      },
+      glbScale: { unitsPerMm: 1 },
+    },
+    items: [
+      { id: "a", name: "Logo", x: 60, width: 40 },
+    ],
+  });
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /crosses the handle keep-out sector/i);
+});
+
+test("locked production export warns when canonical logo crosses handle keep-out sector", () => {
+  const warnings = collectLogoKeepOutWarnings({
+    wrapWidthMm: 345.58,
+    lockedProductionGeometry: true,
+    calibration: {
+      units: "mm",
+      totalHeightMm: 297,
+      bodyHeightMm: 240,
+      lidBodyLineMm: 30,
+      bodyBottomMm: 270,
+      wrapDiameterMm: 110,
+      baseDiameterMm: 78.7,
+      wrapWidthMm: 345.58,
+      frontVisibleWidthMm: 110,
+      frontAxisPx: { xTop: 120, yTop: 10, xBottom: 120, yBottom: 260 },
+      photoToFrontTransform: { type: "affine", matrix: [1, 0, 0, 0, 1, 0] },
+      svgFrontViewBoxMm: { x: -55, y: 0, width: 110, height: 297 },
+      wrapMappingMm: {
+        frontMeridianMm: 259.19,
+        backMeridianMm: 86.4,
+        leftQuarterMm: 172.79,
+        rightQuarterMm: 0,
+        handleMeridianMm: 86.4,
+        handleKeepOutArcDeg: 90,
+        handleKeepOutWidthMm: 86.4,
+        handleKeepOutStartMm: 43.2,
+        handleKeepOutEndMm: 129.6,
+      },
+      glbScale: { unitsPerMm: 1 },
+    },
+    logoRegion: {
+      label: "Front logo region",
+      centerXMm: 86.4,
+      centerYMm: 96,
+      widthMm: 40,
+      heightMm: 22,
+      wrapsAround: false,
+      source: "uploaded-image",
+      confidence: 0.85,
+    },
+  });
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /logo region overlaps the handle keep-out sector/i);
+});
+
+test("locked production export warns when artwork crosses printable top or bottom boundaries", () => {
+  const calibration = {
+    units: "mm" as const,
+    totalHeightMm: 297,
+    bodyHeightMm: 240,
+    lidBodyLineMm: 30,
+    bodyBottomMm: 270,
+    wrapDiameterMm: 110,
+    baseDiameterMm: 78.7,
+    wrapWidthMm: 345.58,
+    frontVisibleWidthMm: 110,
+    frontAxisPx: { xTop: 120, yTop: 10, xBottom: 120, yBottom: 260 },
+    photoToFrontTransform: { type: "affine" as const, matrix: [1, 0, 0, 0, 1, 0] },
+    svgFrontViewBoxMm: { x: -55, y: 0, width: 110, height: 297 },
+    wrapMappingMm: {
+      frontMeridianMm: 259.19,
+      backMeridianMm: 86.4,
+      leftQuarterMm: 172.79,
+      rightQuarterMm: 0,
+    },
+    glbScale: { unitsPerMm: 1 },
+  };
+  const warnings = collectPrintableSurfaceWarnings({
+    lockedProductionGeometry: true,
+    items: [
+      { id: "a", name: "Logo", y: 4, height: 24 },
+      { id: "b", name: "Wrap", y: 200, height: 36 },
+    ],
+    calibration,
+    printableSurfaceContract: {
+      printableTopMm: 48,
+      printableBottomMm: 210,
+      printableHeightMm: 192,
+      axialExclusions: [],
+      circumferentialExclusions: [],
+    },
+  });
+
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0] ?? "", /locked printable-height boundary/i);
+  assert.match(warnings[1] ?? "", /locked printable-height boundary/i);
+});
+
+test("locked production export warns when logo region crosses printable top boundary", () => {
+  const calibration = {
+    units: "mm" as const,
+    totalHeightMm: 297,
+    bodyHeightMm: 240,
+    lidBodyLineMm: 30,
+    bodyBottomMm: 270,
+    wrapDiameterMm: 110,
+    baseDiameterMm: 78.7,
+    wrapWidthMm: 345.58,
+    frontVisibleWidthMm: 110,
+    frontAxisPx: { xTop: 120, yTop: 10, xBottom: 120, yBottom: 260 },
+    photoToFrontTransform: { type: "affine" as const, matrix: [1, 0, 0, 0, 1, 0] },
+    svgFrontViewBoxMm: { x: -55, y: 0, width: 110, height: 297 },
+    wrapMappingMm: {
+      frontMeridianMm: 259.19,
+      backMeridianMm: 86.4,
+      leftQuarterMm: 172.79,
+      rightQuarterMm: 0,
+    },
+    glbScale: { unitsPerMm: 1 },
+  };
+  const warnings = collectLogoPrintableSurfaceWarnings({
+    lockedProductionGeometry: true,
+    logoRegion: {
+      label: "Front logo region",
+      centerXMm: 120,
+      centerYMm: 10,
+      widthMm: 30,
+      heightMm: 16,
+      wrapsAround: false,
+      source: "uploaded-image",
+      confidence: 0.91,
+    },
+    calibration,
+    printableSurfaceContract: {
+      printableTopMm: 48,
+      printableBottomMm: 220,
+      printableHeightMm: 202,
+      axialExclusions: [],
+      circumferentialExclusions: [],
+    },
+  });
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /logo region overlaps the locked printable-height boundary/i);
 });

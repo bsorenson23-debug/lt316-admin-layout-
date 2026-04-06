@@ -293,11 +293,43 @@ export interface EngravableZone {
   width: number;
   /** Height in mm (printable height minus margins) */
   height: number;
+  /** Printable top boundary measured from the body-shell top (mm) */
+  printableTopY?: number | null;
+  /** Printable bottom boundary measured from the body-shell top (mm) */
+  printableBottomY?: number | null;
+  /** Optional lid boundary guide measured from the body-shell top (mm) */
+  lidBoundaryY?: number | null;
+  /** Optional rim/ring boundary guide measured from the body-shell top (mm) */
+  rimBoundaryY?: number | null;
+  /** True when automatic printable band detection is weak. */
+  printableDetectionWeak?: boolean;
   /** Front face center X in mm (for centering artwork) */
   frontCenterX: number;
   /** Back face center X in mm when the layout has a distinct back side */
   backCenterX?: number | null;
+  /** Left quarter-turn guide X in mm */
+  leftQuarterX?: number | null;
+  /** Right quarter-turn guide X in mm */
+  rightQuarterX?: number | null;
   /** Handle center X in mm when the layout has a side handle */
   handleCenterX?: number | null;
+  /** Keep-out sector start X in mm */
+  handleKeepOutStartX?: number | null;
+  /** Keep-out sector end X in mm */
+  handleKeepOutEndX?: number | null;
+  /** Whether the keep-out sector wraps across the seam */
+  handleKeepOutWraps?: boolean;
+  /** Canonical front-logo center X in wrap space (mm) */
+  logoCenterX?: number | null;
+  /** Canonical front-logo center Y in wrap space (mm) */
+  logoCenterY?: number | null;
+  /** Canonical front-logo box width in wrap space (mm) */
+  logoWidth?: number | null;
+  /** Canonical front-logo box height in wrap space (mm) */
+  logoHeight?: number | null;
+  /** Whether the logo guide wraps across the seam */
+  logoWraps?: boolean;
+  /** Canonical logo placement confidence 0..1 */
+  logoConfidence?: number | null;
 }
 

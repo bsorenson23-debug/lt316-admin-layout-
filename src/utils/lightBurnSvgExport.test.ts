@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildLightBurnExportSvg } from "./lightBurnSvgExport.ts";
-import type { LightBurnExportPayload } from "../types/export.ts";
+import { buildLightBurnAlignmentGuideSvg, buildLightBurnExportSvg } from "./lightBurnSvgExport.ts";
+import type { LightBurnAlignmentGuidePayload, LightBurnExportPayload } from "../types/export.ts";
 
 const LIGHTBURN_PX_PER_MM = 96 / 25.4;
 
@@ -110,4 +110,41 @@ test("buildLightBurnExportSvg keeps text items as transformed original svg conte
     )
   );
   assert.match(svg, /<text x="1" y="5">ABC<\/text>/);
+});
+
+test("buildLightBurnAlignmentGuideSvg renders horizontal printable boundary guides", () => {
+  const payload: LightBurnAlignmentGuidePayload = {
+    kind: "lt316-alignment-guides",
+    workspaceMode: "tumbler-wrap",
+    templateWidthMm: 276.15,
+    templateHeightMm: 160,
+    generatedAt: "2026-04-06T00:00:00.000Z",
+    wrapWidthAuthoritative: true,
+    bodyOnlyWrapSpace: true,
+    wrapMappingMm: {
+      frontMeridianMm: 207.1,
+      backMeridianMm: 69.05,
+      leftQuarterMm: 138.08,
+      rightQuarterMm: 0,
+    },
+    lines: [
+      {
+        kind: "printable-top",
+        label: "Printable top",
+        orientation: "horizontal",
+        yMm: 18,
+      },
+      {
+        kind: "front-meridian",
+        label: "Front center",
+        orientation: "vertical",
+        xMm: 207.1,
+      },
+    ],
+  };
+
+  const svg = buildLightBurnAlignmentGuideSvg(payload);
+
+  assert.match(svg, /<line x1="0" y1="68\.0315" x2="1043\.7165" y2="68\.0315"/);
+  assert.match(svg, /<line x1="782\.7402" y1="0" x2="782\.7402" y2="604\.7244"/);
 });

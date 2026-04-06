@@ -13,6 +13,7 @@ import {
 import { Canvas, useLoader, useThree } from "@react-three/fiber";
 import {
   OrbitControls,
+  OrthographicCamera,
   Bounds,
   useBounds,
   ContactShadows,
@@ -24,11 +25,17 @@ import {
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 import * as THREE from "three";
 import type { PlacedItem } from "@/types/admin";
 import { YetiRambler40oz } from "./models/YetiRambler40oz";
 import type { DecalItem } from "./models/YetiRambler40oz";
 import { getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
+import type {
+  CanonicalBodyProfile,
+  CanonicalDimensionCalibration,
+  CanonicalHandleProfile,
+} from "@/types/productTemplate";
 
 // ---------------------------------------------------------------------------
 // Suppress noisy Three.js deprecation warnings
@@ -56,10 +63,18 @@ export interface TumblerDimensions {
   diameterMm: number;
   topDiameterMm?: number;
   bottomDiameterMm?: number;
+  /** Distance from mesh top to the physical tumbler body top in mm */
+  bodyTopOffsetMm?: number;
+  /** Full powder-coated body height in mm */
+  bodyHeightMm?: number;
   /** Height of the laser-engravable zone in mm */
   printableHeightMm: number;
   /** Distance from mesh top to printable zone top in mm */
   printableTopOffsetMm?: number;
+  /** Lid/body seam measured from the overall top in mm */
+  lidSeamFromOverallMm?: number;
+  /** Bottom edge of the top silver ring measured from the overall top in mm */
+  silverBandBottomFromOverallMm?: number;
 }
 
 /** Per-item rasterized texture for 3D Decal projection */
@@ -96,6 +111,37 @@ export interface ModelViewerProps {
   bodyTintColor?: string;
   /** Rim / engraved artwork tint */
   rimTintColor?: string;
+  /** Template preview only: render tumbler surface zones */
+  showTemplateSurfaceZones?: boolean;
+  /** Shared front-view and wrap calibration used by template preview consumers. */
+  dimensionCalibration?: CanonicalDimensionCalibration | null;
+  canonicalBodyProfile?: CanonicalBodyProfile | null;
+  canonicalHandleProfile?: CanonicalHandleProfile | null;
+  previewModelMode?: "alignment-model" | "full-model" | "source-traced";
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function logoDataUrlToCanvas(dataUrl: string): Promise<HTMLCanvasElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth || image.width;
+      canvas.height = image.naturalHeight || image.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Could not create logo canvas."));
+        return;
+      }
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas);
+    };
+    image.onerror = () => reject(new Error("Could not load manufacturer logo stamp."));
+    image.src = dataUrl;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +312,540 @@ function EngravableZoneRing({
         <torusGeometry args={[radMm, 0.7, 8, 64]} />
         <meshBasicMaterial color="#4a8fe8" transparent opacity={0.55} depthWrite={false} />
       </mesh>
+    </group>
+  );
+}
+
+function CalibratedFrontView({
+  enabled,
+  modelBounds,
+}: {
+  enabled: boolean;
+  modelBounds: THREE.Box3 | null;
+}) {
+  const camera = useThree((state) => state.camera);
+  useEffect(() => {
+    if (!enabled || !modelBounds) return;
+    const center = modelBounds.getCenter(new THREE.Vector3());
+    const size = modelBounds.getSize(new THREE.Vector3());
+    const fov = "fov" in camera ? THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov) : THREE.MathUtils.degToRad(35);
+    const fitHeight = size.y / Math.max(0.1, 2 * Math.tan(fov / 2));
+    const fitWidth = size.x / Math.max(0.1, 2 * Math.tan(fov / 2));
+    const distance = Math.max(fitHeight, fitWidth) * 1.18;
+    camera.position.set(center.x, center.y, center.z + Math.max(distance, size.z + 40));
+    camera.lookAt(center);
+    camera.updateProjectionMatrix();
+  }, [camera, enabled, modelBounds]);
+  return null;
+}
+
+function AlignmentOrthoCamera({
+  enabled,
+  modelBounds,
+  viewBoxMm,
+}: {
+  enabled: boolean;
+  modelBounds: THREE.Box3 | null;
+  viewBoxMm?: CanonicalDimensionCalibration["svgFrontViewBoxMm"] | null;
+}) {
+  const cameraRef = useRef<THREE.OrthographicCamera>(null);
+  const size = useThree((state) => state.size);
+
+  useEffect(() => {
+    if (!enabled || !cameraRef.current) return;
+    const center = viewBoxMm
+      ? new THREE.Vector3(
+          viewBoxMm.x + (viewBoxMm.width / 2),
+          (viewBoxMm.height / 2) - (viewBoxMm.y + (viewBoxMm.height / 2)),
+          0,
+        )
+      : modelBounds?.getCenter(new THREE.Vector3()) ?? null;
+    const boundsSize = viewBoxMm
+      ? new THREE.Vector3(viewBoxMm.width, viewBoxMm.height, 1)
+      : modelBounds?.getSize(new THREE.Vector3()) ?? null;
+    if (!center || !boundsSize) return;
+    const aspect = size.width > 0 && size.height > 0 ? size.width / size.height : 1;
+    const worldHeight = Math.max(boundsSize.y * 1.08, (boundsSize.x / Math.max(aspect, 0.1)) * 1.08, 1);
+    cameraRef.current.position.set(center.x, center.y, center.z + Math.max(400, boundsSize.z + 200));
+    cameraRef.current.zoom = size.height / worldHeight;
+    cameraRef.current.near = 0.1;
+    cameraRef.current.far = 5000;
+    cameraRef.current.lookAt(center);
+    cameraRef.current.updateProjectionMatrix();
+  }, [enabled, modelBounds, size.height, size.width, viewBoxMm]);
+
+  if (!enabled) return null;
+  return <OrthographicCamera ref={cameraRef} makeDefault />;
+}
+
+function buildZoneSpanFromTopOffsets(args: {
+  topOffsetMm?: number;
+  bottomOffsetMm?: number;
+  fallbackTopOffsetMm?: number;
+  fallbackBottomOffsetMm?: number;
+  meshTopY: number;
+}): { centerY: number; heightMm: number } | null {
+  const topOffset = Number.isFinite(args.topOffsetMm)
+    ? Math.max(0, args.topOffsetMm ?? 0)
+    : Number.isFinite(args.fallbackTopOffsetMm)
+      ? Math.max(0, args.fallbackTopOffsetMm ?? 0)
+      : null;
+  const bottomOffset = Number.isFinite(args.bottomOffsetMm)
+    ? Math.max(0, args.bottomOffsetMm ?? 0)
+    : Number.isFinite(args.fallbackBottomOffsetMm)
+      ? Math.max(0, args.fallbackBottomOffsetMm ?? 0)
+      : null;
+
+  if (topOffset == null || bottomOffset == null || bottomOffset <= topOffset) {
+    return null;
+  }
+
+  const topY = args.meshTopY - topOffset;
+  const bottomY = args.meshTopY - bottomOffset;
+
+  return {
+    centerY: (topY + bottomY) / 2,
+    heightMm: bottomOffset - topOffset,
+  };
+}
+
+function SurfaceZoneBand({
+  center,
+  radiusMm,
+  zone,
+  color,
+  fillOpacity,
+  ringOpacity,
+}: {
+  center: THREE.Vector3;
+  radiusMm: number;
+  zone: { centerY: number; heightMm: number };
+  color: string;
+  fillOpacity: number;
+  ringOpacity: number;
+}) {
+  const halfH = zone.heightMm / 2;
+
+  return (
+    <group position={[center.x, zone.centerY, center.z]}>
+      <mesh>
+        <cylinderGeometry args={[radiusMm, radiusMm, zone.heightMm, 64, 1, true]} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={fillOpacity}
+          side={THREE.BackSide}
+          depthWrite={false}
+        />
+      </mesh>
+      <mesh position={[0, halfH, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[radiusMm, 0.7, 8, 64]} />
+        <meshBasicMaterial color={color} transparent opacity={ringOpacity} depthWrite={false} />
+      </mesh>
+      <mesh position={[0, -halfH, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[radiusMm, 0.7, 8, 64]} />
+        <meshBasicMaterial color={color} transparent opacity={ringOpacity} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function TemplateSurfaceZones({
+  dims,
+  modelBounds,
+}: {
+  dims: TumblerDimensions;
+  modelBounds: THREE.Box3;
+}) {
+  const size = modelBounds.getSize(new THREE.Vector3());
+  const center = modelBounds.getCenter(new THREE.Vector3());
+  const meshTopY = center.y + size.y / 2;
+  const radiusMm = Math.max(size.x, size.z) / 2 + 1.2;
+
+  const powderTopOffsetMm = Number.isFinite(dims.bodyTopOffsetMm)
+    ? Math.max(0, dims.bodyTopOffsetMm ?? 0)
+    : Number.isFinite(dims.printableTopOffsetMm)
+      ? Math.max(0, dims.printableTopOffsetMm ?? 0)
+      : 0;
+  const powderBottomOffsetMm = Number.isFinite(dims.bodyHeightMm)
+    ? powderTopOffsetMm + Math.max(0, dims.bodyHeightMm ?? 0)
+    : powderTopOffsetMm + Math.max(0, dims.printableHeightMm);
+
+  const powderZone = buildZoneSpanFromTopOffsets({
+    topOffsetMm: powderTopOffsetMm,
+    bottomOffsetMm: powderBottomOffsetMm,
+    meshTopY,
+  });
+
+  const silverZone = buildZoneSpanFromTopOffsets({
+    topOffsetMm: dims.lidSeamFromOverallMm,
+    bottomOffsetMm: dims.silverBandBottomFromOverallMm,
+    fallbackTopOffsetMm: dims.bodyTopOffsetMm,
+    fallbackBottomOffsetMm: dims.printableTopOffsetMm,
+    meshTopY,
+  });
+
+  return (
+    <>
+      {powderZone && (
+        <SurfaceZoneBand
+          center={center}
+          radiusMm={radiusMm}
+          zone={powderZone}
+          color="#4ade80"
+          fillOpacity={0.08}
+          ringOpacity={0.28}
+        />
+      )}
+      {silverZone && (
+        <SurfaceZoneBand
+          center={center}
+          radiusMm={radiusMm + 0.2}
+          zone={silverZone}
+          color="#d8dde6"
+          fillOpacity={0.16}
+          ringOpacity={0.34}
+        />
+      )}
+    </>
+  );
+}
+
+function buildCanonicalBodyGeometry(bodyProfile: CanonicalBodyProfile, totalHeightMm: number): THREE.LatheGeometry | null {
+  if (bodyProfile.samples.length < 4) return null;
+  const profilePoints = bodyProfile.samples.map(
+    (sample) => new THREE.Vector2(
+      Math.max(sample.radiusMm, 0.1),
+      (totalHeightMm / 2) - sample.yMm,
+    ),
+  );
+  const geometry = new THREE.LatheGeometry(profilePoints, 72);
+  geometry.rotateY(Math.PI);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function buildRegistrationShellGeometry(args: {
+  svgPath: string;
+  viewBoxMm: CanonicalDimensionCalibration["svgFrontViewBoxMm"];
+  extrusionDepthMm?: number;
+}): THREE.ExtrudeGeometry | null {
+  const svgPath = args.svgPath.trim();
+  if (!svgPath) return null;
+  const svgText = `<svg xmlns="http://www.w3.org/2000/svg"><path d="${svgPath}" /></svg>`;
+  const data = new SVGLoader().parse(svgText);
+  const shapes = data.paths.flatMap((path) => SVGLoader.createShapes(path));
+  if (!shapes.length) return null;
+  const extrusionDepthMm = Math.max(0.6, args.extrusionDepthMm ?? 1.6);
+  const geometry = new THREE.ExtrudeGeometry(shapes, {
+    depth: extrusionDepthMm,
+    bevelEnabled: false,
+    curveSegments: 32,
+    steps: 1,
+  });
+  // Canonical SVG/front space is Y-down from the top of the overall product.
+  // Normalize exactly once into the viewer's centered Y-up world space.
+  geometry.scale(1, -1, 1);
+  geometry.translate(0, args.viewBoxMm.y + (args.viewBoxMm.height / 2), 0);
+  geometry.translate(0, 0, -extrusionDepthMm / 2);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+function computeCanonicalBodyBounds(bodyProfile: CanonicalBodyProfile, totalHeightMm: number): THREE.Box3 | null {
+  if (bodyProfile.samples.length < 2) return null;
+  const maxRadius = bodyProfile.samples.reduce((max, sample) => Math.max(max, sample.radiusMm), 0);
+  if (!(maxRadius > 0)) return null;
+  return new THREE.Box3(
+    new THREE.Vector3(-maxRadius, -totalHeightMm / 2, -maxRadius),
+    new THREE.Vector3(maxRadius, totalHeightMm / 2, maxRadius),
+  );
+}
+
+function computeRegistrationShellBounds(viewBoxMm: CanonicalDimensionCalibration["svgFrontViewBoxMm"]): THREE.Box3 {
+  const minX = viewBoxMm.x;
+  const maxX = viewBoxMm.x + viewBoxMm.width;
+  const maxY = (viewBoxMm.height / 2) - viewBoxMm.y;
+  const minY = maxY - viewBoxMm.height;
+  return new THREE.Box3(
+    new THREE.Vector3(minX, minY, -1),
+    new THREE.Vector3(maxX, maxY, 1),
+  );
+}
+
+function buildCanonicalHandleGeometry(args: {
+  handleProfile: CanonicalHandleProfile;
+  calibration: CanonicalDimensionCalibration;
+  totalHeightMm: number;
+}): { geometry: THREE.BufferGeometry; extrusionDepthMm: number } | null {
+  const { handleProfile, calibration, totalHeightMm } = args;
+  if (handleProfile.outerContour.length < 3 || handleProfile.widthProfile.length < 1) {
+    return null;
+  }
+
+  const [sx = 1, , tx = 0, , sy = 1, ty = 0] = calibration.photoToFrontTransform.matrix;
+  const pxToMmX = (xPx: number) => (xPx * sx) + tx;
+  const pxToMmY = (yPx: number) => (yPx * sy) + ty;
+  const yToScene = (yMm: number) => (totalHeightMm / 2) - yMm;
+  const robustWidths = handleProfile.widthProfile
+    .map((sample) => Math.max(1.2, Math.abs(sample.widthPx * sx)))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  if (robustWidths.length === 0) return null;
+  const extrusionDepthMm = robustWidths[Math.floor(robustWidths.length / 2)] ?? 6;
+
+  const toFrontPoint = (point: { x: number; y: number }) => new THREE.Vector2(
+    pxToMmX(point.x),
+    yToScene(pxToMmY(point.y)),
+  );
+
+  const outerPoints = handleProfile.outerContour.map(toFrontPoint);
+  const innerPoints = handleProfile.innerContour.map(toFrontPoint);
+  if (outerPoints.length < 3) return null;
+
+  const shape = new THREE.Shape();
+  shape.setFromPoints(outerPoints);
+  if (innerPoints.length >= 3) {
+    const hole = new THREE.Path();
+    hole.setFromPoints(innerPoints);
+    shape.holes.push(hole);
+  }
+
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: extrusionDepthMm,
+    bevelEnabled: true,
+    bevelSegments: 2,
+    bevelSize: Math.min(0.9, extrusionDepthMm * 0.12),
+    bevelThickness: Math.min(0.7, extrusionDepthMm * 0.1),
+    curveSegments: 24,
+  });
+  geometry.translate(0, 0, -extrusionDepthMm / 2);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return {
+    geometry,
+    extrusionDepthMm,
+  };
+}
+
+function createRoundedRectPath(args: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  radius: number;
+}): THREE.Shape {
+  const { x, y, width, height } = args;
+  const radius = clamp(args.radius, 0, Math.min(width, height) / 2);
+  const shape = new THREE.Shape();
+  shape.moveTo(x + radius, y);
+  shape.lineTo(x + width - radius, y);
+  shape.quadraticCurveTo(x + width, y, x + width, y + radius);
+  shape.lineTo(x + width, y + height - radius);
+  shape.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  shape.lineTo(x + radius, y + height);
+  shape.quadraticCurveTo(x, y + height, x, y + height - radius);
+  shape.lineTo(x, y + radius);
+  shape.quadraticCurveTo(x, y, x + radius, y);
+  return shape;
+}
+
+function buildSimplifiedCanonicalHandleGeometry(args: {
+  handleProfile: CanonicalHandleProfile;
+  calibration: CanonicalDimensionCalibration;
+  totalHeightMm: number;
+}): { geometry: THREE.BufferGeometry; extrusionDepthMm: number } | null {
+  const extracted = buildCanonicalHandleGeometry(args);
+  if (!args.handleProfile.outerContour.length || !args.handleProfile.widthProfile.length) {
+    return null;
+  }
+
+  const [sx = 1, , tx = 0, , sy = 1, ty = 0] = args.calibration.photoToFrontTransform.matrix;
+  const pxToMmX = (xPx: number) => (xPx * sx) + tx;
+  const pxToMmY = (yPx: number) => (yPx * sy) + ty;
+  const yToScene = (yMm: number) => (args.totalHeightMm / 2) - yMm;
+  const outerXs = args.handleProfile.outerContour.map((point) => pxToMmX(point.x));
+  const outerYs = args.handleProfile.outerContour.map((point) => yToScene(pxToMmY(point.y)));
+  if (!outerXs.length || !outerYs.length) return extracted;
+  const outerMinX = Math.min(...outerXs);
+  const outerMaxX = Math.max(...outerXs);
+  const outerMinY = Math.min(...outerYs);
+  const outerMaxY = Math.max(...outerYs);
+  const outerWidth = Math.max(4, outerMaxX - outerMinX);
+  const outerHeight = Math.max(8, outerMaxY - outerMinY);
+
+  const robustWidths = args.handleProfile.widthProfile
+    .map((sample) => Math.max(1.2, Math.abs(sample.widthPx * sx)))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  const extrusionDepthMm = robustWidths[Math.floor(robustWidths.length / 2)] ?? extracted?.extrusionDepthMm ?? 8;
+
+  const innerWidth = args.handleProfile.openingBox
+    ? Math.max(outerWidth * 0.28, args.handleProfile.openingBox.w * sx)
+    : Math.max(outerWidth * 0.34, outerWidth - (extrusionDepthMm * 2.2));
+  const innerHeight = args.handleProfile.openingBox
+    ? Math.max(outerHeight * 0.28, args.handleProfile.openingBox.h * sy)
+    : Math.max(outerHeight * 0.52, outerHeight - (extrusionDepthMm * 1.8));
+  const insetX = Math.max(extrusionDepthMm * 0.55, (outerWidth - innerWidth) / 2);
+  const insetY = Math.max(extrusionDepthMm * 0.5, (outerHeight - innerHeight) / 2);
+
+  const shape = createRoundedRectPath({
+    x: outerMinX,
+    y: outerMinY,
+    width: outerWidth,
+    height: outerHeight,
+    radius: Math.min(outerWidth, outerHeight) * 0.16,
+  });
+  const hole = createRoundedRectPath({
+    x: outerMinX + insetX,
+    y: outerMinY + insetY,
+    width: Math.max(2, innerWidth),
+    height: Math.max(2, innerHeight),
+    radius: Math.min(innerWidth, innerHeight) * 0.18,
+  });
+  shape.holes.push(hole);
+
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: extrusionDepthMm,
+    bevelEnabled: true,
+    bevelSegments: 2,
+    bevelSize: Math.min(0.8, extrusionDepthMm * 0.12),
+    bevelThickness: Math.min(0.6, extrusionDepthMm * 0.1),
+    curveSegments: 20,
+  });
+  geometry.translate(0, 0, -extrusionDepthMm / 2);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return {
+    geometry,
+    extrusionDepthMm,
+  };
+}
+
+function SimplifiedRim({
+  dims,
+  totalHeightMm,
+  rimTintColor,
+}: {
+  dims: TumblerDimensions;
+  totalHeightMm: number;
+  rimTintColor?: string;
+}) {
+  const topRadius = Math.max(dims.topDiameterMm ?? dims.diameterMm, dims.diameterMm) / 2;
+  const lidHeight = clamp(dims.bodyTopOffsetMm ?? dims.lidSeamFromOverallMm ?? 18, 10, totalHeightMm * 0.18);
+  const seamY = (totalHeightMm / 2) - lidHeight;
+  return (
+    <group>
+      <mesh position={[0, (totalHeightMm / 2) - (lidHeight / 2), 0]}>
+        <cylinderGeometry args={[topRadius * 1.02, topRadius * 1.05, lidHeight, 64]} />
+        <meshStandardMaterial color={rimTintColor ?? "#d7dce3"} metalness={0.55} roughness={0.42} />
+      </mesh>
+      <mesh position={[0, seamY, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[topRadius * 1.01, 0.85, 8, 64]} />
+        <meshStandardMaterial color={rimTintColor ?? "#b8bfc8"} metalness={0.72} roughness={0.28} />
+      </mesh>
+    </group>
+  );
+}
+
+function CanonicalAlignmentTumbler({
+  dims,
+  bodyProfile,
+  handleProfile,
+  calibration,
+  previewMode,
+  bodyTintColor,
+  rimTintColor,
+  onReady,
+}: {
+  dims: TumblerDimensions;
+  bodyProfile: CanonicalBodyProfile;
+  handleProfile?: CanonicalHandleProfile | null;
+  calibration: CanonicalDimensionCalibration;
+  previewMode: "alignment-model" | "full-model";
+  bodyTintColor?: string;
+  rimTintColor?: string;
+  onReady?: OnReady;
+}) {
+  const ref = useRef<THREE.Group>(null);
+  const bodyGeometry = useMemo(
+    () => (
+      previewMode === "alignment-model"
+        ? buildRegistrationShellGeometry({
+            svgPath: bodyProfile.svgPath,
+            viewBoxMm: calibration.svgFrontViewBoxMm,
+            extrusionDepthMm: 1.4,
+          })
+        : buildCanonicalBodyGeometry(bodyProfile, calibration.totalHeightMm)
+    ),
+    [bodyProfile, calibration.svgFrontViewBoxMm, calibration.totalHeightMm, previewMode],
+  );
+  const handleRenderMode = useMemo(() => {
+    const confidence = handleProfile?.confidence ?? 0;
+    if (confidence < 0.6) return "hidden" as const;
+    if (previewMode === "alignment-model") {
+      return "hidden" as const;
+    }
+    return confidence >= 0.8 ? "extracted" as const : "simplified" as const;
+  }, [handleProfile, previewMode]);
+  const handleGeometryData = useMemo(() => {
+    if (!handleProfile || handleRenderMode === "hidden") return null;
+    if (handleRenderMode === "simplified") {
+      return buildSimplifiedCanonicalHandleGeometry({
+        handleProfile,
+        calibration,
+        totalHeightMm: calibration.totalHeightMm,
+      });
+    }
+    return buildCanonicalHandleGeometry({
+      handleProfile,
+      calibration,
+      totalHeightMm: calibration.totalHeightMm,
+    });
+  }, [calibration, handleProfile, handleRenderMode]);
+
+  useEffect(() => {
+    if (ref.current) onReady?.(ref.current);
+  }, [onReady, bodyGeometry, handleGeometryData]);
+
+  useEffect(() => () => {
+    bodyGeometry?.dispose();
+    handleGeometryData?.geometry.dispose();
+  }, [bodyGeometry, handleGeometryData]);
+
+  if (!bodyGeometry) return null;
+
+  return (
+    <group ref={ref}>
+      <mesh geometry={bodyGeometry} castShadow receiveShadow>
+        <meshPhysicalMaterial
+          color={bodyTintColor ?? "#93aa9b"}
+          metalness={previewMode === "alignment-model" ? 0.04 : 0.22}
+          roughness={previewMode === "alignment-model" ? 0.82 : 0.46}
+          clearcoat={previewMode === "alignment-model" ? 0 : 0.08}
+          clearcoatRoughness={previewMode === "alignment-model" ? 1 : 0.42}
+        />
+      </mesh>
+      {handleGeometryData && (
+        <mesh geometry={handleGeometryData.geometry} castShadow receiveShadow>
+          <meshPhysicalMaterial
+            color="#e4c4cc"
+            metalness={0.16}
+            roughness={0.4}
+            clearcoat={0.1}
+            clearcoatRoughness={0.36}
+            transparent={previewMode === "alignment-model"}
+            opacity={previewMode === "alignment-model" ? 0.22 : 1}
+          />
+        </mesh>
+      )}
+      {previewMode !== "alignment-model" && (
+        <SimplifiedRim dims={dims} totalHeightMm={calibration.totalHeightMm} rimTintColor={rimTintColor} />
+      )}
     </group>
   );
 }
@@ -633,6 +1213,62 @@ function buildDecalItems(
       gridH: item.height,
       gridRotationDeg: item.rotation ?? 0,
     }));
+}
+
+function buildManufacturerLogoPlacedItem(args: {
+  stamp: import("@/types/productTemplate").ManufacturerLogoStamp;
+  dims: TumblerDimensions;
+  wrapWidthMm: number;
+  printHeightMm: number;
+  handleArcDeg?: number;
+}): PlacedItem | null {
+  const radiusMm = args.wrapWidthMm / (2 * Math.PI);
+  if (!Number.isFinite(radiusMm) || radiusMm <= 0) return null;
+  const bodyHeightMm = Math.max(args.dims.bodyHeightMm ?? args.dims.printableHeightMm, 1);
+  const bodyTopOffsetMm = Number.isFinite(args.dims.bodyTopOffsetMm)
+    ? Math.max(0, args.dims.bodyTopOffsetMm ?? 0)
+    : Math.max(0, args.dims.printableTopOffsetMm ?? 0);
+  const printTopOffsetMm = Number.isFinite(args.dims.printableTopOffsetMm)
+    ? Math.max(0, args.dims.printableTopOffsetMm ?? 0)
+    : bodyTopOffsetMm;
+  const widthMm = Math.max(
+    1,
+    args.stamp.placement.widthMm ||
+      (radiusMm * Math.max(0.04, args.stamp.logoPlacement.thetaSpan)),
+  );
+  const heightMm = Math.max(
+    1,
+    args.stamp.placement.heightMm ||
+      (bodyHeightMm * Math.max(0.02, args.stamp.logoPlacement.sSpan)),
+  );
+  const centerYFromTopMm = bodyTopOffsetMm + bodyHeightMm * clamp(args.stamp.logoPlacement.sCenter, 0, 1);
+  const centerXMm = getWrapFrontCenter(args.wrapWidthMm, args.handleArcDeg) +
+    (radiusMm * args.stamp.logoPlacement.thetaCenter);
+  const x = centerXMm - widthMm / 2;
+  const y = centerYFromTopMm - printTopOffsetMm - heightMm / 2;
+
+  return {
+    id: "__manufacturer-logo__",
+    assetId: "__manufacturer-logo__",
+    name: "Manufacturer logo",
+    svgText: "",
+    sourceSvgText: "",
+    documentBounds: { x: 0, y: 0, width: widthMm, height: heightMm },
+    artworkBounds: { x: 0, y: 0, width: widthMm, height: heightMm },
+    x,
+    y,
+    width: widthMm,
+    height: heightMm,
+    rotation: 0,
+    defaults: {
+      x,
+      y,
+      width: widthMm,
+      height: heightMm,
+      rotation: 0,
+    },
+    visible: true,
+  };
 }
 
 function createRoundedRectShape(widthMm: number, heightMm: number, radiusMm: number): THREE.Shape {
@@ -1003,14 +1639,14 @@ class CanvasErrorBoundary extends Component<
 // ---------------------------------------------------------------------------
 
 export default function ModelViewer({
-  file, modelUrl, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, manufacturerLogoStamp, bodyTintColor, rimTintColor,
+  file, modelUrl, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, manufacturerLogoStamp, bodyTintColor, rimTintColor, showTemplateSurfaceZones, dimensionCalibration, canonicalBodyProfile, canonicalHandleProfile, previewModelMode,
 }: ModelViewerProps) {
-  void manufacturerLogoStamp;
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
+  const [manufacturerLogoCanvas, setManufacturerLogoCanvas] = useState<HTMLCanvasElement | null>(null);
 
   // Auto-rotate: on by default for tumblers; pause on user interaction, resume after 4s
-  const [isAutoRotating, setIsAutoRotating] = useState(!!tumblerDims);
+  const [isAutoRotating, setIsAutoRotating] = useState(!!tumblerDims && !showTemplateSurfaceZones);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleOrbitStart = useCallback(() => {
@@ -1020,12 +1656,37 @@ export default function ModelViewer({
 
   const handleOrbitEnd = useCallback(() => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-    idleTimerRef.current = setTimeout(() => setIsAutoRotating(true), 4000);
-  }, []);
+    idleTimerRef.current = setTimeout(() => setIsAutoRotating(!showTemplateSurfaceZones), 4000);
+  }, [showTemplateSurfaceZones]);
 
   useEffect(() => {
     return () => { if (idleTimerRef.current) clearTimeout(idleTimerRef.current); };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!manufacturerLogoStamp?.dataUrl) {
+      const frameId = window.requestAnimationFrame(() => {
+        if (!cancelled) setManufacturerLogoCanvas(null);
+      });
+      return () => {
+        cancelled = true;
+        window.cancelAnimationFrame(frameId);
+      };
+    }
+    logoDataUrlToCanvas(manufacturerLogoStamp.dataUrl)
+      .then((canvas) => {
+        if (cancelled) return;
+        setManufacturerLogoCanvas(canvas);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setManufacturerLogoCanvas(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [manufacturerLogoStamp?.dataUrl]);
 
   // Create blob URL inside useEffect — safe for React Strict Mode
   useEffect(() => {
@@ -1041,13 +1702,13 @@ export default function ModelViewer({
     const frameId = window.requestAnimationFrame(() => {
       setUrl(objectUrl);
       setModelBounds(null);
-      setIsAutoRotating(!!tumblerDims);
+      setIsAutoRotating(!!tumblerDims && !showTemplateSurfaceZones);
     });
     return () => {
       window.cancelAnimationFrame(frameId);
       URL.revokeObjectURL(objectUrl);
     };
-  }, [file, modelUrl, tumblerDims]);
+  }, [file, modelUrl, showTemplateSurfaceZones, tumblerDims]);
 
   const handleModelReady = useCallback((obj: THREE.Object3D) => {
     const box = new THREE.Box3().setFromObject(obj);
@@ -1057,9 +1718,28 @@ export default function ModelViewer({
   const ext = file?.name.split(".").pop()?.toLowerCase() ??
     modelUrl?.split("?")[0]?.split(".").pop()?.toLowerCase() ??
     "";
+  const useCanonicalAlignmentModel = Boolean(
+    (previewModelMode === "alignment-model" || previewModelMode === "full-model") &&
+    tumblerDims &&
+    canonicalBodyProfile &&
+    dimensionCalibration,
+  );
+  const canonicalBodyBounds = useMemo(
+    () => (useCanonicalAlignmentModel && canonicalBodyProfile && dimensionCalibration
+      ? (
+          previewModelMode === "alignment-model"
+            ? computeRegistrationShellBounds(dimensionCalibration.svgFrontViewBoxMm)
+            : computeCanonicalBodyBounds(canonicalBodyProfile, dimensionCalibration.totalHeightMm)
+        )
+      : null),
+    [canonicalBodyProfile, dimensionCalibration, previewModelMode, useCanonicalAlignmentModel],
+  );
+  const alignmentBounds = useCanonicalAlignmentModel
+    ? (canonicalBodyBounds ?? modelBounds)
+    : modelBounds;
   const viewKey = flatPreview
     ? `flat:${flatPreview.widthMm}:${flatPreview.heightMm}:${flatPreview.thicknessMm}:${flatPreview.familyKey ?? ""}:${flatPreview.label ?? ""}`
-    : (url ?? "");
+    : `${useCanonicalAlignmentModel ? previewModelMode : "source-traced"}:${url ?? ""}`;
 
   // ── Adaptive scene scale based on physical dimensions ──────────────────────
   const H = tumblerDims?.overallHeightMm ?? 200;
@@ -1074,16 +1754,54 @@ export default function ModelViewer({
   const gridFade   = isMmScale ? H * 3.5   : 28;
   const shadowScale= isMmScale ? H * 4     : 20;
   const shadowFar  = isMmScale ? H * 0.7   : 5;
+  const wrapWidthMm = dimensionCalibration?.wrapWidthMm && dimensionCalibration.wrapWidthMm > 0
+    ? dimensionCalibration.wrapWidthMm
+    : bedWidthMm && bedWidthMm > 0
+    ? bedWidthMm
+    : (tumblerDims ? Math.PI * Math.max(tumblerDims.diameterMm, 1) : 0);
+  const printHeightMm = bedHeightMm && bedHeightMm > 0
+    ? bedHeightMm
+    : (tumblerDims?.printableHeightMm ?? 0);
+  const manufacturerLogoPlacedItem = useMemo(() => {
+    if (!manufacturerLogoStamp || !manufacturerLogoCanvas || !tumblerDims || !wrapWidthMm || !printHeightMm) {
+      return null;
+    }
+    return buildManufacturerLogoPlacedItem({
+      stamp: manufacturerLogoStamp,
+      dims: tumblerDims,
+      wrapWidthMm,
+      printHeightMm,
+      handleArcDeg: tumblerMapping?.handleArcDeg ?? handleArcDeg,
+    });
+  }, [
+    manufacturerLogoStamp,
+    manufacturerLogoCanvas,
+    tumblerDims,
+    wrapWidthMm,
+    printHeightMm,
+    tumblerMapping?.handleArcDeg,
+    handleArcDeg,
+  ]);
+  const previewPlacedItems = useMemo(() => {
+    if (!manufacturerLogoPlacedItem) return placedItems;
+    const base = (placedItems ?? []).filter((item) => item.id !== manufacturerLogoPlacedItem.id);
+    return [...base, manufacturerLogoPlacedItem];
+  }, [placedItems, manufacturerLogoPlacedItem]);
+  const previewItemTextures = useMemo(() => {
+    if (!manufacturerLogoPlacedItem || !manufacturerLogoCanvas) return itemTextures;
+    const next = new Map(itemTextures ?? []);
+    next.set(manufacturerLogoPlacedItem.id, manufacturerLogoCanvas);
+    return next;
+  }, [itemTextures, manufacturerLogoCanvas, manufacturerLogoPlacedItem]);
+  const previewHasItems = !!previewPlacedItems?.length && !!previewItemTextures?.size;
 
-  if (!url && !flatPreview) return null;
-
-  const hasItems = !!placedItems?.length && !!itemTextures?.size;
+  if (!url && !flatPreview && !useCanonicalAlignmentModel) return null;
 
   return (
     <CanvasErrorBoundary>
       <Canvas
         shadows={false}
-        frameloop={hasItems ? "always" : "demand"}
+        frameloop={previewHasItems ? "always" : "demand"}
         dpr={[1, 1.25]}
         camera={{ fov: 35, near: nearClip, far: farClip }}
         gl={{
@@ -1105,11 +1823,22 @@ export default function ModelViewer({
             {flatPreview ? (
               <FlatItemPreview
                 dims={flatPreview}
-                placedItems={placedItems}
-                itemTextures={itemTextures}
+                placedItems={previewPlacedItems}
+                itemTextures={previewItemTextures}
                 bedWidthMm={bedWidthMm}
                 bedHeightMm={bedHeightMm}
                 bodyTintColor={bodyTintColor}
+                onReady={handleModelReady}
+              />
+            ) : useCanonicalAlignmentModel && tumblerDims && canonicalBodyProfile && dimensionCalibration ? (
+              <CanonicalAlignmentTumbler
+                dims={tumblerDims}
+                bodyProfile={canonicalBodyProfile}
+                handleProfile={canonicalHandleProfile}
+                calibration={dimensionCalibration}
+                previewMode={previewModelMode === "full-model" ? "full-model" : "alignment-model"}
+                bodyTintColor={bodyTintColor}
+                rimTintColor={rimTintColor}
                 onReady={handleModelReady}
               />
             ) : url ? (
@@ -1118,8 +1847,8 @@ export default function ModelViewer({
                 ext={ext}
                 dims={tumblerDims}
                 handleArcDeg={handleArcDeg}
-                placedItems={placedItems}
-                itemTextures={itemTextures}
+                placedItems={previewPlacedItems}
+                itemTextures={previewItemTextures}
                 bedWidthMm={bedWidthMm}
                 bedHeightMm={bedHeightMm}
                 glbPath={glbPath}
@@ -1131,16 +1860,29 @@ export default function ModelViewer({
               />
             ) : null}
           </Suspense>
-          <AutoFit url={viewKey} />
+          {previewModelMode !== "alignment-model" && <AutoFit url={viewKey} />}
         </Bounds>
+        <AlignmentOrthoCamera
+          enabled={Boolean(showTemplateSurfaceZones && tumblerDims && dimensionCalibration && previewModelMode === "alignment-model")}
+          modelBounds={canonicalBodyBounds}
+          viewBoxMm={previewModelMode === "alignment-model" ? (dimensionCalibration?.svgFrontViewBoxMm ?? null) : null}
+        />
+        <CalibratedFrontView
+          enabled={false}
+          modelBounds={previewModelMode === "alignment-model" ? canonicalBodyBounds : modelBounds}
+        />
 
         {/* Engravable zone highlight — shown when tumbler loaded, no items placed */}
-        {tumblerDims && modelBounds && !hasItems && (
-          <EngravableZoneRing dims={tumblerDims} modelBounds={modelBounds} />
+        {tumblerDims && alignmentBounds && (
+          showTemplateSurfaceZones ? (
+            <TemplateSurfaceZones dims={tumblerDims} modelBounds={alignmentBounds} />
+          ) : (!previewHasItems ? (
+            <EngravableZoneRing dims={tumblerDims} modelBounds={alignmentBounds} />
+          ) : null)
         )}
 
         <ContactShadows
-          position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}
+          position={[0, alignmentBounds ? alignmentBounds.min.y - 0.5 : -0.01, 0]}
           opacity={0.4}
           scale={shadowScale}
           blur={3}
@@ -1149,7 +1891,7 @@ export default function ModelViewer({
         />
 
         <Grid
-          position={[0, modelBounds ? modelBounds.min.y - 1 : -0.011, 0]}
+          position={[0, alignmentBounds ? alignmentBounds.min.y - 1 : -0.011, 0]}
           infiniteGrid
           cellSize={gridCell}
           cellThickness={0.4}
@@ -1171,6 +1913,7 @@ export default function ModelViewer({
           maxDistance={maxDist}
           maxPolarAngle={Math.PI / 1.85}
           enablePan={false}
+          enableRotate={!showTemplateSurfaceZones || previewModelMode === "full-model" || previewModelMode === "source-traced"}
           onStart={handleOrbitStart}
           onEnd={handleOrbitEnd}
         />

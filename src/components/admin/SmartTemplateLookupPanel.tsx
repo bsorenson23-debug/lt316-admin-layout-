@@ -57,6 +57,35 @@ function buildMetrics(result: SmartTemplateLookupResponse): string[] {
   ].filter((value): value is string => Boolean(value));
 }
 
+function formatReferenceRole(result: SmartTemplateLookupResponse, imageId: string): string[] {
+  const refSet = result.templateDraft.productReferenceSet;
+  if (!refSet) return [];
+  const roles: string[] = [];
+  if (refSet.canonicalFrontImageId === imageId) roles.push("front");
+  if (refSet.canonicalBackImageId === imageId) roles.push("back");
+  if (refSet.canonicalHandleSideImageId === imageId) roles.push("handle");
+  if (refSet.canonicalViewSelection?.bestAuxBack3qImageId === imageId) roles.push("aux-back-3q");
+  return roles;
+}
+
+function formatReferenceConfidence(confidence: number | null | undefined): string {
+  return `${Math.round((confidence ?? 0) * 100)}%`;
+}
+
+function formatReferenceViewLabel(
+  result: SmartTemplateLookupResponse,
+  image: NonNullable<SmartTemplateLookupResponse["templateDraft"]["productReferenceSet"]>["images"][number],
+): string {
+  const selection = result.templateDraft.productReferenceSet?.canonicalViewSelection;
+  if (
+    selection?.canonicalBackStatus === "only-back-3q-found" &&
+    selection.bestAuxBack3qImageId === image.id
+  ) {
+    return "back-3q";
+  }
+  return image.viewClass;
+}
+
 export function SmartTemplateLookupPanel({
   onResolved,
   onOpenMapping,
@@ -247,6 +276,42 @@ export function SmartTemplateLookupPanel({
                   {metric}
                 </span>
               ))}
+            </div>
+          )}
+
+          {result.templateDraft.productReferenceSet && (
+            <div className={styles.promptBlock}>
+              <div className={styles.promptTitle}>
+                Reference set ({result.templateDraft.productReferenceSet.images.length} images, {Math.round(result.templateDraft.productReferenceSet.orientationConfidence * 100)}% orientation confidence)
+              </div>
+              <div className={styles.assist}>
+                {(() => {
+                  const selection = result.templateDraft.productReferenceSet?.canonicalViewSelection;
+                  if (!selection) return null;
+                  if (selection.canonicalBackStatus === "true-back") {
+                    return `Front ${formatReferenceConfidence(selection.frontConfidence)}. Back face locked as true back (${formatReferenceConfidence(selection.backConfidence)}).`;
+                  }
+                  if (selection.canonicalBackStatus === "only-back-3q-found") {
+                    return `Front ${formatReferenceConfidence(selection.frontConfidence)}. No strict true back face was assigned; only an auxiliary back-3q candidate was found (${formatReferenceConfidence(selection.backConfidence)}).`;
+                  }
+                  return `Front ${formatReferenceConfidence(selection.frontConfidence)}. Back face remains unknown.`;
+                })()}
+              </div>
+              <div className={styles.promptList}>
+                {result.templateDraft.productReferenceSet.images.map((image) => {
+                  const roles = formatReferenceRole(result, image.id);
+                  return (
+                    <span key={image.id} className={styles.promptChip}>
+                      {formatReferenceViewLabel(result, image)}
+                      {image.handleVisible ? ` / handle-${image.handleSide}` : ""}
+                      {image.logoDetected ? " / logo" : ""}
+                      {roles.length > 0 ? ` / ${roles.join("+")}` : ""}
+                      {` / ${formatReferenceConfidence(image.confidence)}`}
+                      {typeof image.approxAzimuthDeg === "number" ? ` / ${image.approxAzimuthDeg}°` : ""}
+                    </span>
+                  );
+                })}
+              </div>
             </div>
           )}
 

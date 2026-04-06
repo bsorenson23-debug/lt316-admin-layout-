@@ -1,5 +1,8 @@
 import type { BedConfig, PlacedItem, WorkspaceMode } from "../types/admin";
 import type {
+  LightBurnAlignmentGuideLine,
+  LightBurnAlignmentLogoRegion,
+  LightBurnAlignmentGuidePayload,
   LightBurnExportArtifacts,
   LightBurnExportCylinder,
   LightBurnExportItem,
@@ -10,13 +13,408 @@ import type {
   TopAnchorMode,
   TumblerPlacementProfile,
 } from "../types/export";
+import type { CanonicalDimensionCalibration, ManufacturerLogoStamp } from "../types/productTemplate";
+import type { AxialSurfaceBand, PrintableSurfaceContract } from "../types/printableSurface";
 import { isTaperWarpApplicable, applyTaperWarpToExportItem } from "./taperWarp.ts";
 import { resolveRotaryCenterXmm } from "./rotaryCenter.ts";
 import { isFiniteNumber } from "./guards.ts";
 import { round4 as toRounded, round2 as toRounded2 } from "./geometry.ts";
+import { getPrintableSurfaceLocalBounds } from "../lib/printableSurface.ts";
 
 function clampNonNegative(value: number): number {
   return value < 0 ? 0 : value;
+}
+
+function wrapMm(value: number, wrapWidthMm: number): number {
+  if (!(wrapWidthMm > 0)) return 0;
+  const wrapped = value % wrapWidthMm;
+  return wrapped < 0 ? wrapped + wrapWidthMm : wrapped;
+}
+
+function buildAlignmentGuideLines(wrapMappingMm: CanonicalDimensionCalibration["wrapMappingMm"]): LightBurnAlignmentGuideLine[] {
+  const lines: LightBurnAlignmentGuideLine[] = [
+    {
+      id: "front-meridian",
+      kind: "front-meridian",
+      label: "Front meridian",
+      orientation: "vertical",
+      xMm: toRounded2(wrapMappingMm.frontMeridianMm),
+    },
+    {
+      id: "back-meridian",
+      kind: "back-meridian",
+      label: "Back meridian",
+      orientation: "vertical",
+      xMm: toRounded2(wrapMappingMm.backMeridianMm),
+    },
+    {
+      id: "left-quarter",
+      kind: "left-quarter",
+      label: "Left quarter",
+      orientation: "vertical",
+      xMm: toRounded2(wrapMappingMm.leftQuarterMm),
+    },
+    {
+      id: "right-quarter",
+      kind: "right-quarter",
+      label: "Right quarter",
+      orientation: "vertical",
+      xMm: toRounded2(wrapMappingMm.rightQuarterMm),
+    },
+  ];
+
+  if (isFiniteNumber(wrapMappingMm.handleMeridianMm)) {
+    lines.push({
+      id: "handle-meridian",
+      kind: "handle-meridian",
+      label: "Handle meridian",
+      orientation: "vertical",
+      xMm: toRounded2(wrapMappingMm.handleMeridianMm),
+    });
+  }
+
+  if (isFiniteNumber(wrapMappingMm.handleKeepOutStartMm) && isFiniteNumber(wrapMappingMm.handleKeepOutEndMm)) {
+    lines.push(
+      {
+        id: "keep-out-start",
+        kind: "keep-out-start",
+        label: "Handle keep-out start",
+        orientation: "vertical",
+        xMm: toRounded2(wrapMappingMm.handleKeepOutStartMm),
+      },
+      {
+        id: "keep-out-end",
+        kind: "keep-out-end",
+        label: "Handle keep-out end",
+        orientation: "vertical",
+        xMm: toRounded2(wrapMappingMm.handleKeepOutEndMm),
+      },
+    );
+  }
+
+  return lines;
+}
+
+function normalizeThetaToWrapMm(theta: number, wrapWidthMm: number): number {
+  return wrapMm((theta / (Math.PI * 2)) * wrapWidthMm, wrapWidthMm);
+}
+
+export function mapLogoPlacementToWrapRegion(args: {
+  templateWidthMm: number;
+  templateHeightMm: number;
+  calibration: CanonicalDimensionCalibration | null | undefined;
+  stamp: ManufacturerLogoStamp | null | undefined;
+}): LightBurnAlignmentLogoRegion | null {
+  if (!args.calibration?.wrapMappingMm || !args.stamp?.logoPlacement) {
+    return null;
+  }
+  const wrapWidthMm = args.templateWidthMm;
+  const templateHeightMm = args.templateHeightMm;
+  if (!(wrapWidthMm > 0) || !(templateHeightMm > 0)) {
+    return null;
+  }
+
+  const placement = args.stamp.logoPlacement;
+  const frontMeridianMm = args.calibration.wrapMappingMm.frontMeridianMm;
+  const thetaOffsetMm = normalizeThetaToWrapMm(placement.thetaCenter, wrapWidthMm);
+  const centerXMm = wrapMm(frontMeridianMm + thetaOffsetMm, wrapWidthMm);
+  const widthMm = Math.max(0.5, wrapWidthMm * (Math.max(0.001, placement.thetaSpan) / (Math.PI * 2)));
+  const centerYMm = clampNonNegative(Math.min(templateHeightMm, placement.sCenter * templateHeightMm));
+  const heightMm = Math.max(0.5, Math.min(templateHeightMm, placement.sSpan * templateHeightMm));
+  const leftMm = wrapMm(centerXMm - widthMm / 2, wrapWidthMm);
+  const rightMm = wrapMm(centerXMm + widthMm / 2, wrapWidthMm);
+
+  return {
+    label: "Front logo region",
+    centerXMm: toRounded2(centerXMm),
+    centerYMm: toRounded2(centerYMm),
+    widthMm: toRounded2(widthMm),
+    heightMm: toRounded2(heightMm),
+    wrapsAround: leftMm > rightMm,
+    source: placement.source,
+    confidence: toRounded(placement.confidence),
+  };
+}
+
+function mapContractToBodyLocalSurface(args: {
+  calibration: CanonicalDimensionCalibration | null | undefined;
+  printableSurfaceContract?: PrintableSurfaceContract | null;
+}): { topMm: number; bottomMm: number; heightMm: number } | null {
+  const contract = args.printableSurfaceContract ?? args.calibration?.printableSurfaceContract;
+  if (!contract || !args.calibration) {
+    return null;
+  }
+  return getPrintableSurfaceLocalBounds({
+    contract,
+    bodyTopFromOverallMm: args.calibration.lidBodyLineMm,
+    bodyBottomFromOverallMm: args.calibration.bodyBottomMm,
+  });
+}
+
+function buildPrintableBoundaryGuideLines(args: {
+  calibration: CanonicalDimensionCalibration;
+  printableSurfaceContract?: PrintableSurfaceContract | null;
+  axialSurfaceBands?: AxialSurfaceBand[] | null;
+}): LightBurnAlignmentGuideLine[] {
+  const localSurface = mapContractToBodyLocalSurface(args);
+  if (!localSurface) {
+    return [];
+  }
+
+  const lines: LightBurnAlignmentGuideLine[] = [
+    {
+      id: "printable-top",
+      kind: "printable-top",
+      label: "Printable top",
+      orientation: "horizontal",
+      yMm: toRounded2(localSurface.topMm),
+    },
+    {
+      id: "printable-bottom",
+      kind: "printable-bottom",
+      label: "Printable bottom",
+      orientation: "horizontal",
+      yMm: toRounded2(localSurface.bottomMm),
+    },
+  ];
+
+  const contract = args.printableSurfaceContract ?? args.calibration.printableSurfaceContract ?? null;
+  const lidExclusion = contract?.axialExclusions.find((exclusion) => exclusion.kind === "lid") ?? null;
+  const rimExclusion = contract?.axialExclusions.find((exclusion) => exclusion.kind === "rim-ring") ?? null;
+  const baseExclusion = contract?.axialExclusions.find((exclusion) => exclusion.kind === "base") ?? null;
+  const bodyTopMm = args.calibration.lidBodyLineMm;
+
+  if (lidExclusion && lidExclusion.endMm >= bodyTopMm) {
+    lines.push({
+      id: "lid-boundary",
+      kind: "lid-boundary",
+      label: "Lid boundary",
+      orientation: "horizontal",
+      yMm: toRounded2(Math.max(0, lidExclusion.endMm - bodyTopMm)),
+    });
+  }
+  if (rimExclusion) {
+    lines.push({
+      id: "rim-boundary",
+      kind: "rim-boundary",
+      label: "Ring boundary",
+      orientation: "horizontal",
+      yMm: toRounded2(Math.max(0, rimExclusion.endMm - bodyTopMm)),
+    });
+  }
+  if (baseExclusion) {
+    lines.push({
+      id: "base-boundary",
+      kind: "base-boundary",
+      label: "Base boundary",
+      orientation: "horizontal",
+      yMm: toRounded2(Math.max(0, baseExclusion.startMm - bodyTopMm)),
+    });
+  }
+
+  const normalizedBands = args.axialSurfaceBands ?? args.calibration.axialSurfaceBands ?? [];
+  if (normalizedBands.length === 0) {
+    return lines;
+  }
+
+  return lines.filter((line, index, all) =>
+    all.findIndex((candidate) => candidate.kind === line.kind && candidate.yMm === line.yMm) === index,
+  );
+}
+
+export function buildLightBurnAlignmentGuidePayload(args: {
+  workspaceMode: WorkspaceMode;
+  templateWidthMm: number;
+  templateHeightMm: number;
+  calibration: CanonicalDimensionCalibration | null | undefined;
+  printableSurfaceContract?: PrintableSurfaceContract | null | undefined;
+  axialSurfaceBands?: AxialSurfaceBand[] | null | undefined;
+  manufacturerLogoStamp?: ManufacturerLogoStamp | null | undefined;
+}): LightBurnAlignmentGuidePayload | null {
+  if (args.workspaceMode !== "tumbler-wrap" || !args.calibration) {
+    return null;
+  }
+
+  const wrapMappingMm = args.calibration.wrapMappingMm;
+  const keepOutRegion =
+    isFiniteNumber(wrapMappingMm.handleKeepOutStartMm) &&
+    isFiniteNumber(wrapMappingMm.handleKeepOutEndMm)
+      ? {
+          label: "Handle keep-out",
+          startMm: toRounded2(wrapMappingMm.handleKeepOutStartMm),
+          endMm: toRounded2(wrapMappingMm.handleKeepOutEndMm),
+          wrapsAround: (wrapMappingMm.handleKeepOutStartMm ?? 0) > (wrapMappingMm.handleKeepOutEndMm ?? 0),
+        }
+      : null;
+  const logoRegion = mapLogoPlacementToWrapRegion({
+    templateWidthMm: args.templateWidthMm,
+    templateHeightMm: args.templateHeightMm,
+    calibration: args.calibration,
+    stamp: args.manufacturerLogoStamp,
+  });
+
+  const lines = [
+    ...buildAlignmentGuideLines(wrapMappingMm),
+    ...buildPrintableBoundaryGuideLines({
+      calibration: args.calibration,
+      printableSurfaceContract: args.printableSurfaceContract,
+      axialSurfaceBands: args.axialSurfaceBands,
+    }),
+  ];
+  if (logoRegion) {
+    lines.push({
+      id: "logo-center",
+      kind: "logo-center",
+      label: "Front logo center",
+      orientation: "vertical",
+      xMm: toRounded2(logoRegion.centerXMm),
+    });
+  }
+
+  return {
+    kind: "lt316-lightburn-alignment-guides",
+    workspaceMode: args.workspaceMode,
+    templateWidthMm: toRounded2(args.templateWidthMm),
+    templateHeightMm: toRounded2(args.templateHeightMm),
+    generatedAt: new Date().toISOString(),
+    units: "mm",
+    origin: "top-left",
+    bodyOnlyWrapSpace: true,
+    wrapWidthAuthoritative: true,
+    wrapMappingMm: {
+      ...wrapMappingMm,
+    },
+    printableSurfaceContract: args.printableSurfaceContract ?? args.calibration.printableSurfaceContract ?? null,
+    axialSurfaceBands: args.axialSurfaceBands ?? args.calibration.axialSurfaceBands ?? [],
+    lines,
+    keepOutRegion,
+    logoRegion,
+    warnings: [
+      ...(keepOutRegion ? [] : ["No handle keep-out sector is defined for this template."]),
+    ],
+  };
+}
+
+function splitWrappedRange(startMm: number, endMm: number, wrapWidthMm: number): Array<{ start: number; end: number }> {
+  const normalizedStart = wrapMm(startMm, wrapWidthMm);
+  const normalizedEnd = wrapMm(endMm, wrapWidthMm);
+  if (normalizedStart <= normalizedEnd) {
+    return [{ start: normalizedStart, end: normalizedEnd }];
+  }
+  return [
+    { start: normalizedStart, end: wrapWidthMm },
+    { start: 0, end: normalizedEnd },
+  ];
+}
+
+function rangesOverlap(a: { start: number; end: number }, b: { start: number; end: number }): boolean {
+  return a.start < b.end && b.start < a.end;
+}
+
+export function collectHandleKeepOutWarnings(args: {
+  items: Pick<PlacedItem, "id" | "name" | "x" | "width">[];
+  wrapWidthMm: number;
+  calibration: CanonicalDimensionCalibration | null | undefined;
+  lockedProductionGeometry: boolean;
+}): string[] {
+  if (!args.lockedProductionGeometry || !args.calibration || !(args.wrapWidthMm > 0)) {
+    return [];
+  }
+  const keepOutStartMm = args.calibration.wrapMappingMm.handleKeepOutStartMm;
+  const keepOutEndMm = args.calibration.wrapMappingMm.handleKeepOutEndMm;
+  if (!isFiniteNumber(keepOutStartMm) || !isFiniteNumber(keepOutEndMm)) {
+    return [];
+  }
+
+  const keepOutRanges = splitWrappedRange(keepOutStartMm, keepOutEndMm, args.wrapWidthMm);
+  const offenders = args.items.filter((item) => {
+    const itemRanges = splitWrappedRange(item.x, item.x + item.width, args.wrapWidthMm);
+    return itemRanges.some((itemRange) => keepOutRanges.some((keepOutRange) => rangesOverlap(itemRange, keepOutRange)));
+  });
+
+  if (offenders.length === 0) {
+    return [];
+  }
+
+  return offenders.map((item) => `Artwork "${item.name}" crosses the handle keep-out sector in locked production mode.`);
+}
+
+export function collectPrintableSurfaceWarnings(args: {
+  items: Pick<PlacedItem, "id" | "name" | "y" | "height">[];
+  calibration: CanonicalDimensionCalibration | null | undefined;
+  printableSurfaceContract?: PrintableSurfaceContract | null | undefined;
+  lockedProductionGeometry: boolean;
+}): string[] {
+  if (!args.lockedProductionGeometry || !args.calibration) {
+    return [];
+  }
+  const localSurface = mapContractToBodyLocalSurface({
+    calibration: args.calibration,
+    printableSurfaceContract: args.printableSurfaceContract,
+  });
+  if (!localSurface) {
+    return [];
+  }
+
+  const offenders = args.items.filter((item) => {
+    const itemTop = item.y;
+    const itemBottom = item.y + item.height;
+    return itemTop < localSurface.topMm || itemBottom > localSurface.bottomMm;
+  });
+  return offenders.map((item) => `Artwork "${item.name}" crosses the locked printable-height boundary.`);
+}
+
+export function collectLogoKeepOutWarnings(args: {
+  wrapWidthMm: number;
+  logoRegion: LightBurnAlignmentLogoRegion | null | undefined;
+  calibration: CanonicalDimensionCalibration | null | undefined;
+  lockedProductionGeometry: boolean;
+}): string[] {
+  if (!args.lockedProductionGeometry || !args.logoRegion || !args.calibration || !(args.wrapWidthMm > 0)) {
+    return [];
+  }
+  const keepOutStartMm = args.calibration.wrapMappingMm.handleKeepOutStartMm;
+  const keepOutEndMm = args.calibration.wrapMappingMm.handleKeepOutEndMm;
+  if (!isFiniteNumber(keepOutStartMm) || !isFiniteNumber(keepOutEndMm)) {
+    return [];
+  }
+
+  const keepOutRanges = splitWrappedRange(keepOutStartMm, keepOutEndMm, args.wrapWidthMm);
+  const logoRanges = splitWrappedRange(
+    args.logoRegion.centerXMm - args.logoRegion.widthMm / 2,
+    args.logoRegion.centerXMm + args.logoRegion.widthMm / 2,
+    args.wrapWidthMm,
+  );
+  const overlaps = logoRanges.some((logoRange) =>
+    keepOutRanges.some((keepOutRange) => rangesOverlap(logoRange, keepOutRange)),
+  );
+  return overlaps
+    ? [`Front logo region overlaps the handle keep-out sector in locked production mode.`]
+    : [];
+}
+
+export function collectLogoPrintableSurfaceWarnings(args: {
+  logoRegion: LightBurnAlignmentLogoRegion | null | undefined;
+  calibration: CanonicalDimensionCalibration | null | undefined;
+  printableSurfaceContract?: PrintableSurfaceContract | null | undefined;
+  lockedProductionGeometry: boolean;
+}): string[] {
+  if (!args.lockedProductionGeometry || !args.logoRegion || !args.calibration) {
+    return [];
+  }
+  const localSurface = mapContractToBodyLocalSurface({
+    calibration: args.calibration,
+    printableSurfaceContract: args.printableSurfaceContract,
+  });
+  if (!localSurface) {
+    return [];
+  }
+
+  const logoTop = args.logoRegion.centerYMm - args.logoRegion.heightMm / 2;
+  const logoBottom = args.logoRegion.centerYMm + args.logoRegion.heightMm / 2;
+  return logoTop < localSurface.topMm || logoBottom > localSurface.bottomMm
+    ? [`Front logo region overlaps the locked printable-height boundary.`]
+    : [];
 }
 
 function inferShapeType(
@@ -473,6 +871,11 @@ export function buildLightBurnExportArtifacts(args: {
   workspaceMode: WorkspaceMode;
   templateWidthMm: number;
   templateHeightMm: number;
+  calibration?: CanonicalDimensionCalibration | null;
+  printableSurfaceContract?: PrintableSurfaceContract | null;
+  axialSurfaceBands?: AxialSurfaceBand[] | null;
+  manufacturerLogoStamp?: ManufacturerLogoStamp | null;
+  lockedProductionGeometry?: boolean;
   items: Pick<
     PlacedItem,
     "id" | "assetId" | "name" | "x" | "y" | "width" | "height" | "rotation" | "svgText"
@@ -485,7 +888,7 @@ export function buildLightBurnExportArtifacts(args: {
   };
   taperWarpEnabled?: boolean;
 }): LightBurnExportArtifacts {
-  const artworkPayload = buildLightBurnExportPayload({
+  const rawArtworkPayload = buildLightBurnExportPayload({
     bedConfig: args.bedConfig,
     workspaceMode: args.workspaceMode,
     templateWidthMm: args.templateWidthMm,
@@ -494,10 +897,60 @@ export function buildLightBurnExportArtifacts(args: {
     rotary: args.rotary,
     taperWarpEnabled: args.taperWarpEnabled,
   });
+  const handleKeepOutWarnings = collectHandleKeepOutWarnings({
+    items: args.items,
+    wrapWidthMm: args.templateWidthMm,
+    calibration: args.calibration,
+    lockedProductionGeometry: Boolean(args.lockedProductionGeometry),
+  });
+  const printableSurfaceWarnings = collectPrintableSurfaceWarnings({
+    items: args.items,
+    calibration: args.calibration,
+    printableSurfaceContract: args.printableSurfaceContract,
+    lockedProductionGeometry: Boolean(args.lockedProductionGeometry),
+  });
+  const alignmentGuides = buildLightBurnAlignmentGuidePayload({
+    workspaceMode: args.workspaceMode,
+    templateWidthMm: args.templateWidthMm,
+    templateHeightMm: args.templateHeightMm,
+    calibration: args.calibration,
+    printableSurfaceContract: args.printableSurfaceContract,
+    axialSurfaceBands: args.axialSurfaceBands,
+    manufacturerLogoStamp: args.manufacturerLogoStamp,
+  });
+  const logoKeepOutWarnings = collectLogoKeepOutWarnings({
+    wrapWidthMm: args.templateWidthMm,
+    logoRegion: alignmentGuides?.logoRegion,
+    calibration: args.calibration,
+    lockedProductionGeometry: Boolean(args.lockedProductionGeometry),
+  });
+  const logoPrintableSurfaceWarnings = collectLogoPrintableSurfaceWarnings({
+    logoRegion: alignmentGuides?.logoRegion,
+    calibration: args.calibration,
+    printableSurfaceContract: args.printableSurfaceContract,
+    lockedProductionGeometry: Boolean(args.lockedProductionGeometry),
+  });
+  const artworkPayload =
+    handleKeepOutWarnings.length > 0 ||
+      printableSurfaceWarnings.length > 0 ||
+      logoKeepOutWarnings.length > 0 ||
+      logoPrintableSurfaceWarnings.length > 0
+      ? {
+          ...rawArtworkPayload,
+          warnings: [
+            ...rawArtworkPayload.warnings,
+            ...handleKeepOutWarnings,
+            ...printableSurfaceWarnings,
+            ...logoKeepOutWarnings,
+            ...logoPrintableSurfaceWarnings,
+          ],
+        }
+      : rawArtworkPayload;
 
   if (!args.includeLightBurnSetup) {
     return {
       artworkPayload,
+      alignmentGuides,
       sidecar: null,
       setupSummary: null,
       setupWarnings: [],
@@ -519,6 +972,7 @@ export function buildLightBurnExportArtifacts(args: {
   if (!sidecar) {
     return {
       artworkPayload,
+      alignmentGuides,
       sidecar: null,
       setupSummary: null,
       setupWarnings: warnings,
@@ -527,8 +981,15 @@ export function buildLightBurnExportArtifacts(args: {
 
   return {
     artworkPayload,
-    sidecar,
-    setupSummary: buildLightBurnSetupSummary(sidecar),
-    setupWarnings: warnings,
-  };
+    alignmentGuides,
+      sidecar,
+      setupSummary: buildLightBurnSetupSummary(sidecar),
+      setupWarnings: [
+        ...warnings,
+        ...handleKeepOutWarnings,
+        ...printableSurfaceWarnings,
+        ...logoKeepOutWarnings,
+        ...logoPrintableSurfaceWarnings,
+      ],
+    };
 }

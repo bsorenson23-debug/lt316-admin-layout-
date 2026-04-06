@@ -2,6 +2,7 @@
 
 import React, { useRef, useEffect, useState } from "react";
 import { deriveEngravableZoneFromFitDebug } from "@/lib/engravableDimensions";
+import type { PrintableSurfaceDetection } from "@/lib/printableSurface";
 import {
   buildContourSvgPath,
   buildDirectContourSvgPath,
@@ -20,12 +21,14 @@ import {
   sortEditableOutlinePoints,
 } from "@/lib/editableBodyOutline";
 import type {
+  CanonicalDimensionCalibration,
   EditableBodyOutline,
   EditableBodyOutlinePoint,
   ReferenceLayerKey,
   ReferenceLayerState,
   ReferencePaths,
 } from "@/types/productTemplate";
+import type { PrintableSurfaceContract } from "@/types/printableSurface";
 import type { ImportedEditableBodyOutlineSource } from "@/lib/editableBodyOutline";
 import type { TumblerItemLookupFitDebug } from "@/types/tumblerItemLookup";
 import styles from "./EngravableZoneEditor.module.css";
@@ -85,9 +88,16 @@ interface Props {
   outlineProfile?: EditableBodyOutline;
   referencePaths?: ReferencePaths;
   referenceLayerState?: ReferenceLayerState;
+  dimensionCalibration?: CanonicalDimensionCalibration;
+  printableSurfaceContract?: PrintableSurfaceContract | null;
+  printableTopOverrideMm?: number;
+  printableBottomOverrideMm?: number;
   onChange: (bodyTopFromOverallMm: number, bodyBottomFromOverallMm: number) => void;
   onLidSeamChange?: (fromOverallMm: number | undefined) => void;
   onSilverBandBottomChange?: (fromOverallMm: number | undefined) => void;
+  onPrintableTopOverrideChange?: (fromOverallMm: number | undefined) => void;
+  onPrintableBottomOverrideChange?: (fromOverallMm: number | undefined) => void;
+  onPrintableSurfaceDetectionChange?: (detection: PrintableSurfaceDetection | null) => void;
   onHandleTopChange?: (fromOverallMm: number | undefined) => void;
   onHandleBottomChange?: (fromOverallMm: number | undefined) => void;
   onHandleReachChange?: (reachMm: number | undefined) => void;
@@ -131,6 +141,12 @@ function round1(n: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function parseOptionalMmInput(value: string): number | undefined {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? round1(parsed) : undefined;
 }
 
 function rgbToHex(r: number, g: number, b: number): string {
@@ -693,6 +709,8 @@ function cropVisibleBounds(
   bodyBottomY: number;
   rimTopY: number | null;
   rimBottomY: number | null;
+  rimDetectionSource: PrintableSurfaceDetection["source"];
+  rimDetectionConfidence: number;
   bodyOutlinePath: string | null;
   bodyOutlineBounds: { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } | null;
   tracedBodyOutlinePath: string | null;
@@ -720,6 +738,8 @@ function cropVisibleBounds(
       bodyBottomY: img.naturalHeight * 0.92,
       rimTopY: null,
       rimBottomY: null,
+      rimDetectionSource: "none",
+      rimDetectionConfidence: 0,
       bodyOutlinePath: null,
       bodyOutlineBounds: null,
       tracedBodyOutlinePath: null,
@@ -783,6 +803,8 @@ function cropVisibleBounds(
       bodyBottomY: img.naturalHeight * 0.92,
       rimTopY: null,
       rimBottomY: null,
+      rimDetectionSource: "none",
+      rimDetectionConfidence: 0,
       bodyOutlinePath: null,
       bodyOutlineBounds: null,
       tracedBodyOutlinePath: null,
@@ -817,6 +839,8 @@ function cropVisibleBounds(
       bodyBottomY: img.naturalHeight * 0.92,
       rimTopY: null,
       rimBottomY: null,
+      rimDetectionSource: "none",
+      rimDetectionConfidence: 0,
       bodyOutlinePath: null,
       bodyOutlineBounds: null,
       tracedBodyOutlinePath: null,
@@ -1190,6 +1214,16 @@ function cropVisibleBounds(
   const rimBottomY = rimRatios
     ? clamp(bodyTopY + (rimRatios.bottom * bodyHeightPx), 0, cropH - 1)
     : detectedRimBottomY;
+  const rimDetectionSource: PrintableSurfaceDetection["source"] = rimRatios
+    ? "fit-debug"
+    : metallicBand
+      ? "photo-row-scan"
+      : "none";
+  const rimDetectionConfidence = rimRatios
+    ? 0.92
+    : metallicBand
+      ? clamp((metallicBand.end - metallicBand.start + 1) / Math.max(6, bodyHeightPx * 0.08), 0.45, 0.82)
+      : 0;
 
   return {
     dataUrl: cropCanvas.toDataURL("image/png"),
@@ -1202,6 +1236,8 @@ function cropVisibleBounds(
     bodyBottomY: effectiveBodyBottomY,
     rimTopY,
     rimBottomY,
+    rimDetectionSource,
+    rimDetectionConfidence,
     bodyOutlinePath,
     bodyOutlineBounds,
     tracedBodyOutlinePath,
@@ -1251,6 +1287,8 @@ function cropBoundsFromFitDebug(
   bodyBottomY: number;
   rimTopY: number | null;
   rimBottomY: number | null;
+  rimDetectionSource: PrintableSurfaceDetection["source"];
+  rimDetectionConfidence: number;
   bodyOutlinePath: string | null;
   bodyOutlineBounds: { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } | null;
   tracedBodyOutlinePath: string | null;
@@ -1454,6 +1492,8 @@ function cropBoundsFromFitDebug(
     bodyBottomY: effectiveBodyBottomY,
     rimTopY,
     rimBottomY,
+    rimDetectionSource: "fit-debug",
+    rimDetectionConfidence: 0.94,
     bodyOutlinePath,
     bodyOutlineBounds,
     tracedBodyOutlinePath,
@@ -1498,9 +1538,16 @@ export function EngravableZoneEditor({
   outlineProfile,
   referencePaths,
   referenceLayerState,
+  dimensionCalibration,
+  printableSurfaceContract,
+  printableTopOverrideMm,
+  printableBottomOverrideMm,
   onChange,
   onLidSeamChange,
   onSilverBandBottomChange,
+  onPrintableTopOverrideChange,
+  onPrintableBottomOverrideChange,
+  onPrintableSurfaceDetectionChange,
   onHandleTopChange,
   onHandleBottomChange,
   onHandleReachChange,
@@ -1560,6 +1607,7 @@ export function EngravableZoneEditor({
   const [outlineImportHeightPct, setOutlineImportHeightPct] = useState(100);
   const [outlineImportOffsetYMm, setOutlineImportOffsetYMm] = useState(0);
   const [outlineImportError, setOutlineImportError] = useState<string | null>(null);
+  const [profileEditMode, setProfileEditMode] = useState(false);
   const [localReferencePaths, setLocalReferencePaths] = useState<ReferencePaths>(
     createReferencePaths({
       bodyOutline: referencePaths?.bodyOutline ?? outlineProfile ?? null,
@@ -1591,6 +1639,8 @@ export function EngravableZoneEditor({
     bodyBottomY: number;
     rimTopY: number | null;
     rimBottomY: number | null;
+    rimDetectionSource: PrintableSurfaceDetection["source"];
+    rimDetectionConfidence: number;
     bodyOutlinePath: string | null;
     bodyOutlineBounds: { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } | null;
     tracedBodyOutlinePath: string | null;
@@ -1604,8 +1654,7 @@ export function EngravableZoneEditor({
   } | null>(null);
   const activeDisplayPhoto = photoDataUrl ? displayPhoto : null;
   const canvasHeightPx = DEFAULT_CANVAS_HEIGHT;
-  const profileEditMode = false;
-  const outlineTransformMode = false;
+  const outlineTransformMode = profileEditMode && shapeWorkflowMode === "fit";
   const showBlueprintOverlay = false;
   const showGuideLabels = false;
   const showHandleTrace = true;
@@ -1617,32 +1666,53 @@ export function EngravableZoneEditor({
     let cancelled = false;
     const img = new Image();
     img.onload = () => {
-      const sourceContour = outlineProfile?.sourceContour;
-      const sourceBounds = outlineProfile?.sourceContourBounds;
+      const sourceOutline = referencePaths?.bodyOutline ?? outlineProfile;
+      const sourceContour = sourceOutline?.sourceContour;
+      const sourceBounds = sourceOutline?.sourceContourBounds;
+      const sourceViewport = sourceOutline?.sourceContourViewport;
       if (
         sourceContour &&
         sourceContour.length >= 3 &&
         sourceBounds &&
+        sourceViewport &&
+        sourceViewport.width > 0 &&
+        sourceViewport.height > 0 &&
         sourceBounds.width > 0 &&
         sourceBounds.height > 0
       ) {
-        const sourceBodyOutlinePath = buildContourSvgPath(sourceContour);
-        const sourceTopWidthPx = estimateContourWidth(sourceContour, sourceBounds.minY + 4) ?? sourceBounds.width;
-        const sourceBaseWidthPx = estimateContourWidth(sourceContour, sourceBounds.maxY - 4) ?? sourceBounds.width;
+        const scaleX = (img.naturalWidth || img.width) / Math.max(1, sourceViewport.width);
+        const scaleY = (img.naturalHeight || img.height) / Math.max(1, sourceViewport.height);
+        const scaledSourceContour = sourceContour.map((point) => ({
+          x: round1((point.x - sourceViewport.minX) * scaleX),
+          y: round1((point.y - sourceViewport.minY) * scaleY),
+        }));
+        const scaledBounds = {
+          minX: round1((sourceBounds.minX - sourceViewport.minX) * scaleX),
+          minY: round1((sourceBounds.minY - sourceViewport.minY) * scaleY),
+          maxX: round1((sourceBounds.maxX - sourceViewport.minX) * scaleX),
+          maxY: round1((sourceBounds.maxY - sourceViewport.minY) * scaleY),
+          width: round1(sourceBounds.width * scaleX),
+          height: round1(sourceBounds.height * scaleY),
+        };
+        const sourceBodyOutlinePath = buildContourSvgPath(scaledSourceContour);
+        const sourceTopWidthPx = estimateContourWidth(scaledSourceContour, scaledBounds.minY + 4) ?? scaledBounds.width;
+        const sourceBaseWidthPx = estimateContourWidth(scaledSourceContour, scaledBounds.maxY - 4) ?? scaledBounds.width;
         if (!cancelled) {
           setDisplayPhoto({
             src: photoDataUrl,
             w: img.naturalWidth || img.width,
             h: img.naturalHeight || img.height,
-            bodyCenterX: (sourceBounds.minX + sourceBounds.maxX) / 2,
-            referenceBodyWidthPx: sourceBounds.width,
-            referenceBandCenterY: sourceBounds.minY + (sourceBounds.height * 0.18),
-            bodyTopY: sourceBounds.minY,
-            bodyBottomY: sourceBounds.maxY,
+            bodyCenterX: (scaledBounds.minX + scaledBounds.maxX) / 2,
+            referenceBodyWidthPx: scaledBounds.width,
+            referenceBandCenterY: scaledBounds.minY + (scaledBounds.height * 0.18),
+            bodyTopY: scaledBounds.minY,
+            bodyBottomY: scaledBounds.maxY,
             rimTopY: null,
             rimBottomY: null,
+            rimDetectionSource: "none",
+            rimDetectionConfidence: 0,
             bodyOutlinePath: sourceBodyOutlinePath,
-            bodyOutlineBounds: sourceBounds,
+            bodyOutlineBounds: scaledBounds,
             tracedBodyOutlinePath: sourceBodyOutlinePath,
             handleOuterPath: null,
             handleInnerPath: null,
@@ -1669,6 +1739,8 @@ export function EngravableZoneEditor({
           bodyBottomY: cropped.bodyBottomY,
           rimTopY: cropped.rimTopY,
           rimBottomY: cropped.rimBottomY,
+          rimDetectionSource: cropped.rimDetectionSource,
+          rimDetectionConfidence: cropped.rimDetectionConfidence,
           bodyOutlinePath: cropped.bodyOutlinePath,
           bodyOutlineBounds: cropped.bodyOutlineBounds,
           tracedBodyOutlinePath: cropped.tracedBodyOutlinePath,
@@ -1692,7 +1764,7 @@ export function EngravableZoneEditor({
     return () => {
       cancelled = true;
     };
-  }, [fitDebug, outlineProfile, photoDataUrl]);
+  }, [fitDebug, outlineProfile, photoDataUrl, referencePaths?.bodyOutline]);
 
   useEffect(() => {
     setLocalReferencePaths(createReferencePaths({
@@ -1706,8 +1778,40 @@ export function EngravableZoneEditor({
     setLocalReferenceLayerState(cloneReferenceLayerState(referenceLayerState ?? createDefaultReferenceLayerState()));
   }, [referenceLayerState]);
 
+  const generatedFallbackOutline = React.useMemo<EditableBodyOutline>(() => createEditableBodyOutline({
+    overallHeightMm,
+    bodyTopFromOverallMm,
+    bodyBottomFromOverallMm,
+    diameterMm,
+    topOuterDiameterMm,
+    baseDiameterMm,
+    shoulderDiameterMm,
+    taperUpperDiameterMm,
+    taperLowerDiameterMm,
+    bevelDiameterMm,
+    fitDebug,
+  }), [
+    baseDiameterMm,
+    bevelDiameterMm,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    diameterMm,
+    fitDebug,
+    overallHeightMm,
+    shoulderDiameterMm,
+    taperLowerDiameterMm,
+    taperUpperDiameterMm,
+    topOuterDiameterMm,
+  ]);
+  const selectUsableOutline = React.useCallback((outline?: EditableBodyOutline | null) => (
+    outline && Array.isArray(outline.points) && outline.points.length >= 2
+      ? outline
+      : null
+  ), []);
   const activeLayer: ReferenceLayerKey = "bodyOutline";
-  const activeLayerPath = localReferencePaths.bodyOutline;
+  const activeLayerPath = selectUsableOutline(localReferencePaths.bodyOutline)
+    ?? selectUsableOutline(outlineProfile)
+    ?? generatedFallbackOutline;
   const activeLayerLocked = localReferenceLayerState.locked.bodyOutline;
   const activeLayerVisible = localReferenceLayerState.visibility.bodyOutline;
 
@@ -1833,11 +1937,13 @@ export function EngravableZoneEditor({
       outlineImportWidthPct,
     ],
   );
+  const editableOutline = outlineDraft;
+  const previewOutline = editableOutline ?? generatedFallbackOutline;
   const editableContourBoundsMm = React.useMemo(() => {
-    const contour = outlineDraft?.directContour;
+    const contour = previewOutline?.directContour;
     if (!contour || contour.length < 3) return null;
     return getBoundsFromPoints(contour.map((point) => ({ x: point.x, y: point.y })));
-  }, [outlineDraft]);
+  }, [previewOutline]);
   const bodyZoneTopPx = bodyTopPx;
   const bodyZoneBottomPx = bodyBottomPx;
   const bodyZoneHeightPx = bodyZoneBottomPx - bodyZoneTopPx;
@@ -1877,9 +1983,6 @@ export function EngravableZoneEditor({
     ? effectiveTopOuterDiameterMm
     : diameterMm;
   const bodyWidthPx = Math.max(40, round1(visualReferenceDiameterMm * pxPerMm));
-  const visualReferencePhotoWidthPx = effectiveTopOuterDiameterMm && effectiveTopOuterDiameterMm > 0
-    ? (activeDisplayPhoto?.topOuterWidthPx ?? activeDisplayPhoto?.referenceBodyWidthPx ?? null)
-    : (activeDisplayPhoto?.referenceBodyWidthPx ?? null);
   const topOuterWidthPx = effectiveTopOuterDiameterMm
     ? Math.max(bodyWidthPx, round1((effectiveTopOuterDiameterMm / Math.max(0.1, visualReferenceDiameterMm)) * bodyWidthPx))
     : null;
@@ -1897,6 +2000,12 @@ export function EngravableZoneEditor({
   const clampedPhotoHeightScalePct = Math.max(MIN_PHOTO_SCALE_PCT, Math.min(photoHeightScalePct || 100, MAX_PHOTO_SCALE_PCT));
   const clampedPhotoOffsetYPct = Math.max(-MAX_PHOTO_OFFSET_Y_PCT, Math.min(photoOffsetYPct || 0, MAX_PHOTO_OFFSET_Y_PCT));
   const clampedPhotoOffsetXPct = Math.max(-MAX_PHOTO_OFFSET_X_PCT, Math.min(photoOffsetXPct || 0, MAX_PHOTO_OFFSET_X_PCT));
+  const effectivePhotoWidthScalePct = profileEditMode ? clampedPhotoWidthScalePct : 100;
+  const effectivePhotoHeightScalePct = profileEditMode ? clampedPhotoHeightScalePct : 100;
+  const effectivePhotoOffsetYPct = profileEditMode ? clampedPhotoOffsetYPct : 0;
+  const effectivePhotoOffsetXPct = profileEditMode ? clampedPhotoOffsetXPct : 0;
+  const effectivePhotoAnchorY = profileEditMode ? photoAnchorY : "center";
+  const effectivePhotoCenterMode = profileEditMode ? photoCenterMode : "body";
   const useContourAlignedPhotoFit = Boolean(
     activeDisplayPhoto?.bodyOutlineBounds &&
     editableContourBoundsMm &&
@@ -1905,28 +2014,44 @@ export function EngravableZoneEditor({
   );
   const contourWidthPx = editableContourBoundsMm ? editableContourBoundsMm.width * pxPerMm : null;
   const contourHeightPx = editableContourBoundsMm ? editableContourBoundsMm.height * pxPerMm : null;
-  const autoWidthFitPhotoHeightPx = useContourAlignedPhotoFit && contourHeightPx != null && activeDisplayPhoto?.bodyOutlineBounds
-    ? (activeDisplayPhoto.h * contourHeightPx) / Math.max(1, activeDisplayPhoto.bodyOutlineBounds.height)
-    : (visualReferencePhotoWidthPx
-      ? (activeDisplayPhoto!.h * bodyWidthPx) / Math.max(1, visualReferencePhotoWidthPx)
-      : canvasHeightPx * VISIBLE_TUMBLER_HEIGHT_PCT);
+  const contourAlignedUniformScale = useContourAlignedPhotoFit &&
+    contourWidthPx != null &&
+    contourHeightPx != null &&
+    activeDisplayPhoto?.bodyOutlineBounds
+      ? Math.min(
+          contourWidthPx / Math.max(1, activeDisplayPhoto.bodyOutlineBounds.width),
+          contourHeightPx / Math.max(1, activeDisplayPhoto.bodyOutlineBounds.height),
+        )
+      : null;
   const tracedBodyHeightPx = activeDisplayPhoto
     ? Math.max(1, activeDisplayPhoto.bodyBottomY - activeDisplayPhoto.bodyTopY)
     : Math.max(1, canvasHeightPx * 0.84);
-  const autoHeightFitPhotoHeightPx = useContourAlignedPhotoFit && contourHeightPx != null && activeDisplayPhoto?.bodyOutlineBounds
-    ? (activeDisplayPhoto.h * contourHeightPx) / Math.max(1, activeDisplayPhoto.bodyOutlineBounds.height)
+  const calibrationScaleXToMm = dimensionCalibration?.photoToFrontTransform.matrix[0] ?? null;
+  const calibrationScaleYToMm = dimensionCalibration?.photoToFrontTransform.matrix[4] ?? null;
+  const calibrationPhotoHeightPx = activeDisplayPhoto && calibrationScaleYToMm != null
+    ? activeDisplayPhoto.h * calibrationScaleYToMm * pxPerMm
+    : null;
+  const calibrationPhotoWidthPx = activeDisplayPhoto && calibrationScaleXToMm != null
+    ? activeDisplayPhoto.w * Math.abs(calibrationScaleXToMm) * pxPerMm
+    : null;
+  const autoHeightFitPhotoHeightPx = contourAlignedUniformScale != null && activeDisplayPhoto
+    ? activeDisplayPhoto.h * contourAlignedUniformScale
+    : calibrationPhotoHeightPx != null
+      ? calibrationPhotoHeightPx
     : (activeDisplayPhoto
       ? (activeDisplayPhoto.h * bodyZoneHeightPx) / tracedBodyHeightPx
-      : autoWidthFitPhotoHeightPx);
+      : canvasHeightPx * VISIBLE_TUMBLER_HEIGHT_PCT);
   const basePhotoHeightPx = Math.max(80, autoHeightFitPhotoHeightPx * BODY_REFERENCE_DISPLAY_FIT_PCT);
-  const basePhotoWidthPx = useContourAlignedPhotoFit && contourWidthPx != null && activeDisplayPhoto?.bodyOutlineBounds
-    ? Math.max(40, ((activeDisplayPhoto.w * contourWidthPx) / Math.max(1, activeDisplayPhoto.bodyOutlineBounds.width)) * BODY_REFERENCE_DISPLAY_FIT_PCT)
+  const basePhotoWidthPx = contourAlignedUniformScale != null && activeDisplayPhoto
+    ? Math.max(40, (activeDisplayPhoto.w * contourAlignedUniformScale) * BODY_REFERENCE_DISPLAY_FIT_PCT)
+    : calibrationPhotoWidthPx != null
+      ? Math.max(40, calibrationPhotoWidthPx * BODY_REFERENCE_DISPLAY_FIT_PCT)
     : (activeDisplayPhoto
       ? (activeDisplayPhoto.w / activeDisplayPhoto.h) * basePhotoHeightPx
       : canvasHeightPx * 0.52);
   const maxPhotoWidthPx = basePhotoWidthPx * (MAX_PHOTO_SCALE_PCT / 100);
-  const targetPhotoHeightPx = basePhotoHeightPx * (clampedPhotoHeightScalePct / 100);
-  const photoWidthPx = basePhotoWidthPx * (clampedPhotoWidthScalePct / 100);
+  const targetPhotoHeightPx = basePhotoHeightPx * (effectivePhotoHeightScalePct / 100);
+  const photoWidthPx = basePhotoWidthPx * (effectivePhotoWidthScalePct / 100);
   const photoScaleXPx = activeDisplayPhoto ? photoWidthPx / Math.max(1, activeDisplayPhoto.w) : 1;
   const photoScaleYPx = activeDisplayPhoto ? targetPhotoHeightPx / Math.max(1, activeDisplayPhoto.h) : 1;
   const scaledBodyCenterX = activeDisplayPhoto
@@ -1975,32 +2100,32 @@ export function EngravableZoneEditor({
   const containerWidthPx = Math.max(Math.ceil(sideSpanPx * 2 + 32), bodyWidthPx + 96);
   const bodyCenterLinePx = Math.round(containerWidthPx / 2);
   const bodyLeftPx = Math.round(bodyCenterLinePx - bodyWidthPx / 2);
-  const centeringAnchorX = photoCenterMode === "photo" ? scaledPhotoCenterX : scaledBodyCenterX;
+  const centeringAnchorX = effectivePhotoCenterMode === "photo" ? scaledPhotoCenterX : scaledBodyCenterX;
   const photoLeftPx = useContourAlignedPhotoFit && contourAlignedPhotoLeftRelPx != null
     ? Math.round(
       bodyCenterLinePx
       + contourAlignedPhotoLeftRelPx
-      + (clampedPhotoOffsetXPct / 100) * containerWidthPx,
+      + (effectivePhotoOffsetXPct / 100) * containerWidthPx,
     )
     : Math.round(
       bodyCenterLinePx
       - centeringAnchorX
-      + (clampedPhotoOffsetXPct / 100) * containerWidthPx,
+      + (effectivePhotoOffsetXPct / 100) * containerWidthPx,
     );
   const bodyCenterInPhotoPx = (scaledBodyTopInPhotoPx + scaledBodyBottomInPhotoPx) / 2;
   const targetBodyCenterPx = (bodyZoneTopPx + bodyZoneBottomPx) / 2;
   const basePhotoTopPx = useContourAlignedPhotoFit && activeDisplayPhoto?.bodyOutlineBounds && contourMinYPx != null && contourMaxYPx != null
     ? (
-      photoAnchorY === "bottom"
+      effectivePhotoAnchorY === "bottom"
         ? contourMaxYPx - (activeDisplayPhoto.bodyOutlineBounds.maxY * photoScaleYPx)
         : contourMinYPx - (activeDisplayPhoto.bodyOutlineBounds.minY * photoScaleYPx)
     )
     : (
-      photoAnchorY === "bottom"
+      effectivePhotoAnchorY === "bottom"
         ? bodyZoneBottomPx - scaledBodyBottomInPhotoPx
         : targetBodyCenterPx - bodyCenterInPhotoPx
     );
-  const photoTopPx = Math.round(basePhotoTopPx + (clampedPhotoOffsetYPct / 100) * canvasHeightPx);
+  const photoTopPx = Math.round(basePhotoTopPx + (effectivePhotoOffsetYPct / 100) * canvasHeightPx);
   const referenceBandGuideTopPx = Math.round(photoTopPx + scaledReferenceBandY);
   const derivedLidSeamGuidePx = scaledRimTopInPhotoPx != null ? Math.round(photoTopPx + scaledRimTopInPhotoPx) : null;
   const derivedSilverBandGuidePx = scaledRimBottomInPhotoPx != null ? Math.round(photoTopPx + scaledRimBottomInPhotoPx) : null;
@@ -2014,6 +2139,63 @@ export function EngravableZoneEditor({
   const effectiveSilverBandGuideMm = typeof silverBandBottomFromOverallMm === "number" && Number.isFinite(silverBandBottomFromOverallMm)
     ? clamp(silverBandBottomFromOverallMm, minimumSilverBandBottomMm, clampedBodyBottomFromOverallMm)
     : (derivedSilverBandGuidePx != null ? round1(clamp(derivedSilverBandGuidePx / pxPerMm, minimumSilverBandBottomMm, clampedBodyBottomFromOverallMm)) : null);
+  const resolvedPrintableTopMm = round1(clamp(
+    printableSurfaceContract?.printableTopMm ??
+      effectiveSilverBandGuideMm ??
+      clampedBodyTopFromOverallMm,
+    clampedBodyTopFromOverallMm,
+    clampedBodyBottomFromOverallMm,
+  ));
+  const resolvedPrintableBottomMm = round1(clamp(
+    printableSurfaceContract?.printableBottomMm ?? clampedBodyBottomFromOverallMm,
+    resolvedPrintableTopMm,
+    clampedBodyBottomFromOverallMm,
+  ));
+  const resolvedPrintableHeightMm = round1(Math.max(0, resolvedPrintableBottomMm - resolvedPrintableTopMm));
+  const printableExclusionSummary = printableSurfaceContract?.axialExclusions
+    ?.filter((band) => band.kind !== "base")
+    .map((band) => (band.kind === "rim-ring" ? "ring" : band.kind))
+    .join(" / ") || "none";
+  const printableDetectionWeak =
+    printableTopOverrideMm == null &&
+    silverBandBottomFromOverallMm == null &&
+    (printableSurfaceContract == null || activeDisplayPhoto?.rimDetectionSource !== "fit-debug") &&
+    resolvedPrintableTopMm > clampedBodyTopFromOverallMm + 0.1;
+
+  useEffect(() => {
+    if (!onPrintableSurfaceDetectionChange) return;
+    if (!activeDisplayPhoto) {
+      onPrintableSurfaceDetectionChange(null);
+      return;
+    }
+
+    const photoBodyHeightPx = Math.max(1, activeDisplayPhoto.bodyBottomY - activeDisplayPhoto.bodyTopY);
+    const mapPhotoBodyYToOverallMm = (yPx: number) => round1(clamp(
+      clampedBodyTopFromOverallMm +
+        (((yPx - activeDisplayPhoto.bodyTopY) / photoBodyHeightPx) * bodyHeightMm),
+      clampedBodyTopFromOverallMm,
+      clampedBodyBottomFromOverallMm,
+    ));
+
+    if (activeDisplayPhoto.rimBottomY == null || activeDisplayPhoto.rimDetectionSource === "none") {
+      onPrintableSurfaceDetectionChange(null);
+      return;
+    }
+
+    onPrintableSurfaceDetectionChange({
+      source: activeDisplayPhoto.rimDetectionSource,
+      lidSeamFromOverallMm:
+        activeDisplayPhoto.rimTopY != null ? mapPhotoBodyYToOverallMm(activeDisplayPhoto.rimTopY) : null,
+      rimRingBottomFromOverallMm: mapPhotoBodyYToOverallMm(activeDisplayPhoto.rimBottomY),
+      confidence: Math.round((activeDisplayPhoto.rimDetectionConfidence ?? 0) * 100) / 100,
+    });
+  }, [
+    activeDisplayPhoto,
+    bodyHeightMm,
+    clampedBodyBottomFromOverallMm,
+    clampedBodyTopFromOverallMm,
+    onPrintableSurfaceDetectionChange,
+  ]);
   const scaledHandleOuterRect = activeDisplayPhoto?.handleOuterRect
     ? {
         x: photoLeftPx + ((activeDisplayPhoto.handleOuterRect.x / activeDisplayPhoto.w) * photoWidthPx),
@@ -2156,39 +2338,49 @@ export function EngravableZoneEditor({
         })
       : null;
 
-  const editableOutline = outlineDraft;
   const sortedEditablePoints = React.useMemo(
     () => (editableOutline ? sortEditableOutlinePoints(editableOutline.points) : []),
     [editableOutline],
   );
   const editableOutlinePath = React.useMemo(
     () => {
-      if (!editableOutline) return null;
-      return buildDirectContourSvgPath({
-        outline: editableOutline,
+      if (!previewOutline) return null;
+      return buildMirroredOutlineSvgPath({
+        outline: previewOutline,
         centerXPx: bodyCenterLinePx,
         pxPerMm,
-      }) || buildMirroredOutlineSvgPath({
-        outline: editableOutline,
+      }) || buildDirectContourSvgPath({
+        outline: previewOutline,
         centerXPx: bodyCenterLinePx,
         pxPerMm,
       });
     },
-    [bodyCenterLinePx, editableOutline, pxPerMm],
+    [bodyCenterLinePx, previewOutline, pxPerMm],
+  );
+  const generatedFallbackOutlinePath = React.useMemo(
+    () => buildMirroredOutlineSvgPath({
+      outline: generatedFallbackOutline,
+      centerXPx: bodyCenterLinePx,
+      pxPerMm,
+    }) || buildDirectContourSvgPath({
+      outline: generatedFallbackOutline,
+      centerXPx: bodyCenterLinePx,
+      pxPerMm,
+    }),
+    [bodyCenterLinePx, generatedFallbackOutline, pxPerMm],
   );
   const hasSourceContourPreview = Boolean(
     activeDisplayPhoto?.bodyOutlinePath &&
     editableOutline?.sourceContour &&
     editableOutline.sourceContour.length >= 3,
   );
-  const readOnlyPreviewOutlinePath = hasSourceContourPreview
+  const sourceContourPreviewPath = hasSourceContourPreview
     ? (activeDisplayPhoto?.bodyOutlinePath ?? null)
-    : (correctedBodyOverlay?.outlinePath ?? activeDisplayPhoto?.bodyOutlinePath ?? null);
-  const showLegacyMeasuredFallback = false;
-  const useEditableOutlinePreview = !profileEditMode && !hasSourceContourPreview && (Boolean(editableOutlinePath) || !showLegacyMeasuredFallback);
-  const showFallbackEditableOutlinePreview = !profileEditMode
-    && !activeDisplayPhoto?.bodyOutlinePath
-    && Boolean(editableOutlinePath);
+    : null;
+  const readOnlyPreviewOutlinePath = !profileEditMode
+    ? (activeDisplayPhoto?.bodyOutlinePath ?? generatedFallbackOutlinePath ?? correctedBodyOverlay?.outlinePath ?? null)
+    : null;
+  const showMainEditableOutlinePreview = profileEditMode && Boolean(editableOutlinePath);
   const selectedPoint = React.useMemo(
     () => sortedEditablePoints.find((point) => point.id === selectedPointId) ?? null,
     [selectedPointId, sortedEditablePoints],
@@ -3024,6 +3216,19 @@ export function EngravableZoneEditor({
     onSilverBandBottomChange(round1(clamp(nextValue, minMm, clampedBodyBottomFromOverallMm)));
   };
 
+  const toggleProfileEditMode = () => {
+    if (profileEditMode) {
+      setSelectedPointId(null);
+      setSelectedHandleType(null);
+      setSelectedSegmentIndex(null);
+      setOutlineDragState(null);
+    } else {
+      setShapeWorkflowMode("fit");
+      setNodeEditMode("edit");
+    }
+    setProfileEditMode((current) => !current);
+  };
+
   useEffect(() => {
     if (!activeDisplayPhoto) return;
 
@@ -3081,6 +3286,15 @@ export function EngravableZoneEditor({
 
   return (
     <div className={styles.wrapper}>
+      <div className={styles.editorToolbar}>
+        <button
+          type="button"
+          className={`${styles.pillButton} ${profileEditMode ? styles.pillButtonActive : ""}`}
+          onClick={toggleProfileEditMode}
+        >
+          {profileEditMode ? "Done outline" : "Edit outline"}
+        </button>
+      </div>
       <div className={styles.editorRow}>
         {/* Product photo + overlay */}
         <div
@@ -3225,7 +3439,7 @@ export function EngravableZoneEditor({
               )}
             </svg>
           )}
-          {!profileEditMode && !useEditableOutlinePreview && (
+          {!profileEditMode && !showMainEditableOutlinePreview && (
             <>
               <div
                 className={styles.bodyFrame}
@@ -3246,7 +3460,7 @@ export function EngravableZoneEditor({
             className={styles.productPhoto}
             style={{ width: photoWidthPx, height: targetPhotoHeightPx, left: photoLeftPx, top: photoTopPx }}
           />
-          {showFallbackEditableOutlinePreview && editableOutlinePath && (
+          {showMainEditableOutlinePreview && editableOutlinePath && (
             <svg
               className={styles.pathEditorOverlay}
               viewBox={`0 0 ${containerWidthPx} ${canvasHeightPx}`}
@@ -3256,11 +3470,11 @@ export function EngravableZoneEditor({
             >
               <path
                 d={editableOutlinePath}
-                className={`${styles.traceBodyOutlineMeasured} ${styles.referenceLayerPathActive}`}
+                className={styles.traceBodyOutline}
               />
             </svg>
           )}
-          {activeDisplayPhoto && !profileEditMode && !useEditableOutlinePreview && readOnlyPreviewOutlinePath && (
+          {activeDisplayPhoto && (profileEditMode || sourceContourPreviewPath || readOnlyPreviewOutlinePath) && (
             <svg
               className={styles.traceOverlay}
               viewBox={`0 0 ${activeDisplayPhoto.w} ${activeDisplayPhoto.h}`}
@@ -3276,20 +3490,26 @@ export function EngravableZoneEditor({
               {showReadOnlyGuides && correctedBodyOverlay?.bottomMaskPath && (
                 <path d={correctedBodyOverlay.bottomMaskPath} className={styles.traceBaseMask} />
               )}
-              {!profileEditMode && !useEditableOutlinePreview && readOnlyPreviewOutlinePath && (
+              {(profileEditMode || showMainEditableOutlinePreview) && sourceContourPreviewPath && (
+                <path
+                  d={sourceContourPreviewPath}
+                  className={styles.traceBodyOutlineRaw}
+                />
+              )}
+              {!profileEditMode && !showMainEditableOutlinePreview && readOnlyPreviewOutlinePath && (
                 <path
                   d={readOnlyPreviewOutlinePath ?? undefined}
                   className={styles.traceBodyOutline}
                 />
               )}
-              {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && showHandleTrace && activeDisplayPhoto.handleOuterPath && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && activeDisplayPhoto.handleOuterPath && (
                 <path
                   d={activeDisplayPhoto.handleOuterPath}
                   transform={handlePathTransform}
                   className={styles.traceHandleOutline}
                 />
               )}
-              {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && showHandleTrace && !activeDisplayPhoto.handleOuterPath && activeDisplayPhoto.handleOuterRect && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && !activeDisplayPhoto.handleOuterPath && activeDisplayPhoto.handleOuterRect && (
                 <rect
                   x={activeDisplayPhoto.handleOuterRect.x}
                   y={activeDisplayPhoto.handleOuterRect.y}
@@ -3300,14 +3520,14 @@ export function EngravableZoneEditor({
                   className={styles.traceHandleOutline}
                 />
               )}
-              {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && showHandleTrace && activeDisplayPhoto.handleInnerPath && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && activeDisplayPhoto.handleInnerPath && (
                 <path
                   d={activeDisplayPhoto.handleInnerPath}
                   transform={handlePathTransform}
                   className={styles.traceHandleHole}
                 />
               )}
-              {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && showHandleTrace && !activeDisplayPhoto.handleInnerPath && activeDisplayPhoto.handleInnerRect && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && !activeDisplayPhoto.handleInnerPath && activeDisplayPhoto.handleInnerRect && (
                 <rect
                   x={activeDisplayPhoto.handleInnerRect.x}
                   y={activeDisplayPhoto.handleInnerRect.y}
@@ -3318,7 +3538,7 @@ export function EngravableZoneEditor({
                   className={styles.traceHandleHole}
                 />
               )}
-              {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && overlayRimTopY != null && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && overlayRimTopY != null && (
                 <>
                   <line
                     x1={0}
@@ -3341,7 +3561,7 @@ export function EngravableZoneEditor({
                   />
                 </>
               )}
-              {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && overlayRimTopY != null && overlayRimBottomY != null && overlayRimBottomY > overlayRimTopY && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && overlayRimTopY != null && overlayRimBottomY != null && overlayRimBottomY > overlayRimTopY && (
                 <>
                   <rect
                     x={0}
@@ -3364,7 +3584,7 @@ export function EngravableZoneEditor({
                   />
                 </>
               )}
-              {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && showHandleTrace && activeDisplayPhoto.handleOuterRect && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && activeDisplayPhoto.handleOuterRect && (
                 <>
                   <circle
                     cx={activeDisplayPhoto.handleOuterRect.x}
@@ -3619,7 +3839,7 @@ export function EngravableZoneEditor({
               </svg>
             </>
           )}
-          {showReadOnlyGuides && activeDisplayPhoto && !profileEditMode && !useEditableOutlinePreview && (
+          {showReadOnlyGuides && activeDisplayPhoto && !profileEditMode && !showMainEditableOutlinePreview && (
             <div
               className={styles.guideLine}
               style={{ top: referenceBandGuideTopPx, left: photoLeftPx, width: photoWidthPx }}
@@ -3627,7 +3847,7 @@ export function EngravableZoneEditor({
               {showGuideLabels && <span className={styles.guideLineLabel}>Scale anchor</span>}
             </div>
           )}
-          {showReadOnlyGuides && hasLidGuide && rimTopGuidePx != null && !profileEditMode && !useEditableOutlinePreview && (
+          {showReadOnlyGuides && hasLidGuide && rimTopGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
             <div
               className={`${styles.placementGuide} ${styles.lidPlacementGuide}`}
               style={{ top: rimTopGuidePx, left: bodyLeftPx, width: bodyWidthPx }}
@@ -3635,7 +3855,7 @@ export function EngravableZoneEditor({
               {showGuideLabels && <span className={styles.placementGuideLabel}>Lid top</span>}
             </div>
           )}
-          {showReadOnlyGuides && hasLidGuide && rimTopGuidePx != null && !profileEditMode && !useEditableOutlinePreview && (
+          {showReadOnlyGuides && hasLidGuide && rimTopGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
             <>
               <button
                 type="button"
@@ -3653,7 +3873,7 @@ export function EngravableZoneEditor({
               />
             </>
           )}
-          {showReadOnlyGuides && hasSilverGuide && rimBottomGuidePx != null && !profileEditMode && !useEditableOutlinePreview && (
+          {showReadOnlyGuides && hasSilverGuide && rimBottomGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
             <div
               className={`${styles.placementGuide} ${styles.coatingPlacementGuide}`}
               style={{ top: rimBottomGuidePx, left: bodyLeftPx, width: bodyWidthPx }}
@@ -3661,7 +3881,7 @@ export function EngravableZoneEditor({
               {showGuideLabels && <span className={styles.placementGuideLabel}>Powder coat begins</span>}
             </div>
           )}
-          {showReadOnlyGuides && hasSilverGuide && rimBottomGuidePx != null && !profileEditMode && !useEditableOutlinePreview && (
+          {showReadOnlyGuides && hasSilverGuide && rimBottomGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
             <>
               <button
                 type="button"
@@ -3681,7 +3901,7 @@ export function EngravableZoneEditor({
           )}
 
           {/* Dead zones (non-engravable) */}
-          {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && (
+          {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && (
             <>
               <div
                 className={styles.deadZone}
@@ -3695,7 +3915,7 @@ export function EngravableZoneEditor({
           )}
 
           {/* Physical tumbler body highlight */}
-          {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && (
+          {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && (
             <>
               <div
                 className={styles.engravableZone}
@@ -3723,7 +3943,7 @@ export function EngravableZoneEditor({
               )}
             </>
           )}
-          {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && showHandleTrace && transformedHandleOuterRect && (
+          {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && transformedHandleOuterRect && (
             <>
               <div
                 className={`${styles.placementGuide} ${styles.handlePlacementGuide}`}
@@ -3780,7 +4000,7 @@ export function EngravableZoneEditor({
               />
             </>
           )}
-          {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && topOuterLeftPx != null && topOuterRightPx != null && (
+          {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && topOuterLeftPx != null && topOuterRightPx != null && (
             <>
               <button
                 type="button"
@@ -3800,7 +4020,7 @@ export function EngravableZoneEditor({
               />
             </>
           )}
-          {showReadOnlyGuides && !profileEditMode && !useEditableOutlinePreview && (
+          {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && (
             <>
               <button
                 type="button"
@@ -4055,6 +4275,14 @@ export function EngravableZoneEditor({
               {effectiveTopOuterDiameterMm != null ? "visible outer diameter" : "body / wrap diameter"}
             </span>
           </div>
+          {dimensionCalibration && (
+            <div className={styles.readoutRow}>
+              <span className={styles.readoutLabel}>Front transform</span>
+              <span className={styles.readoutValue}>
+                {dimensionCalibration.photoToFrontTransform.matrix.map((value) => value.toFixed(3)).join(", ")}
+              </span>
+            </div>
+          )}
           {derivedZoneGuides?.straightWallHeightMm != null && derivedZoneGuides.straightWallHeightMm > 0 && (
             <div className={styles.readoutRow}>
               <span className={styles.readoutLabel}>Straight wall</span>
@@ -4101,6 +4329,65 @@ export function EngravableZoneEditor({
               </span>
             </div>
           )}
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Printable top</span>
+            <span className={styles.readoutInputWrap}>
+              <input
+                className={styles.readoutInput}
+                type="number"
+                min={round1(clampedBodyTopFromOverallMm)}
+                max={round1(Math.max(clampedBodyTopFromOverallMm, resolvedPrintableBottomMm - 1))}
+                step={0.1}
+                value={printableTopOverrideMm != null ? round1(printableTopOverrideMm) : ""}
+                placeholder={String(round1(resolvedPrintableTopMm))}
+                onChange={(e) => onPrintableTopOverrideChange?.(parseOptionalMmInput(e.target.value))}
+              />
+              <span className={styles.dimensionUnit}>mm</span>
+            </span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Printable bottom</span>
+            <span className={styles.readoutInputWrap}>
+              <input
+                className={styles.readoutInput}
+                type="number"
+                min={round1(resolvedPrintableTopMm + 1)}
+                max={round1(clampedBodyBottomFromOverallMm)}
+                step={0.1}
+                value={printableBottomOverrideMm != null ? round1(printableBottomOverrideMm) : ""}
+                placeholder={String(round1(resolvedPrintableBottomMm))}
+                onChange={(e) => onPrintableBottomOverrideChange?.(parseOptionalMmInput(e.target.value))}
+              />
+              <span className={styles.dimensionUnit}>mm</span>
+            </span>
+          </div>
+          <div className={`${styles.readoutRow} ${styles.readoutHighlight}`}>
+            <span className={styles.readoutLabel}>Printable height</span>
+            <span className={styles.readoutValue}>{resolvedPrintableHeightMm} mm</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Top exclusions</span>
+            <span className={styles.readoutValue}>{printableExclusionSummary}</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Handle keep-out</span>
+            <span className={styles.readoutValue}>
+              {printableSurfaceContract?.circumferentialExclusions?.length ? "yes" : "no"}
+            </span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Band detect</span>
+            <span className={styles.readoutValue}>
+              {activeDisplayPhoto?.rimDetectionSource === "none" || !activeDisplayPhoto
+                ? "manual"
+                : `${activeDisplayPhoto.rimDetectionSource} ${Math.round((activeDisplayPhoto.rimDetectionConfidence ?? 0) * 100)}%`}
+            </span>
+          </div>
+          <div className={printableDetectionWeak ? styles.readoutWarning : styles.readoutHint}>
+            {printableDetectionWeak
+              ? "Top band detection is weak. Set printable top / bottom manually instead of trusting the auto split."
+              : "Printable overrides are optional. Leave them blank to use the detected boundary."}
+          </div>
           {transformedHandleOuterRect && (
             <>
               <div className={styles.readoutRow}>

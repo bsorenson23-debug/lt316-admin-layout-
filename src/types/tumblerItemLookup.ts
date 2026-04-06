@@ -1,9 +1,15 @@
 import type { TumblerSourceLink } from "./tumblerAutoSize";
+import type { ProductReferenceSet } from "./productTemplate";
 
 export type TumblerItemLookupMode =
   | "matched-profile"
   | "parsed-page"
   | "safe-fallback";
+
+export type TumblerModelStatus =
+  | "verified-product-model"
+  | "placeholder-model"
+  | "missing-model";
 
 export interface TumblerItemLookupDimensions {
   overallHeightMm: number | null;
@@ -77,9 +83,12 @@ export interface TumblerItemLookupResponse {
   capacityOz: number | null;
   matchedProfileId: string | null;
   glbPath: string;
+  modelStatus?: TumblerModelStatus;
+  modelSourceLabel?: string | null;
   imageUrl: string | null;
   backImageUrl?: string | null;
   imageUrls: string[];
+  productReferenceSet?: ProductReferenceSet | null;
   bodyColorHex?: string | null;
   rimColorHex?: string | null;
   fitDebug?: TumblerItemLookupFitDebug | null;

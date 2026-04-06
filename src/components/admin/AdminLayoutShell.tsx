@@ -59,6 +59,7 @@ import type { OrderJobRecipe, OrderRecord, OrderRecipePlacedItem } from "@/types
 import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
+import { getPrintableSurfaceResolutionFromDimensions } from "@/lib/printableSurface";
 import { getTumblerWrapLayout } from "@/utils/tumblerWrapLayout";
 import { getMaterialProfileById } from "@/data/materialProfiles";
 import type { LightBurnExportPayload } from "@/types/export";
@@ -66,9 +67,9 @@ import {
   LASER_PROFILE_STATE_CHANGED_EVENT,
   getActiveLaserAndLens,
 } from "@/utils/laserProfileState";
-import { buildLightBurnExportArtifacts } from "@/utils/tumblerExportPlacement";
+import { buildLightBurnExportArtifacts, mapLogoPlacementToWrapRegion } from "@/utils/tumblerExportPlacement";
 import { buildLightBurnLbrn } from "@/utils/lightBurnLbrnExport";
-import { buildLightBurnExportSvg } from "@/utils/lightBurnSvgExport";
+import { buildLightBurnAlignmentGuideSvg, buildLightBurnExportSvg } from "@/utils/lightBurnSvgExport";
 import { useAdminWorkspacePersistence } from "./hooks/useAdminWorkspacePersistence";
 import { useQueueRunnerState } from "./hooks/useQueueRunnerState";
 import { useTemplateWorkflow } from "./hooks/useTemplateWorkflow";
@@ -136,7 +137,15 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 const CURRENT_JOB_BASENAME = "current-job";
 
-function inferTopSafeOffsetMm(bedConfig: BedConfig): number | undefined {
+function inferTopSafeOffsetMm(
+  bedConfig: BedConfig,
+  printableSurfaceContract?: ProductTemplate["dimensions"]["printableSurfaceContract"] | null,
+  bodyTopMm?: number | null,
+): number | undefined {
+  if (printableSurfaceContract && Number.isFinite(printableSurfaceContract.printableTopMm) && Number.isFinite(bodyTopMm)) {
+    const delta = printableSurfaceContract.printableTopMm - (bodyTopMm ?? 0);
+    return delta > 0 ? Number(delta.toFixed(2)) : 0;
+  }
   const overallHeightMm = bedConfig.tumblerOverallHeightMm;
   const usableHeightMm = bedConfig.tumblerUsableHeightMm;
   if (!Number.isFinite(overallHeightMm) || !Number.isFinite(usableHeightMm)) {
@@ -273,6 +282,7 @@ export function AdminLayoutShell() {
 
   // -- Product template system -----------------------------------------------
   const [selectedTemplate, setSelectedTemplate] = useState<ProductTemplate | null>(null);
+  const [modelViewerResetKey, setModelViewerResetKey] = useState(0);
   const [activeLaserSetup, setActiveLaserSetup] = useState(readActiveLaserSetup);
 
   const {
@@ -361,6 +371,13 @@ export function AdminLayoutShell() {
     if (!isTumblerMode || !selectedTemplate) return null;
     return getEngravableDimensions(selectedTemplate);
   }, [isTumblerMode, selectedTemplate]);
+  const templatePrintableSurface = React.useMemo(() => {
+    if (!selectedTemplate) return null;
+    return getPrintableSurfaceResolutionFromDimensions(
+      selectedTemplate.dimensions,
+      selectedTemplate.dimensions.canonicalDimensionCalibration,
+    );
+  }, [selectedTemplate]);
 
   // Tumbler dimensions — shared between left panel preview and center 3D view
   const tumblerDims = React.useMemo(() => {
@@ -370,11 +387,12 @@ export function AdminLayoutShell() {
       bedConfig.tumblerOverallHeightMm ??
       bedConfig.height;
     const printableHeightMm =
-      templateEngravableDims?.engravableHeightMm ??
-      bedConfig.tumblerPrintableHeightMm ??
+      templateEngravableDims?.printableHeightMm ??
       bedConfig.tumblerUsableHeightMm ??
+      bedConfig.tumblerPrintableHeightMm ??
       bedConfig.height;
     const printableTopOffsetMm =
+      templateEngravableDims?.printableSurfaceContract?.printableTopMm ??
       templateEngravableDims?.topMarginMm ??
       Math.max(0, (overallHeightMm - printableHeightMm) / 2);
     return {
@@ -382,10 +400,20 @@ export function AdminLayoutShell() {
       diameterMm: bedConfig.tumblerDiameterMm,
       topDiameterMm: bedConfig.tumblerTopDiameterMm,
       bottomDiameterMm: bedConfig.tumblerBottomDiameterMm,
+      bodyTopOffsetMm: templateEngravableDims?.bodyTopOffsetMm,
+      bodyHeightMm: templateEngravableDims?.engravableHeightMm,
       printableHeightMm,
       printableTopOffsetMm,
+      lidSeamFromOverallMm: selectedTemplate?.dimensions.lidSeamFromOverallMm,
+      silverBandBottomFromOverallMm: selectedTemplate?.dimensions.silverBandBottomFromOverallMm,
     };
-  }, [isTumblerMode, bedConfig, templateEngravableDims]);
+  }, [
+    isTumblerMode,
+    bedConfig,
+    selectedTemplate?.dimensions.lidSeamFromOverallMm,
+    selectedTemplate?.dimensions.silverBandBottomFromOverallMm,
+    templateEngravableDims,
+  ]);
 
   const isPlacementArmed = placementAsset !== null;
   const selectedItem = placedItems.find((p) => p.id === selectedItemId) ?? null;
@@ -422,16 +450,17 @@ export function AdminLayoutShell() {
     if (!isTumblerMode || !selectedTemplate || !templateEngravableDims) return;
 
     setBedConfig((prev) => {
-      const nextPrintableHeight = templateEngravableDims.engravableHeightMm;
+      const nextWorkspaceHeight = templateEngravableDims.engravableHeightMm;
+      const nextUsableHeight = templateEngravableDims.printableHeightMm;
       const nextOverallHeight = templateEngravableDims.totalHeightMm;
       const nextWidth = templateEngravableDims.circumferenceMm;
 
       if (
-        Math.abs((prev.tumblerPrintableHeightMm ?? 0) - nextPrintableHeight) < 0.01 &&
-        Math.abs((prev.tumblerUsableHeightMm ?? 0) - nextPrintableHeight) < 0.01 &&
+        Math.abs((prev.tumblerPrintableHeightMm ?? 0) - nextWorkspaceHeight) < 0.01 &&
+        Math.abs((prev.tumblerUsableHeightMm ?? 0) - nextUsableHeight) < 0.01 &&
         Math.abs((prev.tumblerOverallHeightMm ?? 0) - nextOverallHeight) < 0.01 &&
         Math.abs((prev.tumblerTemplateWidthMm ?? 0) - nextWidth) < 0.01 &&
-        Math.abs((prev.tumblerTemplateHeightMm ?? 0) - nextPrintableHeight) < 0.01
+        Math.abs((prev.tumblerTemplateHeightMm ?? 0) - nextWorkspaceHeight) < 0.01
       ) {
         return prev;
       }
@@ -440,11 +469,11 @@ export function AdminLayoutShell() {
         ...prev,
         tumblerDiameterMm: templateEngravableDims.diameterMm,
         tumblerOutsideDiameterMm: templateEngravableDims.diameterMm,
-        tumblerPrintableHeightMm: nextPrintableHeight,
-        tumblerUsableHeightMm: nextPrintableHeight,
+        tumblerPrintableHeightMm: nextWorkspaceHeight,
+        tumblerUsableHeightMm: nextUsableHeight,
         tumblerOverallHeightMm: nextOverallHeight,
         tumblerTemplateWidthMm: nextWidth,
-        tumblerTemplateHeightMm: nextPrintableHeight,
+        tumblerTemplateHeightMm: nextWorkspaceHeight,
       });
     });
   }, [isTumblerMode, selectedTemplate, templateEngravableDims]);
@@ -456,10 +485,19 @@ export function AdminLayoutShell() {
     }
 
     const fullWrapW = templateEngravableDims.circumferenceMm;
+    const printableSurfaceLocalTop = templateEngravableDims.printableTopFromBodyTopMm;
+    const printableSurfaceLocalBottom = templateEngravableDims.printableBottomFromBodyTopMm;
+    const wrapMapping = selectedTemplate.dimensions.canonicalDimensionCalibration?.wrapMappingMm;
+    const logoRegion = mapLogoPlacementToWrapRegion({
+      templateWidthMm: fullWrapW,
+      templateHeightMm: templateEngravableDims.engravableHeightMm,
+      calibration: selectedTemplate.dimensions.canonicalDimensionCalibration ?? null,
+      stamp: selectedTemplate.manufacturerLogoStamp ?? null,
+    });
     const layout = getTumblerWrapLayout(activeHandleArcDeg);
-    const frontCenterX = fullWrapW * layout.frontCenterRatio;
-    const backCenterX = layout.backCenterRatio == null ? null : fullWrapW * layout.backCenterRatio;
-    const handleCenterX = layout.handleCenterRatio == null ? null : fullWrapW * layout.handleCenterRatio;
+    const frontCenterX = wrapMapping?.frontMeridianMm ?? (fullWrapW * layout.frontCenterRatio);
+    const backCenterX = wrapMapping?.backMeridianMm ?? (layout.backCenterRatio == null ? null : fullWrapW * layout.backCenterRatio);
+    const handleCenterX = wrapMapping?.handleMeridianMm ?? (layout.handleCenterRatio == null ? null : fullWrapW * layout.handleCenterRatio);
     let zoneW = Math.max(0, Math.min(templateEngravableDims.printableWidthMm, fullWrapW));
     if (zoneW <= 0) zoneW = fullWrapW;
     let zoneX = frontCenterX - zoneW / 2;
@@ -467,14 +505,38 @@ export function AdminLayoutShell() {
       zoneX = 0;
       zoneW = fullWrapW;
     }
+    const bodyTopMm = selectedTemplate.dimensions.bodyTopFromOverallMm ??
+      selectedTemplate.dimensions.canonicalDimensionCalibration?.lidBodyLineMm ??
+      0;
+    const lidBoundaryY = templatePrintableSurface?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "lid")?.endMm;
+    const rimBoundaryY = templatePrintableSurface?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "rim-ring")?.endMm;
     const nextZone = {
       x: zoneX,
-      y: 0,
+      y: printableSurfaceLocalTop,
       width: zoneW,
-      height: templateEngravableDims.engravableHeightMm,
+      height: templateEngravableDims.printableHeightMm,
+      printableTopY: printableSurfaceLocalTop,
+      printableBottomY: printableSurfaceLocalBottom,
+      lidBoundaryY: lidBoundaryY != null ? Math.max(0, lidBoundaryY - bodyTopMm) : null,
+      rimBoundaryY: rimBoundaryY != null ? Math.max(0, rimBoundaryY - bodyTopMm) : null,
+      printableDetectionWeak: templateEngravableDims.automaticPrintableDetectionWeak,
       frontCenterX,
       backCenterX,
+      leftQuarterX: wrapMapping?.leftQuarterMm ?? null,
+      rightQuarterX: wrapMapping?.rightQuarterMm ?? null,
       handleCenterX,
+      handleKeepOutStartX: wrapMapping?.handleKeepOutStartMm ?? null,
+      handleKeepOutEndX: wrapMapping?.handleKeepOutEndMm ?? null,
+      handleKeepOutWraps:
+        wrapMapping?.handleKeepOutStartMm != null &&
+        wrapMapping?.handleKeepOutEndMm != null &&
+        wrapMapping.handleKeepOutStartMm > wrapMapping.handleKeepOutEndMm,
+      logoCenterX: logoRegion?.centerXMm ?? null,
+      logoCenterY: logoRegion?.centerYMm ?? null,
+      logoWidth: logoRegion?.widthMm ?? null,
+      logoHeight: logoRegion?.heightMm ?? null,
+      logoWraps: logoRegion?.wrapsAround ?? false,
+      logoConfidence: logoRegion?.confidence ?? null,
     };
 
     setEngravableZone((prev) => {
@@ -484,15 +546,31 @@ export function AdminLayoutShell() {
         Math.abs(prev.y - nextZone.y) < 0.01 &&
         Math.abs(prev.width - nextZone.width) < 0.01 &&
         Math.abs(prev.height - nextZone.height) < 0.01 &&
+        Math.abs((prev.printableTopY ?? -1) - (nextZone.printableTopY ?? -1)) < 0.01 &&
+        Math.abs((prev.printableBottomY ?? -1) - (nextZone.printableBottomY ?? -1)) < 0.01 &&
+        Math.abs((prev.lidBoundaryY ?? -1) - (nextZone.lidBoundaryY ?? -1)) < 0.01 &&
+        Math.abs((prev.rimBoundaryY ?? -1) - (nextZone.rimBoundaryY ?? -1)) < 0.01 &&
+        Boolean(prev.printableDetectionWeak) === Boolean(nextZone.printableDetectionWeak) &&
         Math.abs(prev.frontCenterX - nextZone.frontCenterX) < 0.01 &&
         Math.abs((prev.backCenterX ?? -1) - (nextZone.backCenterX ?? -1)) < 0.01 &&
-        Math.abs((prev.handleCenterX ?? -1) - (nextZone.handleCenterX ?? -1)) < 0.01
+        Math.abs((prev.leftQuarterX ?? -1) - (nextZone.leftQuarterX ?? -1)) < 0.01 &&
+        Math.abs((prev.rightQuarterX ?? -1) - (nextZone.rightQuarterX ?? -1)) < 0.01 &&
+        Math.abs((prev.handleCenterX ?? -1) - (nextZone.handleCenterX ?? -1)) < 0.01 &&
+        Math.abs((prev.handleKeepOutStartX ?? -1) - (nextZone.handleKeepOutStartX ?? -1)) < 0.01 &&
+        Math.abs((prev.handleKeepOutEndX ?? -1) - (nextZone.handleKeepOutEndX ?? -1)) < 0.01 &&
+        Boolean(prev.handleKeepOutWraps) === Boolean(nextZone.handleKeepOutWraps) &&
+        Math.abs((prev.logoCenterX ?? -1) - (nextZone.logoCenterX ?? -1)) < 0.01 &&
+        Math.abs((prev.logoCenterY ?? -1) - (nextZone.logoCenterY ?? -1)) < 0.01 &&
+        Math.abs((prev.logoWidth ?? -1) - (nextZone.logoWidth ?? -1)) < 0.01 &&
+        Math.abs((prev.logoHeight ?? -1) - (nextZone.logoHeight ?? -1)) < 0.01 &&
+        Boolean(prev.logoWraps) === Boolean(nextZone.logoWraps) &&
+        Math.abs((prev.logoConfidence ?? -1) - (nextZone.logoConfidence ?? -1)) < 0.001
       ) {
         return prev;
       }
       return nextZone;
     });
-  }, [isTumblerMode, selectedTemplate, templateEngravableDims, activeHandleArcDeg]);
+  }, [isTumblerMode, selectedTemplate, templateEngravableDims, templatePrintableSurface, activeHandleArcDeg]);
 
   const {
     handleUploadAssets,
@@ -553,6 +631,7 @@ export function AdminLayoutShell() {
     setBgRemovalStatus,
     setEngravableZone,
     setToastMessage,
+    bumpModelViewerResetKey: () => setModelViewerResetKey((value) => value + 1),
     buildMaterialSettings: buildActiveMaterialSettings,
   });
 
@@ -689,10 +768,22 @@ export function AdminLayoutShell() {
     const materialSettings = order.jobRecipe?.materialProfileId
       ? buildActiveMaterialSettings(order.jobRecipe.materialProfileId) ?? undefined
       : undefined;
+    const printableSurfaceContract =
+      selectedTemplate?.dimensions.printableSurfaceContract ??
+      selectedTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract ??
+      null;
+    const axialSurfaceBands =
+      selectedTemplate?.dimensions.axialSurfaceBands ??
+      selectedTemplate?.dimensions.canonicalDimensionCalibration?.axialSurfaceBands ??
+      null;
+    const bodyTopMm =
+      selectedTemplate?.dimensions.bodyTopFromOverallMm ??
+      selectedTemplate?.dimensions.canonicalDimensionCalibration?.lidBodyLineMm ??
+      null;
     const placementProfile = {
       overallHeightMm: snapshot.tumblerOverallHeightMm ?? snapshot.height,
       usableHeightMm: snapshot.tumblerUsableHeightMm ?? snapshot.height,
-      topToSafeZoneStartMm: inferTopSafeOffsetMm(snapshot),
+      topToSafeZoneStartMm: inferTopSafeOffsetMm(snapshot, printableSurfaceContract, bodyTopMm),
       bottomMarginMm: undefined,
       topAnchorMode: "physical-top" as const,
     };
@@ -704,6 +795,11 @@ export function AdminLayoutShell() {
         workspaceMode: snapshot.workspaceMode,
         templateWidthMm: snapshot.width,
         templateHeightMm: snapshot.height,
+        calibration: selectedTemplate?.dimensions.canonicalDimensionCalibration ?? null,
+        printableSurfaceContract,
+        axialSurfaceBands,
+        manufacturerLogoStamp: selectedTemplate?.manufacturerLogoStamp ?? null,
+        lockedProductionGeometry: Boolean(selectedTemplate && !selectedTemplate.dimensions.advancedGeometryOverridesUnlocked),
         items: recipeItems,
         rotary: {
           enabled: Boolean(order.jobRecipe?.rotaryAutoPlacementEnabled),
@@ -715,11 +811,15 @@ export function AdminLayoutShell() {
       const preprocessedPayload = await preprocessPayloadForCurrentJob(exportArtifacts.artworkPayload);
       const sidecarPayload = JSON.stringify({
         artwork: exportArtifacts.artworkPayload,
+        alignmentGuides: exportArtifacts.alignmentGuides,
         setup: exportArtifacts.sidecar,
         setupSummary: exportArtifacts.setupSummary,
         materialSettings: materialSettings ?? null,
       }, null, 2);
       const svgContent = buildLightBurnExportSvg(exportArtifacts.artworkPayload);
+      const guideSvgContent = exportArtifacts.alignmentGuides
+        ? buildLightBurnAlignmentGuideSvg(exportArtifacts.alignmentGuides)
+        : null;
       const lbrnContent = buildLightBurnLbrn(
         preprocessedPayload,
         materialSettings,
@@ -738,6 +838,13 @@ export function AdminLayoutShell() {
           filename: `${CURRENT_JOB_BASENAME}.svg`,
           content: svgContent,
         }),
+        ...(guideSvgContent
+          ? [saveCurrentJobFile({
+              outputFolderPath,
+              filename: `${CURRENT_JOB_BASENAME}.alignment-guides.svg`,
+              content: guideSvgContent,
+            })]
+          : []),
         saveCurrentJobFile({
           outputFolderPath,
           filename: `${CURRENT_JOB_BASENAME}.lightburn.json`,
@@ -751,7 +858,7 @@ export function AdminLayoutShell() {
         }`,
       );
     }
-  }, [lbOutputFolderPath, setToastMessage]);
+  }, [lbOutputFolderPath, selectedTemplate, setToastMessage]);
 
   const handleLoadOrder = useCallback((order: OrderRecord) => {
     const snapshot = normalizeBedConfig(order.bedConfigSnapshot);
@@ -2333,6 +2440,7 @@ export function AdminLayoutShell() {
           {/* 3D preview */}
           {selectedTemplate && !is3DPlacement && (
             <Model3DPanel
+              viewerModeResetKey={modelViewerResetKey}
               templateKey={selectedTemplate.id}
               placedItems={placedItems}
               bedWidthMm={bedConfig.width}
@@ -2347,6 +2455,9 @@ export function AdminLayoutShell() {
               bodyTintColor={bodyTintColor}
               rimTintColor={rimTintColor}
               artworkTintColor={rimTintColor}
+              dimensionCalibration={selectedTemplate?.dimensions.canonicalDimensionCalibration ?? null}
+              canonicalBodyProfile={selectedTemplate?.dimensions.canonicalBodyProfile ?? null}
+              canonicalHandleProfile={selectedTemplate?.dimensions.canonicalHandleProfile ?? null}
             />
           )}
         </div>
@@ -2625,6 +2736,9 @@ export function AdminLayoutShell() {
                     height: h,
                   })));
                 }}
+                dimensionCalibration={selectedTemplate?.dimensions.canonicalDimensionCalibration ?? null}
+                manufacturerLogoStamp={selectedTemplate?.manufacturerLogoStamp ?? null}
+                lockedProductionGeometry={Boolean(selectedTemplate && !selectedTemplate.dimensions.advancedGeometryOverridesUnlocked)}
               />
             </div>
           </>

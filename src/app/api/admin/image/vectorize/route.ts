@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { execFile } from "node:child_process";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import sharp from "sharp";
 import type {
   RasterTraceMode,
@@ -7,6 +11,7 @@ import type {
   RasterVectorizeResponse,
 } from "@/types/rasterVectorize";
 import { prepareRasterTraceInput } from "@/server/rasterVectorize/preprocess";
+import type { PotraceOptions } from "potrace";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -326,6 +331,15 @@ function chooseCentralSegment(mask: Uint8Array, width: number, y: number, center
   return { left: best.left, right: best.right };
 }
 
+function estimateBodyCenterFromRows(rows: SilhouetteRow[]): number {
+  if (rows.length === 0) return 0;
+  const widths = rows.map((row) => row.width);
+  const referenceWidth = percentile(widths, 0.35);
+  const stableRows = rows.filter((row) => row.width <= Math.max(8, referenceWidth * 1.15));
+  const candidates = (stableRows.length >= 8 ? stableRows : rows).map((row) => (row.left + row.right) / 2);
+  return percentile(candidates, 0.5);
+}
+
 function percentile(values: number[], fraction: number): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -356,6 +370,207 @@ function simplifyRows(rows: SilhouetteRow[], targetCount = 72): SilhouetteRow[] 
   return result;
 }
 
+function traceSvg(input: Buffer, options: PotraceOptions): Promise<string> {
+  return (async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "lt316-potrace-"));
+    const inputPath = join(tempDir, "input.png");
+    const script = [
+      "const { trace } = require('potrace');",
+      "const inputPath = process.argv[1];",
+      "const options = JSON.parse(Buffer.from(process.argv[2], 'base64').toString('utf8'));",
+      "trace(inputPath, options, (error, svg) => {",
+      "  if (error) {",
+      "    console.error(error && error.stack ? error.stack : String(error));",
+      "    process.exit(1);",
+      "  }",
+      "  process.stdout.write(svg || '');",
+      "});",
+    ].join("");
+    const encodedOptions = Buffer.from(JSON.stringify(options), "utf8").toString("base64");
+
+    try {
+      await writeFile(inputPath, input);
+      const svg = await new Promise<string>((resolve, reject) => {
+        execFile(
+          process.execPath,
+          ["-e", script, inputPath, encodedOptions],
+          {
+            cwd: process.cwd(),
+            encoding: "utf8",
+            maxBuffer: 10 * 1024 * 1024,
+          },
+          (error, stdout, stderr) => {
+            if (error) {
+              reject(new Error(stderr?.trim() || error.message));
+              return;
+            }
+            if (!stdout) {
+              reject(new Error("Potrace completed without returning SVG output."));
+              return;
+            }
+            resolve(stdout);
+          },
+        );
+      });
+      return svg;
+    } finally {
+      await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  })();
+}
+
+function buildPotraceInput(mask: Uint8Array, width: number, height: number): Promise<Buffer> {
+  const output = Buffer.alloc(mask.length);
+  for (let index = 0; index < mask.length; index += 1) {
+    output[index] = mask[index] === 1 ? 0 : 255;
+  }
+
+  return sharp(output, {
+    raw: {
+      width,
+      height,
+      channels: 1,
+    },
+  })
+    .png()
+    .toBuffer();
+}
+
+function percentileUint8(values: number[], fraction: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * fraction)));
+  return sorted[index] ?? 0;
+}
+
+function medianWindow(values: number[], centerIndex: number, radius: number): number {
+  const start = Math.max(0, centerIndex - radius);
+  const end = Math.min(values.length, centerIndex + radius + 1);
+  const slice = values.slice(start, end).sort((a, b) => a - b);
+  return slice[Math.floor(slice.length / 2)] ?? values[centerIndex] ?? 0;
+}
+
+function smoothBodyRows(rows: SilhouetteRow[]): SilhouetteRow[] {
+  if (rows.length < 5) return rows;
+
+  const lefts = rows.map((row) => row.left);
+  const rights = rows.map((row) => row.right);
+
+  return rows.map((row, index) => {
+    const medianLeft = medianWindow(lefts, index, 2);
+    const medianRight = medianWindow(rights, index, 2);
+    const left =
+      index === 0 || index === rows.length - 1
+        ? row.left
+        : (row.left * 0.45) + (medianLeft * 0.55);
+    const right =
+      index === 0 || index === rows.length - 1
+        ? row.right
+        : (row.right * 0.45) + (medianRight * 0.55);
+
+    return {
+      y: row.y,
+      left,
+      right,
+      width: Math.max(1, right - left),
+    };
+  });
+}
+
+function estimateSideNoise(values: number[]): number {
+  if (values.length < 2) return 0;
+  let total = 0;
+  for (let index = 1; index < values.length; index += 1) {
+    total += Math.abs(values[index]! - values[index - 1]!);
+  }
+  return total / (values.length - 1);
+}
+
+function mirrorRowsToCleanSide(rows: SilhouetteRow[], centerX: number): SilhouetteRow[] {
+  const leftSpans = rows.map((row) => centerX - row.left);
+  const rightSpans = rows.map((row) => row.right - centerX);
+  const leftMetric = percentile(leftSpans, 0.95) + (estimateSideNoise(leftSpans) * 0.8);
+  const rightMetric = percentile(rightSpans, 0.95) + (estimateSideNoise(rightSpans) * 0.8);
+  const useLeftSide = leftMetric <= rightMetric;
+
+  return rows.map((row) => {
+    const cleanSpan = useLeftSide ? (centerX - row.left) : (row.right - centerX);
+    const mirroredSpan = Math.max(1, cleanSpan);
+    return {
+      y: row.y,
+      left: centerX - mirroredSpan,
+      right: centerX + mirroredSpan,
+      width: mirroredSpan * 2,
+    };
+  });
+}
+
+function buildBodyMask(rows: SilhouetteRow[], width: number, height: number): Uint8Array {
+  const mask = new Uint8Array(width * height);
+  for (let index = 0; index < rows.length; index += 1) {
+    const current = rows[index]!;
+    const next = rows[index + 1] ?? current;
+    const startY = Math.max(0, Math.min(height - 1, Math.round(current.y)));
+    const endY = Math.max(startY, Math.min(height - 1, Math.round(next.y)));
+    const span = Math.max(1, endY - startY);
+
+    for (let y = startY; y <= endY; y += 1) {
+      const t = span === 0 ? 0 : (y - startY) / span;
+      const leftValue = current.left + ((next.left - current.left) * t);
+      const rightValue = current.right + ((next.right - current.right) * t);
+      const left = Math.max(0, Math.min(width - 1, Math.round(leftValue)));
+      const right = Math.max(left, Math.min(width - 1, Math.round(rightValue)));
+      for (let x = left; x <= right; x += 1) {
+        mask[(y * width) + x] = 1;
+      }
+    }
+  }
+  return mask;
+}
+
+function erodeMask(mask: Uint8Array, width: number, height: number): Uint8Array {
+  const eroded = new Uint8Array(mask.length);
+
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const index = (y * width) + x;
+      if (mask[index] !== 1) continue;
+
+      const north = mask[index - width];
+      const south = mask[index + width];
+      const west = mask[index - 1];
+      const east = mask[index + 1];
+      const northWest = mask[index - width - 1];
+      const northEast = mask[index - width + 1];
+      const southWest = mask[index + width - 1];
+      const southEast = mask[index + width + 1];
+
+      if (
+        north === 1 &&
+        south === 1 &&
+        west === 1 &&
+        east === 1 &&
+        northWest === 1 &&
+        northEast === 1 &&
+        southWest === 1 &&
+        southEast === 1
+      ) {
+        eroded[index] = 1;
+      }
+    }
+  }
+
+  return eroded;
+}
+
+function countMaskPixels(mask: Uint8Array): number {
+  let total = 0;
+  for (let index = 0; index < mask.length; index += 1) {
+    if (mask[index] === 1) total += 1;
+  }
+  return total;
+}
+
 async function runLocalPotraceFallback(args: {
   imageBuffer: Buffer;
   traceMode: RasterTraceMode;
@@ -380,16 +595,24 @@ async function runLocalPotraceFallback(args: {
     0,
     255,
   );
-  const centerX = (info.width - 1) / 2;
+  const imageCenterX = (info.width - 1) / 2;
+  const alphaValues: number[] = [];
   const hasUsefulAlpha = (() => {
     let alphaPixels = 0;
     for (let offset = 3; offset < data.length; offset += info.channels) {
-      if ((data[offset] ?? 255) < 245) {
+      const alpha = data[offset] ?? 255;
+      if (alpha > 0) {
+        alphaValues.push(alpha);
+      }
+      if (alpha < 245) {
         alphaPixels += 1;
       }
     }
     return alphaPixels > (info.width * info.height * 0.01);
   })();
+  const tightAlphaThreshold = hasUsefulAlpha
+    ? Math.min(232, Math.max(96, percentileUint8(alphaValues, 0.34)))
+    : 0;
 
   const mask = new Uint8Array(info.width * info.height);
   for (let y = 0; y < info.height; y += 1) {
@@ -401,7 +624,7 @@ async function runLocalPotraceFallback(args: {
       const alpha = data[index + 3] ?? 255;
       const luma = Math.round((0.2126 * red) + (0.7152 * green) + (0.0722 * blue));
       const isForeground = hasUsefulAlpha
-        ? alpha > 20
+        ? alpha >= tightAlphaThreshold
         : args.invert
           ? luma >= threshold
           : luma <= threshold;
@@ -411,7 +634,7 @@ async function runLocalPotraceFallback(args: {
 
   const rows: SilhouetteRow[] = [];
   for (let y = 0; y < info.height; y += 1) {
-    const segment = chooseCentralSegment(mask, info.width, y, centerX);
+    const segment = chooseCentralSegment(mask, info.width, y, imageCenterX);
     if (!segment) continue;
     rows.push({
       y,
@@ -425,25 +648,55 @@ async function runLocalPotraceFallback(args: {
     throw new Error("Could not derive a local silhouette trace from the image.");
   }
 
-  const maxWidth = percentile(rows.map((row) => row.width), 0.95);
+  const bodyCenterX = estimateBodyCenterFromRows(rows);
+  const centeredRows: SilhouetteRow[] = [];
+  for (let y = 0; y < info.height; y += 1) {
+    const segment = chooseCentralSegment(mask, info.width, y, bodyCenterX);
+    if (!segment) continue;
+    centeredRows.push({
+      y,
+      left: segment.left,
+      right: segment.right,
+      width: (segment.right - segment.left) + 1,
+    });
+  }
+  const workingRows = centeredRows.length >= 8 ? centeredRows : rows;
+  const maxWidth = percentile(workingRows.map((row) => row.width), 0.95);
   const minKeepWidth = Math.max(6, maxWidth * 0.35);
-  const keptRows = rows.filter((row) => row.width >= minKeepWidth);
-  const activeRows = simplifyRows(keptRows.length >= 8 ? keptRows : rows);
+  const keptRows = workingRows.filter((row) => row.width >= minKeepWidth);
+  const activeRows = smoothBodyRows(mirrorRowsToCleanSide(keptRows.length >= 8 ? keptRows : workingRows, bodyCenterX));
   const left = Math.min(...activeRows.map((row) => row.left));
   const right = Math.max(...activeRows.map((row) => row.right));
   const top = Math.min(...activeRows.map((row) => row.y));
   const bottom = Math.max(...activeRows.map((row) => row.y));
-  const svgPath = buildSilhouetteSvgPath(activeRows);
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${info.width} ${info.height}" width="${info.width}" height="${info.height}">`,
-    `<path d="${svgPath}" fill="${args.outputColor}" stroke="none"/>`,
-    "</svg>",
-  ].join("");
+  const bodyMask = buildBodyMask(activeRows, info.width, info.height);
+  const tightenedBodyMask = erodeMask(bodyMask, info.width, info.height);
+  let effectiveBodyMask = tightenedBodyMask.some((value) => value === 1) ? tightenedBodyMask : bodyMask;
+  if (maxWidth >= 120) {
+    const tightenedAgain = erodeMask(effectiveBodyMask, info.width, info.height);
+    const currentArea = countMaskPixels(effectiveBodyMask);
+    const nextArea = countMaskPixels(tightenedAgain);
+    if (nextArea > 0 && currentArea > 0 && nextArea >= currentArea * 0.8) {
+      effectiveBodyMask = tightenedAgain;
+    }
+  }
+  const potraceInput = await buildPotraceInput(effectiveBodyMask, info.width, info.height);
+  const svg = await traceSvg(potraceInput, {
+    turdSize: Math.max(2, Math.min(8, args.turdSize + 2)),
+    alphaMax: Math.min(0.9, Math.max(0.45, args.alphaMax + 0.15)),
+    optCurve: true,
+    optTolerance: Math.min(0.28, Math.max(0.08, args.optTolerance + 0.08)),
+    threshold: 128,
+    blackOnWhite: true,
+    turnPolicy: "majority",
+    color: args.outputColor,
+    background: "transparent",
+  });
 
   return {
     svg,
     mode: args.traceMode,
-    pathCount: 1,
+    pathCount: countPaths(svg),
     width: right - left,
     height: bottom - top,
     engine: "potrace",
@@ -1002,6 +1255,7 @@ export async function POST(req: NextRequest) {
   const outputColor = sanitizeHexColor(formString(formData, "outputColor"), "#000000");
   const preserveText = parseBoolean(formString(formData, "preserveText"), true);
   const recipe = parseTraceRecipe(formString(formData, "recipe"));
+  const preferLocal = parseBoolean(formString(formData, "preferLocal"), false);
   const maxDimension = clampInt(
     formString(formData, "maxDimension"),
     DEFAULT_TRACE_MAX_DIMENSION,
@@ -1021,6 +1275,9 @@ export async function POST(req: NextRequest) {
     const traceInputFileName = buildTraceInputFileName(imageFile.name);
 
     try {
+      if (preferLocal) {
+        throw new Error("Local vectorize path requested.");
+      }
       const job = await fetchJson<AssetPipelineManifest>(assetPipelineUrl("/jobs"), {
         method: "POST",
         headers: {

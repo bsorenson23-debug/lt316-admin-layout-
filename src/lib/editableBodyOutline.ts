@@ -13,6 +13,12 @@ import type { TumblerItemLookupFitDebug } from "@/types/tumblerItemLookup";
 export interface ImportedEditableBodyOutlineSource {
   svgText: string;
   pathData: string;
+  viewport: {
+    minX: number;
+    minY: number;
+    width: number;
+    height: number;
+  };
   bounds: {
     minX: number;
     minY: number;
@@ -344,9 +350,11 @@ function buildMirroredSourceContour(contour: EditableBodyOutlineContourPoint[]):
     const y = round1(bounds.minY + (bounds.height * t));
     const segments = getContourSegmentsAtY(contour, y);
     if (segments.length === 0) continue;
-    const bodySegment = segments.reduce((best, segment) =>
-      Math.abs(segment.centerX - centerX) < Math.abs(best.centerX - centerX) ? segment : best,
-    );
+    const bodySegment = segments.reduce((best, segment) => {
+      if (segment.width > best.width + 0.1) return segment;
+      if (best.width > segment.width + 0.1) return best;
+      return Math.abs(segment.centerX - centerX) < Math.abs(best.centerX - centerX) ? segment : best;
+    });
     rows.push({
       y,
       leftX: bodySegment.leftX,
@@ -395,6 +403,14 @@ function parsePathContour(path: SVGGeometryElement, sampleCount = 240): Editable
   return points;
 }
 
+function splitPathSubpaths(pathData: string): string[] {
+  const matches = pathData.match(/[Mm][^Mm]*/g);
+  if (!matches || matches.length === 0) return pathData.trim() ? [pathData] : [];
+  return matches
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+}
+
 function ensureSvgGeometryElement(element: Element): element is SVGGeometryElement {
   return typeof (element as SVGGeometryElement).getTotalLength === "function";
 }
@@ -432,6 +448,35 @@ function parseImportedSvg(svgText: string): ImportedEditableBodyOutlineSource {
   document.body.appendChild(host);
 
   try {
+    const viewportFromViewBox = (() => {
+      if (!viewBox) return null;
+      const values = viewBox
+        .trim()
+        .split(/[\s,]+/)
+        .map((value) => Number.parseFloat(value))
+        .filter(Number.isFinite);
+      if (values.length !== 4) return null;
+      return {
+        minX: round1(values[0] ?? 0),
+        minY: round1(values[1] ?? 0),
+        width: Math.max(0.1, round1(values[2] ?? 0)),
+        height: Math.max(0.1, round1(values[3] ?? 0)),
+      };
+    })();
+    const viewportFromDimensions = (() => {
+      const width = Number.parseFloat(widthAttr ?? "");
+      const height = Number.parseFloat(heightAttr ?? "");
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return null;
+      }
+      return {
+        minX: 0,
+        minY: 0,
+        width: round1(width),
+        height: round1(height),
+      };
+    })();
+
     const geometryCandidates = Array.from(
       liveSvg.querySelectorAll("path, rect, circle, ellipse, polygon"),
     ).filter(ensureSvgGeometryElement);
@@ -456,18 +501,65 @@ function parseImportedSvg(svgText: string): ImportedEditableBodyOutlineSource {
       throw new Error("SVG body outline could not be resolved.");
     }
 
-    const contour = parsePathContour(bestElement);
+    let resolvedElement: SVGGeometryElement = bestElement;
+    let resolvedPathData =
+      bestElement.tagName.toLowerCase() === "path"
+        ? bestElement.getAttribute("d") ?? ""
+        : "";
+
+    if (bestElement.tagName.toLowerCase() === "path" && resolvedPathData) {
+      const subpaths = splitPathSubpaths(resolvedPathData);
+      if (subpaths.length > 1) {
+        let bestSubpathElement: SVGGeometryElement | null = null;
+        let bestSubpathData = resolvedPathData;
+        let bestSubpathArea = Number.NEGATIVE_INFINITY;
+        const tempPaths: SVGGeometryElement[] = [];
+
+        for (const subpath of subpaths) {
+          const candidate = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          candidate.setAttribute("d", subpath);
+          liveSvg.appendChild(candidate);
+          tempPaths.push(candidate);
+          const bbox = candidate.getBBox();
+          const area = bbox.width * bbox.height;
+          if (bbox.width > 0 && bbox.height > 0 && area > bestSubpathArea) {
+            bestSubpathArea = area;
+            bestSubpathElement = candidate;
+            bestSubpathData = subpath;
+          }
+        }
+
+        if (bestSubpathElement) {
+          resolvedElement = bestSubpathElement;
+          resolvedPathData = bestSubpathData;
+        }
+
+        for (const candidate of tempPaths) {
+          if (candidate !== bestSubpathElement) {
+            candidate.remove();
+          }
+        }
+      }
+    }
+
+    const contour = parsePathContour(resolvedElement);
     const bounds = getBounds(contour);
     if (!bounds) {
       throw new Error("SVG body outline did not produce a usable contour.");
     }
+    const viewport = viewportFromViewBox
+      ?? viewportFromDimensions
+      ?? {
+        minX: bounds.minX,
+        minY: bounds.minY,
+        width: bounds.width,
+        height: bounds.height,
+      };
 
     return {
       svgText,
-      pathData:
-        bestElement.tagName.toLowerCase() === "path"
-          ? bestElement.getAttribute("d") ?? ""
-          : "",
+      pathData: resolvedPathData,
+      viewport,
       bounds,
       contour,
     };
@@ -524,6 +616,7 @@ export function cloneEditableBodyOutline(
     directContour: outline.directContour?.map((point) => ({ ...point })),
     sourceContour: outline.sourceContour?.map((point) => ({ ...point })),
     sourceContourBounds: outline.sourceContourBounds ? { ...outline.sourceContourBounds } : undefined,
+    sourceContourViewport: outline.sourceContourViewport ? { ...outline.sourceContourViewport } : undefined,
   };
 }
 
@@ -585,7 +678,7 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
     offsetYMm = 0,
     side = "right",
   } = args;
-  const sourceContour = buildMirroredSourceContour(source.contour) ?? source.contour;
+  const sourceContour = source.contour;
   const bounds = getBounds(sourceContour) ?? source.bounds;
   const referenceDiameterMm = round1(topOuterDiameterMm && topOuterDiameterMm > 0 ? topOuterDiameterMm : diameterMm);
   const targetBodyHeightMm = Math.max(10, bodyBottomFromOverallMm - bodyTopFromOverallMm);
@@ -620,6 +713,7 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
     directContour: contour,
     sourceContour,
     sourceContourBounds: bounds,
+    sourceContourViewport: source.viewport,
   };
 }
 

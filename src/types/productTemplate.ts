@@ -1,3 +1,5 @@
+import type { AxialSurfaceBand, PrintableSurfaceContract } from "./printableSurface";
+
 export type EditableOutlinePointType = "corner" | "smooth";
 export type ReferenceLayerKey = "bodyOutline" | "lidProfile" | "silverProfile";
 
@@ -45,6 +47,113 @@ export interface EditableBodyOutline {
     width: number;
     height: number;
   };
+  sourceContourViewport?: {
+    minX: number;
+    minY: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface CanonicalHandleAnchor {
+  sNorm: number;
+  xPx: number;
+  yPx: number;
+}
+
+export interface CanonicalHandleContourPoint {
+  x: number;
+  y: number;
+}
+
+export interface CanonicalHandleCenterlinePoint {
+  t: number;
+  x: number;
+  y: number;
+}
+
+export interface CanonicalHandleWidthSample {
+  t: number;
+  widthPx: number;
+}
+
+export interface CanonicalHandleProfile {
+  side: "left" | "right";
+  confidence: number;
+  anchors: {
+    upper: CanonicalHandleAnchor;
+    lower: CanonicalHandleAnchor;
+  };
+  outerContour: CanonicalHandleContourPoint[];
+  innerContour: CanonicalHandleContourPoint[];
+  centerline: CanonicalHandleCenterlinePoint[];
+  widthProfile: CanonicalHandleWidthSample[];
+  openingBox?: { x: number; y: number; w: number; h: number };
+  svgPathOuter?: string;
+  svgPathInner?: string;
+}
+
+export interface CanonicalBodyProfileAxis {
+  xTop: number;
+  yTop: number;
+  xBottom: number;
+  yBottom: number;
+}
+
+export interface CanonicalBodyProfileSample {
+  sNorm: number;
+  yMm: number;
+  yPx: number;
+  xLeft: number;
+  radiusPx: number;
+  radiusMm: number;
+}
+
+export interface CanonicalBodyProfile {
+  symmetrySource: "left";
+  mirroredRightFromLeft: boolean;
+  axis: CanonicalBodyProfileAxis;
+  samples: CanonicalBodyProfileSample[];
+  svgPath: string;
+}
+
+export interface CanonicalDimensionCalibration {
+  units: "mm";
+  totalHeightMm: number;
+  bodyHeightMm: number;
+  lidBodyLineMm: number;
+  bodyBottomMm: number;
+  wrapDiameterMm: number;
+  baseDiameterMm: number;
+  wrapWidthMm: number;
+  frontVisibleWidthMm: number;
+  frontAxisPx: CanonicalBodyProfileAxis;
+  photoToFrontTransform: {
+    type: "affine" | "similarity";
+    matrix: number[];
+  };
+  svgFrontViewBoxMm: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  wrapMappingMm: {
+    frontMeridianMm: number;
+    backMeridianMm: number;
+    leftQuarterMm: number;
+    rightQuarterMm: number;
+    handleMeridianMm?: number;
+    handleKeepOutArcDeg?: number;
+    handleKeepOutWidthMm?: number;
+    handleKeepOutStartMm?: number;
+    handleKeepOutEndMm?: number;
+  };
+  axialSurfaceBands?: AxialSurfaceBand[];
+  printableSurfaceContract?: PrintableSurfaceContract;
+  glbScale: {
+    unitsPerMm: number;
+  };
 }
 
 export interface ReferencePaths {
@@ -64,6 +173,8 @@ export interface ProductTemplateDimensions {
   diameterMm: number;
   /** Explicit alias for diameterMm when the style needs body and top diameters separated. */
   bodyDiameterMm?: number;
+  /** When true, manual geometry overrides are allowed and the template is no longer in locked production mode. */
+  advancedGeometryOverridesUnlocked?: boolean;
   /** Outer diameter at the top/lid seat. */
   topOuterDiameterMm?: number;
   /** Outer diameter at the base/foot. */
@@ -71,7 +182,7 @@ export interface ProductTemplateDimensions {
   /** Optional inner mouth diameter when known from a source catalog. */
   mouthInnerDiameterMm?: number;
   printHeightMm: number;
-  templateWidthMm: number; // computed: Math.PI * diameterMm
+  templateWidthMm: number; // authoritative wrap width / circumference for drinkware
   /** Flat-item body thickness used for generated 3D preview (mm) */
   flatThicknessMm?: number;
   /** Flat-item preview family key (magazine, knife-blank, dog-tag, etc.) */
@@ -94,6 +205,12 @@ export interface ProductTemplateDimensions {
   handleBottomFromOverallMm?: number;
   /** Horizontal reach of the handle silhouette from the body edge to the outermost handle edge (mm). */
   handleReachMm?: number;
+  /** Canonical handle extraction derived from the uploaded reference image and body-only silhouette. */
+  canonicalHandleProfile?: CanonicalHandleProfile;
+  /** Canonical left-driven mirrored body profile used by preview, guides, and later revolve geometry. */
+  canonicalBodyProfile?: CanonicalBodyProfile;
+  /** Shared mm calibration consumed by photo overlay, body outline, bed mapping, and GLB alignment. */
+  canonicalDimensionCalibration?: CanonicalDimensionCalibration;
   /** Width at the shoulder break where the straight wall transitions into the lower taper (mm). */
   shoulderDiameterMm?: number;
   /** Width at the upper taper control point (mm). */
@@ -110,6 +227,14 @@ export interface ProductTemplateDimensions {
   referenceLayerState?: ReferenceLayerState;
   /** Physical tumbler body height excluding lid/straw (mm). */
   bodyHeightMm?: number;
+  /** Canonical normalized axial surface segmentation for printable and excluded bands. */
+  axialSurfaceBands?: AxialSurfaceBand[];
+  /** Canonical printable-surface contract in absolute mm space. */
+  printableSurfaceContract?: PrintableSurfaceContract;
+  /** Manual override for the printable top boundary measured from the overall top (mm). */
+  printableTopOverrideMm?: number;
+  /** Manual override for the printable bottom boundary measured from the overall top (mm). */
+  printableBottomOverrideMm?: number;
   /** Top non-engravable margin — lid seat / rim (mm) */
   topMarginMm?: number;
   /** Bottom non-engravable margin — base taper (mm) */
@@ -177,11 +302,34 @@ export interface ManufacturerLogoStampPlacement {
   heightMm: number;
 }
 
+export interface OrientationLandmarks {
+  thetaFront: number;
+  thetaBack: number;
+  thetaHandle?: number;
+  sourceImageId?: string;
+  confidence: number;
+}
+
+export interface LogoPlacement {
+  source: "uploaded-image" | "reference-image" | "manual";
+  sourceImageId?: string;
+  sCenter: number;
+  sSpan: number;
+  thetaCenter: number;
+  thetaSpan: number;
+  bboxPx?: { x: number; y: number; w: number; h: number };
+  confidence: number;
+}
+
 export interface ManufacturerLogoStamp {
   /** Transparent PNG data URL extracted from the lookup/front product photo. */
   dataUrl: string;
   /** Placement solved from the source product photo. */
   placement: ManufacturerLogoStampPlacement;
+  /** Canonical body-local logo placement used by preview, overlays, and later GLB work. */
+  logoPlacement: LogoPlacement;
+  /** Canonical orientation landmarks associated with the source image / reference set. */
+  orientationLandmarks: OrientationLandmarks;
   /** Where the logo extraction came from. */
   source: "lookup-photo" | "front-photo";
   /** Brand name associated with the extracted logo, when known. */
@@ -199,12 +347,70 @@ export interface ProductTemplateColorOption {
   variantUrl?: string;
 }
 
+export type ProductReferenceImageSource = "official" | "retailer" | "other";
+
+export type ProductReferenceViewClass =
+  | "front"
+  | "back"
+  | "left-side"
+  | "right-side"
+  | "front-3q"
+  | "back-3q"
+  | "handle-side"
+  | "detail"
+  | "lifestyle"
+  | "unknown";
+
+export interface ProductReferenceLogoBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface ProductReferenceImage {
+  id: string;
+  url: string;
+  source: ProductReferenceImageSource;
+  hash: string;
+  width: number;
+  height: number;
+  viewClass: ProductReferenceViewClass;
+  approxAzimuthDeg?: 0 | 45 | 90 | 135 | 180;
+  handleVisible: boolean;
+  handleSide: "left" | "right" | "center" | "hidden" | "unknown";
+  logoDetected: boolean;
+  logoBox?: ProductReferenceLogoBox;
+  confidence: number;
+}
+
+export type CanonicalBackStatus = "true-back" | "only-back-3q-found" | "unknown";
+
+export interface CanonicalViewSelection {
+  canonicalFrontImageId?: string;
+  canonicalBackImageId?: string;
+  canonicalBackStatus: CanonicalBackStatus;
+  frontConfidence: number;
+  backConfidence: number;
+  bestAuxBack3qImageId?: string;
+}
+
+export interface ProductReferenceSet {
+  productKey: string;
+  images: ProductReferenceImage[];
+  canonicalFrontImageId?: string;
+  canonicalBackImageId?: string;
+  canonicalHandleSideImageId?: string;
+  orientationConfidence: number;
+  canonicalViewSelection?: CanonicalViewSelection;
+}
+
 export interface ProductTemplate {
   id: string; // crypto.randomUUID()
   name: string; // "YETI Rambler 40oz"
   brand: string;
   capacity: string;
-  laserType: "fiber" | "co2" | "diode";
+  laserType?: "fiber" | "co2" | "diode";
   productType: "tumbler" | "mug" | "bottle" | "flat";
   materialSlug?: string;
   materialLabel?: string;
@@ -212,6 +418,8 @@ export interface ProductTemplate {
   /** Full-resolution product photo (max 1024px, JPEG base64) for grid overlay */
   productPhotoFullUrl?: string;
   glbPath: string; // path in /public/models/
+  glbStatus?: "verified-product-model" | "placeholder-model" | "missing-model";
+  glbSourceLabel?: string;
   dimensions: ProductTemplateDimensions;
   laserSettings: ProductTemplateLaserSettings;
   createdAt: string; // ISO string
@@ -226,6 +434,8 @@ export interface ProductTemplate {
   manufacturerLogoStamp?: ManufacturerLogoStamp;
   /** Available catalog colors for this style; used for style-level selection without duplicating templates per color. */
   availableColors?: ProductTemplateColorOption[];
+  /** Multi-image product references captured during lookup for later orientation and logo workflows. */
+  productReferenceSet?: ProductReferenceSet;
 }
 
 export interface ProductTemplateStore {

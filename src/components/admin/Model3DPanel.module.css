@@ -331,6 +331,69 @@
 }
 
 /* ── 3D viewer canvas ── */
+.viewerModeSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.viewerModeSummary {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.viewerModeButtons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.viewerModeBtn {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+}
+
+.viewerModeBtn:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.viewerModeBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.viewerModeBtnActive {
+  border-color: var(--accent);
+  background: var(--accent-dark);
+  color: var(--accent);
+}
+
+.viewerModeBtnActive:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.viewerModeNote {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.viewerModeCompareNote {
+  font-size: 10px;
+  color: var(--warning);
+}
+
 .viewerWrap {
   width: 100%;
   height: 280px;

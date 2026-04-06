@@ -44,7 +44,7 @@ function buildTemplateSearchText(template: ProductTemplate): string {
       template.capacity,
       template.materialLabel,
       template.productType,
-      LASER_LABEL[template.laserType] ?? template.laserType,
+      template.laserType ? (LASER_LABEL[template.laserType] ?? template.laserType) : "",
     ]
       .filter(Boolean)
       .join(" "),
@@ -360,8 +360,8 @@ export function TemplateGallery({
                       <span className={styles.cardMeta}>{cardMeta || "\u00A0"}</span>
                       <span className={styles.specLine}>{getTemplateSpecLine(template)}</span>
                       <div className={styles.badgeRow}>
-                        <span className={`${styles.laserBadge} ${LASER_BADGE_CLASS[template.laserType] ?? ""}`}>
-                          {LASER_LABEL[template.laserType] ?? template.laserType}
+                        <span className={`${styles.laserBadge} ${template.laserType ? (LASER_BADGE_CLASS[template.laserType] ?? "") : ""}`}>
+                          {template.laserType ? (LASER_LABEL[template.laserType] ?? template.laserType) : "Laser optional"}
                         </span>
                         {template.builtIn ? <span className={styles.builtInBadge}>Built-in</span> : null}
                         {template.productType !== "flat" ? (

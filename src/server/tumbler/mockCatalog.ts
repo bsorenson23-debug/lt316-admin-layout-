@@ -56,7 +56,7 @@ const MOCK_ENTRIES: MockTumblerEntry[] = [
     candidates: [
       {
         title: "Stanley Quencher H2.0 FlowState Tumbler | 40 OZ",
-        url: "https://www.stanley1913.com/products/quencher-h2-0-flowstate-tumbler-40-oz",
+        url: "https://www.stanley1913.com/products/adventure-quencher-travel-tumbler-40-oz",
         kind: "official",
         brand: "Stanley",
         model: "Quencher H2.0",

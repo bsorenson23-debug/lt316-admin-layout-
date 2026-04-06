@@ -1,4 +1,4 @@
-import type { LightBurnExportPayload } from "../types/export";
+import type { LightBurnAlignmentGuidePayload, LightBurnExportPayload } from "../types/export";
 
 const LIGHTBURN_SVG_DPI = 96;
 const LIGHTBURN_PX_PER_MM = LIGHTBURN_SVG_DPI / 25.4;
@@ -154,6 +154,94 @@ export function buildLightBurnExportSvg(payload: LightBurnExportPayload): string
     `<!-- ${rotaryNote} -->`,
     `<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${heightPx}" viewBox="0 0 ${widthPx} ${heightPx}">`,
     itemGroups || `  <!-- no items -->`,
+    `</svg>`,
+  ].join("\n");
+}
+
+function buildGuideLineGroup(
+  line: LightBurnAlignmentGuidePayload["lines"][number],
+  widthMm: number,
+  heightMm: number,
+): string {
+  const xPx = line.xMm != null ? formatPx(mmToLightBurnPx(line.xMm)) : null;
+  const yPx = line.yMm != null ? formatPx(mmToLightBurnPx(line.yMm)) : null;
+  const heightPx = formatPx(mmToLightBurnPx(heightMm));
+  const widthPx = formatPx(mmToLightBurnPx(widthMm));
+  const stroke =
+    line.kind === "front-meridian"
+      ? "#2f84d6"
+      : line.kind === "logo-center"
+        ? "#34c759"
+      : line.kind === "printable-top" || line.kind === "printable-bottom"
+        ? "#20c997"
+      : line.kind === "lid-boundary" || line.kind === "rim-boundary" || line.kind === "base-boundary"
+        ? "#f0c15d"
+      : line.kind === "handle-meridian"
+        ? "#f5a24a"
+        : line.kind.startsWith("keep-out")
+          ? "#d96b5f"
+          : "#b7c0ca";
+  const dash =
+    line.kind.startsWith("keep-out")
+      ? "10 6"
+      : line.kind === "printable-top" || line.kind === "printable-bottom"
+        ? "12 5"
+        : "8 6";
+  return [
+    `  <!-- ${escapeXml(line.label)} -->`,
+    line.orientation === "horizontal" && yPx != null
+      ? `  <line x1="0" y1="${yPx}" x2="${widthPx}" y2="${yPx}" stroke="${stroke}" stroke-width="1.5" stroke-dasharray="${dash}" vector-effect="non-scaling-stroke" />`
+      : `  <line x1="${xPx}" y1="0" x2="${xPx}" y2="${heightPx}" stroke="${stroke}" stroke-width="1.5" stroke-dasharray="${dash}" vector-effect="non-scaling-stroke" />`,
+  ].join("\n");
+}
+
+function buildLogoGuideGroup(logoRegion: NonNullable<LightBurnAlignmentGuidePayload["logoRegion"]>): string {
+  const halfWidthMm = logoRegion.widthMm / 2;
+  const halfHeightMm = logoRegion.heightMm / 2;
+  const topMm = Math.max(0, logoRegion.centerYMm - halfHeightMm);
+  const leftMm = logoRegion.centerXMm - halfWidthMm;
+  const rightMm = logoRegion.centerXMm + halfWidthMm;
+  const rectSegments = logoRegion.wrapsAround
+    ? [
+        { x: 0, width: rightMm },
+        { x: leftMm, width: Math.max(0, logoRegion.widthMm - rightMm) },
+      ]
+    : [{ x: leftMm, width: logoRegion.widthMm }];
+
+  const rects = rectSegments.map((segment, index) => {
+    const xPx = formatPx(mmToLightBurnPx(segment.x));
+    const yPx = formatPx(mmToLightBurnPx(topMm));
+    const widthPx = formatPx(mmToLightBurnPx(Math.max(0, segment.width)));
+    const heightPx = formatPx(mmToLightBurnPx(logoRegion.heightMm));
+    return `  <rect x="${xPx}" y="${yPx}" width="${widthPx}" height="${heightPx}" fill="none" stroke="#34c759" stroke-width="1.5" stroke-dasharray="6 4" vector-effect="non-scaling-stroke" data-segment="${index}" />`;
+  }).join("\n");
+
+  const centerXPx = formatPx(mmToLightBurnPx(logoRegion.centerXMm));
+  const centerYPx = formatPx(mmToLightBurnPx(logoRegion.centerYMm));
+  return [
+    `  <!-- ${escapeXml(logoRegion.label)} -->`,
+    rects,
+    `  <line x1="${centerXPx}" y1="0" x2="${centerXPx}" y2="${formatPx(mmToLightBurnPx(logoRegion.centerYMm + halfHeightMm))}" stroke="#34c759" stroke-width="1.2" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />`,
+    `  <line x1="${formatPx(mmToLightBurnPx(logoRegion.centerXMm - halfWidthMm))}" y1="${centerYPx}" x2="${formatPx(mmToLightBurnPx(logoRegion.centerXMm + halfWidthMm))}" y2="${centerYPx}" stroke="#34c759" stroke-width="1.2" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />`,
+    `  <text x="${centerXPx}" y="${formatPx(mmToLightBurnPx(Math.max(4, topMm - 2)))}" text-anchor="middle" font-size="11" fill="#34c759">${escapeXml(`${logoRegion.label} (${Math.round(logoRegion.confidence * 100)}%)`)}</text>`,
+  ].join("\n");
+}
+
+export function buildLightBurnAlignmentGuideSvg(payload: LightBurnAlignmentGuidePayload): string {
+  const widthPx = formatPx(mmToLightBurnPx(payload.templateWidthMm));
+  const heightPx = formatPx(mmToLightBurnPx(payload.templateHeightMm));
+  const guideLines = payload.lines
+    .map((line) => buildGuideLineGroup(line, payload.templateWidthMm, payload.templateHeightMm))
+    .join("\n\n");
+  const logoGuide = payload.logoRegion ? buildLogoGuideGroup(payload.logoRegion) : "";
+
+  return [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<!-- LT316 LightBurn alignment guides -->`,
+    `<!-- Body-only wrap space. Wrap width is authoritative. -->`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${heightPx}" viewBox="0 0 ${widthPx} ${heightPx}">`,
+    guideLines || `  <!-- no guides -->`,
+    logoGuide,
     `</svg>`,
   ].join("\n");
 }

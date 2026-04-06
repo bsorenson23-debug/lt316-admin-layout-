@@ -6,6 +6,11 @@ import type { FlatPreviewDimensions, ModelViewerProps, TumblerDimensions } from 
 import type { PlacedItem } from "@/types/admin";
 import { GLB_TEMPLATES } from "@/data/glbTemplates";
 import type { GlbTemplate } from "@/data/glbTemplates";
+import type {
+  CanonicalBodyProfile,
+  CanonicalDimensionCalibration,
+  CanonicalHandleProfile,
+} from "@/types/productTemplate";
 import styles from "./Model3DPanel.module.css";
 
 const VIEWABLE_EXTS = new Set(["stl", "obj", "glb", "gltf"]);
@@ -21,6 +26,28 @@ const ModelViewer = dynamic<ModelViewerProps>(
 // ---------------------------------------------------------------------------
 
 const PX_PER_MM = 4;
+type PreviewModelMode = "alignment-model" | "full-model" | "source-traced";
+
+function resolveDefaultPreviewModelMode(args: {
+  workspaceMode: "flat-bed" | "tumbler-wrap";
+  hasAlignmentPreviewModel: boolean;
+  hasFullPreviewModel: boolean;
+  hasSourcePreviewModel: boolean;
+}): PreviewModelMode {
+  if (args.workspaceMode === "flat-bed") {
+    return "source-traced";
+  }
+  if (args.hasAlignmentPreviewModel) {
+    return "alignment-model";
+  }
+  if (args.hasFullPreviewModel) {
+    return "full-model";
+  }
+  if (args.hasSourcePreviewModel) {
+    return "source-traced";
+  }
+  return "source-traced";
+}
 
 function clampValue(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -59,6 +86,7 @@ async function rasterizeItem(item: PlacedItem, tintColor?: string): Promise<HTML
 // ---------------------------------------------------------------------------
 
 export interface Model3DPanelProps {
+  viewerModeResetKey?: number;
   templateKey?: string | null;
   placedItems?: PlacedItem[];
   bedWidthMm?: number;
@@ -80,9 +108,13 @@ export interface Model3DPanelProps {
   rimTintColor?: string;
   /** Artwork / engraving tint */
   artworkTintColor?: string;
+  dimensionCalibration?: CanonicalDimensionCalibration | null;
+  canonicalBodyProfile?: CanonicalBodyProfile | null;
+  canonicalHandleProfile?: CanonicalHandleProfile | null;
 }
 
 export function Model3DPanel({
+  viewerModeResetKey = 0,
   templateKey,
   placedItems = [],
   bedWidthMm = 100,
@@ -98,6 +130,9 @@ export function Model3DPanel({
   bodyTintColor,
   rimTintColor,
   artworkTintColor,
+  dimensionCalibration,
+  canonicalBodyProfile,
+  canonicalHandleProfile,
 }: Model3DPanelProps) {
   const [modelFile, setModelFileLocal] = React.useState<File | null>(null);
 
@@ -109,6 +144,7 @@ export function Model3DPanel({
   const [sizeError, setSizeError] = React.useState<string | null>(null);
   const [dragOver, setDragOver] = React.useState(false);
   const [viewerOpen, setViewerOpen] = React.useState(false);
+  const [previewModelMode, setPreviewModelMode] = React.useState<PreviewModelMode>("source-traced");
   const [itemTextures, setItemTextures] = React.useState<Map<string, HTMLCanvasElement>>(new Map());
   const [templateLoading, setTemplateLoading] = React.useState<string | null>(null);
   const [templateError, setTemplateError] = React.useState<string | null>(null);
@@ -159,6 +195,25 @@ export function Model3DPanel({
     modelPathOverride.startsWith("/models/generated/");
   const canPreview = (modelFile !== null && viewable) || hasProceduralFlatPreview;
   const hasItems = placedItems.length > 0;
+  const hasAlignmentPreviewModel =
+    workspaceMode === "tumbler-wrap" &&
+    Boolean(canonicalBodyProfile && dimensionCalibration);
+  const hasFullPreviewModel = hasAlignmentPreviewModel;
+  const hasSourcePreviewModel = Boolean(modelPathOverride?.trim() || canPreview);
+  const defaultPreviewModelMode = React.useMemo(
+    () => resolveDefaultPreviewModelMode({
+      workspaceMode,
+      hasAlignmentPreviewModel,
+      hasFullPreviewModel,
+      hasSourcePreviewModel,
+    }),
+    [hasAlignmentPreviewModel, hasFullPreviewModel, hasSourcePreviewModel, workspaceMode],
+  );
+  const previewModeSummary = React.useMemo(() => {
+    if (previewModelMode === "alignment-model") return "ALIGNMENT MODEL · DEFAULT";
+    if (previewModelMode === "full-model") return "FULL MODEL";
+    return "SOURCE MODEL · COMPARE";
+  }, [previewModelMode]);
 
   // Probe template files so missing assets are disabled instead of erroring on click.
   React.useEffect(() => {
@@ -236,6 +291,11 @@ export function Model3DPanel({
     setTemplateError(null);
     setViewerOpen(hasProceduralFlatPreview);
   }, [templateKey, modelPathOverride, hasProceduralFlatPreview, setModelFile]);
+
+  React.useEffect(() => {
+    if (!viewerOpen) return;
+    setPreviewModelMode(defaultPreviewModelMode);
+  }, [defaultPreviewModelMode, templateKey, viewerModeResetKey, viewerOpen, workspaceMode]);
 
   // Auto-load GLB when a product template is selected
   React.useEffect(() => {
@@ -390,6 +450,50 @@ export function Model3DPanel({
 
         {viewerOpen && canPreview && (
           <>
+            {(hasAlignmentPreviewModel || hasFullPreviewModel || hasSourcePreviewModel) && (
+              <div className={styles.viewerModeSection}>
+                <div className={styles.viewerModeSummary}>{previewModeSummary}</div>
+                <div className={styles.viewerModeButtons}>
+                  <button
+                    type="button"
+                    className={`${styles.viewerModeBtn} ${previewModelMode === "alignment-model" ? styles.viewerModeBtnActive : ""}`}
+                    onClick={() => setPreviewModelMode("alignment-model")}
+                    disabled={!hasAlignmentPreviewModel}
+                    aria-pressed={previewModelMode === "alignment-model"}
+                  >
+                    Alignment (Default)
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.viewerModeBtn} ${previewModelMode === "full-model" ? styles.viewerModeBtnActive : ""}`}
+                    onClick={() => setPreviewModelMode("full-model")}
+                    disabled={!hasFullPreviewModel}
+                    aria-pressed={previewModelMode === "full-model"}
+                  >
+                    Full
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.viewerModeBtn} ${previewModelMode === "source-traced" ? styles.viewerModeBtnActive : ""}`}
+                    onClick={() => setPreviewModelMode("source-traced")}
+                    disabled={!hasSourcePreviewModel}
+                    aria-pressed={previewModelMode === "source-traced"}
+                  >
+                    Source (Compare)
+                  </button>
+                </div>
+                {workspaceMode === "tumbler-wrap" && previewModelMode === "alignment-model" && hasAlignmentPreviewModel && (
+                  <div className={styles.viewerModeNote}>
+                    Alignment is the production-default view. Placement, wrap mapping, centerline, and snap stay pinned to canonical alignment data.
+                  </div>
+                )}
+                {workspaceMode === "tumbler-wrap" && previewModelMode === "source-traced" && hasAlignmentPreviewModel && (
+                  <div className={styles.viewerModeCompareNote}>
+                    Source is compare/debug only. Placement, wrap mapping, centerline, and snap still use canonical alignment data.
+                  </div>
+                )}
+              </div>
+            )}
             <div className={styles.viewerWrap}>
               <ModelViewer
                 file={modelFile}
@@ -408,6 +512,10 @@ export function Model3DPanel({
                 bodyTintColor={bodyTintColor}
                 rimTintColor={rimTintColor}
                 tumblerMapping={effectiveMapping}
+                dimensionCalibration={dimensionCalibration}
+                canonicalBodyProfile={canonicalBodyProfile}
+                canonicalHandleProfile={canonicalHandleProfile}
+                previewModelMode={previewModelMode}
               />
             </div>
 

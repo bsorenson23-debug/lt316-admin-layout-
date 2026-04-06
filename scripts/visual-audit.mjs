@@ -53,6 +53,22 @@ async function wait(ms) {
   await page.waitForTimeout(ms);
 }
 
+async function closeDialogIfOpen() {
+  const dialog = page.locator('[role="dialog"]').first();
+  const isVisible = await dialog.isVisible({ timeout: 500 }).catch(() => false);
+  if (!isVisible) {
+    return;
+  }
+
+  const closeBtn = dialog.locator('button:has-text("Close")').first();
+  if (await closeBtn.isVisible({ timeout: 500 }).catch(() => false)) {
+    await closeBtn.click();
+  } else {
+    await page.keyboard.press("Escape");
+  }
+  await wait(400);
+}
+
 await page.goto(`${BASE_URL}/admin`, {
   waitUntil: "networkidle",
   timeout: 30000,
@@ -74,7 +90,7 @@ if (await tumblerBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
 }
 await shot("03-tumbler-mode", "Tumbler tab active");
 
-const rightTabs = ["Workflow", "Tools", "Setup", "Calibration"];
+const rightTabs = ["Production", "Tools", "Setup"];
 for (const tab of rightTabs) {
   const tabBtn = page.locator(`[role="tab"]:has-text("${tab}"), button:has-text("${tab}")`).first();
   if (await tabBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -86,9 +102,9 @@ for (const tab of rightTabs) {
   }
 }
 
-const workflowTab = page.locator("button", { hasText: "Workflow" }).first();
-if (await workflowTab.isVisible({ timeout: 2000 }).catch(() => false)) {
-  await workflowTab.click();
+const productionTab = page.locator("button", { hasText: "Production" }).first();
+if (await productionTab.isVisible({ timeout: 2000 }).catch(() => false)) {
+  await productionTab.click();
   await wait(400);
 }
 
@@ -100,7 +116,7 @@ if (await preflight.isVisible({ timeout: 2000 }).catch(() => false)) {
   await shot("05b-preflight-scrolled", "Pre-flight scrolled into view");
 }
 
-const preflightItems = ["Rotary preset", "Cylinder diameter", "Template dimensions", "Top anchor calibrated"];
+const preflightItems = ["Product template", "Placement", "Machine + lens", "Material profile", "Export handoff"];
 for (const label of preflightItems) {
   const item = page.locator(`button:has-text("${label}")`).first();
   const isBtn = await item.isVisible({ timeout: 1500 }).catch(() => false);
@@ -111,10 +127,11 @@ for (const label of preflightItems) {
       `06-preflight-click-${label.toLowerCase().replace(/\s+/g, "-")}`,
       `After clicking preflight item: ${label}`
     );
+    await closeDialogIfOpen();
 
-    const wfTab = page.locator("button", { hasText: "Workflow" }).first();
-    if (await wfTab.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await wfTab.click();
+    const prodTab = page.locator("button", { hasText: "Production" }).first();
+    if (await prodTab.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await prodTab.click();
       await wait(400);
     }
   } else {
@@ -152,7 +169,9 @@ if (await rightPanel.isVisible({ timeout: 2000 }).catch(() => false)) {
   await rightPanel.evaluate((el) => el.scrollTo(0, 0));
 }
 
-const exportBtn = page.locator('button:has-text("Export for LightBurn")').first();
+const exportBtn = page
+  .locator('button:has-text("Export Minimal LightBurn Bundle"), button:has-text("Export for LightBurn")')
+  .first();
 if (await exportBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
   await exportBtn.scrollIntoViewIfNeeded();
   await shot("11-export-button", "Export for LightBurn button state");

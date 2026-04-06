@@ -718,6 +718,12 @@
   margin-top: 4px;
 }
 
+.readoutWarning {
+  font-size: 9px;
+  color: var(--warning);
+  margin-top: 4px;
+}
+
 .guideHint {
   font-size: 9px;
   color: var(--success);

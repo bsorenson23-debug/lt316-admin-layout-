@@ -2,11 +2,13 @@
 
 import React from "react";
 import type { TumblerItemLookupFitDebug } from "@/types/tumblerItemLookup";
+import type { CanonicalHandleProfile } from "@/types/productTemplate";
 import styles from "./TumblerLookupDebugPanel.module.css";
 
 interface Props {
   debug: TumblerItemLookupFitDebug;
   imageUrl: string;
+  handleProfile?: CanonicalHandleProfile;
 }
 
 function round1(value: number): number {
@@ -27,7 +29,7 @@ function buildEdgePolyline(
     .join(" ");
 }
 
-export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
+export function TumblerLookupDebugPanel({ debug, imageUrl, handleProfile }: Props) {
   const viewBox = `0 0 ${debug.imageWidthPx} ${debug.imageHeightPx}`;
   const silhouetteWidth = debug.silhouetteBoundsPx.maxX - debug.silhouetteBoundsPx.minX;
   const silhouetteHeight = debug.silhouetteBoundsPx.maxY - debug.silhouetteBoundsPx.minY;
@@ -144,6 +146,37 @@ export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
           </svg>
           <div className={styles.caption}>Sampled lathe profile points that become the generated body mesh.</div>
         </figure>
+
+        {handleProfile && handleProfile.outerContour.length >= 4 && (
+          <figure className={styles.card}>
+            <figcaption className={styles.cardTitle}>4. Canonical handle</figcaption>
+            <svg viewBox={viewBox} className={styles.preview} aria-label="Canonical handle profile">
+              <image href={imageUrl} x="0" y="0" width={debug.imageWidthPx} height={debug.imageHeightPx} className={styles.fadedImage} />
+              <line
+                x1={debug.centerXPx}
+                y1={debug.silhouetteBoundsPx.minY}
+                x2={debug.centerXPx}
+                y2={debug.silhouetteBoundsPx.maxY}
+                className={styles.centerLine}
+              />
+              {handleProfile.svgPathOuter && (
+                <path d={handleProfile.svgPathOuter} className={styles.profileLine} />
+              )}
+              {handleProfile.svgPathInner && (
+                <path d={handleProfile.svgPathInner} className={styles.boundsRect} />
+              )}
+              <polyline
+                points={handleProfile.centerline.map((point) => `${round1(point.x)},${round1(point.y)}`).join(" ")}
+                className={styles.bodyLine}
+              />
+              <circle cx={handleProfile.anchors.upper.xPx} cy={handleProfile.anchors.upper.yPx} r="4" className={styles.profilePoint} />
+              <circle cx={handleProfile.anchors.lower.xPx} cy={handleProfile.anchors.lower.yPx} r="4" className={styles.profilePoint} />
+            </svg>
+            <div className={styles.caption}>
+              {handleProfile.side} handle · confidence {handleProfile.confidence.toFixed(2)} · {handleProfile.centerline.length} centerline samples
+            </div>
+          </figure>
+        )}
       </div>
     </div>
   );

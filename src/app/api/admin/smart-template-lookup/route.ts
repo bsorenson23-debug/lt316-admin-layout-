@@ -102,9 +102,7 @@ export async function POST(request: NextRequest) {
         error: {
           code: "LOOKUP_FAILED",
           message: "Smart product lookup failed.",
-          detail: error instanceof Error
-            ? error.message
-            : "Failed to run smart product lookup.",
+          detail: error instanceof Error ? error.message : "Unknown lookup failure",
         },
       },
       500,

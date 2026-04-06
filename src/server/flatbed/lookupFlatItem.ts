@@ -12,6 +12,7 @@ import {
   ensureGeneratedFlatItemGlb,
   ensureTracedFlatItemGlb,
 } from "./generateFlatItemModel";
+import { normalizeProductLookupUrl } from "@/lib/normalizeProductLookupUrl";
 
 const IMAGE_META_NAMES = [
   "og:image",
@@ -336,7 +337,9 @@ async function fetchPage(url: string): Promise<{ html: string; finalUrl: string 
 export async function lookupFlatItem(args: {
   lookupInput: string;
 }): Promise<FlatItemLookupResponse> {
-  const lookupInput = args.lookupInput.trim();
+  const rawLookupInput = args.lookupInput.trim();
+  const normalizedLookup = normalizeProductLookupUrl(rawLookupInput);
+  const lookupInput = normalizedLookup.value;
   let resolvedUrl: string | null = null;
   let title: string | null = null;
   let brand: string | null = null;
@@ -349,7 +352,7 @@ export async function lookupFlatItem(args: {
   let material: string | null = null;
   let materialLabel: string | null = null;
   let sources: TumblerSourceLink[] = [];
-  const notes: string[] = [];
+  const notes: string[] = normalizedLookup.note ? [normalizedLookup.note] : [];
 
   const fallbackText = extractLookupText(lookupInput);
   let lookupText = fallbackText;
@@ -472,7 +475,7 @@ export async function lookupFlatItem(args: {
   }
 
   return {
-    lookupInput,
+    lookupInput: rawLookupInput,
     resolvedUrl,
     title,
     brand,

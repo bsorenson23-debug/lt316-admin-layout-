@@ -157,8 +157,9 @@ export function useAssetWorkflow({
         bedConfig.workspaceMode === "tumbler-wrap"
           ? getWrapFrontCenter(bedConfig.width, activeHandleArcDeg)
           : bedConfig.width / 2;
+      const placementCenterY = engravableZone ? engravableZone.y + engravableZone.height / 2 : bedConfig.height / 2;
       const newItems: PlacedItem[] = accepted.map((asset) =>
-        buildPlacedItem(asset, placementCenterX, bedConfig.height / 2),
+        buildPlacedItem(asset, placementCenterX, placementCenterY),
       );
       if (newItems.length > 0) {
         setPlacedItems((prev) => [...prev, ...newItems]);
@@ -180,6 +181,7 @@ export function useAssetWorkflow({
     activeHandleArcDeg,
     bedConfig,
     buildPlacedItem,
+    engravableZone,
     selectedAssetId,
     setInspectorNote,
     setPlacedItems,
@@ -251,7 +253,7 @@ export function useAssetWorkflow({
         const item = buildPlacedItem(
           asset,
           getWrapFrontCenter(bedConfig.width, activeHandleArcDeg),
-          bedConfig.height / 2,
+          engravableZone ? engravableZone.y + engravableZone.height / 2 : bedConfig.height / 2,
         );
         setPlacedItems((prev) => [...prev, item]);
         setSelectedItemId(item.id);
@@ -261,7 +263,7 @@ export function useAssetWorkflow({
     }
     setPlacementAssetId(selectedAssetId);
     setInspectorNote(null);
-  }, [activeHandleArcDeg, bedConfig, buildPlacedItem, isTumblerMode, selectedAssetId, setInspectorNote, setPlacedItems, setPlacementAssetId, setSelectedItemId, svgAssets]);
+  }, [activeHandleArcDeg, bedConfig, buildPlacedItem, engravableZone, isTumblerMode, selectedAssetId, setInspectorNote, setPlacedItems, setPlacementAssetId, setSelectedItemId, svgAssets]);
 
   const handleSelectItem = useCallback((id: string | null) => {
     setSelectedItemId(id);

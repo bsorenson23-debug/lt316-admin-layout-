@@ -1,6 +1,5 @@
 import path from "node:path";
 import { Writable } from "node:stream";
-import { Helper as DxfHelper } from "dxf";
 import { getVectorFileExtension, normalizeImportedVectorName } from "../../lib/vectorImport.ts";
 import { countDrawableElements } from "../svgLibrary/libraryMeta.ts";
 
@@ -88,6 +87,9 @@ let pdfModulesPromise:
       workerSrc: string;
       standardFontDataUrl: string;
     }>
+  | null = null;
+let dxfHelperCtorPromise:
+  | Promise<new (source: string) => { toSVG(): string }>
   | null = null;
 
 function importAtRuntime<T>(specifier: string): Promise<T> {
@@ -264,6 +266,14 @@ async function getPdfModules() {
   return pdfModulesPromise;
 }
 
+async function getDxfHelperCtor(): Promise<new (source: string) => { toSVG(): string }> {
+  if (!dxfHelperCtorPromise) {
+    dxfHelperCtorPromise = importAtRuntime<{ Helper: new (source: string) => { toSVG(): string } }>("dxf")
+      .then((module) => module.Helper);
+  }
+  return dxfHelperCtorPromise;
+}
+
 async function getPostscriptConverter() {
   if (!postscriptConverterPromise) {
     postscriptConverterPromise = withMutedConsoleTimersAsync(() => importAtRuntime("ps2svg/dist/v3/ps2svg_v3.js"));
@@ -322,7 +332,8 @@ async function convertPdfToSvg(buffer: Buffer): Promise<{ svgText: string; pageC
   }
 }
 
-function convertDxfToSvg(buffer: Buffer): string {
+async function convertDxfToSvg(buffer: Buffer): Promise<string> {
+  const DxfHelper = await getDxfHelperCtor();
   const helper = new DxfHelper(buffer.toString("utf8"));
   return helper.toSVG();
 }
@@ -370,7 +381,7 @@ export async function convertVectorBufferToSvg(args: {
       }
       break;
     case "dxf":
-      svgText = convertDxfToSvg(args.buffer);
+      svgText = await convertDxfToSvg(args.buffer);
       warnings.push("DXF text, dimensions, and hatches may need manual cleanup.");
       break;
     default:

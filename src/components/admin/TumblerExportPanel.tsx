@@ -9,6 +9,7 @@ import type {
   TopAnchorMode,
   TumblerPlacementProfile,
 } from "@/types/export";
+import type { CanonicalDimensionCalibration, ManufacturerLogoStamp } from "@/types/productTemplate";
 import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "@/data/rotaryPlacementPresets";
 import { getRotaryPresets } from "@/utils/adminCalibrationState";
 import {
@@ -16,7 +17,7 @@ import {
   getLightBurnExportOrigin,
 } from "@/utils/tumblerExportPlacement";
 import { buildLightBurnLbrn, downloadLbrnFile } from "@/utils/lightBurnLbrnExport";
-import { buildLightBurnExportSvg } from "@/utils/lightBurnSvgExport";
+import { buildLightBurnAlignmentGuideSvg, buildLightBurnExportSvg } from "@/utils/lightBurnSvgExport";
 import { isTaperWarpApplicable } from "@/utils/taperWarp";
 import type { LbrnMaterialSettings } from "@/utils/lightBurnLbrnExport";
 import { appendExportHistory, fingerprintItems } from "./ExportHistoryPanel";
@@ -55,6 +56,9 @@ interface Props {
   onDiameterChange?: (diameterMm: number) => void;
   /** Snap all placed items to full-wrap dimensions (circumference x printable height) */
   onSnapFullWrap?: () => void;
+  dimensionCalibration?: CanonicalDimensionCalibration | null;
+  manufacturerLogoStamp?: ManufacturerLogoStamp | null;
+  lockedProductionGeometry?: boolean;
 }
 
 function fmt(n: number) { return n.toFixed(2); }
@@ -65,7 +69,16 @@ function parseNullableNumber(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function inferTopSafeOffsetMm(bedConfig: BedConfig): number | undefined {
+function inferTopSafeOffsetMm(
+  bedConfig: BedConfig,
+  calibration?: CanonicalDimensionCalibration | null,
+): number | undefined {
+  const printableTopMm = calibration?.printableSurfaceContract?.printableTopMm;
+  const bodyTopMm = calibration?.lidBodyLineMm;
+  if (Number.isFinite(printableTopMm) && Number.isFinite(bodyTopMm)) {
+    const delta = (printableTopMm ?? 0) - (bodyTopMm ?? 0);
+    return delta > 0 ? Number(delta.toFixed(2)) : 0;
+  }
   const overall = bedConfig.tumblerOverallHeightMm;
   const usable  = bedConfig.tumblerUsableHeightMm;
   if (!Number.isFinite(overall) || !Number.isFinite(usable)) return undefined;
@@ -77,11 +90,12 @@ function buildPlacementProfile(
   bedConfig: BedConfig,
   anchorMode: TopAnchorMode,
   manualTopOffsetMm: number | null,
+  calibration?: CanonicalDimensionCalibration | null,
 ): TumblerPlacementProfile {
   return {
     overallHeightMm: bedConfig.tumblerOverallHeightMm ?? bedConfig.height,
     usableHeightMm:  bedConfig.tumblerUsableHeightMm  ?? bedConfig.height,
-    topToSafeZoneStartMm: manualTopOffsetMm ?? inferTopSafeOffsetMm(bedConfig) ?? undefined,
+    topToSafeZoneStartMm: manualTopOffsetMm ?? inferTopSafeOffsetMm(bedConfig, calibration) ?? undefined,
     bottomMarginMm: undefined,
     topAnchorMode: anchorMode,
   };
@@ -100,11 +114,15 @@ async function downloadLightBurnBundle(args: {
   baseName: string;
   lbrnContent: string;
   svgContent: string;
+  guideSvgContent?: string;
   jsonContent: string;
 }): Promise<void> {
   const zip = new JSZip();
   zip.file(`${args.baseName}.lbrn2`, args.lbrnContent);
   zip.file(`${args.baseName}.svg`, args.svgContent);
+  if (args.guideSvgContent) {
+    zip.file(`${args.baseName}.alignment-guides.svg`, args.guideSvgContent);
+  }
   zip.file(`${args.baseName}.lightburn.json`, args.jsonContent);
   zip.file(
     "README.txt",
@@ -112,8 +130,9 @@ async function downloadLightBurnBundle(args: {
       "Open the .lbrn2 file in LightBurn for the minimal artwork-only project.",
       "This export includes basic galvo rotary diameter/setup when rotary is enabled.",
       "It still excludes bounds, notes, and advanced LT316 settings.",
-      "Save-to-folder mode also refreshes fixed aliases named current-job.lbrn2 / .svg / .lightburn.json.",
+      "Save-to-folder mode also refreshes fixed aliases named current-job.lbrn2 / .svg / .alignment-guides.svg / .lightburn.json.",
       "Import or inspect the .svg only if you need the raw artwork export.",
+      "The .alignment-guides.svg file contains body-only front/back/quarter and keep-out guides only.",
       "The .lightburn.json file is LT316 metadata and is not meant to be opened by LightBurn.",
     ].join("\r\n"),
   );
@@ -196,6 +215,9 @@ export function TumblerExportPanel({
   onPreflightNav,
   taperWarpEnabled: taperWarpEnabledProp, onTaperWarpChange, outputFolderPath, onDiameterChange,
   onSnapFullWrap,
+  dimensionCalibration,
+  manufacturerLogoStamp,
+  lockedProductionGeometry = false,
 }: Props) {
   const [localRotaryEnabled,  setLocalRotaryEnabled]  = React.useState(false);
   const [availablePresets,    setAvailablePresets]    = React.useState<RotaryPlacementPreset[]>(DEFAULT_ROTARY_PLACEMENT_PRESETS);
@@ -232,7 +254,7 @@ export function TumblerExportPanel({
     : null;
 
   const manualTopOffsetMm  = parseNullableNumber(topOffsetDraft);
-  const placementProfile   = buildPlacementProfile(bedConfig, anchorMode, manualTopOffsetMm);
+  const placementProfile   = buildPlacementProfile(bedConfig, anchorMode, manualTopOffsetMm, dimensionCalibration);
 
   const previewOrigin = isTumblerMode
     ? getLightBurnExportOrigin({
@@ -254,12 +276,12 @@ export function TumblerExportPanel({
       preset: selectedPreset,
       bedWidthMm: bedConfig.flatWidth,
       anchorMode,
-      placementProfile: buildPlacementProfile(bedConfig, anchorMode, parseNullableNumber(topOffsetDraft)),
+      placementProfile: buildPlacementProfile(bedConfig, anchorMode, parseNullableNumber(topOffsetDraft), dimensionCalibration),
     });
     if (!origin) { onFramePreviewChange(null); return; }
     onFramePreviewChange({ originXmm: origin.xMm, originYmm: origin.yMm, widthMm: bedConfig.width, heightMm: bedConfig.height });
   }, [onFramePreviewChange, isTumblerMode, rotaryEnabled, selectedPresetId,
-      selectedPreset, bedConfig, anchorMode, topOffsetDraft]);
+      selectedPreset, bedConfig, anchorMode, topOffsetDraft, dimensionCalibration]);
 
   const exportArtifacts = buildLightBurnExportArtifacts({
     includeLightBurnSetup: isTumblerMode,
@@ -267,6 +289,11 @@ export function TumblerExportPanel({
     workspaceMode: bedConfig.workspaceMode,
     templateWidthMm: bedConfig.width,
     templateHeightMm: bedConfig.height,
+    calibration: dimensionCalibration,
+    printableSurfaceContract: dimensionCalibration?.printableSurfaceContract ?? null,
+    axialSurfaceBands: dimensionCalibration?.axialSurfaceBands ?? null,
+    manufacturerLogoStamp,
+    lockedProductionGeometry,
     items: placedItems,
     rotary: { enabled: rotaryEnabled, preset: selectedPreset, anchorMode, placementProfile },
     taperWarpEnabled: taperApplicable && taperWarpEnabled,
@@ -289,6 +316,22 @@ export function TumblerExportPanel({
       value: isTumblerMode && currentDiameterMm > 0 ? `${fmt(currentDiameterMm)} mm` : "n/a",
     },
     {
+      label: "Keep-out",
+      value: exportArtifacts.alignmentGuides?.keepOutRegion ? "Applied" : "None",
+    },
+    {
+      label: "Printable band",
+      value: dimensionCalibration?.printableSurfaceContract
+        ? `${fmt(dimensionCalibration.printableSurfaceContract.printableTopMm)} → ${fmt(dimensionCalibration.printableSurfaceContract.printableBottomMm)}`
+        : "Full body shell",
+    },
+    {
+      label: "Logo guide",
+      value: exportArtifacts.alignmentGuides?.logoRegion
+        ? `${Math.round(exportArtifacts.alignmentGuides.logoRegion.confidence * 100)}%`
+        : "None",
+    },
+    {
       label: "Origin",
       value: `X ${fmt(previewOrigin.xMm)} · Y ${fmt(previewOrigin.yMm)}`,
     },
@@ -304,6 +347,7 @@ export function TumblerExportPanel({
     const preprocessedForLbrn = await preprocessPayloadForLbrn(exportArtifacts.artworkPayload);
     const sidecarPayload = {
       artwork: exportArtifacts.artworkPayload,
+      alignmentGuides: exportArtifacts.alignmentGuides,
       setup: exportArtifacts.sidecar,
       setupSummary: exportArtifacts.setupSummary,
       materialSettings: materialSettings ?? null,
@@ -313,6 +357,9 @@ export function TumblerExportPanel({
       },
     };
     const svgContent = buildLightBurnExportSvg(exportArtifacts.artworkPayload);
+    const guideSvgContent = exportArtifacts.alignmentGuides
+      ? buildLightBurnAlignmentGuideSvg(exportArtifacts.alignmentGuides)
+      : null;
     const lbrnContent = buildLightBurnLbrn(
       preprocessedForLbrn.payload,
       materialSettings ?? undefined,
@@ -345,21 +392,25 @@ export function TumblerExportPanel({
         const [
           lbrnPath,
           svgPath,
+          guideSvgPath,
           jsonPath,
           currentLbrnPath,
           currentSvgPath,
+          currentGuideSvgPath,
           currentJsonPath,
         ] = await Promise.all([
         saveFile(`${name}.lbrn2`, lbrnContent),
         saveFile(`${name}.svg`, svgContent),
+        guideSvgContent ? saveFile(`${name}.alignment-guides.svg`, guideSvgContent) : Promise.resolve(""),
         saveFile(`${name}.lightburn.json`, sidecarContent),
         saveFile(`${CURRENT_JOB_BASENAME}.lbrn2`, lbrnContent),
         saveFile(`${CURRENT_JOB_BASENAME}.svg`, svgContent),
+        guideSvgContent ? saveFile(`${CURRENT_JOB_BASENAME}.alignment-guides.svg`, guideSvgContent) : Promise.resolve(""),
         saveFile(`${CURRENT_JOB_BASENAME}.lightburn.json`, sidecarContent),
         ]);
         setSaveResult({
           ok: true,
-          message: `Saved ${lbrnPath}, ${svgPath}, and ${jsonPath}. Updated fixed job files at ${currentLbrnPath}, ${currentSvgPath}, and ${currentJsonPath}${preprocessedForLbrn.usedInkscape ? " (Inkscape preprocessed .lbrn2 artwork)" : ""}`,
+          message: `Saved ${lbrnPath}, ${svgPath}${guideSvgPath ? `, ${guideSvgPath}` : ""}, and ${jsonPath}. Updated fixed job files at ${currentLbrnPath}, ${currentSvgPath}${currentGuideSvgPath ? `, ${currentGuideSvgPath}` : ""}, and ${currentJsonPath}${preprocessedForLbrn.usedInkscape ? " (Inkscape preprocessed .lbrn2 artwork)" : ""}`,
         });
       } catch (err) {
         setSaveResult({
@@ -376,6 +427,7 @@ export function TumblerExportPanel({
         baseName: name,
         lbrnContent,
         svgContent,
+        guideSvgContent: guideSvgContent ?? undefined,
         jsonContent: sidecarContent,
       });
     }
@@ -508,7 +560,7 @@ export function TumblerExportPanel({
                         step={0.1}
                         className={styles.numInput}
                         value={topOffsetDraft}
-                        placeholder={`${inferTopSafeOffsetMm(bedConfig) ?? 0}`}
+                        placeholder={`${inferTopSafeOffsetMm(bedConfig, dimensionCalibration) ?? 0}`}
                         onChange={(e) => setTopOffsetDraft(e.target.value)}
                       />
                       <span className={styles.numUnit}>mm</span>
@@ -575,6 +627,18 @@ export function TumblerExportPanel({
         </div>
 
         {/* ── Warnings ── */}
+        {dimensionCalibration && (
+          <div className={styles.diameterMeta}>
+            Body-only wrap space. Wrap width authoritative = {lockedProductionGeometry ? "yes" : "no"} · Printable top = {fmt(dimensionCalibration.printableSurfaceContract?.printableTopMm ?? dimensionCalibration.lidBodyLineMm)} mm · Printable bottom = {fmt(dimensionCalibration.printableSurfaceContract?.printableBottomMm ?? dimensionCalibration.bodyBottomMm)} mm · Handle keep-out applied = {exportArtifacts.alignmentGuides?.keepOutRegion ? "yes" : "no"}
+          </div>
+        )}
+
+        {exportArtifacts.alignmentGuides && (
+          <div className={styles.diameterMeta}>
+            Alignment guides: front {fmt(exportArtifacts.alignmentGuides.wrapMappingMm.frontMeridianMm)} · back {fmt(exportArtifacts.alignmentGuides.wrapMappingMm.backMeridianMm)} · left quarter {fmt(exportArtifacts.alignmentGuides.wrapMappingMm.leftQuarterMm)} · right quarter {fmt(exportArtifacts.alignmentGuides.wrapMappingMm.rightQuarterMm)} mm
+          </div>
+        )}
+
         {warnings.map((w) => (
           <div key={w} className={styles.warning}>{w}</div>
         ))}

@@ -1,4 +1,6 @@
 import type { WorkspaceMode } from "./admin";
+import type { CanonicalDimensionCalibration, LogoPlacement } from "./productTemplate";
+import type { AxialSurfaceBand, PrintableSurfaceContract } from "./printableSurface";
 
 export type BedOrigin = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 export type RotaryDriveType = "chuck" | "roller";
@@ -116,6 +118,67 @@ export interface LightBurnExportPayload {
   items: LightBurnExportItem[];
 }
 
+export type LightBurnGuideKind =
+  | "front-meridian"
+  | "back-meridian"
+  | "left-quarter"
+  | "right-quarter"
+  | "handle-meridian"
+  | "keep-out-start"
+  | "keep-out-end"
+  | "logo-center"
+  | "printable-top"
+  | "printable-bottom"
+  | "lid-boundary"
+  | "rim-boundary"
+  | "base-boundary";
+
+export interface LightBurnAlignmentGuideLine {
+  id: string;
+  kind: LightBurnGuideKind;
+  label: string;
+  orientation: "vertical" | "horizontal";
+  xMm?: number;
+  yMm?: number;
+}
+
+export interface LightBurnAlignmentKeepOutRegion {
+  label: string;
+  startMm: number;
+  endMm: number;
+  wrapsAround: boolean;
+}
+
+export interface LightBurnAlignmentLogoRegion {
+  label: string;
+  centerXMm: number;
+  centerYMm: number;
+  widthMm: number;
+  heightMm: number;
+  wrapsAround: boolean;
+  source: LogoPlacement["source"];
+  confidence: number;
+}
+
+export interface LightBurnAlignmentGuidePayload {
+  kind: "lt316-lightburn-alignment-guides";
+  workspaceMode: WorkspaceMode;
+  templateWidthMm: number;
+  templateHeightMm: number;
+  generatedAt: string;
+  units: "mm";
+  origin: "top-left";
+  bodyOnlyWrapSpace: boolean;
+  wrapWidthAuthoritative: boolean;
+  wrapMappingMm: CanonicalDimensionCalibration["wrapMappingMm"];
+  printableSurfaceContract?: PrintableSurfaceContract | null;
+  axialSurfaceBands?: AxialSurfaceBand[];
+  lines: LightBurnAlignmentGuideLine[];
+  keepOutRegion: LightBurnAlignmentKeepOutRegion | null;
+  logoRegion: LightBurnAlignmentLogoRegion | null;
+  warnings: string[];
+}
+
 export interface Lt316LightBurnSetupSidecar {
   product: {
     profileId?: string | null;
@@ -152,6 +215,7 @@ export interface Lt316LightBurnSetupSidecar {
 
 export interface LightBurnExportArtifacts {
   artworkPayload: LightBurnExportPayload;
+  alignmentGuides: LightBurnAlignmentGuidePayload | null;
   sidecar: Lt316LightBurnSetupSidecar | null;
   setupSummary: string | null;
   setupWarnings: string[];
