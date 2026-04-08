@@ -62,7 +62,9 @@ export function computeAlignmentPatch(
     engravableZone?.handleCenterX ??
     getWrapHandleCenter(bedConfig.width) ??
     (bedConfig.width / 2);
-  const safeCenterY = engravableZone ? engravableZone.y + engravableZone.height / 2 : bedConfig.height / 2;
+  const safeCenterY = engravableZone
+    ? (engravableZone.printableCenterY ?? (engravableZone.y + engravableZone.height / 2))
+    : bedConfig.height / 2;
   const safeUpperY = engravableZone ? engravableZone.y + engravableZone.height * 0.35 : bedConfig.height * 0.35;
 
   if (mode === "fit-bed") {
@@ -98,7 +100,7 @@ export function computeAlignmentPatch(
 
   if (mode === "center-zone" && engravableZone) {
     const zoneCX = engravableZone.x + engravableZone.width / 2;
-    const zoneCY = engravableZone.y + engravableZone.height / 2;
+    const zoneCY = engravableZone.printableCenterY ?? (engravableZone.y + engravableZone.height / 2);
     const artworkCenterX = artwork.x + artwork.width / 2;
     const artworkCenterY = artwork.y + artwork.height / 2;
     nextX += zoneCX - artworkCenterX;
@@ -120,7 +122,7 @@ export function computeAlignmentPatch(
         itemWidth: nextWidth,
         itemHeight: nextHeight,
         targetCenterX: engravableZone.x + engravableZone.width / 2,
-        targetCenterY: engravableZone.y + engravableZone.height / 2,
+        targetCenterY: engravableZone.printableCenterY ?? (engravableZone.y + engravableZone.height / 2),
       });
 
       nextX = centered.x;

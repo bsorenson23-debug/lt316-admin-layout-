@@ -212,6 +212,16 @@ function inferBrand(text: string): string | null {
 function inferModel(text: string, brand: string | null, capacityOz: number | null): string | null {
   const normalized = normalizeText(text);
   if (brand === "Stanley") {
+    if (
+      normalized.includes("protour") ||
+      normalized.includes("pro tour") ||
+      (
+        normalized.includes("travel tumbler") &&
+        (normalized.includes("quencher") || normalized.includes("flip straw"))
+      )
+    ) {
+      return capacityOz ? `ProTour Travel Tumbler ${capacityOz}oz` : "ProTour Travel Tumbler";
+    }
     if (normalized.includes("iceflow")) {
       return capacityOz ? `IceFlow Flip Straw ${capacityOz}oz` : "IceFlow Flip Straw";
     }
@@ -1321,13 +1331,22 @@ function parseTripletDimensionsMm(text: string): TumblerItemLookupDimensions | n
   const overallHeightMm = valuesMm[2];
   const horizontalDelta = Math.abs(horizontalA - horizontalB);
   const isStraight = horizontalDelta <= 3;
+  const normalized = normalizeText(text);
+  const looksHandleDriven =
+    (/\bhandle\b|\btravel tumbler\b|\bprotour\b|\bpro tour\b|\bquencher\b/.test(normalized)) &&
+    horizontalB / Math.max(horizontalA, 1) >= 1.2;
 
   return {
     overallHeightMm: round2(overallHeightMm),
-    outsideDiameterMm: isStraight ? round2((horizontalA + horizontalB) / 2) : null,
-    topDiameterMm: isStraight ? null : round2(horizontalB),
-    bottomDiameterMm: isStraight ? null : round2(horizontalA),
+    outsideDiameterMm: looksHandleDriven
+      ? round2(horizontalA)
+      : isStraight
+        ? round2((horizontalA + horizontalB) / 2)
+        : null,
+    topDiameterMm: looksHandleDriven ? null : isStraight ? null : round2(horizontalB),
+    bottomDiameterMm: looksHandleDriven ? null : isStraight ? null : round2(horizontalA),
     usableHeightMm: round2(overallHeightMm * 0.78),
+    handleSpanMm: looksHandleDriven ? round2(horizontalB) : null,
   };
 }
 
@@ -1742,11 +1761,12 @@ export async function lookupTumblerItem(args: {
       rimColorHex: fallbackAsset.rimColorHex,
       fitDebug: fallbackAsset.fitDebug,
       dimensions: {
-        overallHeightMm: matchedProfile.overallHeightMm,
-        outsideDiameterMm: matchedProfile.outsideDiameterMm ?? null,
-        topDiameterMm: matchedProfile.topDiameterMm ?? null,
-        bottomDiameterMm: matchedProfile.bottomDiameterMm ?? null,
-        usableHeightMm: matchedProfile.usableHeightMm,
+        overallHeightMm: scrapedDims?.overallHeightMm ?? matchedProfile.overallHeightMm,
+        outsideDiameterMm: scrapedDims?.outsideDiameterMm ?? matchedProfile.outsideDiameterMm ?? null,
+        topDiameterMm: scrapedDims?.topDiameterMm ?? matchedProfile.topDiameterMm ?? null,
+        bottomDiameterMm: scrapedDims?.bottomDiameterMm ?? matchedProfile.bottomDiameterMm ?? null,
+        usableHeightMm: scrapedDims?.usableHeightMm ?? matchedProfile.usableHeightMm,
+        handleSpanMm: scrapedDims?.handleSpanMm ?? matchedProfile.handleSpanMm ?? null,
       },
       mode: "matched-profile",
       notes: [
@@ -1768,6 +1788,7 @@ export async function lookupTumblerItem(args: {
     topDiameterMm: null,
     bottomDiameterMm: null,
     usableHeightMm: null,
+    handleSpanMm: null,
   };
 
   if (!scrapedDims) {

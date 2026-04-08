@@ -22,7 +22,7 @@ import type { FlatItemLookupResponse } from "@/types/flatItemLookup";
 import type { TumblerFinish } from "@/types/materials";
 import type { RasterVectorizeResponse } from "@/types/rasterVectorize";
 import type { SmartTemplateLookupResponse } from "@/types/smartTemplateLookup";
-import type { TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
+import type { TumblerItemLookupFitDebug, TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
 import type { CatalogBatchImportSummary } from "@/lib/catalogBatchImport";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
 import { lookupFlatItem as lookupFlatItemRequest } from "@/lib/flatItemLookup";
@@ -70,8 +70,13 @@ import { TumblerMappingWizard } from "./TumblerMappingWizard";
 import { EngravableZoneEditor } from "./EngravableZoneEditor";
 import { TumblerLookupDebugPanel } from "./TumblerLookupDebugPanel";
 import { FlatItemLookupDebugPanel } from "./FlatItemLookupDebugPanel";
+import {
+  PipelineDebugDrawer,
+  type PipelineDebugRawObject,
+  type PipelineDebugSection,
+} from "./PipelineDebugDrawer";
 import { SmartTemplateLookupPanel } from "./SmartTemplateLookupPanel";
-import type { FlatPreviewDimensions, ModelViewerProps, TumblerDimensions } from "./ModelViewer";
+import type { EditableHandlePreview, FlatPreviewDimensions, ModelViewerProps, TumblerDimensions } from "./ModelViewer";
 import styles from "./TemplateCreateForm.module.css";
 
 const ModelViewer = dynamic<ModelViewerProps>(
@@ -94,6 +99,228 @@ type PreviewModelMode = "alignment-model" | "full-model" | "source-traced";
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function estimateEditableHandleWallThicknessMm(args: {
+  handleProfile?: CanonicalHandleProfile | null;
+  pxToMmScaleX?: number | null;
+  pxToMmScaleY?: number | null;
+  fallbackMm: number;
+}): number {
+  const { handleProfile, pxToMmScaleX, pxToMmScaleY, fallbackMm } = args;
+  if (!handleProfile?.outerContour?.length || !handleProfile.innerContour?.length) {
+    return round2(fallbackMm);
+  }
+
+  const scaleX = Math.abs(pxToMmScaleX ?? 0);
+  const scaleY = Math.abs(pxToMmScaleY ?? scaleX);
+  if (!(scaleX > 0) || !(scaleY > 0)) {
+    return round2(fallbackMm);
+  }
+
+  const outerXs = handleProfile.outerContour.map((point) => point.x);
+  const outerYs = handleProfile.outerContour.map((point) => point.y);
+  const innerXs = handleProfile.innerContour.map((point) => point.x);
+  const innerYs = handleProfile.innerContour.map((point) => point.y);
+
+  const outerMinX = Math.min(...outerXs);
+  const outerMaxX = Math.max(...outerXs);
+  const outerMinY = Math.min(...outerYs);
+  const outerMaxY = Math.max(...outerYs);
+  const innerMinX = Math.min(...innerXs);
+  const innerMaxX = Math.max(...innerXs);
+  const innerMinY = Math.min(...innerYs);
+  const innerMaxY = Math.max(...innerYs);
+
+  const candidatesPx = [
+    innerMinX - outerMinX,
+    outerMaxX - innerMaxX,
+    innerMinY - outerMinY,
+    outerMaxY - innerMaxY,
+  ].filter((value) => Number.isFinite(value) && value > 1);
+
+  if (candidatesPx.length === 0) {
+    return round2(fallbackMm);
+  }
+
+  const sorted = [...candidatesPx].sort((a, b) => a - b);
+  const medianPx = sorted[Math.floor(sorted.length / 2)] ?? sorted[0] ?? 0;
+  const mmCandidates = [
+    medianPx * scaleX,
+    medianPx * scaleY,
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  if (mmCandidates.length === 0) {
+    return round2(fallbackMm);
+  }
+
+  return round2(clampNumber(
+    mmCandidates.reduce((sum, value) => sum + value, 0) / mmCandidates.length,
+    4,
+    Math.max(6, fallbackMm * 1.6),
+  ));
+}
+
+function getHandleContourBounds(points: Array<{ x: number; y: number }> | undefined | null) {
+  if (!points?.length) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+  };
+}
+
+function deriveMeasuredEditableHandlePreview(args: {
+  fitDebug?: TumblerItemLookupFitDebug | null;
+  handleProfile?: CanonicalHandleProfile | null;
+  calibration?: CanonicalDimensionCalibration | null;
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+  fallbackTubeDiameterMm: number;
+}): EditableHandlePreview | null {
+  const {
+    fitDebug,
+    handleProfile,
+    calibration,
+    bodyTopFromOverallMm,
+    bodyBottomFromOverallMm,
+    fallbackTubeDiameterMm,
+  } = args;
+  if (!calibration) return null;
+  const [sx = 1, , tx = 0, , sy = 1, ty = 0] = calibration.photoToFrontTransform.matrix;
+  const pxToMmX = (value: number) => (value * sx) + tx;
+  const pxToMmY = (value: number) => (value * sy) + ty;
+  const clampY = (value: number, min: number, max: number) => round2(clampNumber(value, min, max));
+  const finalizePreview = (seed: {
+    side: "left" | "right";
+    attachXpx: number;
+    outerEdgeXpx: number;
+    innerTopPx: number;
+    innerBottomPx: number;
+    outerTopPx: number;
+    outerBottomPx: number;
+    wallThicknessPx: number;
+  }): EditableHandlePreview | null => {
+    const topFromOverallMm = clampY(pxToMmY(seed.innerTopPx), bodyTopFromOverallMm, bodyBottomFromOverallMm - 24);
+    const bottomFromOverallMm = clampY(pxToMmY(seed.innerBottomPx), topFromOverallMm + 24, bodyBottomFromOverallMm);
+    const outerTopFromOverallMm = clampY(pxToMmY(seed.outerTopPx), bodyTopFromOverallMm, topFromOverallMm);
+    const outerBottomFromOverallMm = clampY(pxToMmY(seed.outerBottomPx), bottomFromOverallMm, bodyBottomFromOverallMm);
+    const outerWidthMm = Math.abs(pxToMmX(seed.outerEdgeXpx) - pxToMmX(seed.attachXpx));
+    if (!(outerWidthMm > 4)) return null;
+    const measuredWallMm = Math.max(3, Math.abs(seed.wallThicknessPx * sx));
+    const reachMm = round2(clampNumber(outerWidthMm - measuredWallMm, 8, Math.max(10, outerWidthMm - 1)));
+    const tubeDiameterMm = round2(clampNumber(
+      Math.max(fallbackTubeDiameterMm, measuredWallMm),
+      4,
+      Math.max(6, fallbackTubeDiameterMm * 1.6),
+    ));
+    const outerOffsetMm = round2(clampNumber(
+      measuredWallMm,
+      2,
+      Math.max(4, outerWidthMm * 0.58),
+    ));
+    const innerHeightMm = Math.max(24, bottomFromOverallMm - topFromOverallMm);
+    const cornerInsetMm = round2(clampNumber(
+      Math.max(tubeDiameterMm * 0.95, innerHeightMm * 0.16),
+      4,
+      Math.max(6, (innerHeightMm / 2) - 2),
+    ));
+    const upperCornerFromOverallMm = round2(clampNumber(
+      topFromOverallMm + cornerInsetMm,
+      topFromOverallMm + 4,
+      bottomFromOverallMm - 8,
+    ));
+    const lowerCornerFromOverallMm = round2(clampNumber(
+      bottomFromOverallMm - cornerInsetMm,
+      upperCornerFromOverallMm + 4,
+      bottomFromOverallMm - 4,
+    ));
+    return {
+      side: seed.side,
+      topFromOverallMm,
+      bottomFromOverallMm,
+      outerTopFromOverallMm,
+      outerBottomFromOverallMm,
+      reachMm,
+      outerOffsetMm,
+      upperCornerFromOverallMm,
+      lowerCornerFromOverallMm,
+      upperCornerReachMm: reachMm,
+      lowerCornerReachMm: reachMm,
+      upperTransitionFromOverallMm: topFromOverallMm,
+      lowerTransitionFromOverallMm: bottomFromOverallMm,
+      upperTransitionReachMm: reachMm,
+      lowerTransitionReachMm: reachMm,
+      tubeDiameterMm,
+    };
+  };
+
+  if (
+    fitDebug?.handleSide &&
+    fitDebug.handleAttachEdgePx != null &&
+    fitDebug.handleOuterEdgePx != null &&
+    fitDebug.handleHoleTopPx != null &&
+    fitDebug.handleHoleBottomPx != null &&
+    fitDebug.handleCenterYPx != null &&
+    fitDebug.handleOuterHeightPx != null &&
+    fitDebug.handleBarWidthPx != null
+  ) {
+    const outerHalfHeightPx = fitDebug.handleOuterHeightPx / 2;
+    const outerTopFromBarPx = fitDebug.handleHoleTopPx - fitDebug.handleBarWidthPx;
+    const outerBottomFromBarPx = fitDebug.handleHoleBottomPx + fitDebug.handleBarWidthPx;
+    const fromFitDebug = finalizePreview({
+      side: fitDebug.handleSide,
+      attachXpx: fitDebug.handleAttachEdgePx,
+      outerEdgeXpx: fitDebug.handleOuterEdgePx,
+      innerTopPx: fitDebug.handleHoleTopPx,
+      innerBottomPx: fitDebug.handleHoleBottomPx,
+      outerTopPx: Math.max(fitDebug.handleCenterYPx - outerHalfHeightPx, outerTopFromBarPx),
+      outerBottomPx: Math.min(fitDebug.handleCenterYPx + outerHalfHeightPx, outerBottomFromBarPx),
+      wallThicknessPx: fitDebug.handleBarWidthPx,
+    });
+    if (fromFitDebug) {
+      return fromFitDebug;
+    }
+  }
+
+  const outerBounds = getHandleContourBounds(handleProfile?.outerContour);
+  const innerBounds = handleProfile?.openingBox
+    ? {
+        minX: handleProfile.openingBox.x,
+        maxX: handleProfile.openingBox.x + handleProfile.openingBox.w,
+        minY: handleProfile.openingBox.y,
+        maxY: handleProfile.openingBox.y + handleProfile.openingBox.h,
+      }
+    : getHandleContourBounds(handleProfile?.innerContour);
+  const side = handleProfile?.side ?? null;
+  if (!outerBounds || !innerBounds || !side) {
+    return null;
+  }
+
+  const attachXpx = side === "right" ? outerBounds.minX : outerBounds.maxX;
+  const outerEdgeXpx = side === "right" ? outerBounds.maxX : outerBounds.minX;
+  const wallThicknessPx = Math.max(
+    4,
+    side === "right"
+      ? Math.min(innerBounds.minX - outerBounds.minX, outerBounds.maxX - innerBounds.maxX)
+      : Math.min(outerBounds.maxX - innerBounds.maxX, innerBounds.minX - outerBounds.minX),
+  );
+  return finalizePreview({
+    side,
+    attachXpx,
+    outerEdgeXpx,
+    innerTopPx: innerBounds.minY,
+    innerBottomPx: innerBounds.maxY,
+    outerTopPx: outerBounds.minY,
+    outerBottomPx: outerBounds.maxY,
+    wallThicknessPx,
+  });
 }
 
 function wrapTheta(theta: number): number {
@@ -945,6 +1172,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [printableBottomOverrideMm, setPrintableBottomOverrideMm] = React.useState<number | undefined>(
     editingTemplate?.dimensions.printableBottomOverrideMm,
   );
+  const autoSeededBandDetectionKeyRef = React.useRef<string | null>(null);
   const [handleTopFromOverallMm, setHandleTopFromOverallMm] = React.useState<number | undefined>(
     editingTemplate?.dimensions.handleTopFromOverallMm,
   );
@@ -953,6 +1181,42 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   );
   const [handleReachMm, setHandleReachMm] = React.useState<number | undefined>(
     editingTemplate?.dimensions.handleReachMm,
+  );
+  const [handleUpperCornerFromOverallMm, setHandleUpperCornerFromOverallMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleUpperCornerFromOverallMm,
+  );
+  const [handleLowerCornerFromOverallMm, setHandleLowerCornerFromOverallMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleLowerCornerFromOverallMm,
+  );
+  const [handleUpperCornerReachMm, setHandleUpperCornerReachMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleUpperCornerReachMm,
+  );
+  const [handleLowerCornerReachMm, setHandleLowerCornerReachMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleLowerCornerReachMm,
+  );
+  const [handleUpperTransitionReachMm, setHandleUpperTransitionReachMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleUpperTransitionReachMm,
+  );
+  const [handleLowerTransitionReachMm, setHandleLowerTransitionReachMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleLowerTransitionReachMm,
+  );
+  const [handleUpperTransitionFromOverallMm, setHandleUpperTransitionFromOverallMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleUpperTransitionFromOverallMm,
+  );
+  const [handleLowerTransitionFromOverallMm, setHandleLowerTransitionFromOverallMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleLowerTransitionFromOverallMm,
+  );
+  const [handleOuterTopFromOverallMm, setHandleOuterTopFromOverallMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleOuterTopFromOverallMm,
+  );
+  const [handleOuterBottomFromOverallMm, setHandleOuterBottomFromOverallMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleOuterBottomFromOverallMm,
+  );
+  const [handleTubeDiameterMm, setHandleTubeDiameterMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleTubeDiameterMm,
+  );
+  const [handleSpanMm, setHandleSpanMm] = React.useState<number | undefined>(
+    editingTemplate?.dimensions.handleSpanMm,
   );
   const [canonicalHandleProfile, setCanonicalHandleProfile] = React.useState<CanonicalHandleProfile | undefined>(
     editingTemplate?.dimensions.canonicalHandleProfile,
@@ -1353,12 +1617,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       bodyTopFromOverallMm,
       bodyBottomFromOverallMm,
       bodyDiameterMm: effectiveCylinderDiameterMm,
+      handleSide: canonicalHandleProfile?.side ?? lookupResult?.fitDebug?.handleSide ?? null,
       fitDebug: lookupResult?.fitDebug ?? null,
     }) ?? persistedCanonicalBodyProfile;
   }, [
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
     calibrationBodyOutline,
+    canonicalHandleProfile?.side,
     effectiveCylinderDiameterMm,
     persistedCanonicalBodyProfile,
     lookupResult?.fitDebug,
@@ -1377,6 +1643,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       wrapDiameterMm: effectiveCylinderDiameterMm,
       baseDiameterMm,
       handleArcDeg,
+      handleSide: canonicalHandleProfile?.side ?? lookupResult?.fitDebug?.handleSide ?? null,
       fitDebug: lookupResult?.fitDebug ?? null,
     }) ?? persistedCanonicalDimensionCalibration;
   }, [
@@ -1384,6 +1651,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
     calibrationBodyOutline,
+    canonicalHandleProfile?.side,
     effectiveCylinderDiameterMm,
     handleArcDeg,
     lookupResult?.fitDebug,
@@ -1399,7 +1667,72 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     !Number.isFinite(printableBottomOverrideMm) &&
     Boolean(persistedPrintableSurfaceResolution);
   const persistedLidBoundaryMm = persistedPrintableSurfaceResolution?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "lid")?.endMm;
+  const persistedRimBoundaryMm = persistedPrintableSurfaceResolution?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "rim-ring")?.endMm;
   const persistedBaseBandStartMm = persistedPrintableSurfaceResolution?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "base")?.startMm;
+  const resolvedLidSeamForPersistence = React.useMemo(() => {
+    if (Number.isFinite(lidSeamFromOverallMm)) {
+      return round2(Math.max(0, lidSeamFromOverallMm ?? 0));
+    }
+    if (Number.isFinite(printableSurfaceDetection?.lidSeamFromOverallMm)) {
+      return round2(Math.max(0, printableSurfaceDetection?.lidSeamFromOverallMm ?? 0));
+    }
+    if (Number.isFinite(persistedLidBoundaryMm)) {
+      return round2(Math.max(0, persistedLidBoundaryMm ?? 0));
+    }
+    return undefined;
+  }, [
+    lidSeamFromOverallMm,
+    persistedLidBoundaryMm,
+    printableSurfaceDetection?.lidSeamFromOverallMm,
+  ]);
+  const resolvedSilverBandBottomForPersistence = React.useMemo(() => {
+    if (Number.isFinite(silverBandBottomFromOverallMm)) {
+      return round2(Math.max(0, silverBandBottomFromOverallMm ?? 0));
+    }
+    if (Number.isFinite(printableSurfaceDetection?.rimRingBottomFromOverallMm)) {
+      return round2(Math.max(0, printableSurfaceDetection?.rimRingBottomFromOverallMm ?? 0));
+    }
+    if (Number.isFinite(persistedRimBoundaryMm)) {
+      return round2(Math.max(0, persistedRimBoundaryMm ?? 0));
+    }
+    return undefined;
+  }, [
+    persistedRimBoundaryMm,
+    printableSurfaceDetection?.rimRingBottomFromOverallMm,
+    silverBandBottomFromOverallMm,
+  ]);
+  React.useEffect(() => {
+    if (productType === "flat") return;
+    if (Number.isFinite(printableTopOverrideMm) || Number.isFinite(printableBottomOverrideMm)) return;
+    if (!Number.isFinite(printableSurfaceDetection?.rimRingBottomFromOverallMm)) return;
+
+    const detectionKey = [
+      printableSurfaceDetection?.source ?? "none",
+      Number.isFinite(printableSurfaceDetection?.lidSeamFromOverallMm)
+        ? round2(printableSurfaceDetection?.lidSeamFromOverallMm ?? 0)
+        : "none",
+      round2(printableSurfaceDetection?.rimRingBottomFromOverallMm ?? 0),
+    ].join(":");
+
+    if (autoSeededBandDetectionKeyRef.current === detectionKey) return;
+    autoSeededBandDetectionKeyRef.current = detectionKey;
+
+    if (Number.isFinite(printableSurfaceDetection?.lidSeamFromOverallMm)) {
+      setLidSeamFromOverallMm(round2(Math.max(0, printableSurfaceDetection?.lidSeamFromOverallMm ?? 0)));
+    }
+    setSilverBandBottomFromOverallMm(round2(Math.max(0, printableSurfaceDetection?.rimRingBottomFromOverallMm ?? 0)));
+  }, [
+    printableBottomOverrideMm,
+    printableSurfaceDetection?.lidSeamFromOverallMm,
+    printableSurfaceDetection?.rimRingBottomFromOverallMm,
+    printableSurfaceDetection?.source,
+    printableTopOverrideMm,
+    productType,
+  ]);
+  const hasSemanticTopBandData = React.useMemo(
+    () => Number.isFinite(resolvedLidSeamForPersistence) || Number.isFinite(resolvedSilverBandBottomForPersistence),
+    [resolvedLidSeamForPersistence, resolvedSilverBandBottomForPersistence],
+  );
   const activePrintableSurfaceResolution = React.useMemo(() => {
     if (
       productType === "flat" ||
@@ -1416,9 +1749,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       bodyTopFromOverallMm,
       bodyBottomFromOverallMm,
       lidSeamFromOverallMm:
-        lidSeamFromOverallMm ??
+        resolvedLidSeamForPersistence ??
         (usePersistedPrintableSurfaceFallback ? persistedLidBoundaryMm : undefined),
-      silverBandBottomFromOverallMm,
+      silverBandBottomFromOverallMm:
+        resolvedSilverBandBottomForPersistence ??
+        (usePersistedPrintableSurfaceFallback ? persistedRimBoundaryMm : undefined),
       printableTopOverrideMm:
         printableTopOverrideMm ??
         (usePersistedPrintableSurfaceFallback
@@ -1441,12 +1776,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   }, [
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
-    lidSeamFromOverallMm,
     overallHeightMm,
     persistedBaseBandStartMm,
     persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
     persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
     persistedLidBoundaryMm,
+    persistedRimBoundaryMm,
     persistedPrintableSurfaceResolution,
     printableBottomOverrideMm,
     printableSurfaceDetection,
@@ -1454,7 +1789,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     productType,
     provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
     provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
-    silverBandBottomFromOverallMm,
+    resolvedLidSeamForPersistence,
+    resolvedSilverBandBottomForPersistence,
     usePersistedPrintableSurfaceFallback,
   ]);
   const activeCanonicalDimensionCalibration = React.useMemo<CanonicalDimensionCalibration | null>(() => {
@@ -1469,6 +1805,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       wrapDiameterMm: effectiveCylinderDiameterMm,
       baseDiameterMm,
       handleArcDeg,
+      handleSide: canonicalHandleProfile?.side ?? lookupResult?.fitDebug?.handleSide ?? null,
       axialSurfaceBands: activePrintableSurfaceResolution?.axialSurfaceBands ?? null,
       printableSurfaceContract: activePrintableSurfaceResolution?.printableSurfaceContract ?? null,
       fitDebug: lookupResult?.fitDebug ?? null,
@@ -1480,6 +1817,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
     calibrationBodyOutline,
+    canonicalHandleProfile?.side,
     effectiveCylinderDiameterMm,
     handleArcDeg,
     lookupResult?.fitDebug,
@@ -1520,8 +1858,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       overallHeightMm,
       bodyTopFromOverallMm: fallbackBodyTopMm,
       bodyBottomFromOverallMm: fallbackBodyBottomMm,
-      lidSeamFromOverallMm,
-      silverBandBottomFromOverallMm,
+      lidSeamFromOverallMm: resolvedLidSeamForPersistence,
+      silverBandBottomFromOverallMm: resolvedSilverBandBottomForPersistence,
       printableTopOverrideMm,
       printableBottomOverrideMm,
       handleKeepOutStartMm:
@@ -1541,7 +1879,6 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
     bottomMarginMm,
-    lidSeamFromOverallMm,
     overallHeightMm,
     persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
     persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
@@ -1551,7 +1888,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     productType,
     provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
     provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
-    silverBandBottomFromOverallMm,
+    resolvedLidSeamForPersistence,
+    resolvedSilverBandBottomForPersistence,
     topMarginMm,
   ]);
   const liveTumblerDims = React.useMemo<TumblerDimensions | null>(() => {
@@ -1581,12 +1919,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       printableHeightMm: round2(resolvedPrintableHeightMm),
       printableTopOffsetMm: resolvedPrintableTopOffsetMm,
       lidSeamFromOverallMm:
-        overallHeightMm > 0 && Number.isFinite(lidSeamFromOverallMm)
-          ? round2(Math.max(0, lidSeamFromOverallMm ?? 0))
+        overallHeightMm > 0 && Number.isFinite(resolvedLidSeamForPersistence)
+          ? round2(Math.max(0, resolvedLidSeamForPersistence ?? 0))
           : undefined,
       silverBandBottomFromOverallMm:
-        overallHeightMm > 0 && Number.isFinite(silverBandBottomFromOverallMm)
-          ? round2(Math.max(0, silverBandBottomFromOverallMm ?? 0))
+        overallHeightMm > 0 && Number.isFinite(resolvedSilverBandBottomForPersistence)
+          ? round2(Math.max(0, resolvedSilverBandBottomForPersistence ?? 0))
           : undefined,
     };
   }, [
@@ -1599,9 +1937,265 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyTopFromOverallMm,
     printHeightMm,
     overallHeightMm,
+    resolvedLidSeamForPersistence,
+    resolvedSilverBandBottomForPersistence,
     topMarginMm,
-    lidSeamFromOverallMm,
-    silverBandBottomFromOverallMm,
+  ]);
+  const defaultEditableHandlePreview = React.useMemo<EditableHandlePreview | null>(() => {
+    if (
+      productType === "flat" ||
+      overallHeightMm <= 0 ||
+      !Number.isFinite(bodyTopFromOverallMm) ||
+      !Number.isFinite(bodyBottomFromOverallMm) ||
+      bodyBottomFromOverallMm <= bodyTopFromOverallMm
+    ) {
+      return null;
+    }
+
+    const pxToMmScaleX = activeCanonicalDimensionCalibration?.photoToFrontTransform.matrix?.[0];
+    const pxToMmScaleY = activeCanonicalDimensionCalibration?.photoToFrontTransform.matrix?.[4];
+    const fallbackTubeDiameterMm = estimateEditableHandleWallThicknessMm({
+      handleProfile: canonicalHandleProfile,
+      pxToMmScaleX,
+      pxToMmScaleY,
+      fallbackMm: Math.max(5, effectiveCylinderDiameterMm * 0.115),
+    });
+    const measuredHandlePreview = deriveMeasuredEditableHandlePreview({
+      fitDebug: lookupResult?.fitDebug ?? null,
+      handleProfile: canonicalHandleProfile,
+      calibration: activeCanonicalDimensionCalibration,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      fallbackTubeDiameterMm,
+    });
+    if (measuredHandlePreview) {
+      return measuredHandlePreview;
+    }
+
+    const side = canonicalHandleProfile?.side ?? lookupResult?.fitDebug?.handleSide ?? null;
+    if (!side) return null;
+    const bodyHeight = Math.max(1, bodyBottomFromOverallMm - bodyTopFromOverallMm);
+    const ringBottomMm = Number.isFinite(resolvedSilverBandBottomForPersistence)
+      ? Math.max(bodyTopFromOverallMm, resolvedSilverBandBottomForPersistence ?? bodyTopFromOverallMm)
+      : bodyTopFromOverallMm;
+    const topFromOverallMm = round2(clampNumber(
+      Math.max(ringBottomMm + 8, bodyTopFromOverallMm + (bodyHeight * 0.08)),
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm - 24,
+    ));
+    const bottomFromOverallMm = round2(clampNumber(
+      Math.max(
+        topFromOverallMm + Math.max(64, bodyHeight * 0.42),
+        bodyTopFromOverallMm + (bodyHeight * 0.56),
+      ),
+      topFromOverallMm + 24,
+      bodyBottomFromOverallMm,
+    ));
+    const reachMm = round2(Math.max(12, effectiveCylinderDiameterMm * 0.34));
+    const cornerInsetMm = round2(Math.max(4, Math.min((bottomFromOverallMm - topFromOverallMm) * 0.18, 18)));
+    return {
+      side,
+      topFromOverallMm,
+      bottomFromOverallMm,
+      outerTopFromOverallMm: round2(clampNumber(
+        topFromOverallMm - Math.max(4, Math.min(18, (bottomFromOverallMm - topFromOverallMm) * 0.1)),
+        bodyTopFromOverallMm,
+        topFromOverallMm,
+      )),
+      outerBottomFromOverallMm: round2(clampNumber(
+        bottomFromOverallMm + Math.max(4, Math.min(18, (bottomFromOverallMm - topFromOverallMm) * 0.1)),
+        bottomFromOverallMm,
+        bodyBottomFromOverallMm,
+      )),
+      reachMm,
+      outerOffsetMm: fallbackTubeDiameterMm,
+      upperCornerFromOverallMm: round2(clampNumber(
+        topFromOverallMm + cornerInsetMm,
+        topFromOverallMm + 4,
+        bottomFromOverallMm - 8,
+      )),
+      lowerCornerFromOverallMm: round2(clampNumber(
+        bottomFromOverallMm - cornerInsetMm,
+        topFromOverallMm + 8,
+        bottomFromOverallMm - 4,
+      )),
+      upperCornerReachMm: round2(Math.max(6, reachMm * 0.78)),
+      lowerCornerReachMm: round2(Math.max(6, reachMm * 0.78)),
+      upperTransitionFromOverallMm: topFromOverallMm,
+      lowerTransitionFromOverallMm: bottomFromOverallMm,
+      upperTransitionReachMm: round2(Math.max(4, reachMm * 0.58)),
+      lowerTransitionReachMm: round2(Math.max(4, reachMm * 0.58)),
+      tubeDiameterMm: fallbackTubeDiameterMm,
+    };
+  }, [
+    activeCanonicalDimensionCalibration,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    canonicalHandleProfile,
+    effectiveCylinderDiameterMm,
+    lookupResult?.fitDebug,
+    overallHeightMm,
+    productType,
+    resolvedSilverBandBottomForPersistence,
+  ]);
+  const editableHandlePreview = React.useMemo<EditableHandlePreview | null>(() => {
+    if (
+      productType === "flat" ||
+      overallHeightMm <= 0 ||
+      !Number.isFinite(bodyTopFromOverallMm) ||
+      !Number.isFinite(bodyBottomFromOverallMm) ||
+      bodyBottomFromOverallMm <= bodyTopFromOverallMm
+    ) {
+      return null;
+    }
+
+    const side = defaultEditableHandlePreview?.side ?? canonicalHandleProfile?.side ?? lookupResult?.fitDebug?.handleSide ?? null;
+    if (!side) return null;
+
+    const defaultTopMm = defaultEditableHandlePreview?.topFromOverallMm ?? bodyTopFromOverallMm;
+    const topFromOverallMm = Number.isFinite(handleTopFromOverallMm)
+      ? round2(clampNumber(handleTopFromOverallMm ?? 0, bodyTopFromOverallMm, bodyBottomFromOverallMm - 24))
+      : defaultTopMm;
+    const defaultBottomMm = defaultEditableHandlePreview?.bottomFromOverallMm ?? round2(clampNumber(
+      topFromOverallMm + 64,
+      topFromOverallMm + 24,
+      bodyBottomFromOverallMm,
+    ));
+    const bottomFromOverallMm = Number.isFinite(handleBottomFromOverallMm)
+      ? round2(clampNumber(handleBottomFromOverallMm ?? 0, topFromOverallMm + 24, bodyBottomFromOverallMm))
+      : defaultBottomMm;
+    const reachMm = Number.isFinite(handleReachMm)
+      ? round2(Math.max(0, handleReachMm ?? 0))
+      : (defaultEditableHandlePreview?.reachMm ?? round2(Math.max(12, effectiveCylinderDiameterMm * 0.34)));
+    const defaultCornerInsetMm = round2(
+      defaultEditableHandlePreview?.upperCornerFromOverallMm != null
+        ? Math.max(4, defaultEditableHandlePreview.upperCornerFromOverallMm - topFromOverallMm)
+        : Math.max(4, Math.min((bottomFromOverallMm - topFromOverallMm) * 0.18, 18)),
+    );
+    const upperCornerFromOverallMm = Number.isFinite(handleUpperCornerFromOverallMm)
+      ? round2(clampNumber(
+          handleUpperCornerFromOverallMm ?? 0,
+          topFromOverallMm + 4,
+          bottomFromOverallMm - 8,
+        ))
+      : (defaultEditableHandlePreview?.upperCornerFromOverallMm ?? round2(clampNumber(
+          topFromOverallMm + defaultCornerInsetMm,
+          topFromOverallMm + 4,
+          bottomFromOverallMm - 8,
+        )));
+    const lowerCornerFromOverallMm = Number.isFinite(handleLowerCornerFromOverallMm)
+      ? round2(clampNumber(
+          handleLowerCornerFromOverallMm ?? 0,
+          upperCornerFromOverallMm + 4,
+          bottomFromOverallMm - 4,
+        ))
+      : (defaultEditableHandlePreview?.lowerCornerFromOverallMm ?? round2(clampNumber(
+          bottomFromOverallMm - defaultCornerInsetMm,
+          upperCornerFromOverallMm + 4,
+          bottomFromOverallMm - 4,
+        )));
+    const defaultCornerReachMm = defaultEditableHandlePreview?.upperCornerReachMm ?? round2(Math.max(6, reachMm * 0.78));
+    const upperCornerReachMm = Number.isFinite(handleUpperCornerReachMm)
+      ? round2(Math.max(0, handleUpperCornerReachMm ?? 0))
+      : (defaultEditableHandlePreview?.upperCornerReachMm ?? defaultCornerReachMm);
+    const lowerCornerReachMm = Number.isFinite(handleLowerCornerReachMm)
+      ? round2(Math.max(0, handleLowerCornerReachMm ?? 0))
+      : (defaultEditableHandlePreview?.lowerCornerReachMm ?? defaultCornerReachMm);
+    const defaultTransitionReachMm = defaultEditableHandlePreview?.upperTransitionReachMm ?? round2(Math.max(4, reachMm * 0.58));
+    const upperTransitionFromOverallMm = Number.isFinite(handleUpperTransitionFromOverallMm)
+      ? round2(clampNumber(
+          handleUpperTransitionFromOverallMm ?? 0,
+          topFromOverallMm,
+          upperCornerFromOverallMm - 2,
+        ))
+      : (defaultEditableHandlePreview?.upperTransitionFromOverallMm ?? topFromOverallMm);
+    const lowerTransitionFromOverallMm = Number.isFinite(handleLowerTransitionFromOverallMm)
+      ? round2(clampNumber(
+          handleLowerTransitionFromOverallMm ?? 0,
+          lowerCornerFromOverallMm + 2,
+          bottomFromOverallMm,
+        ))
+      : (defaultEditableHandlePreview?.lowerTransitionFromOverallMm ?? bottomFromOverallMm);
+    const upperTransitionReachMm = Number.isFinite(handleUpperTransitionReachMm)
+      ? round2(Math.max(0, handleUpperTransitionReachMm ?? 0))
+      : (defaultEditableHandlePreview?.upperTransitionReachMm ?? defaultTransitionReachMm);
+    const lowerTransitionReachMm = Number.isFinite(handleLowerTransitionReachMm)
+      ? round2(Math.max(0, handleLowerTransitionReachMm ?? 0))
+      : (defaultEditableHandlePreview?.lowerTransitionReachMm ?? defaultTransitionReachMm);
+    const defaultOuterTopMm = defaultEditableHandlePreview?.outerTopFromOverallMm ?? round2(clampNumber(
+      topFromOverallMm - Math.max(4, Math.min(18, (bottomFromOverallMm - topFromOverallMm) * 0.1)),
+      bodyTopFromOverallMm,
+      topFromOverallMm,
+    ));
+    const defaultOuterBottomMm = defaultEditableHandlePreview?.outerBottomFromOverallMm ?? round2(clampNumber(
+      bottomFromOverallMm + Math.max(4, Math.min(18, (bottomFromOverallMm - topFromOverallMm) * 0.1)),
+      bottomFromOverallMm,
+      bodyBottomFromOverallMm,
+    ));
+    const outerTopFromOverallMm = Number.isFinite(handleOuterTopFromOverallMm)
+      ? round2(clampNumber(handleOuterTopFromOverallMm ?? 0, bodyTopFromOverallMm, topFromOverallMm))
+      : defaultOuterTopMm;
+    const outerBottomFromOverallMm = Number.isFinite(handleOuterBottomFromOverallMm)
+      ? round2(clampNumber(handleOuterBottomFromOverallMm ?? 0, bottomFromOverallMm, bodyBottomFromOverallMm))
+      : defaultOuterBottomMm;
+    const pxToMmScaleX = activeCanonicalDimensionCalibration?.photoToFrontTransform.matrix?.[0];
+    const pxToMmScaleY = activeCanonicalDimensionCalibration?.photoToFrontTransform.matrix?.[4];
+    const fallbackWallMm = defaultEditableHandlePreview?.tubeDiameterMm ?? Math.max(5, reachMm * 0.18);
+    const estimatedTubeDiameterMm = estimateEditableHandleWallThicknessMm({
+      handleProfile: canonicalHandleProfile,
+      pxToMmScaleX,
+      pxToMmScaleY,
+      fallbackMm: fallbackWallMm,
+    });
+    const tubeDiameterMm = Number.isFinite(handleTubeDiameterMm)
+      ? round2(Math.max(2, handleTubeDiameterMm ?? 0))
+      : estimatedTubeDiameterMm;
+
+    return {
+      side,
+      topFromOverallMm,
+      bottomFromOverallMm,
+      outerTopFromOverallMm,
+      outerBottomFromOverallMm,
+      reachMm,
+      outerOffsetMm: tubeDiameterMm,
+      upperCornerFromOverallMm,
+      lowerCornerFromOverallMm,
+      upperCornerReachMm,
+      lowerCornerReachMm,
+      upperTransitionFromOverallMm,
+      lowerTransitionFromOverallMm,
+      upperTransitionReachMm,
+      lowerTransitionReachMm,
+      tubeDiameterMm,
+    };
+  }, [
+    activeCanonicalDimensionCalibration?.photoToFrontTransform.matrix,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    canonicalHandleProfile?.side,
+    canonicalHandleProfile?.innerContour,
+    canonicalHandleProfile?.outerContour,
+    effectiveCylinderDiameterMm,
+    handleBottomFromOverallMm,
+    handleLowerCornerFromOverallMm,
+    handleLowerCornerReachMm,
+    handleLowerTransitionFromOverallMm,
+    handleLowerTransitionReachMm,
+    handleOuterBottomFromOverallMm,
+    handleOuterTopFromOverallMm,
+    handleTubeDiameterMm,
+    handleReachMm,
+    handleTopFromOverallMm,
+    handleUpperCornerFromOverallMm,
+    handleUpperCornerReachMm,
+    handleUpperTransitionFromOverallMm,
+    handleUpperTransitionReachMm,
+    lookupResult?.fitDebug?.handleSide,
+    overallHeightMm,
+    productType,
+    resolvedSilverBandBottomForPersistence,
+    defaultEditableHandlePreview,
   ]);
   const referenceSelection = productReferenceSet?.canonicalViewSelection;
   const referenceImagesById = React.useMemo(() => {
@@ -1695,6 +2289,17 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     productType !== "flat" &&
     advancedGeometryOverridesUnlocked &&
     derivedDiameterMismatchMm > LOCKED_WRAP_DIAMETER_TOLERANCE_MM;
+  const printableHeightLooksLikeOverallHeight =
+    productType !== "flat" &&
+    overallHeightMm > 0 &&
+    printHeightMm > 0 &&
+    Math.abs(printHeightMm - overallHeightMm) <= 0.5;
+  const handleSpanContaminatesBodyWidth =
+    productType !== "flat" &&
+    Number.isFinite(handleSpanMm) &&
+    (handleSpanMm ?? 0) > 0 &&
+    effectiveCylinderDiameterMm > 0 &&
+    Math.abs((handleSpanMm ?? 0) - effectiveCylinderDiameterMm) <= 1;
   const canonicalHandleDebugSummary = React.useMemo(
     () => summarizeCanonicalHandleDebug({
       handleProfile: canonicalHandleProfile,
@@ -1709,6 +2314,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }),
     [canonicalHandleProfile, previewModelMode],
   );
+  const usingEditableHandlePreview = previewModelMode === "full-model" && Boolean(editableHandlePreview);
   const canonicalFrontReferenceImage = referenceSelection?.canonicalFrontImageId
     ? (referenceImagesById.get(referenceSelection.canonicalFrontImageId) ?? null)
     : null;
@@ -1855,7 +2461,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             bodyBottomFromOverallMm,
             diameterMm: effectiveCylinderDiameterMm,
             topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
-            side: "right",
+            side:
+              canonicalHandleProfile?.side === "left" || lookupResult?.fitDebug?.handleSide === "left"
+                ? "right"
+                : "left",
           });
           if (cancelled) return;
           setBodyOutlineProfile(outline);
@@ -1886,6 +2495,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyTopFromOverallMm,
     bevelDiameterMm,
     baseDiameterMm,
+    canonicalHandleProfile?.side,
+    editingTemplate,
     effectiveCylinderDiameterMm,
     frontPhotoDataUrl,
     frontCleanUrl,
@@ -2162,6 +2773,458 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     productType,
   ]);
 
+  const pipelineDebugSections = React.useMemo<PipelineDebugSection[]>(() => {
+    if (productType === "flat") {
+      return [];
+    }
+
+    const fmtMm = (value: number | null | undefined) =>
+      typeof value === "number" && Number.isFinite(value) ? `${round2(value)} mm` : "n/a";
+    const fmtPct = (value: number | null | undefined) =>
+      typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}%` : "n/a";
+    const fmtTheta = (value: number | null | undefined) =>
+      typeof value === "number" && Number.isFinite(value) ? `${round2((value * 180) / Math.PI)}°` : "n/a";
+
+    const wrapMapping = activeCanonicalDimensionCalibration?.wrapMappingMm;
+    const printableContract = activePrintableSurfaceResolution?.printableSurfaceContract ?? activeCanonicalDimensionCalibration?.printableSurfaceContract ?? null;
+    const handleWidthSamples = canonicalHandleProfile?.widthProfile ?? [];
+    const handleWidthSummary = handleWidthSamples.length
+      ? `${handleWidthSamples.length} samples / median ${round2(handleWidthSamples[Math.floor(handleWidthSamples.length / 2)]?.widthPx ?? 0)} px`
+      : "None";
+    const productReferenceSelection = productReferenceSet?.canonicalViewSelection;
+    const logoWrapCenterMm =
+      wrapMapping && manufacturerLogoStamp?.logoPlacement
+        ? round2(
+            wrapMapping.frontMeridianMm +
+              ((manufacturerLogoStamp.logoPlacement.thetaCenter / (Math.PI * 2)) * activeCanonicalDimensionCalibration!.wrapWidthMm),
+          )
+        : null;
+    const logoWrapSpanMm =
+      activeCanonicalDimensionCalibration && manufacturerLogoStamp?.logoPlacement
+        ? round2((manufacturerLogoStamp.logoPlacement.thetaSpan / (Math.PI * 2)) * activeCanonicalDimensionCalibration.wrapWidthMm)
+        : null;
+    const logoTopMm = logoPlacementSurfaceStatus?.logoTopMm ?? null;
+    const logoBottomMm = logoPlacementSurfaceStatus?.logoBottomMm ?? null;
+    const printableHeightMatchesOverall =
+      printableContract &&
+      overallHeightMm > 0 &&
+      Math.abs(printableContract.printableHeightMm - overallHeightMm) <= 0.5;
+    const handleSpanValue = handleSpanMm ?? 0;
+    const diameterMismatchMm =
+      templateWidthMm > 0 && effectiveCylinderDiameterMm > 0
+        ? Math.abs((templateWidthMm / Math.PI) - effectiveCylinderDiameterMm)
+        : 0;
+    const handleSpanContaminatesBody =
+      handleSpanValue > 0 && effectiveCylinderDiameterMm > 0 && handleSpanValue <= effectiveCylinderDiameterMm + 2;
+
+    return [
+      {
+        id: "lookup-seed",
+        title: "Lookup / seed",
+        defaultOpen: true,
+        fields: [
+          {
+            label: "Detected profile",
+            value: lookupResult?.matchedProfileId ?? "n/a",
+            source: "smart lookup / product profile match",
+          },
+          {
+            label: "Seed source",
+            value: lookupResult?.mode ?? "manual/edit",
+            source: "lookup response mode",
+          },
+          { label: "Overall height", value: fmtMm(overallHeightMm), source: "SKU seed / stored dimensions" },
+          { label: "Body diameter", value: fmtMm(effectiveCylinderDiameterMm), source: lockedProductionGeometry ? "wrapWidthMm / π" : "manual override / stored dimensions", formula: lockedProductionGeometry ? "wrapDiameterMm = wrapWidthMm / π" : undefined, override: lockedProductionGeometry ? "no" : "yes" },
+          { label: "Base diameter", value: fmtMm(baseDiameterMm), source: "SKU seed / stored dimensions" },
+          { label: "Wrap width", value: fmtMm(templateWidthMm), source: "locked production authoritative width", override: lockedProductionGeometry ? "no" : "yes" },
+          { label: "Handle span metadata", value: fmtMm(handleSpanMm), source: "catalog metadata only", warning: handleSpanContaminatesBody ? "Handle span is too close to body diameter; verify it is not being used as body width." : undefined },
+          { label: "GLB path", value: glbPath || "n/a", source: activeDrinkwareGlbStatus?.sourceLabel ?? "template draft" },
+          { label: "GLB status", value: activeDrinkwareGlbStatus?.status ?? "n/a", source: "template preview binding", warning: activeDrinkwareGlbStatus?.status === "placeholder-model" ? "Placeholder model still bound." : undefined },
+        ],
+        note: productReferenceSelection?.canonicalBackStatus === "only-back-3q-found"
+          ? "Strict back-face selection is active: only a back-3q auxiliary reference was found, so canonical back remains empty."
+          : undefined,
+      },
+      {
+        id: "image-prep",
+        title: "Image prep",
+        fields: [
+          {
+            label: "Source image",
+            value: lookupResult?.fitDebug ? `${lookupResult.fitDebug.imageWidthPx} × ${lookupResult.fitDebug.imageHeightPx} px` : "n/a",
+            source: "front/body reference photo",
+          },
+          {
+            label: "Background removed",
+            value: frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl) ? "yes" : "no",
+            source: "front photo background-removal state",
+          },
+          {
+            label: "Alpha mask present",
+            value: frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl) ? "yes" : "no",
+            source: "transparent cutout availability",
+          },
+          {
+            label: "Clean side chosen",
+            value: activeCanonicalBodyProfile?.symmetrySource ?? "n/a",
+            source: "canonical body profile",
+            confidence: lookupResult?.fitDebug?.fitScore != null ? fmtPct(lookupResult.fitDebug.fitScore) : undefined,
+          },
+        ],
+      },
+      {
+        id: "canonical-body",
+        title: "Canonical body profile",
+        fields: [
+          { label: "Symmetry source", value: activeCanonicalBodyProfile?.symmetrySource ?? "n/a", source: "canonicalBodyProfile" },
+          { label: "Mirrored from clean side", value: activeCanonicalBodyProfile ? (activeCanonicalBodyProfile.mirroredFromSymmetrySource ? "yes" : "no") : "n/a", source: "canonicalBodyProfile" },
+          { label: "Sample count", value: activeCanonicalBodyProfile ? String(activeCanonicalBodyProfile.samples.length) : "n/a", source: "canonicalBodyProfile" },
+          {
+            label: "Body axis",
+            value: activeCanonicalBodyProfile
+              ? `${round2(activeCanonicalBodyProfile.axis.xTop)}, ${round2(activeCanonicalBodyProfile.axis.yTop)} → ${round2(activeCanonicalBodyProfile.axis.xBottom)}, ${round2(activeCanonicalBodyProfile.axis.yBottom)}`
+              : "n/a",
+            source: "canonicalBodyProfile.axis",
+          },
+          {
+            label: "Front SVG box",
+            value: activeCanonicalDimensionCalibration
+              ? `${round2(activeCanonicalDimensionCalibration.svgFrontViewBoxMm.width)} × ${round2(activeCanonicalDimensionCalibration.svgFrontViewBoxMm.height)} mm`
+              : "n/a",
+            source: "canonicalDimensionCalibration.svgFrontViewBoxMm",
+          },
+          { label: "Front visible width", value: fmtMm(activeCanonicalDimensionCalibration?.frontVisibleWidthMm), source: "canonical body shell", formula: "body-profile-derived front projection" },
+          { label: "Wrap width", value: fmtMm(activeCanonicalDimensionCalibration?.wrapWidthMm ?? templateWidthMm), source: "authoritative wrap width", formula: "wrapWidthMm = π × wrapDiameterMm" },
+          { label: "Total height", value: fmtMm(activeCanonicalDimensionCalibration?.totalHeightMm ?? overallHeightMm), source: "SKU seed / canonical calibration" },
+          { label: "Body height", value: fmtMm(activeCanonicalDimensionCalibration?.bodyHeightMm), source: "canonical body calibration" },
+          { label: "Lid/body line", value: fmtMm(activeCanonicalDimensionCalibration?.lidBodyLineMm), source: "canonical body calibration" },
+          { label: "Body bottom", value: fmtMm(activeCanonicalDimensionCalibration?.bodyBottomMm), source: "canonical body calibration" },
+        ],
+      },
+      {
+        id: "printable-surface",
+        title: "Printable surface contract",
+        fields: [
+          { label: "Printable top", value: fmtMm(printableContract?.printableTopMm), source: "printableSurfaceContract" },
+          { label: "Printable bottom", value: fmtMm(printableContract?.printableBottomMm), source: "printableSurfaceContract" },
+          { label: "Printable height", value: fmtMm(printableContract?.printableHeightMm), source: "printableBottomMm - printableTopMm", formula: "printableHeightMm = printableBottomMm - printableTopMm", warning: printableHeightMatchesOverall ? "Printable height is effectively equal to overall height; verify lid/ring exclusion." : undefined },
+          {
+            label: "Printable top source",
+            value: activePrintableSurfaceResolution?.topBoundarySource ?? "n/a",
+            source: "printable surface resolution",
+            confidence: activePrintableSurfaceResolution ? fmtPct(activePrintableSurfaceResolution.topConfidence) : undefined,
+            warning:
+              activePrintableSurfaceResolution?.topBoundarySource === "body-top-fallback"
+                ? "Top boundary is still using a fallback instead of semantic lid/ring detection."
+                : undefined,
+          },
+          {
+            label: "Lid band",
+            value:
+              printableContract?.axialExclusions.find((band) => band.kind === "lid")
+                ? `${fmtMm(printableContract.axialExclusions.find((band) => band.kind === "lid")?.startMm)} → ${fmtMm(printableContract.axialExclusions.find((band) => band.kind === "lid")?.endMm)}`
+                : "None",
+            source: "printableSurfaceContract.axialExclusions",
+          },
+          {
+            label: "Rim-ring band",
+            value:
+              printableContract?.axialExclusions.find((band) => band.kind === "rim-ring")
+                ? `${fmtMm(printableContract.axialExclusions.find((band) => band.kind === "rim-ring")?.startMm)} → ${fmtMm(printableContract.axialExclusions.find((band) => band.kind === "rim-ring")?.endMm)}`
+                : "None",
+            source: "printableSurfaceContract.axialExclusions",
+          },
+          {
+            label: "Axial exclusions",
+            value: printableContract?.axialExclusions?.map((band) => `${band.kind} ${round2(band.startMm)}→${round2(band.endMm)} mm`).join(" / ") || "None",
+            source: "printableSurfaceContract.axialExclusions",
+          },
+        ],
+      },
+      {
+        id: "handle-artifact",
+        title: "Handle artifact",
+        fields: [
+          { label: "Canonical handle profile", value: canonicalHandleProfile ? "yes" : "no", source: "canonicalHandleProfile" },
+          { label: "Handle side", value: canonicalHandleProfile?.side ?? "n/a", source: "canonicalHandleProfile.side" },
+          { label: "Handle confidence", value: fmtPct(canonicalHandleProfile?.confidence), source: "canonicalHandleProfile.confidence", warning: canonicalHandleProfile && canonicalHandleProfile.confidence < 0.8 ? "Low-confidence handle extraction." : undefined },
+          {
+            label: "Anchors",
+            value: canonicalHandleProfile
+              ? `upper ${round2(canonicalHandleProfile.anchors.upper.sNorm)} @ ${round2(canonicalHandleProfile.anchors.upper.xPx)}, ${round2(canonicalHandleProfile.anchors.upper.yPx)} / lower ${round2(canonicalHandleProfile.anchors.lower.sNorm)} @ ${round2(canonicalHandleProfile.anchors.lower.xPx)}, ${round2(canonicalHandleProfile.anchors.lower.yPx)}`
+              : "n/a",
+            source: "canonicalHandleProfile.anchors",
+          },
+          {
+            label: "Opening box",
+            value: canonicalHandleProfile?.openingBox
+              ? `${round2(canonicalHandleProfile.openingBox.x)}, ${round2(canonicalHandleProfile.openingBox.y)}, ${round2(canonicalHandleProfile.openingBox.w)} × ${round2(canonicalHandleProfile.openingBox.h)} px`
+              : "n/a",
+            source: "canonicalHandleProfile.openingBox",
+          },
+          {
+            label: "Attachment widths",
+            value: canonicalHandleProfile
+              ? `upper ${round2(canonicalHandleProfile.upperAttachmentWidthPx ?? 0)} px / lower ${round2(canonicalHandleProfile.lowerAttachmentWidthPx ?? 0)} px`
+              : "n/a",
+            source: "canonicalHandleProfile.upperAttachmentWidthPx/lowerAttachmentWidthPx",
+          },
+          {
+            label: "Opening gaps",
+            value: canonicalHandleProfile
+              ? `upper ${round2(canonicalHandleProfile.upperOpeningGapPx ?? 0)} px / lower ${round2(canonicalHandleProfile.lowerOpeningGapPx ?? 0)} px`
+              : "n/a",
+            source: "canonicalHandleProfile.upperOpeningGapPx/lowerOpeningGapPx",
+          },
+          {
+            label: "Symmetric extrusion width",
+            value: canonicalHandleProfile?.symmetricExtrusionWidthPx != null
+              ? `${round2(canonicalHandleProfile.symmetricExtrusionWidthPx)} px`
+              : "n/a",
+            source: "canonicalHandleProfile.symmetricExtrusionWidthPx",
+          },
+          { label: "Width profile", value: handleWidthSummary, source: "canonicalHandleProfile.widthProfile" },
+          { label: "Handle render mode", value: canonicalHandleRenderMode, source: "resolveCanonicalHandleRenderMode(...)", confidence: canonicalHandleDebugSummary ? fmtPct(canonicalHandleDebugSummary.confidence) : undefined },
+          {
+            label: "Handle keep-out sector",
+            value: wrapMapping?.handleKeepOutArcDeg != null
+              ? `center ${round2(wrapMapping.handleMeridianMm ?? 0)} mm / ${round2(wrapMapping.handleKeepOutStartMm ?? 0)} → ${round2(wrapMapping.handleKeepOutEndMm ?? 0)} mm / arc ${round2(wrapMapping.handleKeepOutArcDeg)}°`
+              : "None",
+            source: "canonicalDimensionCalibration.wrapMappingMm",
+          },
+        ],
+      },
+      {
+        id: "logo-placement",
+        title: "Logo placement",
+        fields: [
+          { label: "Logo source", value: manufacturerLogoStamp?.logoPlacement?.source ?? "n/a", source: "manufacturerLogoStamp.logoPlacement" },
+          { label: "Logo confidence", value: fmtPct(manufacturerLogoStamp?.logoPlacement?.confidence), source: "manufacturerLogoStamp.logoPlacement.confidence" },
+          { label: "θ center / span", value: `${fmtTheta(manufacturerLogoStamp?.logoPlacement?.thetaCenter)} / ${fmtTheta(manufacturerLogoStamp?.logoPlacement?.thetaSpan)}`, source: "body-local coordinates" },
+          {
+            label: "s center / span",
+            value: manufacturerLogoStamp?.logoPlacement
+              ? `${round2(manufacturerLogoStamp.logoPlacement.sCenter)} / ${round2(manufacturerLogoStamp.logoPlacement.sSpan)}`
+              : "n/a",
+            source: "body-local coordinates",
+          },
+          {
+            label: "Wrap-space center / span",
+            value: logoWrapCenterMm != null && logoWrapSpanMm != null ? `${logoWrapCenterMm} mm / ${logoWrapSpanMm} mm` : "n/a",
+            source: "front meridian + wrapWidthMm",
+            formula: "wrapCenterMm = frontMeridianMm + (thetaCenter / 2π) × wrapWidthMm",
+          },
+          {
+            label: "Axial top / bottom",
+            value: logoTopMm != null && logoBottomMm != null ? `${logoTopMm} → ${logoBottomMm} mm` : "n/a",
+            source: "printable surface check",
+            warning: logoPlacementSurfaceStatus?.overlapsPrintableSurface ? "Logo overlaps the locked printable-height boundary." : undefined,
+          },
+          {
+            label: "Duplicate to back",
+            value: "no",
+            source: "manual action only",
+          },
+        ],
+      },
+      {
+        id: "wrap-export",
+        title: "Wrap / export mapping",
+        fields: [
+          { label: "Front meridian", value: fmtMm(wrapMapping?.frontMeridianMm), source: "canonicalDimensionCalibration.wrapMappingMm" },
+          { label: "Back meridian", value: fmtMm(wrapMapping?.backMeridianMm), source: "canonicalDimensionCalibration.wrapMappingMm" },
+          { label: "Quarter guides", value: wrapMapping ? `${fmtMm(wrapMapping.leftQuarterMm)} / ${fmtMm(wrapMapping.rightQuarterMm)}` : "n/a", source: "canonicalDimensionCalibration.wrapMappingMm" },
+          { label: "Handle meridian", value: fmtMm(wrapMapping?.handleMeridianMm), source: "canonicalDimensionCalibration.wrapMappingMm" },
+          { label: "Wrap width authoritative", value: lockedProductionGeometry ? "yes" : "no", source: "locked production geometry state", override: lockedProductionGeometry ? "no" : "yes" },
+          {
+            label: "Exported guide set",
+            value: "front / back / quarter / keep-out / printable top-bottom / logo",
+            source: "guide-only export payload",
+          },
+          {
+            label: "Coordinate system",
+            value: "origin top-left / units mm / width wrapWidthMm / height printableHeightMm",
+            source: "export contract",
+          },
+        ],
+      },
+      {
+        id: "viewer-truth",
+        title: "Viewer mode / placement truth",
+        fields: [
+          { label: "Current visible mode", value: previewModelMode, source: "template preview mode" },
+          { label: "Production default mode", value: defaultPreviewModelMode, source: "resolveDefaultPreviewModelMode(...)" },
+          { label: "Placement truth", value: "canonical alignment", source: "placement/wrap/snap contract", warning: previewModelMode === "source-traced" ? "Source model visible; placement still uses canonical alignment data." : undefined },
+          { label: "Body-only camera fit", value: previewModelMode === "alignment-model" ? "yes" : "n/a", source: "alignment-model camera", },
+        ],
+      },
+      {
+        id: "consistency",
+        title: "Warnings / consistency checks",
+        fields: [
+          { label: "Wrap vs diameter mismatch", value: `${round2(diameterMismatchMm)} mm`, source: "wrapWidthMm / π vs effective diameter", warning: diameterMismatchMm > 0.5 ? "Mismatch exceeds tolerance." : undefined },
+          { label: "Overall reused as printable", value: printableHeightMatchesOverall ? "possible" : "no", source: "printable height consistency", warning: printableHeightMatchesOverall ? "Printable height is too close to overall height." : undefined },
+          { label: "Handle span contaminates body", value: handleSpanContaminatesBody ? "possible" : "no", source: "body vs handle metadata", warning: handleSpanContaminatesBody ? "Handle span is near the effective diameter." : undefined },
+          { label: "Printable bounds valid", value: printableContract && printableContract.printableTopMm < printableContract.printableBottomMm ? "yes" : "no", source: "printableSurfaceContract", warning: printableContract && printableContract.printableTopMm >= printableContract.printableBottomMm ? "Printable top is greater than or equal to printable bottom." : undefined },
+          { label: "Canonical contracts present", value: activeCanonicalBodyProfile && activeCanonicalDimensionCalibration ? "yes" : "no", source: "stored canonical contracts", warning: !activeCanonicalBodyProfile || !activeCanonicalDimensionCalibration ? "Missing canonical body profile or calibration." : undefined },
+        ],
+      },
+    ];
+  }, [
+    activeCanonicalBodyProfile,
+    activeCanonicalDimensionCalibration,
+    activeDrinkwareGlbStatus?.sourceLabel,
+    activeDrinkwareGlbStatus?.status,
+    activePrintableSurfaceResolution,
+    bodyReferencePhotoDataUrl,
+    canonicalHandleDebugSummary,
+    canonicalHandleProfile,
+    canonicalHandleRenderMode,
+    defaultPreviewModelMode,
+    effectiveCylinderDiameterMm,
+    baseDiameterMm,
+    frontBgStatus,
+    frontCleanUrl,
+    glbPath,
+    handleSpanMm,
+    lockedProductionGeometry,
+    logoPlacementSurfaceStatus,
+    lookupResult?.fitDebug,
+    lookupResult?.matchedProfileId,
+    lookupResult?.mode,
+    manufacturerLogoStamp,
+    overallHeightMm,
+    previewModelMode,
+    productReferenceSet?.canonicalViewSelection,
+    productType,
+    templateWidthMm,
+  ]);
+
+  const pipelineDebugWarnings = React.useMemo(() => {
+    const warnings: string[] = [];
+    const printableContract = activePrintableSurfaceResolution?.printableSurfaceContract ?? activeCanonicalDimensionCalibration?.printableSurfaceContract ?? null;
+
+    if (!activeCanonicalBodyProfile || !activeCanonicalDimensionCalibration) {
+      warnings.push("Missing canonical body profile or canonical dimension calibration.");
+    }
+    if (templateWidthMm > 0 && effectiveCylinderDiameterMm > 0) {
+      const mismatch = Math.abs((templateWidthMm / Math.PI) - effectiveCylinderDiameterMm);
+      if (mismatch > 0.5) {
+        warnings.push(`Wrap width and cylinder diameter differ by ${round2(mismatch)} mm through π.`);
+      }
+    }
+    if (printableContract && printableContract.printableTopMm >= printableContract.printableBottomMm) {
+      warnings.push("Printable top is greater than or equal to printable bottom.");
+    }
+    if (printableContract && overallHeightMm > 0 && Math.abs(printableContract.printableHeightMm - overallHeightMm) <= 0.5) {
+      warnings.push("Printable height is effectively equal to overall height; verify lid/ring exclusion.");
+    }
+    const handleSpanValue = handleSpanMm ?? 0;
+    if (handleSpanValue > 0 && effectiveCylinderDiameterMm > 0 && handleSpanValue <= effectiveCylinderDiameterMm + 2) {
+      warnings.push("Handle span metadata is too close to the body diameter and may be contaminating sizing.");
+    }
+    if (canonicalHandleProfile && canonicalHandleProfile.confidence < 0.8) {
+      warnings.push(`Handle confidence is only ${Math.round(canonicalHandleProfile.confidence * 100)}%.`);
+    }
+    if (logoPlacementSurfaceStatus?.overlapsPrintableSurface) {
+      warnings.push("Logo overlaps the locked printable-height boundary.");
+    }
+    if (previewModelMode === "source-traced") {
+      warnings.push("Source traced model is visible; placement still uses canonical alignment data.");
+    }
+    return warnings;
+  }, [
+    activeCanonicalBodyProfile,
+    activeCanonicalDimensionCalibration,
+    activePrintableSurfaceResolution?.printableSurfaceContract,
+    canonicalHandleProfile,
+    effectiveCylinderDiameterMm,
+    handleSpanMm,
+    logoPlacementSurfaceStatus?.overlapsPrintableSurface,
+    overallHeightMm,
+    previewModelMode,
+    templateWidthMm,
+  ]);
+
+  const pipelineDebugRawObjects = React.useMemo<PipelineDebugRawObject[]>(() => ([
+    { id: "canonical-body-profile", label: "canonicalBodyProfile", value: activeCanonicalBodyProfile },
+    { id: "canonical-dimension-calibration", label: "canonicalDimensionCalibration", value: activeCanonicalDimensionCalibration },
+    { id: "printable-surface-contract", label: "printableSurfaceContract", value: activePrintableSurfaceResolution?.printableSurfaceContract ?? activeCanonicalDimensionCalibration?.printableSurfaceContract ?? null },
+    { id: "canonical-handle-profile", label: "canonicalHandleProfile", value: canonicalHandleProfile ?? null },
+    { id: "logo-placement", label: "logoPlacement", value: manufacturerLogoStamp?.logoPlacement ?? null },
+  ]), [
+    activeCanonicalBodyProfile,
+    activeCanonicalDimensionCalibration,
+    activePrintableSurfaceResolution?.printableSurfaceContract,
+    canonicalHandleProfile,
+    manufacturerLogoStamp?.logoPlacement,
+  ]);
+
+  const pipelineDebugFormulas = React.useMemo(
+    () => [
+      "Cylinder diameter = wrapWidthMm / π",
+      "Printable height = printableBottomMm - printableTopMm",
+      "Logo wrap center = frontMeridianMm + (thetaCenter / 2π) × wrapWidthMm",
+      "Logo wrap span = (thetaSpan / 2π) × wrapWidthMm",
+      "Handle keep-out width = wrapWidthMm × (handleKeepOutArcDeg / 360)",
+      "Alignment shell fit = svgFrontViewBoxMm + fixed body-only padding",
+    ],
+    [],
+  );
+
+  const pipelineDebugJson = React.useMemo(
+    () => ({
+      lookup: {
+        matchedProfileId: lookupResult?.matchedProfileId ?? null,
+        mode: lookupResult?.mode ?? null,
+        glbPath: glbPath || null,
+        glbStatus: activeDrinkwareGlbStatus?.status ?? null,
+        glbSourceLabel: activeDrinkwareGlbStatus?.sourceLabel ?? null,
+      },
+      imagePrep: {
+        sourceImage: lookupResult?.fitDebug
+          ? {
+              widthPx: lookupResult.fitDebug.imageWidthPx,
+              heightPx: lookupResult.fitDebug.imageHeightPx,
+            }
+          : null,
+        backgroundRemoved: frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl),
+        alphaMaskPresent: frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl),
+      },
+      canonicalBodyProfile: activeCanonicalBodyProfile,
+      canonicalDimensionCalibration: activeCanonicalDimensionCalibration,
+      printableSurfaceContract: activePrintableSurfaceResolution?.printableSurfaceContract ?? activeCanonicalDimensionCalibration?.printableSurfaceContract ?? null,
+      canonicalHandleProfile: canonicalHandleProfile ?? null,
+      logoPlacement: manufacturerLogoStamp?.logoPlacement ?? null,
+      viewer: {
+        previewModelMode,
+        defaultPreviewModelMode,
+        lockedProductionGeometry,
+      },
+      warnings: pipelineDebugWarnings,
+    }),
+    [
+      activeCanonicalBodyProfile,
+      activeCanonicalDimensionCalibration,
+      activeDrinkwareGlbStatus?.sourceLabel,
+      activeDrinkwareGlbStatus?.status,
+      activePrintableSurfaceResolution?.printableSurfaceContract,
+      bodyReferencePhotoDataUrl,
+      defaultPreviewModelMode,
+      frontBgStatus,
+      frontCleanUrl,
+      glbPath,
+      lockedProductionGeometry,
+      lookupResult?.fitDebug,
+      lookupResult?.matchedProfileId,
+      lookupResult?.mode,
+      manufacturerLogoStamp?.logoPlacement,
+      canonicalHandleProfile,
+      pipelineDebugWarnings,
+      previewModelMode,
+    ],
+  );
+
   React.useEffect(() => {
     if (productType === "flat") {
       autoZoneSignatureRef.current = "";
@@ -2199,14 +3262,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
     setBodyTopFromOverallMm(autoZone.bodyTopFromOverallMm);
     setBodyBottomFromOverallMm(autoZone.bodyBottomFromOverallMm);
-    setLidSeamFromOverallMm(undefined);
-    setSilverBandBottomFromOverallMm(undefined);
+    if (!hasSemanticTopBandData) {
+      setLidSeamFromOverallMm(undefined);
+      setSilverBandBottomFromOverallMm(undefined);
+    }
     setPrintableTopOverrideMm(undefined);
     setPrintableBottomOverrideMm(undefined);
     setTopMarginMm(autoZone.topMarginMm);
     setBottomMarginMm(autoZone.bottomMarginMm);
     setPrintHeightMm(autoZone.printHeightMm);
-  }, [lookupResult?.fitDebug, overallHeightMm, productType]);
+  }, [hasSemanticTopBandData, lookupResult?.fitDebug, overallHeightMm, productType]);
 
   // ── Validation ───────────────────────────────────────────────────
   const [errors, setErrors] = React.useState<string[]>([]);
@@ -2344,7 +3409,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
     if (resolvedBodyDiameterMm) {
       setDiameterMm(round2(resolvedBodyDiameterMm));
-      setWrapWidthInputMm(round2(Math.PI * resolvedBodyDiameterMm));
+      setWrapWidthInputMm(round2(matchedProfile?.wrapWidthMm ?? (Math.PI * resolvedBodyDiameterMm)));
     }
     if (resolvedTopOuterDiameterMm) {
       setTopOuterDiameterMm(round2(resolvedTopOuterDiameterMm));
@@ -2532,6 +3597,18 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       setHandleTopFromOverallMm(draftDims?.handleTopFromOverallMm ?? undefined);
       setHandleBottomFromOverallMm(draftDims?.handleBottomFromOverallMm ?? undefined);
       setHandleReachMm(draftDims?.handleReachMm ?? undefined);
+      setHandleUpperCornerFromOverallMm(draftDims?.handleUpperCornerFromOverallMm ?? undefined);
+      setHandleLowerCornerFromOverallMm(draftDims?.handleLowerCornerFromOverallMm ?? undefined);
+      setHandleUpperCornerReachMm(draftDims?.handleUpperCornerReachMm ?? undefined);
+      setHandleLowerCornerReachMm(draftDims?.handleLowerCornerReachMm ?? undefined);
+      setHandleUpperTransitionReachMm(draftDims?.handleUpperTransitionReachMm ?? undefined);
+      setHandleLowerTransitionReachMm(draftDims?.handleLowerTransitionReachMm ?? undefined);
+      setHandleUpperTransitionFromOverallMm(draftDims?.handleUpperTransitionFromOverallMm ?? undefined);
+      setHandleLowerTransitionFromOverallMm(draftDims?.handleLowerTransitionFromOverallMm ?? undefined);
+      setHandleOuterTopFromOverallMm(editingTemplate ? (draftDims?.handleOuterTopFromOverallMm ?? undefined) : undefined);
+      setHandleOuterBottomFromOverallMm(editingTemplate ? (draftDims?.handleOuterBottomFromOverallMm ?? undefined) : undefined);
+      setHandleTubeDiameterMm(editingTemplate ? (draftDims?.handleTubeDiameterMm ?? undefined) : undefined);
+      setHandleSpanMm(draftDims?.handleSpanMm ?? undefined);
       setCanonicalHandleProfile(draftDims?.canonicalHandleProfile ?? undefined);
       setShoulderDiameterMm(draftDims?.shoulderDiameterMm ?? undefined);
       setTaperUpperDiameterMm(draftDims?.taperUpperDiameterMm ?? undefined);
@@ -2626,20 +3703,80 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       } else {
         setPrintableBottomOverrideMm(undefined);
       }
-      if (typeof draftDims?.handleTopFromOverallMm === "number") {
+      if (editingTemplate && typeof draftDims?.handleTopFromOverallMm === "number") {
         setHandleTopFromOverallMm(round2(draftDims.handleTopFromOverallMm));
       } else {
         setHandleTopFromOverallMm(undefined);
       }
-      if (typeof draftDims?.handleBottomFromOverallMm === "number") {
+      if (editingTemplate && typeof draftDims?.handleBottomFromOverallMm === "number") {
         setHandleBottomFromOverallMm(round2(draftDims.handleBottomFromOverallMm));
       } else {
         setHandleBottomFromOverallMm(undefined);
       }
-      if (typeof draftDims?.handleReachMm === "number") {
+      if (editingTemplate && typeof draftDims?.handleReachMm === "number") {
         setHandleReachMm(round2(draftDims.handleReachMm));
       } else {
         setHandleReachMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleUpperCornerFromOverallMm === "number") {
+        setHandleUpperCornerFromOverallMm(round2(draftDims.handleUpperCornerFromOverallMm));
+      } else {
+        setHandleUpperCornerFromOverallMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleLowerCornerFromOverallMm === "number") {
+        setHandleLowerCornerFromOverallMm(round2(draftDims.handleLowerCornerFromOverallMm));
+      } else {
+        setHandleLowerCornerFromOverallMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleUpperCornerReachMm === "number") {
+        setHandleUpperCornerReachMm(round2(draftDims.handleUpperCornerReachMm));
+      } else {
+        setHandleUpperCornerReachMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleLowerCornerReachMm === "number") {
+        setHandleLowerCornerReachMm(round2(draftDims.handleLowerCornerReachMm));
+      } else {
+        setHandleLowerCornerReachMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleUpperTransitionReachMm === "number") {
+        setHandleUpperTransitionReachMm(round2(draftDims.handleUpperTransitionReachMm));
+      } else {
+        setHandleUpperTransitionReachMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleLowerTransitionReachMm === "number") {
+        setHandleLowerTransitionReachMm(round2(draftDims.handleLowerTransitionReachMm));
+      } else {
+        setHandleLowerTransitionReachMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleUpperTransitionFromOverallMm === "number") {
+        setHandleUpperTransitionFromOverallMm(round2(draftDims.handleUpperTransitionFromOverallMm));
+      } else {
+        setHandleUpperTransitionFromOverallMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleLowerTransitionFromOverallMm === "number") {
+        setHandleLowerTransitionFromOverallMm(round2(draftDims.handleLowerTransitionFromOverallMm));
+      } else {
+        setHandleLowerTransitionFromOverallMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleOuterTopFromOverallMm === "number") {
+        setHandleOuterTopFromOverallMm(round2(draftDims.handleOuterTopFromOverallMm));
+      } else {
+        setHandleOuterTopFromOverallMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleOuterBottomFromOverallMm === "number") {
+        setHandleOuterBottomFromOverallMm(round2(draftDims.handleOuterBottomFromOverallMm));
+      } else {
+        setHandleOuterBottomFromOverallMm(undefined);
+      }
+      if (editingTemplate && typeof draftDims?.handleTubeDiameterMm === "number") {
+        setHandleTubeDiameterMm(round2(draftDims.handleTubeDiameterMm));
+      } else {
+        setHandleTubeDiameterMm(undefined);
+      }
+      if (typeof draftDims?.handleSpanMm === "number") {
+        setHandleSpanMm(round2(draftDims.handleSpanMm));
+      } else {
+        setHandleSpanMm(undefined);
       }
       setCanonicalHandleProfile(draftDims?.canonicalHandleProfile ?? undefined);
       if (typeof draftDims?.shoulderDiameterMm === "number") {
@@ -2830,6 +3967,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           setTopMarginMm(autoZone.topMarginMm);
           setBottomMarginMm(autoZone.bottomMarginMm);
           setPrintHeightMm(autoZone.printHeightMm);
+        }
+        if (typeof result.dimensions.handleSpanMm === "number") {
+          setHandleSpanMm(round2(result.dimensions.handleSpanMm));
         }
       }
 
@@ -3087,6 +4227,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       errs.push(`Cylinder diameter override is inconsistent with wrap width by ${derivedDiameterMismatchMm.toFixed(2)} mm. Recompute derived fields from wrap width or relock production geometry.`);
     }
     if (printHeightMm <= 0) errs.push("Print height must be > 0.");
+    if (productType && productType !== "flat" && printableHeightLooksLikeOverallHeight) {
+      errs.push("Printable height still matches overall assembled height. Re-run body analysis or set printable boundaries before saving.");
+    }
+    if (productType && productType !== "flat" && handleSpanContaminatesBodyWidth) {
+      errs.push("Overall handle span is matching the body diameter. Handle span metadata must not be used as body width or wrap math.");
+    }
     if (
       productType &&
       productType !== "flat" &&
@@ -3164,13 +4310,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             ? undefined
             : round2(Math.max(bodyTopFromOverallMm, bodyBottomFromOverallMm)),
         lidSeamFromOverallMm:
-          productType === "flat" || !Number.isFinite(lidSeamFromOverallMm)
+          productType === "flat" || !Number.isFinite(resolvedLidSeamForPersistence)
             ? undefined
-            : round2(Math.max(0, lidSeamFromOverallMm ?? 0)),
+            : round2(Math.max(0, resolvedLidSeamForPersistence ?? 0)),
         silverBandBottomFromOverallMm:
-          productType === "flat" || !Number.isFinite(silverBandBottomFromOverallMm)
+          productType === "flat" || !Number.isFinite(resolvedSilverBandBottomForPersistence)
             ? undefined
-            : round2(Math.max(0, silverBandBottomFromOverallMm ?? 0)),
+            : round2(Math.max(0, resolvedSilverBandBottomForPersistence ?? 0)),
         printableTopOverrideMm:
           productType === "flat" || !Number.isFinite(printableTopOverrideMm)
             ? undefined
@@ -3191,6 +4337,54 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           productType === "flat" || !Number.isFinite(handleReachMm)
             ? undefined
             : round2(Math.max(0, handleReachMm ?? 0)),
+        handleUpperCornerFromOverallMm:
+          productType === "flat" || !Number.isFinite(handleUpperCornerFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, handleUpperCornerFromOverallMm ?? 0)),
+        handleLowerCornerFromOverallMm:
+          productType === "flat" || !Number.isFinite(handleLowerCornerFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, handleLowerCornerFromOverallMm ?? 0)),
+        handleUpperCornerReachMm:
+          productType === "flat" || !Number.isFinite(handleUpperCornerReachMm)
+            ? undefined
+            : round2(Math.max(0, handleUpperCornerReachMm ?? 0)),
+        handleLowerCornerReachMm:
+          productType === "flat" || !Number.isFinite(handleLowerCornerReachMm)
+            ? undefined
+            : round2(Math.max(0, handleLowerCornerReachMm ?? 0)),
+        handleUpperTransitionReachMm:
+          productType === "flat" || !Number.isFinite(handleUpperTransitionReachMm)
+            ? undefined
+            : round2(Math.max(0, handleUpperTransitionReachMm ?? 0)),
+        handleLowerTransitionReachMm:
+          productType === "flat" || !Number.isFinite(handleLowerTransitionReachMm)
+            ? undefined
+            : round2(Math.max(0, handleLowerTransitionReachMm ?? 0)),
+        handleUpperTransitionFromOverallMm:
+          productType === "flat" || !Number.isFinite(handleUpperTransitionFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, handleUpperTransitionFromOverallMm ?? 0)),
+        handleLowerTransitionFromOverallMm:
+          productType === "flat" || !Number.isFinite(handleLowerTransitionFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, handleLowerTransitionFromOverallMm ?? 0)),
+        handleOuterTopFromOverallMm:
+          productType === "flat" || !Number.isFinite(handleOuterTopFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, handleOuterTopFromOverallMm ?? 0)),
+        handleOuterBottomFromOverallMm:
+          productType === "flat" || !Number.isFinite(handleOuterBottomFromOverallMm)
+            ? undefined
+            : round2(Math.max(0, handleOuterBottomFromOverallMm ?? 0)),
+        handleTubeDiameterMm:
+          productType === "flat" || !Number.isFinite(handleTubeDiameterMm)
+            ? undefined
+            : round2(Math.max(0, handleTubeDiameterMm ?? 0)),
+        handleSpanMm:
+          productType === "flat" || !Number.isFinite(handleSpanMm)
+            ? undefined
+            : round2(Math.max(0, handleSpanMm ?? 0)),
         canonicalHandleProfile: productType === "flat" ? undefined : canonicalHandleProfile,
         canonicalBodyProfile: productType === "flat" ? undefined : (activeCanonicalBodyProfile ?? undefined),
         canonicalDimensionCalibration: productType === "flat" ? undefined : (activeCanonicalDimensionCalibration ?? undefined),
@@ -3323,19 +4517,33 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     referencePhotoOffsetXPct,
     referencePhotoOffsetYPct,
     referencePhotoWidthScalePct,
+    resolvedLidSeamForPersistence,
     resolvedMaterialLabel,
     resolvedMaterialSlug,
+    resolvedSilverBandBottomForPersistence,
     resolveManufacturerLogoStamp,
     rimColorHex,
     handleBottomFromOverallMm,
+    handleLowerCornerFromOverallMm,
+    handleLowerCornerReachMm,
+    handleLowerTransitionFromOverallMm,
+    handleLowerTransitionReachMm,
+    handleOuterBottomFromOverallMm,
+    handleOuterTopFromOverallMm,
+    handleTubeDiameterMm,
     handleReachMm,
+    handleSpanMm,
+    handleSpanContaminatesBodyWidth,
     shoulderDiameterMm,
     taperUpperDiameterMm,
     taperLowerDiameterMm,
     bevelDiameterMm,
     handleTopFromOverallMm,
-    lidSeamFromOverallMm,
-    silverBandBottomFromOverallMm,
+    handleUpperCornerFromOverallMm,
+    handleUpperCornerReachMm,
+    handleUpperTransitionFromOverallMm,
+    handleUpperTransitionReachMm,
+    printableHeightLooksLikeOverallHeight,
     speed,
     taperCorrection,
     templateWidthMm,
@@ -4208,6 +5416,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       dimensionCalibration={productType === "flat" ? undefined : activeCanonicalDimensionCalibration}
                       canonicalBodyProfile={productType === "flat" ? undefined : activeCanonicalBodyProfile}
                       canonicalHandleProfile={productType === "flat" ? undefined : canonicalHandleProfile}
+                      editableHandlePreview={productType === "flat" ? undefined : editableHandlePreview}
                       previewModelMode={previewModelMode}
                     />
                     {productType !== "flat" && previewModelMode === "alignment-model" && activeCanonicalBodyProfile && activeCanonicalDimensionCalibration && (
@@ -4349,12 +5558,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             <div className={styles.fieldRow}>
               <label className={styles.fieldLabel}>Handle mesh</label>
               <div className={styles.readOnly}>
-                {canonicalHandleDebugSummary
+                {usingEditableHandlePreview && editableHandlePreview
+                  ? `${editableHandlePreview.side} / ${(editableHandlePreview.tubeDiameterMm ?? 0).toFixed(2)} mm depth / editable`
+                  : canonicalHandleDebugSummary
                   ? `${canonicalHandleDebugSummary.side} / ${canonicalHandleDebugSummary.extrusionDepthMm.toFixed(2)} mm depth / ${Math.round(canonicalHandleDebugSummary.confidence * 100)}% confidence / ${canonicalHandleRenderMode}`
                   : "Unavailable"}
               </div>
               <span className={styles.fieldHint}>
-                {canonicalHandleDebugSummary?.derivedFromCanonicalProfile
+                {usingEditableHandlePreview
+                  ? "Full-model preview is using the editable BODY REFERENCE handle path. Canonical handle extraction stays available as fallback/debug data."
+                  : canonicalHandleDebugSummary?.derivedFromCanonicalProfile
                   ? canonicalHandleRenderMode === "simplified"
                     ? "Simplified handle mesh derived from canonical anchors/opening because traced confidence is mid-range."
                     : canonicalHandleRenderMode === "hidden"
@@ -4507,6 +5720,20 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       </div>
 
       {/* ── Physical dimensions ───────────────────────────────────── */}
+      {productType !== "flat" && pipelineDebugSections.length > 0 && (
+        <div className={styles.section}>
+          <PipelineDebugDrawer
+            title="Pipeline Debug"
+            subtitle="Read-only canonical workflow state, formulas, confidence, and warnings."
+            sections={pipelineDebugSections}
+            warnings={pipelineDebugWarnings}
+            rawObjects={pipelineDebugRawObjects}
+            formulas={pipelineDebugFormulas}
+            debugJson={pipelineDebugJson}
+          />
+        </div>
+      )}
+
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Physical dimensions</div>
 
@@ -4567,6 +5794,84 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
         {productType && productType !== "flat" && (
           <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Overall height (assembled)</label>
+            <span className={styles.readOnly}>
+              {overallHeightMm > 0 ? `${round2(overallHeightMm)} mm` : "\u2014"}
+            </span>
+            <span className={styles.fieldHint}>Catalog/lookup seed for the full assembled product. This is not the printable body height.</span>
+          </div>
+        )}
+
+        {productType && productType !== "flat" && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Base diameter</label>
+            <span className={styles.readOnly}>
+              {baseDiameterMm > 0 ? `${round2(baseDiameterMm)} mm` : "\u2014"}
+            </span>
+            <span className={styles.fieldHint}>Body-only lower base/foot diameter. Never derived from overall handle span.</span>
+          </div>
+        )}
+
+        {productType && productType !== "flat" && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Printable top (derived)</label>
+            <span className={styles.readOnly}>
+              {activePrintableSurfaceResolution
+                ? `${round2(activePrintableSurfaceResolution.printableSurfaceContract.printableTopMm)} mm`
+                : "\u2014"}
+            </span>
+            <span className={styles.fieldHint}>Derived from detected lid/body or silver-ring boundaries, measured from the overall top.</span>
+          </div>
+        )}
+
+        {productType && productType !== "flat" && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Printable bottom (derived)</label>
+            <span className={styles.readOnly}>
+              {activePrintableSurfaceResolution
+                ? `${round2(activePrintableSurfaceResolution.printableSurfaceContract.printableBottomMm)} mm`
+                : "\u2014"}
+            </span>
+            <span className={styles.fieldHint}>Derived from the lower taper/base transition, measured from the overall top.</span>
+          </div>
+        )}
+
+        {productType && productType !== "flat" && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Printable height (derived)</label>
+            <span className={styles.readOnly}>
+              {activePrintableSurfaceResolution
+                ? `${round2(activePrintableSurfaceResolution.printableSurfaceContract.printableHeightMm)} mm`
+                : (printHeightMm > 0 ? `${round2(printHeightMm)} mm` : "\u2014")}
+            </span>
+            <span className={styles.fieldHint}>Derived from printable top and bottom boundaries; not seeded from the overall catalog height.</span>
+          </div>
+        )}
+
+        {productType && productType !== "flat" && handleSpanMm != null && handleSpanMm > 0 && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Overall handle span metadata</label>
+            <span className={styles.readOnly}>
+              {round2(handleSpanMm)} mm
+            </span>
+            <span className={styles.fieldHint}>Reference only. Excluded from body diameter, wrap width, meridians, and alignment math.</span>
+          </div>
+        )}
+
+        {productType && productType !== "flat" && printableHeightLooksLikeOverallHeight && (
+          <div className={styles.error}>
+            Printable height is still matching the overall assembled height. Re-run BODY REFERENCE analysis or set printable top / bottom before saving production geometry.
+          </div>
+        )}
+
+        {productType && productType !== "flat" && handleSpanContaminatesBodyWidth && (
+          <div className={styles.error}>
+            Overall handle span is matching the body diameter. Handle span metadata must stay separate from body diameter and wrap-width math.
+          </div>
+        )}
+
+        {productType && productType !== "flat" && (
+          <div className={styles.fieldRow}>
             <label className={styles.fieldLabel}>Locked production geometry</label>
             <label className={styles.fieldHint}>
               <input
@@ -4581,6 +5886,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 ? "Manual overrides are enabled. The template is no longer in locked production mode."
                 : "Wrap width is authoritative. Diameter and front alignment width are derived automatically."}
             </span>
+          </div>
+        )}
+
+        {productType && productType !== "flat" && activeCanonicalBodyProfile && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Canonical body shell</label>
+            <span className={styles.readOnly}>
+              clean side {activeCanonicalBodyProfile.symmetrySource} / mirrored shell / body-only
+            </span>
+            <span className={styles.fieldHint}>Body geometry is sampled from the non-handle side and mirrored across the detected body axis. Interior logo/ring analysis does not redefine the shell.</span>
           </div>
         )}
 
@@ -4800,6 +6115,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             bodyColorHex={bodyColorHex}
             rimColorHex={rimColorHex}
             fitDebug={lookupResult?.fitDebug ?? null}
+            canonicalHandleProfile={canonicalHandleProfile ?? null}
             outlineProfile={bodyOutlineProfile}
             referencePaths={referencePaths}
             referenceLayerState={referenceLayerState}
@@ -4816,9 +6132,36 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             onPrintableTopOverrideChange={setPrintableTopOverrideMm}
             onPrintableBottomOverrideChange={setPrintableBottomOverrideMm}
             onPrintableSurfaceDetectionChange={setPrintableSurfaceDetection}
-            handleTopFromOverallMm={handleTopFromOverallMm}
-            handleBottomFromOverallMm={handleBottomFromOverallMm}
-            handleReachMm={handleReachMm}
+            handleTopFromOverallMm={handleTopFromOverallMm ?? editableHandlePreview?.topFromOverallMm}
+            handleBottomFromOverallMm={handleBottomFromOverallMm ?? editableHandlePreview?.bottomFromOverallMm}
+            handleReachMm={handleReachMm ?? editableHandlePreview?.reachMm}
+            handleUpperCornerFromOverallMm={
+              handleUpperCornerFromOverallMm ?? editableHandlePreview?.upperCornerFromOverallMm
+            }
+            handleLowerCornerFromOverallMm={
+              handleLowerCornerFromOverallMm ?? editableHandlePreview?.lowerCornerFromOverallMm
+            }
+            handleUpperCornerReachMm={handleUpperCornerReachMm ?? editableHandlePreview?.upperCornerReachMm}
+            handleLowerCornerReachMm={handleLowerCornerReachMm ?? editableHandlePreview?.lowerCornerReachMm}
+            handleUpperTransitionReachMm={
+              handleUpperTransitionReachMm ?? editableHandlePreview?.upperTransitionReachMm
+            }
+            handleLowerTransitionReachMm={
+              handleLowerTransitionReachMm ?? editableHandlePreview?.lowerTransitionReachMm
+            }
+            handleUpperTransitionFromOverallMm={
+              handleUpperTransitionFromOverallMm ?? editableHandlePreview?.upperTransitionFromOverallMm
+            }
+            handleLowerTransitionFromOverallMm={
+              handleLowerTransitionFromOverallMm ?? editableHandlePreview?.lowerTransitionFromOverallMm
+            }
+            handleOuterTopFromOverallMm={
+              handleOuterTopFromOverallMm ?? editableHandlePreview?.outerTopFromOverallMm
+            }
+            handleOuterBottomFromOverallMm={
+              handleOuterBottomFromOverallMm ?? editableHandlePreview?.outerBottomFromOverallMm
+            }
+            handleTubeDiameterMm={handleTubeDiameterMm ?? editableHandlePreview?.tubeDiameterMm}
             shoulderDiameterMm={shoulderDiameterMm}
             taperUpperDiameterMm={taperUpperDiameterMm}
             taperLowerDiameterMm={taperLowerDiameterMm}
@@ -4826,6 +6169,17 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             onHandleTopChange={setHandleTopFromOverallMm}
             onHandleBottomChange={setHandleBottomFromOverallMm}
             onHandleReachChange={setHandleReachMm}
+            onHandleUpperCornerChange={setHandleUpperCornerFromOverallMm}
+            onHandleLowerCornerChange={setHandleLowerCornerFromOverallMm}
+            onHandleUpperCornerReachChange={setHandleUpperCornerReachMm}
+            onHandleLowerCornerReachChange={setHandleLowerCornerReachMm}
+            onHandleUpperTransitionReachChange={setHandleUpperTransitionReachMm}
+            onHandleLowerTransitionReachChange={setHandleLowerTransitionReachMm}
+            onHandleUpperTransitionChange={setHandleUpperTransitionFromOverallMm}
+            onHandleLowerTransitionChange={setHandleLowerTransitionFromOverallMm}
+            onHandleOuterTopChange={setHandleOuterTopFromOverallMm}
+            onHandleOuterBottomChange={setHandleOuterBottomFromOverallMm}
+            onHandleTubeDiameterChange={setHandleTubeDiameterMm}
             onShoulderDiameterChange={setShoulderDiameterMm}
             onTaperUpperDiameterChange={setTaperUpperDiameterMm}
             onTaperLowerDiameterChange={setTaperLowerDiameterMm}

@@ -767,8 +767,8 @@ export async function runSmartTemplateLookup(
   });
   let printHeightMm =
     tumblerLookup?.dimensions.usableHeightMm ??
-    matchedProfile?.usableHeightMm ??
     tumblerAuto?.suggestion.usableHeightMm ??
+    matchedProfile?.usableHeightMm ??
     tumblerAuto?.calculation.templateHeightMm ??
     null;
   const overallHeightMm =
@@ -824,8 +824,13 @@ export async function runSmartTemplateLookup(
   });
 
   const templateWidthMm =
+    matchedProfile?.wrapWidthMm ??
     calculateTemplateWidthMm(diameterMm) ??
     tumblerAuto?.calculation.templateWidthMm ??
+    null;
+  const handleSpanMm =
+    tumblerLookup?.dimensions.handleSpanMm ??
+    matchedProfile?.handleSpanMm ??
     null;
   const handleArcDeg =
     matchedProfile ? getProfileHandleArcDeg(matchedProfile) : tumblerAuto?.suggestion.hasHandle ? 90 : 0;
@@ -937,6 +942,7 @@ export async function runSmartTemplateLookup(
         bodyTopFromOverallMm: autoZone?.bodyTopFromOverallMm ?? null,
         bodyBottomFromOverallMm: autoZone?.bodyBottomFromOverallMm ?? null,
         bodyHeightMm: autoZone?.bodyHeightMm ?? null,
+        handleSpanMm: typeof handleSpanMm === "number" ? round2(handleSpanMm) : null,
         topMarginMm,
         bottomMarginMm,
         bodyColorHex: resolvedBodyColorHex,

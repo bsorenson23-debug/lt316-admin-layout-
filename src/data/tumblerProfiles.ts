@@ -25,6 +25,10 @@ export interface TumblerProfile {
   overallHeightMm: number;
   /** Engraveable / printable height (between grooves, mm) */
   usableHeightMm: number;
+  /** Authoritative production wrap width / circumference (mm) when the catalog provides a family-specific value. */
+  wrapWidthMm?: number;
+  /** Overall left-to-right product span including the handle silhouette (mm). Metadata only. */
+  handleSpanMm?: number;
   /** Does this model have an external carry handle? */
   hasHandle: boolean;
   /** Handle exclusion arc in degrees (0 = no handle). Defaults to 90 when hasHandle is true. */
@@ -174,6 +178,32 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
       lowerGrooveYmm: 174,
     },
     notes: "Chuck required — tapered body + handle. Significant taper: top Ø106mm, base Ø74mm.",
+  },
+
+  {
+    id: "stanley-protour-40",
+    label: "Stanley ProTour 40oz",
+    brand: "Stanley",
+    model: "ProTour Travel Tumbler 40oz",
+    capacityOz: 40,
+    shapeType: "tapered",
+    outsideDiameterMm: 99.8,       // official body diameter seed: 3.93"
+    topDiameterMm: 99.8,           // body-only upper reference seed
+    bottomDiameterMm: 78.7,        // cup-holder/base diameter seed: 3.10"
+    overallHeightMm: 273.8,        // official overall assembled height: 10.78"
+    usableHeightMm: 214,           // fallback only; production printable height should come from image analysis
+    wrapWidthMm: 313.6,            // official production wrap-width seed
+    handleSpanMm: 147.8,           // official overall handle span metadata: 5.82"
+    hasHandle: true,
+    handleArcDeg: 90,
+    chuckRecommended: true,
+    guideBand: {
+      id: "stanley-protour-40-band",
+      label: "Derived Print Zone",
+      upperGrooveYmm: 30,
+      lowerGrooveYmm: 214,
+    },
+    notes: "Official ProTour 40oz family seed. Wrap/body math stays body-only; handle span is metadata only and printable height should be refined from BODY REFERENCE analysis.",
   },
 
   {

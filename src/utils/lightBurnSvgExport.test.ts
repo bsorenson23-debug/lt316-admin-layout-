@@ -114,11 +114,13 @@ test("buildLightBurnExportSvg keeps text items as transformed original svg conte
 
 test("buildLightBurnAlignmentGuideSvg renders horizontal printable boundary guides", () => {
   const payload: LightBurnAlignmentGuidePayload = {
-    kind: "lt316-alignment-guides",
+    kind: "lt316-lightburn-alignment-guides",
     workspaceMode: "tumbler-wrap",
     templateWidthMm: 276.15,
     templateHeightMm: 160,
     generatedAt: "2026-04-06T00:00:00.000Z",
+    units: "mm",
+    origin: "top-left",
     wrapWidthAuthoritative: true,
     bodyOnlyWrapSpace: true,
     wrapMappingMm: {
@@ -127,14 +129,19 @@ test("buildLightBurnAlignmentGuideSvg renders horizontal printable boundary guid
       leftQuarterMm: 138.08,
       rightQuarterMm: 0,
     },
+    keepOutRegion: null,
+    logoRegion: null,
+    warnings: [],
     lines: [
       {
+        id: "guide-printable-top",
         kind: "printable-top",
         label: "Printable top",
         orientation: "horizontal",
         yMm: 18,
       },
       {
+        id: "guide-front-meridian",
         kind: "front-meridian",
         label: "Front center",
         orientation: "vertical",

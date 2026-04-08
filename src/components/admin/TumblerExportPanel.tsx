@@ -21,6 +21,11 @@ import { buildLightBurnAlignmentGuideSvg, buildLightBurnExportSvg } from "@/util
 import { isTaperWarpApplicable } from "@/utils/taperWarp";
 import type { LbrnMaterialSettings } from "@/utils/lightBurnLbrnExport";
 import { appendExportHistory, fingerprintItems } from "./ExportHistoryPanel";
+import {
+  PipelineDebugDrawer,
+  type PipelineDebugRawObject,
+  type PipelineDebugSection,
+} from "./PipelineDebugDrawer";
 import styles from "./TumblerExportPanel.module.css";
 
 export interface FramePreview {
@@ -341,6 +346,147 @@ export function TumblerExportPanel({
     },
   ];
 
+  const pipelineDebugSections = React.useMemo<PipelineDebugSection[]>(() => {
+    if (!isTumblerMode || !dimensionCalibration) {
+      return [];
+    }
+
+    const keepOut = exportArtifacts.alignmentGuides?.keepOutRegion;
+    const logoRegion = exportArtifacts.alignmentGuides?.logoRegion;
+
+    return [
+      {
+        id: "wrap-export",
+        title: "Wrap / export mapping",
+        defaultOpen: true,
+        fields: [
+          {
+            label: "Wrap width",
+            value: `${fmt(dimensionCalibration.wrapWidthMm)} mm`,
+            source: "canonicalDimensionCalibration.wrapWidthMm",
+            formula: "authoritative production width",
+            override: lockedProductionGeometry ? "no" : "yes",
+          },
+          {
+            label: "Cylinder diameter",
+            value: currentDiameterMm > 0 ? `${fmt(currentDiameterMm)} mm` : "n/a",
+            source: "bedConfig tumbler diameter",
+            formula: "wrapWidthMm / π",
+          },
+          {
+            label: "Front / back meridians",
+            value: `${fmt(exportArtifacts.alignmentGuides?.wrapMappingMm.frontMeridianMm ?? 0)} / ${fmt(exportArtifacts.alignmentGuides?.wrapMappingMm.backMeridianMm ?? 0)} mm`,
+            source: "alignment guide payload",
+          },
+          {
+            label: "Quarter guides",
+            value: exportArtifacts.alignmentGuides
+              ? `${fmt(exportArtifacts.alignmentGuides.wrapMappingMm.leftQuarterMm)} / ${fmt(exportArtifacts.alignmentGuides.wrapMappingMm.rightQuarterMm)} mm`
+              : "n/a",
+            source: "alignment guide payload",
+          },
+          {
+            label: "Printable top / bottom",
+            value: dimensionCalibration.printableSurfaceContract
+              ? `${fmt(dimensionCalibration.printableSurfaceContract.printableTopMm)} → ${fmt(dimensionCalibration.printableSurfaceContract.printableBottomMm)} mm`
+              : "n/a",
+            source: "printableSurfaceContract",
+          },
+          {
+            label: "Handle keep-out",
+            value: keepOut
+              ? `${fmt(keepOut.startMm)} → ${fmt(keepOut.endMm)} mm`
+              : "None",
+            source: "guide payload from canonical keep-out sector",
+          },
+          {
+            label: "Logo guide",
+            value: logoRegion
+              ? `${fmt(logoRegion.centerXMm)} mm center / ${fmt(logoRegion.widthMm)} × ${fmt(logoRegion.heightMm)} mm`
+              : "None",
+            source: "manufacturerLogoStamp.logoPlacement",
+            confidence: logoRegion ? `${Math.round(logoRegion.confidence * 100)}%` : undefined,
+          },
+        ],
+      },
+      {
+        id: "guide-export",
+        title: "Guide export set",
+        fields: [
+          {
+            label: "Guide set",
+            value: "front / back / quarter / handle keep-out / printable top-bottom / logo",
+            source: "buildLightBurnAlignmentGuidePayload(...)",
+          },
+          {
+            label: "Coordinate system",
+            value: "origin top-left / units mm / width wrapWidthMm / height printableHeightMm",
+            source: "LightBurn alignment guide export",
+          },
+          {
+            label: "Placement truth",
+            value: "canonical alignment",
+            source: "export consumes canonical calibration, not source model",
+          },
+        ],
+      },
+    ];
+  }, [
+    currentDiameterMm,
+    dimensionCalibration,
+    exportArtifacts.alignmentGuides,
+    isTumblerMode,
+    lockedProductionGeometry,
+  ]);
+
+  const pipelineDebugWarnings = React.useMemo(() => {
+    const nextWarnings = [...warnings];
+    if (dimensionCalibration && currentDiameterMm > 0) {
+      const mismatch = Math.abs((dimensionCalibration.wrapWidthMm / Math.PI) - currentDiameterMm);
+      if (mismatch > 0.5) {
+        nextWarnings.push(`Export diameter differs from wrap width / π by ${fmt(mismatch)} mm.`);
+      }
+    }
+    if (dimensionCalibration?.printableSurfaceContract && dimensionCalibration.printableSurfaceContract.printableTopMm >= dimensionCalibration.printableSurfaceContract.printableBottomMm) {
+      nextWarnings.push("Printable top is greater than or equal to printable bottom.");
+    }
+    return nextWarnings;
+  }, [currentDiameterMm, dimensionCalibration, warnings]);
+
+  const pipelineDebugRawObjects = React.useMemo<PipelineDebugRawObject[]>(
+    () => [
+      { id: "export-calibration", label: "canonicalDimensionCalibration", value: dimensionCalibration ?? null },
+      { id: "export-alignment-guides", label: "alignmentGuides", value: exportArtifacts.alignmentGuides ?? null },
+      { id: "export-logo-placement", label: "logoPlacement", value: manufacturerLogoStamp?.logoPlacement ?? null },
+    ],
+    [dimensionCalibration, exportArtifacts.alignmentGuides, manufacturerLogoStamp?.logoPlacement],
+  );
+
+  const pipelineDebugJson = React.useMemo(
+    () => ({
+      calibration: dimensionCalibration ?? null,
+      alignmentGuides: exportArtifacts.alignmentGuides ?? null,
+      lockedProductionGeometry,
+      warnings: pipelineDebugWarnings,
+      logoPlacement: manufacturerLogoStamp?.logoPlacement ?? null,
+      bedConfig: {
+        widthMm: bedConfig.width,
+        heightMm: bedConfig.height,
+        tumblerDiameterMm: currentDiameterMm,
+      },
+    }),
+    [
+      bedConfig.height,
+      bedConfig.width,
+      currentDiameterMm,
+      dimensionCalibration,
+      exportArtifacts.alignmentGuides,
+      lockedProductionGeometry,
+      manufacturerLogoStamp?.logoPlacement,
+      pipelineDebugWarnings,
+    ],
+  );
+
   const doExport = async (mode: "download" | "save") => {
     const name = `lt316-${Date.now()}`;
     const material = materialSettings ?? undefined;
@@ -637,6 +783,28 @@ export function TumblerExportPanel({
           <div className={styles.diameterMeta}>
             Alignment guides: front {fmt(exportArtifacts.alignmentGuides.wrapMappingMm.frontMeridianMm)} · back {fmt(exportArtifacts.alignmentGuides.wrapMappingMm.backMeridianMm)} · left quarter {fmt(exportArtifacts.alignmentGuides.wrapMappingMm.leftQuarterMm)} · right quarter {fmt(exportArtifacts.alignmentGuides.wrapMappingMm.rightQuarterMm)} mm
           </div>
+        )}
+
+        {pipelineDebugSections.length > 0 && (
+          <PipelineDebugDrawer
+            title="Pipeline Debug"
+            subtitle="Compact export and bed-mapping summary from canonical alignment data."
+            sections={pipelineDebugSections}
+            warnings={pipelineDebugWarnings}
+            rawObjects={pipelineDebugRawObjects}
+            formulas={[
+              "Cylinder diameter = wrapWidthMm / π",
+              "Guide X positions derive from canonical meridians in wrap space.",
+              "Logo wrap region derives from theta/s body-local placement.",
+            ]}
+            exportSummary={[
+              "Body-only wrap space",
+              `Wrap width authoritative = ${lockedProductionGeometry ? "yes" : "no"}`,
+              `Handle keep-out applied = ${exportArtifacts.alignmentGuides?.keepOutRegion ? "yes" : "no"}`,
+            ]}
+            debugJson={pipelineDebugJson}
+            compact
+          />
         )}
 
         {warnings.map((w) => (

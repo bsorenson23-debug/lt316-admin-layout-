@@ -157,7 +157,9 @@ export function useAssetWorkflow({
         bedConfig.workspaceMode === "tumbler-wrap"
           ? getWrapFrontCenter(bedConfig.width, activeHandleArcDeg)
           : bedConfig.width / 2;
-      const placementCenterY = engravableZone ? engravableZone.y + engravableZone.height / 2 : bedConfig.height / 2;
+      const placementCenterY = engravableZone
+        ? (engravableZone.printableCenterY ?? (engravableZone.y + engravableZone.height / 2))
+        : bedConfig.height / 2;
       const newItems: PlacedItem[] = accepted.map((asset) =>
         buildPlacedItem(asset, placementCenterX, placementCenterY),
       );
@@ -253,7 +255,9 @@ export function useAssetWorkflow({
         const item = buildPlacedItem(
           asset,
           getWrapFrontCenter(bedConfig.width, activeHandleArcDeg),
-          engravableZone ? engravableZone.y + engravableZone.height / 2 : bedConfig.height / 2,
+          engravableZone
+            ? (engravableZone.printableCenterY ?? (engravableZone.y + engravableZone.height / 2))
+            : bedConfig.height / 2,
         );
         setPlacedItems((prev) => [...prev, item]);
         setSelectedItemId(item.id);

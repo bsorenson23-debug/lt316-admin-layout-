@@ -6,7 +6,7 @@ import { OrbitControls, ContactShadows, Grid, Bounds, useBounds } from "@react-t
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { PlacedItem, PlacedItemPatch } from "@/types/admin";
-import type { TumblerDimensions } from "./ModelViewer";
+import { CanonicalAlignmentTumbler, type TumblerDimensions } from "./ModelViewer";
 import { YetiRambler40oz } from "./models/YetiRambler40oz";
 import type { DecalItem } from "./models/YetiRambler40oz";
 import type { ProductTemplate } from "@/types/productTemplate";
@@ -169,6 +169,10 @@ export function TumblerPlacementView({
   const bodyTintColor = selectedTemplate?.dimensions.bodyColorHex ?? "#b0b8c4";
   const rimTintColor = selectedTemplate?.dimensions.rimColorHex ?? "#d0d0d0";
   const tumblerMappingProp = selectedTemplate?.tumblerMapping;
+  const canonicalBodyProfile = selectedTemplate?.dimensions.canonicalBodyProfile ?? null;
+  const canonicalHandleProfile = selectedTemplate?.dimensions.canonicalHandleProfile ?? null;
+  const dimensionCalibration = selectedTemplate?.dimensions.canonicalDimensionCalibration ?? null;
+  const canUseCanonicalFullModel = Boolean(canonicalBodyProfile && dimensionCalibration);
   const clampedTumblerMapping = useMemo(() => {
     if (!tumblerMappingProp) return tumblerMappingProp;
     const calXLimit = Math.max(15, Math.min(45, Math.round(wrapWidthMm * 0.12)));
@@ -288,20 +292,40 @@ export function TumblerPlacementView({
 
         <Bounds observe={false} margin={1.8}>
           <Suspense fallback={null}>
-            <YetiRambler40oz
-              placedItems={decalItems}
-              diameterMm={diameterMm}
-              topDiameterMm={tumblerDims.topDiameterMm}
-              overallHeightMm={tumblerDims.overallHeightMm}
-              printHeightMm={printHeightMm}
-              printableTopOffsetMm={tumblerDims.printableTopOffsetMm ?? 0}
-              wrapWidthMm={wrapWidthMm}
-              handleArcDeg={handleArcDeg}
-              glbPath={glbPath}
-              tumblerMapping={clampedTumblerMapping}
-              bodyTintColor={bodyTintColor}
-              rimTintColor={rimTintColor}
-            />
+            {canUseCanonicalFullModel && canonicalBodyProfile && dimensionCalibration ? (
+              <CanonicalAlignmentTumbler
+                dims={tumblerDims}
+                bodyProfile={canonicalBodyProfile}
+                handleProfile={canonicalHandleProfile}
+                calibration={dimensionCalibration}
+                previewMode="full-model"
+                bodyTintColor={bodyTintColor}
+                rimTintColor={rimTintColor}
+                decalItems={decalItems}
+                wrapWidthMm={wrapWidthMm}
+                printHeightMm={printHeightMm}
+                printableTopOffsetMm={tumblerDims.printableTopOffsetMm ?? 0}
+                tumblerMapping={clampedTumblerMapping}
+                handleArcDeg={handleArcDeg}
+              />
+            ) : (
+              <YetiRambler40oz
+                placedItems={decalItems}
+                diameterMm={diameterMm}
+                topDiameterMm={tumblerDims.topDiameterMm}
+                bottomDiameterMm={tumblerDims.bottomDiameterMm}
+                overallHeightMm={tumblerDims.overallHeightMm}
+                printHeightMm={printHeightMm}
+                printableTopOffsetMm={tumblerDims.printableTopOffsetMm ?? 0}
+                wrapWidthMm={wrapWidthMm}
+                handleArcDeg={handleArcDeg}
+                glbPath={glbPath}
+                tumblerMapping={clampedTumblerMapping}
+                bodyTintColor={bodyTintColor}
+                rimTintColor={rimTintColor}
+                orientToFrontFace
+              />
+            )}
           </Suspense>
           <AutoFit />
         </Bounds>

@@ -132,12 +132,28 @@ function findHalfWidthPxAtRow(contour: ContourPoint[], axisX: number, yPx: numbe
   return Math.max(0, Math.min(axisX - left, right - axisX));
 }
 
+function findAuthoritativeHalfWidthPxAtRow(
+  contour: ContourPoint[],
+  axisX: number,
+  yPx: number,
+  side: "left" | "right",
+): number {
+  const xs = getContourIntersectionsAtY(contour, yPx);
+  if (xs.length < 2) return 0;
+  const left = xs[0]!;
+  const right = xs[xs.length - 1]!;
+  return side === "left"
+    ? Math.max(0, axisX - left)
+    : Math.max(0, right - axisX);
+}
+
 export function buildCanonicalBodyProfile(args: {
   outline: EditableBodyOutline | null | undefined;
   overallHeightMm: number;
   bodyTopFromOverallMm: number;
   bodyBottomFromOverallMm: number;
   bodyDiameterMm?: number;
+  handleSide?: "left" | "right" | null;
   fitDebug?: TumblerItemLookupFitDebug | null;
 }): CanonicalBodyProfile | null {
   const outline = args.outline;
@@ -153,6 +169,10 @@ export function buildCanonicalBodyProfile(args: {
   const axisYTop = args.fitDebug?.bodyTopPx ?? sourceBounds?.minY ?? 0;
   const axisYBottom = args.fitDebug?.bodyBottomPx ?? sourceBounds?.maxY ?? axisYTop + 1;
   const axisHeightPx = Math.max(1, axisYBottom - axisYTop);
+  const symmetrySource: "left" | "right" =
+    args.handleSide === "left"
+      ? "right"
+      : "left";
   const sampleCount = Math.max(96, Math.min(240, Math.round(bodyHeightMm * 1.1)));
   const sourceRadiusSamplesPx: number[] = [];
   if (sourceContour.length >= 3) {
@@ -160,7 +180,7 @@ export function buildCanonicalBodyProfile(args: {
       const sNorm = sampleCount === 1 ? 0 : index / (sampleCount - 1);
       if (sNorm < 0.12 || sNorm > 0.46) continue;
       const yPx = axisYTop + (axisHeightPx * sNorm);
-      const radiusPx = findHalfWidthPxAtRow(sourceContour, axisX, yPx);
+      const radiusPx = findAuthoritativeHalfWidthPxAtRow(sourceContour, axisX, yPx, symmetrySource);
       if (radiusPx > 0) sourceRadiusSamplesPx.push(radiusPx);
     }
   }
@@ -178,7 +198,7 @@ export function buildCanonicalBodyProfile(args: {
     const yMm = round2(bodyTopMm + (bodyHeightMm * sNorm));
     const yPx = axisYTop + (axisHeightPx * sNorm);
     const radiusPx = sourceContour.length >= 3
-      ? round2(findHalfWidthPxAtRow(sourceContour, axisX, yPx))
+      ? round2(findAuthoritativeHalfWidthPxAtRow(sourceContour, axisX, yPx, symmetrySource))
       : 0;
     const interpolatedRadiusMm = round2(interpolateRadiusMm(outline, yMm));
     const radiusMm = round2(
@@ -201,8 +221,9 @@ export function buildCanonicalBodyProfile(args: {
   const svgPath = buildContourSvgPath([...leftPoints, ...rightPoints]) ?? "";
 
   return {
-    symmetrySource: "left",
-    mirroredRightFromLeft: true,
+    symmetrySource,
+    mirroredFromSymmetrySource: true,
+    mirroredRightFromLeft: symmetrySource === "left",
     axis: {
       xTop: round2(axisX),
       yTop: round2(axisYTop),
@@ -222,6 +243,7 @@ export function buildCanonicalDimensionCalibration(args: {
   wrapDiameterMm: number;
   baseDiameterMm?: number | null;
   handleArcDeg?: number;
+  handleSide?: "left" | "right" | null;
   axialSurfaceBands?: AxialSurfaceBand[] | null;
   printableSurfaceContract?: PrintableSurfaceContract | null;
   fitDebug?: TumblerItemLookupFitDebug | null;
@@ -232,6 +254,7 @@ export function buildCanonicalDimensionCalibration(args: {
     bodyTopFromOverallMm: args.bodyTopFromOverallMm,
     bodyBottomFromOverallMm: args.bodyBottomFromOverallMm,
     bodyDiameterMm: args.wrapDiameterMm,
+    handleSide: args.handleSide,
     fitDebug: args.fitDebug,
   });
   if (!canonicalBodyProfile || canonicalBodyProfile.samples.length < 2) {
@@ -340,14 +363,39 @@ export interface CanonicalHandleDebugSummary {
 
 export type CanonicalHandleRenderMode = "extracted" | "simplified" | "hidden";
 
+function hasUsableCanonicalHandleGeometry(handleProfile: CanonicalHandleProfile | null | undefined): boolean {
+  if (!handleProfile) return false;
+  const upper = handleProfile.anchors.upper;
+  const lower = handleProfile.anchors.lower;
+  const anchorsValid =
+    Number.isFinite(upper.xPx) &&
+    Number.isFinite(upper.yPx) &&
+    Number.isFinite(lower.xPx) &&
+    Number.isFinite(lower.yPx) &&
+    Math.abs((lower.yPx ?? 0) - (upper.yPx ?? 0)) >= 8;
+  const usableWidthSamples = handleProfile.widthProfile.filter(
+    (sample) => Number.isFinite(sample.widthPx) && sample.widthPx > 0,
+  ).length;
+  const hasUsableContours =
+    handleProfile.centerline.length >= 3 ||
+    handleProfile.outerContour.length >= 4 ||
+    handleProfile.innerContour.length >= 4;
+  const hasUsableDepth =
+    (Number.isFinite(handleProfile.symmetricExtrusionWidthPx) && (handleProfile.symmetricExtrusionWidthPx ?? 0) > 0) ||
+    usableWidthSamples >= 6;
+  return anchorsValid && hasUsableContours && hasUsableDepth;
+}
+
 export function resolveCanonicalHandleRenderMode(args: {
   handleProfile: CanonicalHandleProfile | null | undefined;
   previewMode: "alignment-model" | "full-model";
 }): CanonicalHandleRenderMode {
-  const confidence = args.handleProfile?.confidence ?? 0;
-  if (confidence < 0.6) return "hidden";
   if (args.previewMode === "alignment-model") {
     return "hidden";
+  }
+  const confidence = args.handleProfile?.confidence ?? 0;
+  if (confidence < 0.6) {
+    return hasUsableCanonicalHandleGeometry(args.handleProfile) ? "simplified" : "hidden";
   }
   return confidence >= 0.8 ? "extracted" : "simplified";
 }
@@ -368,11 +416,15 @@ export function summarizeCanonicalHandleDebug(args: {
     .filter((value) => Number.isFinite(value) && value > 0)
     .sort((a, b) => a - b);
   if (robustWidths.length === 0) return null;
+  const profileExtrusionDepthMm = robustWidths[Math.floor(robustWidths.length / 2)] ?? 0;
+  const extrusionDepthMm = handleProfile.symmetricExtrusionWidthPx && Number.isFinite(handleProfile.symmetricExtrusionWidthPx)
+    ? Math.max(1.2, Math.abs(handleProfile.symmetricExtrusionWidthPx * sx))
+    : profileExtrusionDepthMm;
 
   return {
     side: handleProfile.side,
     confidence: round4(handleProfile.confidence),
-    extrusionDepthMm: round4(robustWidths[Math.floor(robustWidths.length / 2)] ?? 0),
+    extrusionDepthMm: round4(extrusionDepthMm),
     derivedFromCanonicalProfile: handleProfile.outerContour.length >= 3 && handleProfile.innerContour.length >= 3,
   };
 }

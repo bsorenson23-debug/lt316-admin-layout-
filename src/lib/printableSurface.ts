@@ -98,7 +98,17 @@ function resolveContractTopMm(dims: ProductTemplateDimensions): number | null {
   if (isFiniteNumber(dims.printableTopOverrideMm)) {
     return dims.printableTopOverrideMm ?? null;
   }
-  if (dims.printableSurfaceContract && isFiniteNumber(dims.printableSurfaceContract.printableTopMm)) {
+  const hasSemanticTopExclusion = Boolean(
+    dims.printableSurfaceContract?.axialExclusions.some((band) => band.kind === "lid" || band.kind === "rim-ring"),
+  );
+  if (
+    dims.printableSurfaceContract &&
+    isFiniteNumber(dims.printableSurfaceContract.printableTopMm) &&
+    (
+      hasSemanticTopExclusion ||
+      (!isFiniteNumber(dims.lidSeamFromOverallMm) && !isFiniteNumber(dims.silverBandBottomFromOverallMm))
+    )
+  ) {
     return dims.printableSurfaceContract.printableTopMm;
   }
   return null;

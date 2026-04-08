@@ -109,8 +109,14 @@
   position: absolute;
   top: 0;
   width: 1px;
-  border-left: 1px dashed rgba(80, 160, 220, 0.55);
-  z-index: 3;
+  transform: translateX(-0.5px);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--accent) 88%, white) 0 5px,
+    transparent 5px 10px
+  );
+  opacity: 0.92;
+  z-index: 4;
   pointer-events: none;
 }
 
@@ -397,6 +403,67 @@
   opacity: 0.98;
 }
 
+.traceCenterLine {
+  stroke: color-mix(in srgb, var(--accent) 90%, white);
+  stroke-width: 0.9;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.96;
+}
+
+.traceGuideUnderlay {
+  stroke: color-mix(in srgb, var(--bg-base) 82%, transparent);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.62;
+}
+
+.traceRingBandFill {
+  fill: color-mix(in srgb, white 16%, var(--info) 14%, transparent);
+  opacity: 0.18;
+}
+
+.tracePrintableBandFill {
+  fill: color-mix(in srgb, var(--success) 28%, transparent);
+  opacity: 0.16;
+}
+
+.traceLidGuide {
+  stroke: var(--info);
+  stroke-width: 0.75;
+  stroke-dasharray: 3 2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.98;
+}
+
+.tracePowderGuide {
+  stroke: var(--warning);
+  stroke-width: 0.75;
+  stroke-dasharray: 3 2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.98;
+}
+
+.tracePrintableCenterMark {
+  stroke: color-mix(in srgb, var(--accent) 88%, white 12%);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 1;
+}
+
+.traceNodeLidGuide {
+  fill: var(--info);
+  stroke: var(--bg-base);
+}
+
+.traceNodePowderGuide {
+  fill: var(--warning);
+  stroke: var(--bg-base);
+}
+
 .traceLidSeam {
   stroke: var(--info);
   stroke-width: 1;
@@ -427,6 +494,26 @@
   opacity: 0.92;
 }
 
+.traceHandleInnerReference {
+  fill: none;
+  stroke: color-mix(in srgb, var(--success) 72%, white 28%);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 1;
+}
+
+.traceHandleOuterReference {
+  fill: none;
+  stroke: color-mix(in srgb, var(--success) 48%, white 52%);
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.92;
+}
+
 .traceNode {
   stroke-width: 1;
   opacity: 0.98;
@@ -444,6 +531,11 @@
 
 .traceNodeHandle {
   fill: var(--success);
+  stroke: var(--bg-base);
+}
+
+.traceNodeHandleOuterAnchor {
+  fill: var(--error);
   stroke: var(--bg-base);
 }
 
@@ -506,17 +598,19 @@
 
 .placementGuide {
   position: absolute;
-  height: 1px;
+  height: 0;
   z-index: 4;
   pointer-events: none;
 }
 
 .lidPlacementGuide {
-  border-top: 1px dashed var(--info);
+  border-top: 1px solid color-mix(in srgb, var(--info) 84%, white);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg-base) 76%, transparent);
 }
 
 .coatingPlacementGuide {
-  border-top: 1px dashed var(--warning);
+  border-top: 1px solid color-mix(in srgb, var(--warning) 84%, white);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg-base) 76%, transparent);
 }
 
 .handlePlacementGuide {
@@ -537,8 +631,8 @@
 /* ── Drag lines ────────────────────────────────────────────────── */
 .guideNode {
   position: absolute;
-  width: 12px;
-  height: 12px;
+  width: 6px;
+  height: 6px;
   padding: 0;
   border: 1px solid var(--bg-base);
   border-radius: 999px;
@@ -558,11 +652,11 @@
 }
 
 .guideNodeLid {
-  background: var(--info);
+  background: color-mix(in srgb, var(--info) 82%, white);
 }
 
 .guideNodeSilver {
-  background: var(--warning);
+  background: color-mix(in srgb, var(--warning) 82%, white);
 }
 
 .guideNodeBody {
@@ -576,6 +670,19 @@
 
 .guideNodeHandleReach {
   cursor: ew-resize;
+}
+
+.guideNodeHandleCorner {
+  cursor: move;
+}
+
+.guideNodeHandleTransition {
+  cursor: ew-resize;
+}
+
+.guideNodeHandleOuterAnchor {
+  background: color-mix(in srgb, var(--error) 82%, white);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 3px color-mix(in srgb, var(--error) 18%, transparent);
 }
 
 .guideNodeOutlineWidth {

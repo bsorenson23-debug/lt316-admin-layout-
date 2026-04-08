@@ -54,7 +54,7 @@ import { type LaserLayer, buildDefaultLayers } from "@/types/laserLayer";
 import { FiberColorCalibrationPanel } from "./FiberColorCalibrationPanel";
 import { TemplateGallery } from "./TemplateGallery";
 import { TemplateCreateForm } from "./TemplateCreateForm";
-import type { ProductTemplate } from "@/types/productTemplate";
+import { getTemplateEffectiveCylinderDiameterMm, type ProductTemplate } from "@/types/productTemplate";
 import type { OrderJobRecipe, OrderRecord, OrderRecipePlacedItem } from "@/types/orders";
 import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
@@ -371,6 +371,10 @@ export function AdminLayoutShell() {
     if (!isTumblerMode || !selectedTemplate) return null;
     return getEngravableDimensions(selectedTemplate);
   }, [isTumblerMode, selectedTemplate]);
+  const selectedTemplateEffectiveDiameterMm = React.useMemo(
+    () => (selectedTemplate ? getTemplateEffectiveCylinderDiameterMm(selectedTemplate) : 0),
+    [selectedTemplate],
+  );
   const templatePrintableSurface = React.useMemo(() => {
     if (!selectedTemplate) return null;
     return getPrintableSurfaceResolutionFromDimensions(
@@ -487,6 +491,7 @@ export function AdminLayoutShell() {
     const fullWrapW = templateEngravableDims.circumferenceMm;
     const printableSurfaceLocalTop = templateEngravableDims.printableTopFromBodyTopMm;
     const printableSurfaceLocalBottom = templateEngravableDims.printableBottomFromBodyTopMm;
+    const printableSurfaceLocalCenter = (printableSurfaceLocalTop + printableSurfaceLocalBottom) / 2;
     const wrapMapping = selectedTemplate.dimensions.canonicalDimensionCalibration?.wrapMappingMm;
     const logoRegion = mapLogoPlacementToWrapRegion({
       templateWidthMm: fullWrapW,
@@ -517,6 +522,7 @@ export function AdminLayoutShell() {
       height: templateEngravableDims.printableHeightMm,
       printableTopY: printableSurfaceLocalTop,
       printableBottomY: printableSurfaceLocalBottom,
+      printableCenterY: printableSurfaceLocalCenter,
       lidBoundaryY: lidBoundaryY != null ? Math.max(0, lidBoundaryY - bodyTopMm) : null,
       rimBoundaryY: rimBoundaryY != null ? Math.max(0, rimBoundaryY - bodyTopMm) : null,
       printableDetectionWeak: templateEngravableDims.automaticPrintableDetectionWeak,
@@ -548,6 +554,7 @@ export function AdminLayoutShell() {
         Math.abs(prev.height - nextZone.height) < 0.01 &&
         Math.abs((prev.printableTopY ?? -1) - (nextZone.printableTopY ?? -1)) < 0.01 &&
         Math.abs((prev.printableBottomY ?? -1) - (nextZone.printableBottomY ?? -1)) < 0.01 &&
+        Math.abs((prev.printableCenterY ?? -1) - (nextZone.printableCenterY ?? -1)) < 0.01 &&
         Math.abs((prev.lidBoundaryY ?? -1) - (nextZone.lidBoundaryY ?? -1)) < 0.01 &&
         Math.abs((prev.rimBoundaryY ?? -1) - (nextZone.rimBoundaryY ?? -1)) < 0.01 &&
         Boolean(prev.printableDetectionWeak) === Boolean(nextZone.printableDetectionWeak) &&
@@ -1969,8 +1976,8 @@ export function AdminLayoutShell() {
                 <div className={styles.productCardCompactInfo}>
                   <span className={styles.productCardCompactName}>{selectedTemplate.name}</span>
                   <span className={styles.productCardCompactDims}>
-                    {selectedTemplate.dimensions.diameterMm > 0
-                      ? `\u00F8${selectedTemplate.dimensions.diameterMm}mm \u00D7 ${selectedTemplatePrintHeightMm}mm`
+                    {selectedTemplateEffectiveDiameterMm > 0
+                      ? `\u00F8${(Math.round(selectedTemplateEffectiveDiameterMm * 10) / 10).toFixed(1)}mm \u00D7 ${selectedTemplatePrintHeightMm}mm`
                       : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplatePrintHeightMm}mm`}
                   </span>
                 </div>
@@ -2210,8 +2217,8 @@ export function AdminLayoutShell() {
                 <div className={styles.productCardCompactInfo}>
                   <span className={styles.productCardCompactName}>{selectedTemplate.name}</span>
                   <span className={styles.productCardCompactDims}>
-                    {selectedTemplate.dimensions.diameterMm > 0
-                      ? `\u00F8${selectedTemplate.dimensions.diameterMm}mm \u00D7 ${selectedTemplatePrintHeightMm}mm`
+                    {selectedTemplateEffectiveDiameterMm > 0
+                      ? `\u00F8${(Math.round(selectedTemplateEffectiveDiameterMm * 10) / 10).toFixed(1)}mm \u00D7 ${selectedTemplatePrintHeightMm}mm`
                       : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplatePrintHeightMm}mm`}
                   </span>
                 </div>

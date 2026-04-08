@@ -47,6 +47,18 @@ export interface SmartTemplateLookupDimensionsDraft {
   handleTopFromOverallMm?: number | null;
   handleBottomFromOverallMm?: number | null;
   handleReachMm?: number | null;
+  handleUpperCornerFromOverallMm?: number | null;
+  handleLowerCornerFromOverallMm?: number | null;
+  handleUpperCornerReachMm?: number | null;
+  handleLowerCornerReachMm?: number | null;
+  handleUpperTransitionReachMm?: number | null;
+  handleLowerTransitionReachMm?: number | null;
+  handleUpperTransitionFromOverallMm?: number | null;
+  handleLowerTransitionFromOverallMm?: number | null;
+  handleOuterTopFromOverallMm?: number | null;
+  handleOuterBottomFromOverallMm?: number | null;
+  handleTubeDiameterMm?: number | null;
+  handleSpanMm?: number | null;
   canonicalHandleProfile?: CanonicalHandleProfile | null;
   canonicalBodyProfile?: CanonicalBodyProfile | null;
   canonicalDimensionCalibration?: CanonicalDimensionCalibration | null;

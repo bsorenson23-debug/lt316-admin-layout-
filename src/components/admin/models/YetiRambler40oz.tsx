@@ -64,6 +64,7 @@ interface Props {
   placedItems: DecalItem[];
   diameterMm: number;
   topDiameterMm?: number;
+  bottomDiameterMm?: number;
   overallHeightMm: number;
   printHeightMm: number;
   printableTopOffsetMm: number;
@@ -73,15 +74,17 @@ interface Props {
   tumblerMapping?: TumblerMapping;
   bodyTintColor?: string;
   rimTintColor?: string;
+  orientToFrontFace?: boolean;
+  preferProceduralShell?: boolean;
   onReady?: (obj: THREE.Object3D) => void;
 }
 
 const DEFAULT_GLB_PATH = "/models/templates/yeti-40oz-body.glb";
 const WRAP_TEXTURE_PX_PER_MM = 4;
-const BODY_RADIUS_TOLERANCE_WITH_HANDLE = 1.14;
-const BODY_RADIUS_TOLERANCE_DEFAULT = 1.03;
+export const BODY_RADIUS_TOLERANCE_WITH_HANDLE = 1.14;
+export const BODY_RADIUS_TOLERANCE_DEFAULT = 1.03;
 
-const CYL_OVERLAY_VERTEX_SHADER = `
+export const CYL_OVERLAY_VERTEX_SHADER = `
   varying vec3 vLocalPos;
 
   void main() {
@@ -90,7 +93,7 @@ const CYL_OVERLAY_VERTEX_SHADER = `
   }
 `;
 
-const CYL_OVERLAY_FRAGMENT_SHADER = `
+export const CYL_OVERLAY_FRAGMENT_SHADER = `
   uniform sampler2D uWrapMap;
   uniform float uPrintHeightMm;
   uniform float uPrintTopOffsetMm;
@@ -136,7 +139,7 @@ const CYL_OVERLAY_FRAGMENT_SHADER = `
   }
 `;
 
-function buildWrapTexture(
+export function buildWrapTexture(
   placedItems: DecalItem[],
   wrapWidthMm: number,
   printHeightMm: number,
@@ -198,10 +201,86 @@ function buildWrapTexture(
   return texture;
 }
 
+function buildProceduralTumblerBodyGeometry(args: {
+  diameterMm: number;
+  topDiameterMm?: number;
+  bottomDiameterMm?: number;
+  overallHeightMm: number;
+}): {
+  geometry: THREE.LatheGeometry;
+  topY: number;
+  bodyRadius: number;
+} {
+  const heightMm = Math.max(args.overallHeightMm, 1);
+  const midDiameterMm = Math.max(args.diameterMm, 1);
+  const topDiameterMm = Math.max(args.topDiameterMm ?? midDiameterMm, 1);
+  const bottomDiameterMm = Math.max(args.bottomDiameterMm ?? midDiameterMm, 1);
+
+  const bodyRadius = midDiameterMm / 2;
+  const topRadius = topDiameterMm / 2;
+  const bottomRadius = bottomDiameterMm / 2;
+  const halfHeight = heightMm / 2;
+  const lowerTransitionY = -halfHeight + (heightMm * 0.28);
+  const upperTransitionY = halfHeight - (heightMm * 0.16);
+
+  const profilePoints = [
+    new THREE.Vector2(Math.max(2, topRadius * 0.94), halfHeight),
+    new THREE.Vector2(Math.max(2, topRadius), halfHeight - (heightMm * 0.03)),
+    new THREE.Vector2(Math.max(2, topRadius * 0.985), upperTransitionY),
+    new THREE.Vector2(Math.max(2, bodyRadius), halfHeight * 0.04),
+    new THREE.Vector2(Math.max(2, bodyRadius * 0.985), -heightMm * 0.18),
+    new THREE.Vector2(Math.max(2, bottomRadius * 1.05), lowerTransitionY),
+    new THREE.Vector2(Math.max(2, bottomRadius), -halfHeight + (heightMm * 0.035)),
+    new THREE.Vector2(Math.max(2, bottomRadius * 0.96), -halfHeight),
+  ];
+
+  const geometry = new THREE.LatheGeometry(profilePoints, 72);
+  geometry.rotateY(Math.PI);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+
+  return {
+    geometry,
+    topY: halfHeight,
+    bodyRadius: Math.max(bodyRadius, topRadius, bottomRadius),
+  };
+}
+
+function buildProceduralHandleGeometry(args: {
+  bodyRadiusMm: number;
+  overallHeightMm: number;
+  handleArcDeg: number;
+}): THREE.TubeGeometry | null {
+  if (!(args.handleArcDeg > 0)) return null;
+
+  const heightMm = Math.max(args.overallHeightMm, 1);
+  const bodyRadiusMm = Math.max(args.bodyRadiusMm, 1);
+  const attachInset = Math.max(2.2, bodyRadiusMm * 0.08);
+  const outerReach = Math.max(bodyRadiusMm * 0.82, heightMm * 0.14);
+  const topAttachY = heightMm * 0.16;
+  const bottomAttachY = -heightMm * 0.2;
+  const midY = (topAttachY + bottomAttachY) / 2;
+
+  const curve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-(bodyRadiusMm - attachInset), topAttachY, 0),
+    new THREE.Vector3(-(bodyRadiusMm + outerReach * 0.76), topAttachY * 0.96, 0),
+    new THREE.Vector3(-(bodyRadiusMm + outerReach), midY, 0),
+    new THREE.Vector3(-(bodyRadiusMm + outerReach * 0.76), bottomAttachY * 1.02, 0),
+    new THREE.Vector3(-(bodyRadiusMm - attachInset), bottomAttachY, 0),
+  ]);
+
+  const tubeRadius = Math.max(3.2, Math.min(8, heightMm * 0.022));
+  const geometry = new THREE.TubeGeometry(curve, 48, tubeRadius, 16, false);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  return geometry;
+}
+
 export function YetiRambler40oz({
   placedItems,
   diameterMm,
   topDiameterMm,
+  bottomDiameterMm,
   overallHeightMm,
   printHeightMm,
   printableTopOffsetMm,
@@ -211,15 +290,18 @@ export function YetiRambler40oz({
   tumblerMapping,
   bodyTintColor = "#1f2322",
   rimTintColor = "#cfd2d0",
+  orientToFrontFace = false,
+  preferProceduralShell = false,
   onReady,
 }: Props) {
+  const shouldUseProceduralShell = preferProceduralShell || !glbPath;
   const effectiveHandleArcDeg = tumblerMapping?.handleArcDeg ?? _handleArcDeg ?? 0;
   const wrapLayout = useMemo(
     () => getTumblerWrapLayout(effectiveHandleArcDeg),
     [effectiveHandleArcDeg],
   );
 
-  const { nodes } = useGLTF(glbPath) as unknown as GLTFResult;
+  const { nodes } = useGLTF(glbPath || DEFAULT_GLB_PATH) as unknown as GLTFResult;
   const bodyMesh = useMemo(() => resolveBodyMesh(nodes), [nodes]);
   const groupRef = useRef<THREE.Group>(null);
 
@@ -240,6 +322,33 @@ export function YetiRambler40oz({
     clone.computeVertexNormals();
     return clone;
   }, [normalizedGeo, rimAnalysis]);
+
+  const proceduralShell = useMemo(() => {
+    if (!shouldUseProceduralShell) return null;
+    const body = buildProceduralTumblerBodyGeometry({
+      diameterMm,
+      topDiameterMm,
+      bottomDiameterMm,
+      overallHeightMm,
+    });
+    return {
+      bodyGeometry: body.geometry,
+      handleGeometry: buildProceduralHandleGeometry({
+        bodyRadiusMm: body.bodyRadius,
+        overallHeightMm,
+        handleArcDeg: effectiveHandleArcDeg,
+      }),
+      topY: body.topY,
+      bodyRadius: body.bodyRadius,
+    };
+  }, [
+    shouldUseProceduralShell,
+    diameterMm,
+    topDiameterMm,
+    bottomDiameterMm,
+    overallHeightMm,
+    effectiveHandleArcDeg,
+  ]);
 
   const horizontalBodyRadiusLocal = useMemo(() => {
     rimCenteredGeo.computeBoundingBox();
@@ -300,6 +409,11 @@ export function YetiRambler40oz({
   const bodyRadiusTolerance = effectiveHandleArcDeg > 0
     ? BODY_RADIUS_TOLERANCE_WITH_HANDLE
     : BODY_RADIUS_TOLERANCE_DEFAULT;
+  const renderGeometry = proceduralShell?.bodyGeometry ?? rimCenteredGeo;
+  const renderBodyRadiusLocal = proceduralShell?.bodyRadius ?? bodyRadiusLocal;
+  const renderTopLocalY = proceduralShell?.topY ?? rimAnalysis.topY;
+  const renderScaleFactorXz = proceduralShell ? 1 : scaleFactorXz;
+  const renderScaleFactorY = proceduralShell ? 1 : scaleFactorY;
 
   const radiusMm = computedWrapWidthMm / (2 * Math.PI);
   const maxCalX = computedWrapWidthMm * 0.12;
@@ -307,6 +421,7 @@ export function YetiRambler40oz({
   const maxCalRotationDeg = 35;
 
   const frontRotation = tumblerMapping?.frontFaceRotation ?? 0;
+  const visualFrontRotation = orientToFrontFace ? -frontRotation : 0;
   const calX = THREE.MathUtils.clamp(
     tumblerMapping?.calibrationOffsetX ?? 0,
     -maxCalX,
@@ -339,7 +454,14 @@ export function YetiRambler40oz({
 
   useEffect(() => {
     if (groupRef.current) onReady?.(groupRef.current);
-  }, [onReady, rimCenteredGeo, scaleFactorXz, scaleFactorY]);
+  }, [onReady, renderGeometry, renderScaleFactorXz, renderScaleFactorY, proceduralShell]);
+
+  useEffect(() => {
+    return () => {
+      proceduralShell?.bodyGeometry.dispose();
+      proceduralShell?.handleGeometry?.dispose();
+    };
+  }, [proceduralShell]);
 
   const overlayUniforms = useMemo(() => {
     if (!wrapTexture) return null;
@@ -347,10 +469,10 @@ export function YetiRambler40oz({
       uWrapMap: { value: wrapTexture },
       uPrintHeightMm: { value: Math.max(1, printHeightMm) },
       uPrintTopOffsetMm: { value: Math.max(0, printableTopOffsetMm) },
-      uScaleFactorY: { value: scaleFactorY > 0 ? scaleFactorY : scaleFactorXz || 1 },
-      uRimTopLocalY: { value: rimAnalysis.topY },
+      uScaleFactorY: { value: renderScaleFactorY > 0 ? renderScaleFactorY : renderScaleFactorXz || 1 },
+      uRimTopLocalY: { value: renderTopLocalY },
       uFrontRotation: { value: frontRotation },
-      uBodyRadiusLocal: { value: Math.max(0.0001, bodyRadiusLocal) },
+      uBodyRadiusLocal: { value: Math.max(0.0001, renderBodyRadiusLocal) },
       uBodyRadiusTolerance: { value: bodyRadiusTolerance },
       uCalY: { value: calY },
       uCalRotation: { value: calRotation },
@@ -362,11 +484,11 @@ export function YetiRambler40oz({
     wrapTexture,
     printHeightMm,
     printableTopOffsetMm,
-    scaleFactorY,
-    scaleFactorXz,
-    rimAnalysis.topY,
+    renderScaleFactorY,
+    renderScaleFactorXz,
+    renderTopLocalY,
     frontRotation,
-    bodyRadiusLocal,
+    renderBodyRadiusLocal,
     bodyRadiusTolerance,
     calY,
     calRotation,
@@ -379,24 +501,30 @@ export function YetiRambler40oz({
     uRimColor: { value: new THREE.Color(rimTintColor) },
     uBodyStartMm: { value: Math.max(0, printableTopOffsetMm) },
     uBodyEndMm: { value: Math.max(0, printableTopOffsetMm) + Math.max(0, printHeightMm) },
-    uBodyRadiusLocal: { value: Math.max(0.0001, bodyRadiusLocal) },
+    uBodyRadiusLocal: { value: Math.max(0.0001, renderBodyRadiusLocal) },
     uBodyRadiusTolerance: { value: bodyRadiusTolerance },
-    uScaleFactorY: { value: scaleFactorY > 0 ? scaleFactorY : scaleFactorXz || 1 },
-    uRimTopLocalY: { value: rimAnalysis.topY },
+    uScaleFactorY: { value: renderScaleFactorY > 0 ? renderScaleFactorY : renderScaleFactorXz || 1 },
+    uRimTopLocalY: { value: renderTopLocalY },
   }), [
     bodyTintColor,
     rimTintColor,
     printableTopOffsetMm,
     printHeightMm,
-    bodyRadiusLocal,
+    renderBodyRadiusLocal,
     bodyRadiusTolerance,
-    scaleFactorY,
-    scaleFactorXz,
-    rimAnalysis.topY,
+    renderScaleFactorY,
+    renderScaleFactorXz,
+    renderTopLocalY,
   ]);
 
   const baseBandMaterial = useMemo(() => {
-    const material = resolveBaseMaterial(bodyMesh.material);
+    const material = shouldUseProceduralShell
+      ? new THREE.MeshStandardMaterial({
+          color: bodyTintColor,
+          metalness: 0.34,
+          roughness: 0.58,
+        })
+      : resolveBaseMaterial(bodyMesh.material);
 
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uBodyColor = baseColorUniforms.uBodyColor;
@@ -448,7 +576,7 @@ export function YetiRambler40oz({
 
     material.customProgramCacheKey = () => "yeti-hard-band-v4";
     return material;
-  }, [baseColorUniforms, bodyMesh.material]);
+  }, [baseColorUniforms, bodyMesh.material, bodyTintColor, shouldUseProceduralShell]);
 
   useEffect(() => {
     return () => {
@@ -456,17 +584,36 @@ export function YetiRambler40oz({
     };
   }, [baseBandMaterial]);
 
+  const proceduralHandleMaterial = useMemo(() => {
+    if (!proceduralShell?.handleGeometry) return null;
+    return new THREE.MeshStandardMaterial({
+      color: bodyTintColor,
+      metalness: 0.26,
+      roughness: 0.62,
+    });
+  }, [bodyTintColor, proceduralShell?.handleGeometry]);
+
+  useEffect(() => {
+    return () => {
+      proceduralHandleMaterial?.dispose();
+    };
+  }, [proceduralHandleMaterial]);
+
   return (
-    <group ref={groupRef} scale={[scaleFactorXz, scaleFactorY, scaleFactorXz]}>
+    <group
+      ref={groupRef}
+      rotation={[0, visualFrontRotation, 0]}
+      scale={[renderScaleFactorXz, renderScaleFactorY, renderScaleFactorXz]}
+    >
       <mesh
-        geometry={rimCenteredGeo}
+        geometry={renderGeometry}
         castShadow
         receiveShadow
         material={baseBandMaterial}
       />
 
       {overlayUniforms && (
-        <mesh geometry={rimCenteredGeo} renderOrder={2}>
+        <mesh geometry={renderGeometry} renderOrder={2}>
           <shaderMaterial
             transparent
             depthWrite={false}
@@ -479,6 +626,15 @@ export function YetiRambler40oz({
             fragmentShader={CYL_OVERLAY_FRAGMENT_SHADER}
           />
         </mesh>
+      )}
+
+      {proceduralShell?.handleGeometry && proceduralHandleMaterial && (
+        <mesh
+          geometry={proceduralShell.handleGeometry}
+          castShadow
+          receiveShadow
+          material={proceduralHandleMaterial}
+        />
       )}
     </group>
   );

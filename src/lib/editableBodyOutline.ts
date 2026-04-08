@@ -679,18 +679,20 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
     side = "right",
   } = args;
   const sourceContour = source.contour;
-  const bounds = getBounds(sourceContour) ?? source.bounds;
+  const mirroredSourceContour = buildMirroredSourceContour(sourceContour);
+  const bodySourceContour = mirroredSourceContour ?? sourceContour;
+  const bounds = getBounds(bodySourceContour) ?? getBounds(sourceContour) ?? source.bounds;
   const referenceDiameterMm = round1(topOuterDiameterMm && topOuterDiameterMm > 0 ? topOuterDiameterMm : diameterMm);
   const targetBodyHeightMm = Math.max(10, bodyBottomFromOverallMm - bodyTopFromOverallMm);
   const scaleFactor = scalePct / 100;
-  const referenceSourceWidth = estimateReferenceWidth(sourceContour);
+  const referenceSourceWidth = estimateReferenceWidth(bodySourceContour);
   const scaleX = (referenceDiameterMm / Math.max(0.1, referenceSourceWidth)) * (widthScalePct / 100) * scaleFactor;
   const scaleY = (targetBodyHeightMm / Math.max(1, bounds.height)) * (heightScalePct / 100) * scaleFactor;
-  const centerX = estimateBodyCenterX(sourceContour);
+  const centerX = estimateBodyCenterX(bodySourceContour);
   const minY = bounds.minY;
   const sign = side === "left" ? -1 : 1;
 
-  const rawContour = sourceContour.map((point) => ({
+  const rawContour = bodySourceContour.map((point) => ({
     x: round1(((point.x - centerX) * scaleX) * sign),
     y: round1(bodyTopFromOverallMm + ((point.y - minY) * scaleY) + offsetYMm),
   }));

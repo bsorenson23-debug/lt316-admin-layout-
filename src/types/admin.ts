@@ -297,6 +297,8 @@ export interface EngravableZone {
   printableTopY?: number | null;
   /** Printable bottom boundary measured from the body-shell top (mm) */
   printableBottomY?: number | null;
+  /** Printable center anchor measured from the body-shell top (mm) */
+  printableCenterY?: number | null;
   /** Optional lid boundary guide measured from the body-shell top (mm) */
   lidBoundaryY?: number | null;
   /** Optional rim/ring boundary guide measured from the body-shell top (mm) */

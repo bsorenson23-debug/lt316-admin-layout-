@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import type { ProductTemplate } from "@/types/productTemplate";
+import { getTemplateEffectiveCylinderDiameterMm, type ProductTemplate } from "@/types/productTemplate";
 import { loadTemplates, deleteTemplate } from "@/lib/templateStorage";
 import styles from "./TemplateGallery.module.css";
 
@@ -100,10 +100,10 @@ function getTemplateSpecLine(template: ProductTemplate): string {
     return width > 0 && height > 0 ? `${width} x ${height} mm` : "Flat-bed product";
   }
 
-  const diameter = template.dimensions.diameterMm;
+  const diameter = getTemplateEffectiveCylinderDiameterMm(template);
   const height = template.dimensions.printHeightMm;
   if (diameter > 0 && height > 0) {
-    return `${diameter} mm dia / ${height} mm print`;
+    return `${(Math.round(diameter * 10) / 10).toFixed(1)} mm dia / ${height} mm print`;
   }
 
   return "Tumbler setup";

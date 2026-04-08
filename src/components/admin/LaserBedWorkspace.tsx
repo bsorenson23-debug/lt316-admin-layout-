@@ -748,7 +748,9 @@ export function LaserBedWorkspace({
     if (showTwoSidedCrosshairs) {
       // Snap to FRONT (center) if click is within 20% of bed width
       const frontX = engravableZone?.frontCenterX ?? getWrapFrontCenter(bedConfig.width, handleArcDeg);
-      const centerY = engravableZone ? engravableZone.y + engravableZone.height / 2 : bedConfig.height / 2;
+      const centerY = engravableZone
+        ? (engravableZone.printableCenterY ?? (engravableZone.y + engravableZone.height / 2))
+        : bedConfig.height / 2;
       const snapR = bedConfig.width * 0.20;
       if (Math.hypot(xMm - frontX, yMm - centerY) <= snapR) {
         xMm = frontX;

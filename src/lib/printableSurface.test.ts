@@ -34,6 +34,11 @@ test("buildPrintableSurfaceResolution separates axial lid/ring bands from handle
 
 test("getPrintableSurfaceResolutionFromDimensions preserves saved printable boundaries without live detection", () => {
   const resolution = getPrintableSurfaceResolutionFromDimensions({
+    diameterMm: 99.8,
+    printHeightMm: 210.5,
+    templateWidthMm: 313.6,
+    handleArcDeg: 90,
+    taperCorrection: "bottom-narrow",
     overallHeightMm: 297,
     bodyTopFromOverallMm: 30,
     bodyBottomFromOverallMm: 270,
@@ -57,4 +62,37 @@ test("getPrintableSurfaceResolutionFromDimensions preserves saved printable boun
   assert.equal(resolution?.printableSurfaceContract.printableBottomMm, 259);
   assert.equal(resolution?.printableTopFromBodyTopMm, 18.5);
   assert.equal(resolution?.printableBottomFromBodyTopMm, 229);
+});
+
+test("getPrintableSurfaceResolutionFromDimensions rebuilds semantic top exclusions from saved seam/ring dimensions", () => {
+  const resolution = getPrintableSurfaceResolutionFromDimensions({
+    diameterMm: 99.8,
+    printHeightMm: 214,
+    templateWidthMm: 313.59,
+    handleArcDeg: 90,
+    taperCorrection: "bottom-narrow",
+    overallHeightMm: 273.8,
+    bodyTopFromOverallMm: 18,
+    bodyBottomFromOverallMm: 244,
+    lidSeamFromOverallMm: 24,
+    silverBandBottomFromOverallMm: 30,
+    printableSurfaceContract: {
+      printableTopMm: 30,
+      printableBottomMm: 244,
+      printableHeightMm: 214,
+      axialExclusions: [],
+      circumferentialExclusions: [],
+    },
+  }, null);
+
+  assert.ok(resolution);
+  assert.equal(resolution?.printableSurfaceContract.printableTopMm, 30);
+  assert.deepEqual(
+    resolution?.printableSurfaceContract.axialExclusions,
+    [
+      { kind: "lid", startMm: 0, endMm: 24 },
+      { kind: "rim-ring", startMm: 24, endMm: 30 },
+    ],
+  );
+  assert.equal(resolution?.topBoundarySource, "rim-ring");
 });

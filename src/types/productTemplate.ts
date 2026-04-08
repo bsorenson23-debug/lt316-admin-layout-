@@ -88,6 +88,11 @@ export interface CanonicalHandleProfile {
   innerContour: CanonicalHandleContourPoint[];
   centerline: CanonicalHandleCenterlinePoint[];
   widthProfile: CanonicalHandleWidthSample[];
+  upperAttachmentWidthPx?: number;
+  lowerAttachmentWidthPx?: number;
+  upperOpeningGapPx?: number;
+  lowerOpeningGapPx?: number;
+  symmetricExtrusionWidthPx?: number;
   openingBox?: { x: number; y: number; w: number; h: number };
   svgPathOuter?: string;
   svgPathInner?: string;
@@ -110,8 +115,9 @@ export interface CanonicalBodyProfileSample {
 }
 
 export interface CanonicalBodyProfile {
-  symmetrySource: "left";
-  mirroredRightFromLeft: boolean;
+  symmetrySource: "left" | "right";
+  mirroredFromSymmetrySource: boolean;
+  mirroredRightFromLeft?: boolean;
   axis: CanonicalBodyProfileAxis;
   samples: CanonicalBodyProfileSample[];
   svgPath: string;
@@ -205,6 +211,30 @@ export interface ProductTemplateDimensions {
   handleBottomFromOverallMm?: number;
   /** Horizontal reach of the handle silhouette from the body edge to the outermost handle edge (mm). */
   handleReachMm?: number;
+  /** Y position of the visible upper outer handle corner measured from the overall top (mm). */
+  handleUpperCornerFromOverallMm?: number;
+  /** Y position of the visible lower outer handle corner measured from the overall top (mm). */
+  handleLowerCornerFromOverallMm?: number;
+  /** Reach of the visible upper outer handle corner from the body edge (mm). */
+  handleUpperCornerReachMm?: number;
+  /** Reach of the visible lower outer handle corner from the body edge (mm). */
+  handleLowerCornerReachMm?: number;
+  /** Reach of the upper horizontal handle transition from the body edge (mm). */
+  handleUpperTransitionReachMm?: number;
+  /** Reach of the lower horizontal handle transition from the body edge (mm). */
+  handleLowerTransitionReachMm?: number;
+  /** Y position of the upper horizontal handle transition from the overall top (mm). */
+  handleUpperTransitionFromOverallMm?: number;
+  /** Y position of the lower horizontal handle transition from the overall top (mm). */
+  handleLowerTransitionFromOverallMm?: number;
+  /** Body-edge anchor for the outer handle reference line measured from the overall top (mm). */
+  handleOuterTopFromOverallMm?: number;
+  /** Body-edge anchor for the outer handle reference line measured from the overall top (mm). */
+  handleOuterBottomFromOverallMm?: number;
+  /** Wall / thickness offset used to derive the outer handle contour from the inner handle line (mm). */
+  handleTubeDiameterMm?: number;
+  /** Overall left-to-right product span including the handle silhouette (mm). Metadata only; never used for wrap math. */
+  handleSpanMm?: number;
   /** Canonical handle extraction derived from the uploaded reference image and body-only silhouette. */
   canonicalHandleProfile?: CanonicalHandleProfile;
   /** Canonical left-driven mirrored body profile used by preview, guides, and later revolve geometry. */
@@ -446,6 +476,14 @@ export interface ProductTemplateStore {
 
 export function getTemplateBodyDiameterMm(template: Pick<ProductTemplate, "dimensions">): number {
   return template.dimensions.bodyDiameterMm ?? template.dimensions.diameterMm;
+}
+
+export function getTemplateEffectiveCylinderDiameterMm(template: Pick<ProductTemplate, "dimensions">): number {
+  const dims = template.dimensions;
+  if (!dims.advancedGeometryOverridesUnlocked && dims.templateWidthMm > 0) {
+    return dims.templateWidthMm / Math.PI;
+  }
+  return getTemplateBodyDiameterMm(template);
 }
 
 export function getTemplateTopOuterDiameterMm(template: Pick<ProductTemplate, "dimensions">): number | undefined {

@@ -22,6 +22,11 @@ type HandleRow = {
   extension: number;
 };
 
+type AttachmentMetrics = {
+  widthPx?: number;
+  gapPx?: number;
+};
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -45,6 +50,47 @@ function medianWindow(values: number[], index: number, radius: number): number {
   const start = Math.max(0, index - radius);
   const end = Math.min(values.length, index + radius + 1);
   return median(values.slice(start, end));
+}
+
+function colorDistance(
+  r: number,
+  g: number,
+  b: number,
+  background: { r: number; g: number; b: number },
+): number {
+  const dr = r - background.r;
+  const dg = g - background.g;
+  const db = b - background.b;
+  return Math.sqrt((dr * dr) + (dg * dg) + (db * db));
+}
+
+function estimateBackgroundColor(data: Uint8ClampedArray, width: number, height: number): { r: number; g: number; b: number } {
+  const samplePoints = [
+    [0, 0],
+    [Math.max(0, width - 1), 0],
+    [0, Math.max(0, height - 1)],
+    [Math.max(0, width - 1), Math.max(0, height - 1)],
+    [Math.round(width * 0.5), 0],
+    [Math.round(width * 0.5), Math.max(0, height - 1)],
+  ];
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
+  let count = 0;
+  for (const [x, y] of samplePoints) {
+    const clampedX = clamp(x, 0, Math.max(0, width - 1));
+    const clampedY = clamp(y, 0, Math.max(0, height - 1));
+    const index = ((clampedY * width) + clampedX) * 4;
+    sumR += data[index] ?? 0;
+    sumG += data[index + 1] ?? 0;
+    sumB += data[index + 2] ?? 0;
+    count += 1;
+  }
+  return {
+    r: Math.round(sumR / Math.max(1, count)),
+    g: Math.round(sumG / Math.max(1, count)),
+    b: Math.round(sumB / Math.max(1, count)),
+  };
 }
 
 function buildClosedPath(points: CanonicalHandleContourPoint[]): string | undefined {
@@ -155,18 +201,34 @@ function buildBodyRows(mask: Uint8Array, width: number, height: number): BodyRow
 function computeForegroundMask(imageData: ImageData): Uint8Array {
   const { data, width, height } = imageData;
   const alphaValues: number[] = [];
+  let transparentPixels = 0;
   for (let index = 3; index < data.length; index += 4) {
     const alpha = data[index] ?? 0;
     if (alpha > 0) alphaValues.push(alpha);
+    if (alpha < 245) transparentPixels += 1;
   }
-  const threshold = alphaValues.length > 0
-    ? clamp(percentile(alphaValues, 0.38), 64, 224)
-    : 96;
-
   const mask = new Uint8Array(width * height);
+  const totalPixels = Math.max(1, width * height);
+  const hasTransparency = transparentPixels > totalPixels * 0.01;
+  if (hasTransparency) {
+    const threshold = alphaValues.length > 0
+      ? clamp(percentile(alphaValues, 0.38), 64, 224)
+      : 96;
+    for (let index = 0; index < width * height; index += 1) {
+      const alpha = data[(index * 4) + 3] ?? 0;
+      mask[index] = alpha >= threshold ? 1 : 0;
+    }
+    return mask;
+  }
+
+  const background = estimateBackgroundColor(data, width, height);
   for (let index = 0; index < width * height; index += 1) {
-    const alpha = data[(index * 4) + 3] ?? 0;
-    mask[index] = alpha >= threshold ? 1 : 0;
+    const dataIndex = index * 4;
+    const alpha = data[dataIndex + 3] ?? 0;
+    const r = data[dataIndex] ?? 0;
+    const g = data[dataIndex + 1] ?? 0;
+    const b = data[dataIndex + 2] ?? 0;
+    mask[index] = alpha > 8 && colorDistance(r, g, b, background) > 22 ? 1 : 0;
   }
   return mask;
 }
@@ -339,6 +401,22 @@ function pickAnchorRow(rows: HandleRow[], side: "left" | "right", fromStart: boo
   return fromStart ? slice[0]! : slice[slice.length - 1]!;
 }
 
+function pickAttachmentMetrics(rows: HandleRow[], fromStart: boolean): AttachmentMetrics {
+  if (rows.length === 0) return {};
+  const sliceLength = Math.max(3, Math.min(rows.length, Math.round(rows.length * 0.18)));
+  const slice = fromStart ? rows.slice(0, sliceLength) : rows.slice(-sliceLength);
+  const widths = slice
+    .map((row) => row.width)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const gaps = slice
+    .map((row) => row.gap)
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  return {
+    widthPx: widths.length ? round3(median(widths)) : undefined,
+    gapPx: gaps.length ? round3(median(gaps)) : undefined,
+  };
+}
+
 export async function extractCanonicalHandleProfileFromCutout(args: {
   imageDataUrl: string;
   outline: EditableBodyOutline | null | undefined;
@@ -386,8 +464,8 @@ export async function extractCanonicalHandleProfileFromCutout(args: {
   );
   if (spanRows.length < 8) return null;
 
-  const outerContour = simplifyPoints([
-    ...spanRows.map((row) => ({ x: side === "right" ? row.start : row.start, y: row.y })),
+  const rawOuterContour = simplifyPoints([
+    ...spanRows.map((row) => ({ x: row.start, y: row.y })),
     ...[...spanRows].reverse().map((row) => ({ x: row.end, y: row.y })),
   ]);
 
@@ -404,6 +482,40 @@ export async function extractCanonicalHandleProfileFromCutout(args: {
         })),
       ])
     : [];
+
+  const upperAttachmentMetrics = pickAttachmentMetrics(
+    holeRows.length >= 3 ? holeRows : spanRows,
+    true,
+  );
+  const lowerAttachmentMetrics = pickAttachmentMetrics(
+    holeRows.length >= 3 ? holeRows : spanRows,
+    false,
+  );
+  const symmetricExtrusionWidthPx = round3(
+    upperAttachmentMetrics.widthPx ??
+      lowerAttachmentMetrics.widthPx ??
+      median(spanRows.map((row) => row.width)),
+  );
+  const outerContour = holeRows.length >= 4 && symmetricExtrusionWidthPx > 0
+    ? simplifyPoints([
+        ...spanRows.map((row) => ({
+          x: round3(
+            side === "right"
+              ? row.start
+              : clamp(row.end - symmetricExtrusionWidthPx, 0, canvas.width - 1),
+          ),
+          y: round3(row.y),
+        })),
+        ...[...spanRows].reverse().map((row) => ({
+          x: round3(
+            side === "right"
+              ? clamp(row.start + symmetricExtrusionWidthPx, 0, canvas.width - 1)
+              : row.end,
+          ),
+          y: round3(row.y),
+        })),
+      ])
+    : rawOuterContour;
 
   const upperAnchorRow = pickAnchorRow(spanRows, side, true);
   const lowerAnchorRow = pickAnchorRow(spanRows, side, false);
@@ -446,6 +558,11 @@ export async function extractCanonicalHandleProfileFromCutout(args: {
     innerContour,
     centerline: centerline.centerline,
     widthProfile: centerline.widthProfile,
+    upperAttachmentWidthPx: upperAttachmentMetrics.widthPx,
+    lowerAttachmentWidthPx: lowerAttachmentMetrics.widthPx,
+    upperOpeningGapPx: upperAttachmentMetrics.gapPx,
+    lowerOpeningGapPx: lowerAttachmentMetrics.gapPx,
+    symmetricExtrusionWidthPx,
     openingBox: boundsFromPoints(innerContour),
     svgPathOuter: buildClosedPath(outerContour),
     svgPathInner: buildClosedPath(innerContour),

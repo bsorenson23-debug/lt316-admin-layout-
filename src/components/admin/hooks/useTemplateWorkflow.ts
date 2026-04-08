@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { BedConfig, WorkspaceMode } from "@/types/admin";
-import type { ProductTemplate } from "@/types/productTemplate";
+import { getTemplateEffectiveCylinderDiameterMm, type ProductTemplate } from "@/types/productTemplate";
 import type { ActiveMaterialSettings } from "../MaterialProfilePanel";
 import type { BedMockupConfig, FlatBedItemOverlay } from "../LaserBedWorkspace";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
@@ -63,6 +63,9 @@ export function useTemplateWorkflow({
     // Apply all dimensions at once via bedConfig.
     const isRotary = template.productType === "tumbler" || template.productType === "mug" || template.productType === "bottle";
     const mode: WorkspaceMode = isRotary ? "tumbler-wrap" : "flat-bed";
+    const effectiveCylinderDiameterMm = isRotary
+      ? getTemplateEffectiveCylinderDiameterMm(template)
+      : template.dimensions.diameterMm;
     const dims = isRotary ? getEngravableDimensions(template) : null;
     const printableSurface = isRotary
       ? getPrintableSurfaceResolutionFromDimensions(
@@ -82,7 +85,7 @@ export function useTemplateWorkflow({
       normalizeBedConfig({
         ...prev,
         workspaceMode: mode,
-        tumblerDiameterMm: template.dimensions.diameterMm,
+        tumblerDiameterMm: effectiveCylinderDiameterMm,
         tumblerPrintableHeightMm: workspaceHeightMm,
         tumblerTemplateWidthMm: template.dimensions.templateWidthMm,
         tumblerTemplateHeightMm: workspaceHeightMm,
@@ -91,7 +94,7 @@ export function useTemplateWorkflow({
           dims?.totalHeightMm,
         ...(isRotary
           ? {
-              tumblerOutsideDiameterMm: template.dimensions.diameterMm,
+              tumblerOutsideDiameterMm: effectiveCylinderDiameterMm,
               tumblerUsableHeightMm: usableHeightMm,
             }
           : {

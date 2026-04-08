@@ -2,6 +2,7 @@
 
 import React, { useRef, useEffect, useState } from "react";
 import { deriveEngravableZoneFromFitDebug } from "@/lib/engravableDimensions";
+import { extractCanonicalHandleProfileFromCutout } from "@/lib/canonicalHandleProfile";
 import type { PrintableSurfaceDetection } from "@/lib/printableSurface";
 import {
   buildContourSvgPath,
@@ -21,6 +22,7 @@ import {
   sortEditableOutlinePoints,
 } from "@/lib/editableBodyOutline";
 import type {
+  CanonicalHandleProfile,
   CanonicalDimensionCalibration,
   EditableBodyOutline,
   EditableBodyOutlinePoint,
@@ -52,6 +54,28 @@ interface Props {
   handleBottomFromOverallMm?: number;
   /** Reach of the handle silhouette from the body edge to the outer edge (mm). */
   handleReachMm?: number;
+  /** Y position of the visible upper outer handle corner measured from the overall top (mm). */
+  handleUpperCornerFromOverallMm?: number;
+  /** Y position of the visible lower outer handle corner measured from the overall top (mm). */
+  handleLowerCornerFromOverallMm?: number;
+  /** Reach of the visible upper outer handle corner from the body edge (mm). */
+  handleUpperCornerReachMm?: number;
+  /** Reach of the visible lower outer handle corner from the body edge (mm). */
+  handleLowerCornerReachMm?: number;
+  /** Reach of the upper horizontal transition into the handle outer side from the body edge (mm). */
+  handleUpperTransitionReachMm?: number;
+  /** Reach of the lower horizontal transition into the handle outer side from the body edge (mm). */
+  handleLowerTransitionReachMm?: number;
+  /** Y position of the upper horizontal transition into the handle outer side from the overall top (mm). */
+  handleUpperTransitionFromOverallMm?: number;
+  /** Y position of the lower horizontal transition into the handle outer side from the overall top (mm). */
+  handleLowerTransitionFromOverallMm?: number;
+  /** Body-edge anchor for the outer handle reference line measured from the overall top (mm). */
+  handleOuterTopFromOverallMm?: number;
+  /** Body-edge anchor for the outer handle reference line measured from the overall top (mm). */
+  handleOuterBottomFromOverallMm?: number;
+  /** Thickness / wall offset used to derive the outer handle contour from the inner handle line (mm). */
+  handleTubeDiameterMm?: number;
   /** Width at the shoulder break where the straight wall transitions into taper (mm). */
   shoulderDiameterMm?: number;
   taperUpperDiameterMm?: number;
@@ -85,6 +109,7 @@ interface Props {
   rimColorHex: string;
   /** Traced profile details from the lookup image, when available */
   fitDebug?: TumblerItemLookupFitDebug | null;
+  canonicalHandleProfile?: CanonicalHandleProfile | null;
   outlineProfile?: EditableBodyOutline;
   referencePaths?: ReferencePaths;
   referenceLayerState?: ReferenceLayerState;
@@ -101,6 +126,17 @@ interface Props {
   onHandleTopChange?: (fromOverallMm: number | undefined) => void;
   onHandleBottomChange?: (fromOverallMm: number | undefined) => void;
   onHandleReachChange?: (reachMm: number | undefined) => void;
+  onHandleUpperCornerChange?: (fromOverallMm: number | undefined) => void;
+  onHandleLowerCornerChange?: (fromOverallMm: number | undefined) => void;
+  onHandleUpperCornerReachChange?: (reachMm: number | undefined) => void;
+  onHandleLowerCornerReachChange?: (reachMm: number | undefined) => void;
+  onHandleUpperTransitionReachChange?: (reachMm: number | undefined) => void;
+  onHandleLowerTransitionReachChange?: (reachMm: number | undefined) => void;
+  onHandleUpperTransitionChange?: (fromOverallMm: number | undefined) => void;
+  onHandleLowerTransitionChange?: (fromOverallMm: number | undefined) => void;
+  onHandleOuterTopChange?: (fromOverallMm: number | undefined) => void;
+  onHandleOuterBottomChange?: (fromOverallMm: number | undefined) => void;
+  onHandleTubeDiameterChange?: (diameterMm: number | undefined) => void;
   onShoulderDiameterChange?: (diameterMm: number | undefined) => void;
   onTaperUpperDiameterChange?: (diameterMm: number | undefined) => void;
   onTaperLowerDiameterChange?: (diameterMm: number | undefined) => void;
@@ -134,6 +170,8 @@ const MIN_PHOTO_SCALE_PCT = 60;
 const MAX_PHOTO_SCALE_PCT = 180;
 const MAX_PHOTO_OFFSET_Y_PCT = 25;
 const MAX_PHOTO_OFFSET_X_PCT = 25;
+const MIN_AUTO_RIM_DETECTION_CONFIDENCE = 0.45;
+const HANDLE_GUIDE_REACH_FACTOR = 0.78;
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
@@ -369,11 +407,377 @@ function findLongestYSegment(rows: number[]): { start: number; end: number } | n
   return best;
 }
 
+function findYSegments(rows: number[]): Array<{ start: number; end: number }> {
+  if (rows.length === 0) return [];
+  const sorted = [...rows].sort((a, b) => a - b);
+  const segments: Array<{ start: number; end: number }> = [];
+  let current = { start: sorted[0] ?? 0, end: sorted[0] ?? 0 };
+  for (let index = 1; index < sorted.length; index += 1) {
+    const y = sorted[index] ?? 0;
+    if (y - current.end <= 2) {
+      current.end = y;
+      continue;
+    }
+    segments.push(current);
+    current = { start: y, end: y };
+  }
+  segments.push(current);
+  return segments;
+}
+
+function detectRimBandRows(args: {
+  imageData: Uint8ClampedArray;
+  width: number;
+  height: number;
+  bodyCenterX: number;
+  referenceBodyWidthPx: number;
+  referenceBandCenterY?: number | null;
+  bodyTopY: number;
+  bodyBottomY: number;
+  fitDebugRatios?: { top: number; bottom: number } | null;
+}): {
+  rimTopY: number | null;
+  rimBottomY: number | null;
+  rimDetectionSource: PrintableSurfaceDetection["source"];
+  rimDetectionConfidence: number;
+} {
+  const {
+    imageData,
+    width,
+    height,
+    bodyCenterX,
+    referenceBodyWidthPx,
+    referenceBandCenterY,
+    bodyTopY,
+    bodyBottomY,
+    fitDebugRatios,
+  } = args;
+
+  const bodyHeightPx = Math.max(1, bodyBottomY - bodyTopY);
+  const fitDebugBand = fitDebugRatios
+    ? {
+        rimTopY: clamp(bodyTopY + (fitDebugRatios.top * bodyHeightPx), 0, height - 1),
+        rimBottomY: clamp(bodyTopY + (fitDebugRatios.bottom * bodyHeightPx), 0, height - 1),
+        rimDetectionSource: "fit-debug" as PrintableSurfaceDetection["source"],
+        rimDetectionConfidence: 0.92,
+      }
+    : null;
+
+  const centralBodyLeft = clamp(Math.round(bodyCenterX - (referenceBodyWidthPx * 0.24)), 0, width - 1);
+  const centralBodyRight = clamp(Math.round(bodyCenterX + (referenceBodyWidthPx * 0.24)), centralBodyLeft + 1, width - 1);
+  const rowStats = new Map<number, { luminance: number; saturation: number; coverage: number; luminanceStdDev: number }>();
+  const sampleRowStats = (y: number): { luminance: number; saturation: number; coverage: number; luminanceStdDev: number } | null => {
+    const cached = rowStats.get(y);
+    if (cached) return cached;
+    let luminanceTotal = 0;
+    let saturationTotal = 0;
+    let luminanceSqTotal = 0;
+    let samples = 0;
+    for (let x = centralBodyLeft; x <= centralBodyRight; x += 1) {
+      const index = (Math.round(y) * width + x) * 4;
+      const alpha = imageData[index + 3] ?? 0;
+      if (alpha < 10) continue;
+      const r = imageData[index] ?? 0;
+      const g = imageData[index + 1] ?? 0;
+      const b = imageData[index + 2] ?? 0;
+      const luminance = r * 0.2126 + g * 0.7152 + b * 0.0722;
+      luminanceTotal += luminance;
+      luminanceSqTotal += luminance * luminance;
+      saturationTotal += rgbToSaturation(r, g, b);
+      samples += 1;
+    }
+    if (samples < Math.max(6, (centralBodyRight - centralBodyLeft) * 0.4)) return null;
+    const stats = {
+      luminance: luminanceTotal / samples,
+      saturation: saturationTotal / samples,
+      coverage: samples / Math.max(1, centralBodyRight - centralBodyLeft + 1),
+      luminanceStdDev: Math.sqrt(
+        Math.max(
+          0,
+          (luminanceSqTotal / samples) - Math.pow(luminanceTotal / samples, 2),
+        ),
+      ),
+    };
+    rowStats.set(y, stats);
+    return stats;
+  };
+
+  const bodyBaselineStats = [];
+  for (
+    let y = Math.round(bodyTopY + (bodyHeightPx * 0.14));
+    y <= Math.round(bodyTopY + (bodyHeightPx * 0.3));
+    y += 1
+  ) {
+    const stats = sampleRowStats(y);
+    if (stats) bodyBaselineStats.push(stats);
+  }
+  const baselineLuminance = bodyBaselineStats.length > 0
+    ? medianNumber(bodyBaselineStats.map((stats) => stats.luminance))
+    : 0;
+  const baselineSaturation = bodyBaselineStats.length > 0
+    ? medianNumber(bodyBaselineStats.map((stats) => stats.saturation))
+    : 0;
+  const baselineLuminanceStdDev = bodyBaselineStats.length > 0
+    ? medianNumber(bodyBaselineStats.map((stats) => stats.luminanceStdDev))
+    : 0;
+
+  const reflectiveMetallicRows: number[] = [];
+  const metallicRows: number[] = [];
+  const brightMetallicRows: number[] = [];
+  for (
+    let y = Math.max(0, Math.round(bodyTopY - (bodyHeightPx * 0.05)));
+    y <= Math.min(height - 1, Math.round(bodyTopY + (bodyHeightPx * 0.16)));
+    y += 1
+  ) {
+    const stats = sampleRowStats(y);
+    if (!stats) continue;
+    const looksMetallic =
+      stats.coverage >= 0.55 &&
+      stats.saturation <= Math.max(0.18, baselineSaturation * 0.58) &&
+      stats.luminance >= Math.max(102, baselineLuminance * 0.74);
+    if (looksMetallic) metallicRows.push(y);
+
+    const looksReflectiveMetallic =
+      looksMetallic &&
+      stats.luminanceStdDev >= Math.max(18, baselineLuminanceStdDev * 1.7);
+    if (looksReflectiveMetallic) reflectiveMetallicRows.push(y);
+
+    const looksBrightMetallic =
+      looksMetallic &&
+      stats.luminance >= Math.max(150, baselineLuminance * 0.96) &&
+      stats.luminanceStdDev >= Math.max(12, baselineLuminanceStdDev * 1.15);
+    if (looksBrightMetallic) brightMetallicRows.push(y);
+  }
+
+  const bandTargetY = referenceBandCenterY
+    ?? (fitDebugBand ? (fitDebugBand.rimTopY + fitDebugBand.rimBottomY) / 2 : bodyTopY + (bodyHeightPx * 0.14));
+  const pickSeedBand = (segments: Array<{ start: number; end: number }>) => {
+    if (segments.length === 0) return null;
+    return [...segments].sort((a, b) => {
+      const aCenter = (a.start + a.end) / 2;
+      const bCenter = (b.start + b.end) / 2;
+      const aDistance = Math.abs(aCenter - bandTargetY);
+      const bDistance = Math.abs(bCenter - bandTargetY);
+      if (Math.abs(aDistance - bDistance) > 1) return aDistance - bDistance;
+      return (b.end - b.start) - (a.end - a.start);
+    })[0] ?? null;
+  };
+  const reflectiveSegments = findYSegments(reflectiveMetallicRows);
+  const brightSegments = findYSegments(brightMetallicRows);
+  const metallicSegments = findYSegments(metallicRows);
+  const seedBand =
+    pickSeedBand(reflectiveSegments)
+    ?? pickSeedBand(brightSegments)
+    ?? pickSeedBand(metallicSegments);
+  const qualifiesAsRimEdge = (y: number) => {
+    const stats = sampleRowStats(y);
+    if (!stats) return false;
+    return (
+      stats.coverage >= 0.55 &&
+      stats.saturation <= Math.max(0.14, baselineSaturation * 0.95) &&
+      stats.luminance >= Math.max(96, baselineLuminance * 0.7) &&
+      stats.luminanceStdDev >= Math.max(13, baselineLuminanceStdDev * 1.0)
+    );
+  };
+  const metallicBand = seedBand
+    ? (() => {
+        let start = seedBand.start;
+        let end = seedBand.end;
+        while (start - 1 >= Math.max(0, Math.round(bodyTopY - (bodyHeightPx * 0.05))) && qualifiesAsRimEdge(start - 1)) {
+          start -= 1;
+        }
+        while (end + 1 <= Math.min(height - 1, Math.round(bodyTopY + (bodyHeightPx * 0.18))) && qualifiesAsRimEdge(end + 1)) {
+          end += 1;
+        }
+        return { start, end };
+      })()
+    : null;
+  if (metallicBand) {
+    const photoConfidence = clamp(
+      (metallicBand.end - metallicBand.start + 1) / Math.max(6, bodyHeightPx * 0.08),
+      0.45,
+      0.82,
+    );
+    const fitAgreement = fitDebugBand
+      ? 1 - clamp(
+        (
+          Math.abs(fitDebugBand.rimTopY - metallicBand.start)
+          + Math.abs(fitDebugBand.rimBottomY - metallicBand.end)
+        ) / Math.max(10, bodyHeightPx * 0.08),
+        0,
+        1,
+      )
+      : null;
+    return {
+      rimTopY: metallicBand.start,
+      rimBottomY: metallicBand.end,
+      rimDetectionSource: "photo-row-scan",
+      rimDetectionConfidence: fitAgreement != null
+        ? clamp((photoConfidence * 0.88) + (fitAgreement * 0.12), 0.45, 0.88)
+        : photoConfidence,
+    };
+  }
+
+  if (fitDebugBand) {
+    return fitDebugBand;
+  }
+
+  return {
+    rimTopY: null,
+    rimBottomY: null,
+    rimDetectionSource: "none",
+    rimDetectionConfidence: 0,
+  };
+}
+
 function buildClosedPath(points: Array<{ x: number; y: number }>): string | null {
   if (points.length < 4) return null;
   return `M ${points
     .map((point, index) => `${index === 0 ? "" : "L "}${round1(point.x)} ${round1(point.y)}`)
     .join(" ")} Z`;
+}
+
+function buildOpenPath(points: Array<{ x: number; y: number }>): string | null {
+  if (points.length < 2) return null;
+  return `M ${points
+    .map((point, index) => `${index === 0 ? "" : "L "}${round1(point.x)} ${round1(point.y)}`)
+    .join(" ")}`;
+}
+
+function buildAnchoredHandleGuidePath(args: {
+  attachX: number;
+  topY: number;
+  bottomY: number;
+  upperEntryX: number;
+  upperEntryY: number;
+  lowerExitX: number;
+  lowerExitY: number;
+  upperCornerX: number;
+  upperCornerY: number;
+  lowerCornerX: number;
+  lowerCornerY: number;
+}): string {
+  const {
+    attachX,
+    topY,
+    bottomY,
+    upperEntryX,
+    upperEntryY,
+    lowerExitX,
+    lowerExitY,
+    upperCornerX,
+    upperCornerY,
+    lowerCornerX,
+    lowerCornerY,
+  } = args;
+  const resolvedAttachX = round1(attachX);
+  const resolvedTopY = round1(topY);
+  const resolvedBottomY = round1(bottomY);
+  const resolvedUpperEntryX = round1(upperEntryX);
+  const resolvedUpperEntryY = round1(upperEntryY);
+  const resolvedLowerExitX = round1(lowerExitX);
+  const resolvedLowerExitY = round1(lowerExitY);
+  const resolvedUpperCornerX = round1(upperCornerX);
+  const resolvedUpperCornerY = round1(upperCornerY);
+  const resolvedLowerCornerX = round1(lowerCornerX);
+  const resolvedLowerCornerY = round1(lowerCornerY);
+  return [
+    `M ${resolvedAttachX} ${resolvedTopY}`,
+    `L ${resolvedUpperEntryX} ${resolvedUpperEntryY}`,
+    `Q ${resolvedUpperCornerX} ${resolvedUpperEntryY} ${resolvedUpperCornerX} ${resolvedUpperCornerY}`,
+    `L ${resolvedLowerCornerX} ${resolvedLowerCornerY}`,
+    `Q ${resolvedLowerCornerX} ${resolvedLowerExitY} ${resolvedLowerExitX} ${resolvedLowerExitY}`,
+    `L ${resolvedAttachX} ${resolvedBottomY}`,
+  ].join(" ");
+}
+
+function buildAnchoredHandleGuideFromRect(args: {
+  side: "left" | "right";
+  attachX: number;
+  topY: number;
+  bottomY: number;
+  farX: number;
+}) {
+  const { side, attachX, topY, bottomY, farX } = args;
+  const width = Math.max(6, Math.abs(farX - attachX));
+  const height = Math.max(10, bottomY - topY);
+  const radius = clamp(
+    Math.min(width * 0.42, height * 0.22),
+    3,
+    Math.max(3, Math.min(width * 0.48, height * 0.28)),
+  );
+  const sideSign = side === "right" ? 1 : -1;
+  const upperTransition = {
+    x: round1(farX - (sideSign * radius)),
+    y: round1(topY),
+  };
+  const lowerTransition = {
+    x: round1(farX - (sideSign * radius)),
+    y: round1(bottomY),
+  };
+  const upperCorner = {
+    x: round1(farX),
+    y: round1(topY + radius),
+  };
+  const lowerCorner = {
+    x: round1(farX),
+    y: round1(bottomY - radius),
+  };
+
+  return {
+    path: buildAnchoredHandleGuidePath({
+      attachX,
+      topY,
+      bottomY,
+      upperEntryX: upperTransition.x,
+      upperEntryY: upperTransition.y,
+      lowerExitX: lowerTransition.x,
+      lowerExitY: lowerTransition.y,
+      upperCornerX: upperCorner.x,
+      upperCornerY: upperCorner.y,
+      lowerCornerX: lowerCorner.x,
+      lowerCornerY: lowerCorner.y,
+    }),
+    attachPoints: {
+      x: round1(attachX),
+      topY: round1(topY),
+      bottomY: round1(bottomY),
+    },
+    transitionPoints: {
+      upper: upperTransition,
+      lower: lowerTransition,
+    },
+    cornerPoints: {
+      upper: upperCorner,
+      lower: lowerCorner,
+    },
+  };
+}
+
+function pickTallestRect<T extends { height: number }>(rects: Array<T | null | undefined>): T | null {
+  const candidates = rects.filter((rect): rect is T => rect != null && Number.isFinite(rect.height) && rect.height > 0);
+  if (candidates.length === 0) return null;
+  return [...candidates].sort((a, b) => b.height - a.height)[0] ?? null;
+}
+
+function findMaskSegments(mask: Uint8Array, width: number, y: number): AlphaSegment[] {
+  const segments: AlphaSegment[] = [];
+  const rowOffset = y * width;
+  let start = -1;
+  for (let x = 0; x < width; x += 1) {
+    if (mask[rowOffset + x] === 1) {
+      if (start === -1) start = x;
+      continue;
+    }
+    if (start !== -1) {
+      segments.push({ left: start, right: x - 1, width: x - start });
+      start = -1;
+    }
+  }
+  if (start !== -1) {
+    segments.push({ left: start, right: width - 1, width: width - start });
+  }
+  return segments;
 }
 
 type LowerBodyRow = {
@@ -384,6 +788,191 @@ type LowerBodyRow = {
   segmentLeft?: number;
   segmentRight?: number;
 };
+
+function createForegroundMask(imageData: ImageData): Uint8Array {
+  const { data, width, height } = imageData;
+  const totalPixels = Math.max(1, width * height);
+  let transparentPixels = 0;
+  for (let index = 3; index < data.length; index += 4) {
+    if ((data[index] ?? 255) < 245) {
+      transparentPixels += 1;
+    }
+  }
+  const hasTransparency = transparentPixels > totalPixels * 0.01;
+  const background = hasTransparency ? null : estimateBackgroundColor(data, width, height);
+  const mask = new Uint8Array(width * height);
+  for (let index = 0; index < width * height; index += 1) {
+    const dataIndex = index * 4;
+    const alpha = data[dataIndex + 3] ?? 255;
+    const r = data[dataIndex] ?? 0;
+    const g = data[dataIndex + 1] ?? 0;
+    const b = data[dataIndex + 2] ?? 0;
+    mask[index] = hasTransparency
+      ? (alpha > 8 ? 1 : 0)
+      : (alpha > 8 && background != null && colorDistance(r, g, b, background) > 22 ? 1 : 0);
+  }
+  return mask;
+}
+
+function createContourMask(
+  width: number,
+  height: number,
+  contour: Array<{ x: number; y: number }>,
+): Uint8Array {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  const mask = new Uint8Array(width * height);
+  if (!ctx || contour.length < 3) {
+    return mask;
+  }
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  contour.forEach((point, index) => {
+    if (index === 0) {
+      ctx.moveTo(point.x, point.y);
+    } else {
+      ctx.lineTo(point.x, point.y);
+    }
+  });
+  ctx.closePath();
+  ctx.fill();
+  const imageData = ctx.getImageData(0, 0, width, height).data;
+  for (let index = 0; index < width * height; index += 1) {
+    mask[index] = imageData[(index * 4) + 3] > 0 ? 1 : 0;
+  }
+  return mask;
+}
+
+function buildBodyRowsFromMask(mask: Uint8Array, width: number, height: number): LowerBodyRow[] {
+  const rows: LowerBodyRow[] = [];
+  for (let y = 0; y < height; y += 1) {
+    const segments = findMaskSegments(mask, width, y);
+    if (segments.length === 0) continue;
+    const dominantSegment = [...segments].sort((a, b) => b.width - a.width)[0];
+    if (!dominantSegment) continue;
+    rows.push({
+      y,
+      bodyLeft: dominantSegment.left,
+      bodyRight: dominantSegment.right,
+      coreWidth: dominantSegment.width,
+      segmentLeft: dominantSegment.left,
+      segmentRight: dominantSegment.right,
+    });
+  }
+  return rows;
+}
+
+function deriveHandleTraceFromImage(args: {
+  imageData: ImageData;
+  bodyContour: Array<{ x: number; y: number }>;
+  handleSideHint?: "left" | "right" | null;
+}): {
+  outerPath: string | null;
+  innerPath: string | null;
+  outerRect: { x: number; y: number; width: number; height: number } | null;
+  innerRect: { x: number; y: number; width: number; height: number } | null;
+  handleSide: "left" | "right" | null;
+} {
+  const { imageData, bodyContour, handleSideHint } = args;
+  if (bodyContour.length < 3) {
+    return {
+      outerPath: null,
+      innerPath: null,
+      outerRect: null,
+      innerRect: null,
+      handleSide: handleSideHint ?? null,
+    };
+  }
+
+  const foregroundMask = createForegroundMask(imageData);
+  const bodyMask = createContourMask(imageData.width, imageData.height, bodyContour);
+  const bodyRows = buildBodyRowsFromMask(bodyMask, imageData.width, imageData.height);
+  if (bodyRows.length < 8) {
+    return {
+      outerPath: null,
+      innerPath: null,
+      outerRect: null,
+      innerRect: null,
+      handleSide: handleSideHint ?? null,
+    };
+  }
+
+  let leftMass = 0;
+  let rightMass = 0;
+  for (const row of bodyRows) {
+    const rowOffset = row.y * imageData.width;
+    for (let x = 0; x < row.bodyLeft; x += 1) {
+      leftMass += foregroundMask[rowOffset + x] === 1 ? 1 : 0;
+    }
+    for (let x = row.bodyRight + 1; x < imageData.width; x += 1) {
+      rightMass += foregroundMask[rowOffset + x] === 1 ? 1 : 0;
+    }
+  }
+
+  const handleSide = handleSideHint ?? (rightMass >= leftMass ? "right" : "left");
+  const handleRows: Array<LowerBodyRow & { extension: number }> = [];
+  for (const row of bodyRows) {
+    const segments = findMaskSegments(foregroundMask, imageData.width, row.y);
+    const sideSegments = handleSide === "right"
+      ? segments.filter((segment) => segment.left > row.bodyRight + 1)
+      : segments.filter((segment) => segment.right < row.bodyLeft - 1);
+    if (sideSegments.length === 0) continue;
+    const chosen = [...sideSegments].sort((a, b) => {
+      const distanceA = handleSide === "right" ? (a.left - row.bodyRight) : (row.bodyLeft - a.right);
+      const distanceB = handleSide === "right" ? (b.left - row.bodyRight) : (row.bodyLeft - b.right);
+      if (Math.abs(distanceA - distanceB) > 0.001) return distanceA - distanceB;
+      return b.width - a.width;
+    })[0];
+    if (!chosen) continue;
+    handleRows.push({
+      ...row,
+      segmentLeft: chosen.left,
+      segmentRight: chosen.right,
+      extension: handleSide === "right" ? chosen.right - row.bodyRight : row.bodyLeft - chosen.left,
+    });
+  }
+
+  if (handleRows.length < 6) {
+    return {
+      outerPath: null,
+      innerPath: null,
+      outerRect: null,
+      innerRect: null,
+      handleSide,
+    };
+  }
+
+  const peakExtension = percentileNumber(handleRows.map((row) => row.extension), 0.92);
+  const threshold = Math.max(4, peakExtension * 0.14);
+  const candidateSegment = findLongestYSegment(handleRows.map((row) => row.y));
+  if (!candidateSegment) {
+    return {
+      outerPath: null,
+      innerPath: null,
+      outerRect: null,
+      innerRect: null,
+      handleSide,
+    };
+  }
+
+  const tracedRows = handleRows
+    .filter((row) => row.y >= candidateSegment.start && row.y <= candidateSegment.end)
+    .filter((row) => row.extension >= threshold);
+  const handleTrace = buildHandleTraceFromRows({
+    rows: tracedRows,
+    handleSide,
+    handleStartY: candidateSegment.start,
+    handleEndY: candidateSegment.end,
+  });
+
+  return {
+    ...handleTrace,
+    handleSide,
+  };
+}
 
 function buildHandleTraceFromRows(args: {
   rows: LowerBodyRow[];
@@ -437,10 +1026,24 @@ function buildHandleTraceFromRows(args: {
     ...outlineRows.map((row) => ({ x: row.leftX, y: row.y })),
     ...[...outlineRows].reverse().map((row) => ({ x: row.rightX, y: row.y })),
   ]);
-  const innerPath = buildClosedPath([
-    ...holeRows.map((row) => ({ x: row.leftX, y: row.y })),
-    ...[...holeRows].reverse().map((row) => ({ x: row.rightX, y: row.y })),
-  ]);
+  const innerGuidePoints = holeRows.length > 1
+    ? (handleSide === "right"
+      ? [
+          { x: holeRows[0]!.leftX, y: holeRows[0]!.y },
+          { x: holeRows[0]!.rightX, y: holeRows[0]!.y },
+          ...holeRows.slice(1, -1).map((row) => ({ x: row.rightX, y: row.y })),
+          { x: holeRows[holeRows.length - 1]!.rightX, y: holeRows[holeRows.length - 1]!.y },
+          { x: holeRows[holeRows.length - 1]!.leftX, y: holeRows[holeRows.length - 1]!.y },
+        ]
+      : [
+          { x: holeRows[0]!.rightX, y: holeRows[0]!.y },
+          { x: holeRows[0]!.leftX, y: holeRows[0]!.y },
+          ...holeRows.slice(1, -1).map((row) => ({ x: row.leftX, y: row.y })),
+          { x: holeRows[holeRows.length - 1]!.leftX, y: holeRows[holeRows.length - 1]!.y },
+          { x: holeRows[holeRows.length - 1]!.rightX, y: holeRows[holeRows.length - 1]!.y },
+        ])
+    : [];
+  const innerPath = buildOpenPath(innerGuidePoints);
 
   const outerRect = outlineRows.length > 0
     ? {
@@ -1152,78 +1755,22 @@ function cropVisibleBounds(
         bottom: (fitDebug.rimBottomPx - fitDebug.bodyTopPx) / Math.max(1, fitDebug.bodyBottomPx - fitDebug.bodyTopPx),
       }
     : null;
-  const centralBodyLeft = clamp(Math.round(bodyCenterX - (referenceBodyWidthPx * 0.24)), 0, cropW - 1);
-  const centralBodyRight = clamp(Math.round(bodyCenterX + (referenceBodyWidthPx * 0.24)), centralBodyLeft + 1, cropW - 1);
-  const sampleRowStats = (y: number): { luminance: number; saturation: number; coverage: number } | null => {
-    let luminanceTotal = 0;
-    let saturationTotal = 0;
-    let samples = 0;
-    for (let x = centralBodyLeft; x <= centralBodyRight; x += 1) {
-      const index = (Math.round(y) * cropW + x) * 4;
-      const alpha = croppedImage.data[index + 3] ?? 0;
-      if (alpha < 10) continue;
-      const r = croppedImage.data[index] ?? 0;
-      const g = croppedImage.data[index + 1] ?? 0;
-      const b = croppedImage.data[index + 2] ?? 0;
-      luminanceTotal += r * 0.2126 + g * 0.7152 + b * 0.0722;
-      saturationTotal += rgbToSaturation(r, g, b);
-      samples += 1;
-    }
-    if (samples < Math.max(6, (centralBodyRight - centralBodyLeft) * 0.4)) return null;
-    return {
-      luminance: luminanceTotal / samples,
-      saturation: saturationTotal / samples,
-      coverage: samples / Math.max(1, centralBodyRight - centralBodyLeft + 1),
-    };
-  };
-  const bodyBaselineStats = [];
-  for (
-    let y = Math.round(bodyTopY + (bodyHeightPx * 0.14));
-    y <= Math.round(bodyTopY + (bodyHeightPx * 0.3));
-    y += 1
-  ) {
-    const stats = sampleRowStats(y);
-    if (stats) bodyBaselineStats.push(stats);
-  }
-  const baselineLuminance = bodyBaselineStats.length > 0
-    ? medianNumber(bodyBaselineStats.map((stats) => stats.luminance))
-    : 0;
-  const baselineSaturation = bodyBaselineStats.length > 0
-    ? medianNumber(bodyBaselineStats.map((stats) => stats.saturation))
-    : 0;
-  const metallicRows: number[] = [];
-  for (
-    let y = Math.max(0, Math.round(bodyTopY - (bodyHeightPx * 0.05)));
-    y <= Math.min(cropH - 1, Math.round(bodyTopY + (bodyHeightPx * 0.16)));
-    y += 1
-  ) {
-    const stats = sampleRowStats(y);
-    if (!stats) continue;
-    const looksMetallic =
-      stats.coverage >= 0.55 &&
-      stats.saturation <= Math.max(0.18, baselineSaturation * 0.58) &&
-      stats.luminance >= Math.max(110, baselineLuminance * 0.9);
-    if (looksMetallic) metallicRows.push(y);
-  }
-  const metallicBand = findLongestYSegment(metallicRows);
-  const detectedRimTopY = metallicBand ? metallicBand.start : null;
-  const detectedRimBottomY = metallicBand ? metallicBand.end : null;
-  const rimTopY = rimRatios
-    ? clamp(bodyTopY + (rimRatios.top * bodyHeightPx), 0, cropH - 1)
-    : detectedRimTopY;
-  const rimBottomY = rimRatios
-    ? clamp(bodyTopY + (rimRatios.bottom * bodyHeightPx), 0, cropH - 1)
-    : detectedRimBottomY;
-  const rimDetectionSource: PrintableSurfaceDetection["source"] = rimRatios
-    ? "fit-debug"
-    : metallicBand
-      ? "photo-row-scan"
-      : "none";
-  const rimDetectionConfidence = rimRatios
-    ? 0.92
-    : metallicBand
-      ? clamp((metallicBand.end - metallicBand.start + 1) / Math.max(6, bodyHeightPx * 0.08), 0.45, 0.82)
-      : 0;
+  const {
+    rimTopY,
+    rimBottomY,
+    rimDetectionSource,
+    rimDetectionConfidence,
+  } = detectRimBandRows({
+    imageData: croppedImage.data,
+    width: cropW,
+    height: cropH,
+    bodyCenterX,
+    referenceBodyWidthPx,
+    referenceBandCenterY,
+    bodyTopY,
+    bodyBottomY,
+    fitDebugRatios: rimRatios,
+  });
 
   return {
     dataUrl: cropCanvas.toDataURL("image/png"),
@@ -1517,6 +2064,17 @@ export function EngravableZoneEditor({
   handleTopFromOverallMm,
   handleBottomFromOverallMm,
   handleReachMm,
+  handleUpperCornerFromOverallMm,
+  handleLowerCornerFromOverallMm,
+  handleUpperCornerReachMm,
+  handleLowerCornerReachMm,
+  handleUpperTransitionReachMm,
+  handleLowerTransitionReachMm,
+  handleUpperTransitionFromOverallMm,
+  handleLowerTransitionFromOverallMm,
+  handleOuterTopFromOverallMm,
+  handleOuterBottomFromOverallMm,
+  handleTubeDiameterMm,
   shoulderDiameterMm,
   taperUpperDiameterMm,
   taperLowerDiameterMm,
@@ -1535,6 +2093,7 @@ export function EngravableZoneEditor({
   bodyColorHex,
   rimColorHex,
   fitDebug,
+  canonicalHandleProfile,
   outlineProfile,
   referencePaths,
   referenceLayerState,
@@ -1551,6 +2110,17 @@ export function EngravableZoneEditor({
   onHandleTopChange,
   onHandleBottomChange,
   onHandleReachChange,
+  onHandleUpperCornerChange,
+  onHandleLowerCornerChange,
+  onHandleUpperCornerReachChange,
+  onHandleLowerCornerReachChange,
+  onHandleUpperTransitionReachChange,
+  onHandleLowerTransitionReachChange,
+  onHandleUpperTransitionChange,
+  onHandleLowerTransitionChange,
+  onHandleOuterTopChange,
+  onHandleOuterBottomChange,
+  onHandleTubeDiameterChange,
   onShoulderDiameterChange,
   onTaperUpperDiameterChange,
   onTaperLowerDiameterChange,
@@ -1572,14 +2142,22 @@ export function EngravableZoneEditor({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgOutlineInputRef = useRef<HTMLInputElement>(null);
+  const printableBandClipId = React.useId().replace(/:/g, "-");
   const [dragging, setDragging] = useState<
     | "top"
     | "bottom"
     | "lid-seam"
     | "silver-band"
+    | "printable-bottom"
     | "handle-top"
     | "handle-bottom"
     | "handle-reach"
+    | "handle-upper-corner"
+    | "handle-lower-corner"
+    | "handle-upper-transition"
+    | "handle-lower-transition"
+    | "handle-outer-top"
+    | "handle-outer-bottom"
     | "top-outer-width"
     | "body-width"
     | "base-width"
@@ -1589,6 +2167,37 @@ export function EngravableZoneEditor({
     | "bevel-width"
     | null
   >(null);
+  const [manualGuideSelection, setManualGuideSelection] = useState({
+    lid: false,
+    silver: false,
+    printableBottom: false,
+  });
+  const markGuideAsManual = React.useCallback((guide: "lid" | "silver" | "printableBottom") => {
+    setManualGuideSelection((current) => (
+      current[guide]
+        ? current
+        : { ...current, [guide]: true }
+    ));
+  }, []);
+  const [manualHandleSelection, setManualHandleSelection] = useState({
+    top: false,
+    bottom: false,
+    reach: false,
+    upperCorner: false,
+    lowerCorner: false,
+    upperTransition: false,
+    lowerTransition: false,
+    outerTop: false,
+    outerBottom: false,
+    tubeDiameter: false,
+  });
+  const markHandleAsManual = React.useCallback((handle: "top" | "bottom" | "reach" | "upperCorner" | "lowerCorner" | "upperTransition" | "lowerTransition" | "outerTop" | "outerBottom" | "tubeDiameter") => {
+    setManualHandleSelection((current) => (
+      current[handle]
+        ? current
+        : { ...current, [handle]: true }
+    ));
+  }, []);
   const [shapeWorkflowMode, setShapeWorkflowMode] = useState<"fit" | "refine">("fit");
   const [nodeEditMode, setNodeEditMode] = useState<"edit" | "add">("edit");
   const [showAdvancedHandles, setShowAdvancedHandles] = useState(false);
@@ -1665,7 +2274,7 @@ export function EngravableZoneEditor({
 
     let cancelled = false;
     const img = new Image();
-    img.onload = () => {
+    img.onload = async () => {
       const sourceOutline = referencePaths?.bodyOutline ?? outlineProfile;
       const sourceContour = sourceOutline?.sourceContour;
       const sourceBounds = sourceOutline?.sourceContourBounds;
@@ -1697,6 +2306,143 @@ export function EngravableZoneEditor({
         const sourceBodyOutlinePath = buildContourSvgPath(scaledSourceContour);
         const sourceTopWidthPx = estimateContourWidth(scaledSourceContour, scaledBounds.minY + 4) ?? scaledBounds.width;
         const sourceBaseWidthPx = estimateContourWidth(scaledSourceContour, scaledBounds.maxY - 4) ?? scaledBounds.width;
+        let sourceHandleProfile = canonicalHandleProfile ?? null;
+        if (!sourceHandleProfile && sourceOutline) {
+          try {
+            sourceHandleProfile = await extractCanonicalHandleProfileFromCutout({
+              imageDataUrl: photoDataUrl,
+              outline: sourceOutline,
+            });
+          } catch {
+            sourceHandleProfile = null;
+          }
+        }
+        const fitDebugScaleX = fitDebug?.imageWidthPx
+          ? (img.naturalWidth || img.width) / Math.max(1, fitDebug.imageWidthPx)
+          : null;
+        const fitDebugScaleY = fitDebug?.imageHeightPx
+          ? (img.naturalHeight || img.height) / Math.max(1, fitDebug.imageHeightPx)
+          : null;
+        const fitHandleOuterRect = fitDebug && fitDebugScaleX != null && fitDebugScaleY != null &&
+          fitDebug.handleAttachEdgePx != null &&
+          fitDebug.handleOuterEdgePx != null &&
+          fitDebug.handleCenterYPx != null &&
+          fitDebug.handleOuterHeightPx != null
+          ? {
+              x: Math.min(
+                fitDebug.handleAttachEdgePx * fitDebugScaleX,
+                fitDebug.handleOuterEdgePx * fitDebugScaleX,
+              ),
+              y: (fitDebug.handleCenterYPx - (fitDebug.handleOuterHeightPx / 2)) * fitDebugScaleY,
+              width: Math.abs((fitDebug.handleOuterEdgePx - fitDebug.handleAttachEdgePx) * fitDebugScaleX),
+              height: Math.max(1, fitDebug.handleOuterHeightPx * fitDebugScaleY),
+            }
+          : null;
+        const fitHandleInnerRect = fitDebug && fitDebugScaleX != null && fitDebugScaleY != null &&
+          fitDebug.handleAttachEdgePx != null &&
+          fitDebug.handleOuterEdgePx != null &&
+          fitDebug.handleHoleTopPx != null &&
+          fitDebug.handleHoleBottomPx != null &&
+          fitDebug.handleBarWidthPx != null
+          ? {
+              x: Math.min(
+                fitDebug.handleAttachEdgePx * fitDebugScaleX,
+                fitDebug.handleOuterEdgePx * fitDebugScaleX,
+              ) + Math.max(1, fitDebug.handleBarWidthPx * fitDebugScaleX),
+              y: fitDebug.handleHoleTopPx * fitDebugScaleY,
+              width: Math.max(
+                1,
+                Math.abs((fitDebug.handleOuterEdgePx - fitDebug.handleAttachEdgePx) * fitDebugScaleX)
+                - Math.max(2, fitDebug.handleBarWidthPx * fitDebugScaleX * 2),
+              ),
+              height: Math.max(1, (fitDebug.handleHoleBottomPx - fitDebug.handleHoleTopPx) * fitDebugScaleY),
+            }
+          : null;
+        const sourceHandleOuterBounds = sourceHandleProfile?.outerContour?.length
+          ? getBoundsFromPoints(sourceHandleProfile.outerContour)
+          : null;
+        const sourceHandleInnerBounds = sourceHandleProfile?.openingBox
+          ? {
+              minX: sourceHandleProfile.openingBox.x,
+              minY: sourceHandleProfile.openingBox.y,
+              maxX: sourceHandleProfile.openingBox.x + sourceHandleProfile.openingBox.w,
+              maxY: sourceHandleProfile.openingBox.y + sourceHandleProfile.openingBox.h,
+              width: sourceHandleProfile.openingBox.w,
+              height: sourceHandleProfile.openingBox.h,
+            }
+          : (sourceHandleProfile?.innerContour?.length
+            ? getBoundsFromPoints(sourceHandleProfile.innerContour)
+            : null);
+        const sourceCanvas = document.createElement("canvas");
+        sourceCanvas.width = img.naturalWidth || img.width;
+        sourceCanvas.height = img.naturalHeight || img.height;
+        const sourceCtx = sourceCanvas.getContext("2d");
+        const sourceHandleTrace = (() => {
+          if (!sourceCtx) {
+            return {
+              outerPath: null,
+              innerPath: null,
+              outerRect: null,
+              innerRect: null,
+              handleSide: fitDebug?.handleSide ?? null,
+            };
+          }
+          sourceCtx.drawImage(img, 0, 0);
+          const sourceImage = sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+          return deriveHandleTraceFromImage({
+            imageData: sourceImage,
+            bodyContour: scaledSourceContour,
+            handleSideHint: canonicalHandleProfile?.side ?? fitDebug?.handleSide ?? null,
+          });
+        })();
+        const fitDebugRatios = fitDebug && fitDebug.bodyBottomPx > fitDebug.bodyTopPx
+          ? {
+              top: (fitDebug.rimTopPx - fitDebug.bodyTopPx) / Math.max(1, fitDebug.bodyBottomPx - fitDebug.bodyTopPx),
+              bottom: (fitDebug.rimBottomPx - fitDebug.bodyTopPx) / Math.max(1, fitDebug.bodyBottomPx - fitDebug.bodyTopPx),
+            }
+          : null;
+        const sourceRimDetection = (() => {
+          if (!sourceCtx) {
+            return {
+              rimTopY: null,
+              rimBottomY: null,
+              rimDetectionSource: "none" as PrintableSurfaceDetection["source"],
+              rimDetectionConfidence: 0,
+            };
+          }
+          const sourceImage = sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+          return detectRimBandRows({
+            imageData: sourceImage.data,
+            width: sourceCanvas.width,
+            height: sourceCanvas.height,
+            bodyCenterX: (scaledBounds.minX + scaledBounds.maxX) / 2,
+            referenceBodyWidthPx: scaledBounds.width,
+            referenceBandCenterY: scaledBounds.minY + (scaledBounds.height * 0.18),
+            bodyTopY: scaledBounds.minY,
+            bodyBottomY: scaledBounds.maxY,
+            fitDebugRatios,
+          });
+        })();
+        const detectedReferenceBandCenterY =
+          sourceRimDetection.rimTopY != null && sourceRimDetection.rimBottomY != null
+            ? (sourceRimDetection.rimTopY + sourceRimDetection.rimBottomY) / 2
+            : (scaledBounds.minY + (scaledBounds.height * 0.18));
+        const sourceHandleOuterRectCandidate = sourceHandleOuterBounds
+          ? {
+              x: sourceHandleOuterBounds.minX,
+              y: sourceHandleOuterBounds.minY,
+              width: sourceHandleOuterBounds.width,
+              height: sourceHandleOuterBounds.height,
+            }
+          : null;
+        const sourceHandleInnerRectCandidate = sourceHandleInnerBounds
+          ? {
+              x: sourceHandleInnerBounds.minX,
+              y: sourceHandleInnerBounds.minY,
+              width: sourceHandleInnerBounds.width,
+              height: sourceHandleInnerBounds.height,
+            }
+          : null;
         if (!cancelled) {
           setDisplayPhoto({
             src: photoDataUrl,
@@ -1704,21 +2450,29 @@ export function EngravableZoneEditor({
             h: img.naturalHeight || img.height,
             bodyCenterX: (scaledBounds.minX + scaledBounds.maxX) / 2,
             referenceBodyWidthPx: scaledBounds.width,
-            referenceBandCenterY: scaledBounds.minY + (scaledBounds.height * 0.18),
+            referenceBandCenterY: detectedReferenceBandCenterY,
             bodyTopY: scaledBounds.minY,
             bodyBottomY: scaledBounds.maxY,
-            rimTopY: null,
-            rimBottomY: null,
-            rimDetectionSource: "none",
-            rimDetectionConfidence: 0,
+            rimTopY: sourceRimDetection.rimTopY,
+            rimBottomY: sourceRimDetection.rimBottomY,
+            rimDetectionSource: sourceRimDetection.rimDetectionSource,
+            rimDetectionConfidence: sourceRimDetection.rimDetectionConfidence,
             bodyOutlinePath: sourceBodyOutlinePath,
             bodyOutlineBounds: scaledBounds,
             tracedBodyOutlinePath: sourceBodyOutlinePath,
-            handleOuterPath: null,
-            handleInnerPath: null,
-            handleSide: null,
-            handleOuterRect: null,
-            handleInnerRect: null,
+            handleOuterPath: sourceHandleTrace.outerPath ?? sourceHandleProfile?.svgPathOuter ?? null,
+            handleInnerPath: sourceHandleTrace.innerPath ?? sourceHandleProfile?.svgPathInner ?? null,
+            handleSide: sourceHandleTrace.handleSide ?? sourceHandleProfile?.side ?? fitDebug?.handleSide ?? null,
+            handleOuterRect: pickTallestRect([
+              sourceHandleTrace.outerRect,
+              fitHandleOuterRect,
+              sourceHandleOuterRectCandidate,
+            ]),
+            handleInnerRect: pickTallestRect([
+              sourceHandleTrace.innerRect,
+              fitHandleInnerRect,
+              sourceHandleInnerRectCandidate,
+            ]),
             topOuterWidthPx: sourceTopWidthPx,
             baseWidthPx: sourceBaseWidthPx,
           });
@@ -1764,7 +2518,7 @@ export function EngravableZoneEditor({
     return () => {
       cancelled = true;
     };
-  }, [fitDebug, outlineProfile, photoDataUrl, referencePaths?.bodyOutline]);
+  }, [canonicalHandleProfile, fitDebug, outlineProfile, photoDataUrl, referencePaths?.bodyOutline]);
 
   useEffect(() => {
     setLocalReferencePaths(createReferencePaths({
@@ -2049,6 +2803,17 @@ export function EngravableZoneEditor({
     : (activeDisplayPhoto
       ? (activeDisplayPhoto.w / activeDisplayPhoto.h) * basePhotoHeightPx
       : canvasHeightPx * 0.52);
+  const resolvedHandleSide = activeDisplayPhoto?.handleSide
+    ?? (
+      activeDisplayPhoto?.bodyOutlineBounds
+        ? (
+          (activeDisplayPhoto.w - activeDisplayPhoto.bodyOutlineBounds.maxX)
+            >= activeDisplayPhoto.bodyOutlineBounds.minX
+            ? "right"
+            : "left"
+        )
+        : null
+    );
   const maxPhotoWidthPx = basePhotoWidthPx * (MAX_PHOTO_SCALE_PCT / 100);
   const targetPhotoHeightPx = basePhotoHeightPx * (effectivePhotoHeightScalePct / 100);
   const photoWidthPx = basePhotoWidthPx * (effectivePhotoWidthScalePct / 100);
@@ -2061,17 +2826,46 @@ export function EngravableZoneEditor({
   const scaledReferenceBandY = activeDisplayPhoto
     ? (activeDisplayPhoto.referenceBandCenterY / activeDisplayPhoto.h) * targetPhotoHeightPx
     : targetPhotoHeightPx * 0.24;
+  const scaledReferenceBandHalfPx = activeDisplayPhoto
+    ? Math.max(4, Math.min(10, targetPhotoHeightPx * 0.02))
+    : null;
   const scaledBodyTopInPhotoPx = activeDisplayPhoto
     ? (activeDisplayPhoto.bodyTopY / activeDisplayPhoto.h) * targetPhotoHeightPx
     : targetPhotoHeightPx * 0.08;
   const scaledBodyBottomInPhotoPx = activeDisplayPhoto
     ? (activeDisplayPhoto.bodyBottomY / activeDisplayPhoto.h) * targetPhotoHeightPx
     : targetPhotoHeightPx * 0.92;
-  const scaledRimTopInPhotoPx = activeDisplayPhoto?.rimTopY != null
+  const scaledDetectedRimTopInPhotoPx = activeDisplayPhoto?.rimTopY != null
     ? (activeDisplayPhoto.rimTopY / activeDisplayPhoto.h) * targetPhotoHeightPx
     : null;
-  const scaledRimBottomInPhotoPx = activeDisplayPhoto?.rimBottomY != null
+  const scaledDetectedRimBottomInPhotoPx = activeDisplayPhoto?.rimBottomY != null
     ? (activeDisplayPhoto.rimBottomY / activeDisplayPhoto.h) * targetPhotoHeightPx
+    : null;
+  const scaledRimTopInPhotoPx = activeDisplayPhoto
+    ? (() => {
+        if (scaledDetectedRimTopInPhotoPx == null) return null;
+        if (
+          scaledDetectedRimBottomInPhotoPx != null &&
+          scaledReferenceBandHalfPx != null &&
+          (scaledDetectedRimBottomInPhotoPx - scaledDetectedRimTopInPhotoPx) < scaledReferenceBandHalfPx * 1.7
+        ) {
+          return Math.min(scaledDetectedRimTopInPhotoPx, scaledReferenceBandY - scaledReferenceBandHalfPx);
+        }
+        return scaledDetectedRimTopInPhotoPx;
+      })()
+    : null;
+  const scaledRimBottomInPhotoPx = activeDisplayPhoto
+    ? (() => {
+        if (scaledDetectedRimBottomInPhotoPx == null) return null;
+        if (
+          scaledDetectedRimTopInPhotoPx != null &&
+          scaledReferenceBandHalfPx != null &&
+          (scaledDetectedRimBottomInPhotoPx - scaledDetectedRimTopInPhotoPx) < scaledReferenceBandHalfPx * 1.7
+        ) {
+          return Math.max(scaledDetectedRimBottomInPhotoPx, scaledReferenceBandY + scaledReferenceBandHalfPx);
+        }
+        return scaledDetectedRimBottomInPhotoPx;
+      })()
     : null;
   const contourMinXRelPx = editableContourBoundsMm ? editableContourBoundsMm.minX * pxPerMm : null;
   const contourMaxXRelPx = editableContourBoundsMm ? editableContourBoundsMm.maxX * pxPerMm : null;
@@ -2098,20 +2892,23 @@ export function EngravableZoneEditor({
         : maxPhotoWidthPx / 2,
     );
   const containerWidthPx = Math.max(Math.ceil(sideSpanPx * 2 + 32), bodyWidthPx + 96);
-  const bodyCenterLinePx = Math.round(containerWidthPx / 2);
-  const bodyLeftPx = Math.round(bodyCenterLinePx - bodyWidthPx / 2);
+  const containerCenterLinePx = Math.round(containerWidthPx / 2);
   const centeringAnchorX = effectivePhotoCenterMode === "photo" ? scaledPhotoCenterX : scaledBodyCenterX;
   const photoLeftPx = useContourAlignedPhotoFit && contourAlignedPhotoLeftRelPx != null
     ? Math.round(
-      bodyCenterLinePx
+      containerCenterLinePx
       + contourAlignedPhotoLeftRelPx
       + (effectivePhotoOffsetXPct / 100) * containerWidthPx,
     )
     : Math.round(
-      bodyCenterLinePx
+      containerCenterLinePx
       - centeringAnchorX
       + (effectivePhotoOffsetXPct / 100) * containerWidthPx,
     );
+  const bodyCenterLinePx = activeDisplayPhoto
+    ? Math.round(photoLeftPx + scaledBodyCenterX)
+    : containerCenterLinePx;
+  const bodyLeftPx = Math.round(bodyCenterLinePx - bodyWidthPx / 2);
   const bodyCenterInPhotoPx = (scaledBodyTopInPhotoPx + scaledBodyBottomInPhotoPx) / 2;
   const targetBodyCenterPx = (bodyZoneTopPx + bodyZoneBottomPx) / 2;
   const basePhotoTopPx = useContourAlignedPhotoFit && activeDisplayPhoto?.bodyOutlineBounds && contourMinYPx != null && contourMaxYPx != null
@@ -2126,19 +2923,50 @@ export function EngravableZoneEditor({
         : targetBodyCenterPx - bodyCenterInPhotoPx
     );
   const photoTopPx = Math.round(basePhotoTopPx + (effectivePhotoOffsetYPct / 100) * canvasHeightPx);
+  const displayedBodyTopPx = activeDisplayPhoto
+    ? Math.round(photoTopPx + scaledBodyTopInPhotoPx)
+    : bodyTopPx;
+  const displayedBodyBottomPx = activeDisplayPhoto
+    ? Math.round(photoTopPx + scaledBodyBottomInPhotoPx)
+    : bodyBottomPx;
+  const displayedBodyHeightPx = Math.max(1, displayedBodyBottomPx - displayedBodyTopPx);
+  const mapOverallMmToDisplayedBodyPx = (overallMm: number) => {
+    if (!activeDisplayPhoto || clampedBodyBottomFromOverallMm <= clampedBodyTopFromOverallMm) {
+      return overallMm * pxPerMm;
+    }
+    const ratio = (overallMm - clampedBodyTopFromOverallMm) / Math.max(0.1, clampedBodyBottomFromOverallMm - clampedBodyTopFromOverallMm);
+    return displayedBodyTopPx + (clamp(ratio, 0, 1) * displayedBodyHeightPx);
+  };
+  const mapDisplayedBodyPxToOverallMm = (displayPx: number) => {
+    if (!activeDisplayPhoto || displayedBodyBottomPx <= displayedBodyTopPx) {
+      return displayPx / pxPerMm;
+    }
+    const ratio = (displayPx - displayedBodyTopPx) / Math.max(1, displayedBodyHeightPx);
+    return clampedBodyTopFromOverallMm
+      + (clamp(ratio, 0, 1) * Math.max(0.1, clampedBodyBottomFromOverallMm - clampedBodyTopFromOverallMm));
+  };
   const referenceBandGuideTopPx = Math.round(photoTopPx + scaledReferenceBandY);
   const derivedLidSeamGuidePx = scaledRimTopInPhotoPx != null ? Math.round(photoTopPx + scaledRimTopInPhotoPx) : null;
   const derivedSilverBandGuidePx = scaledRimBottomInPhotoPx != null ? Math.round(photoTopPx + scaledRimBottomInPhotoPx) : null;
+  const mapGuidePxToOverallMm = (guidePx: number) => round1(clamp(
+    mapDisplayedBodyPxToOverallMm(guidePx),
+    0,
+    overallHeightMm,
+  ));
   const effectiveLidSeamGuideMm = typeof lidSeamFromOverallMm === "number" && Number.isFinite(lidSeamFromOverallMm)
     ? clamp(lidSeamFromOverallMm, 0, overallHeightMm)
-    : (derivedLidSeamGuidePx != null ? round1(derivedLidSeamGuidePx / pxPerMm) : null);
+    : (derivedLidSeamGuidePx != null ? mapGuidePxToOverallMm(derivedLidSeamGuidePx) : null);
   const minimumSilverBandBottomMm = Math.max(
     clampedBodyTopFromOverallMm + 2,
     effectiveLidSeamGuideMm != null ? effectiveLidSeamGuideMm + 1 : clampedBodyTopFromOverallMm + 2,
   );
   const effectiveSilverBandGuideMm = typeof silverBandBottomFromOverallMm === "number" && Number.isFinite(silverBandBottomFromOverallMm)
     ? clamp(silverBandBottomFromOverallMm, minimumSilverBandBottomMm, clampedBodyBottomFromOverallMm)
-    : (derivedSilverBandGuidePx != null ? round1(clamp(derivedSilverBandGuidePx / pxPerMm, minimumSilverBandBottomMm, clampedBodyBottomFromOverallMm)) : null);
+    : (derivedSilverBandGuidePx != null ? round1(clamp(
+      mapGuidePxToOverallMm(derivedSilverBandGuidePx),
+      minimumSilverBandBottomMm,
+      clampedBodyBottomFromOverallMm,
+    )) : null);
   const resolvedPrintableTopMm = round1(clamp(
     printableSurfaceContract?.printableTopMm ??
       effectiveSilverBandGuideMm ??
@@ -2151,11 +2979,56 @@ export function EngravableZoneEditor({
     resolvedPrintableTopMm,
     clampedBodyBottomFromOverallMm,
   ));
-  const resolvedPrintableHeightMm = round1(Math.max(0, resolvedPrintableBottomMm - resolvedPrintableTopMm));
   const printableExclusionSummary = printableSurfaceContract?.axialExclusions
     ?.filter((band) => band.kind !== "base")
     .map((band) => (band.kind === "rim-ring" ? "ring" : band.kind))
     .join(" / ") || "none";
+  const autoDetectedBandValues = React.useMemo(() => {
+    if (!activeDisplayPhoto) return null;
+    if (
+      activeDisplayPhoto.rimBottomY == null ||
+      activeDisplayPhoto.rimDetectionSource === "none" ||
+      (
+        activeDisplayPhoto.rimDetectionSource === "photo-row-scan" &&
+        (activeDisplayPhoto.rimDetectionConfidence ?? 0) < MIN_AUTO_RIM_DETECTION_CONFIDENCE
+      )
+    ) {
+      return null;
+    }
+
+    const detectedLidSeamFromOverallMm = derivedLidSeamGuidePx != null
+      ? mapGuidePxToOverallMm(derivedLidSeamGuidePx)
+      : null;
+    const detectedSilverBandBottomFromOverallMm = derivedSilverBandGuidePx != null
+      ? round1(clamp(
+        mapGuidePxToOverallMm(derivedSilverBandGuidePx),
+        Math.max(
+          clampedBodyTopFromOverallMm + 2,
+          (detectedLidSeamFromOverallMm ?? clampedBodyTopFromOverallMm) + 1,
+        ),
+        clampedBodyBottomFromOverallMm,
+      ))
+      : null;
+
+    if (detectedSilverBandBottomFromOverallMm == null) {
+      return null;
+    }
+
+    return {
+      source: activeDisplayPhoto.rimDetectionSource,
+      confidence: Math.round((activeDisplayPhoto.rimDetectionConfidence ?? 0) * 100) / 100,
+      lidSeamFromOverallMm: detectedLidSeamFromOverallMm,
+      silverBandBottomFromOverallMm: detectedSilverBandBottomFromOverallMm,
+    };
+  }, [
+    activeDisplayPhoto,
+    clampedBodyBottomFromOverallMm,
+    clampedBodyTopFromOverallMm,
+    derivedLidSeamGuidePx,
+    derivedSilverBandGuidePx,
+    overallHeightMm,
+    pxPerMm,
+  ]);
   const printableDetectionWeak =
     printableTopOverrideMm == null &&
     silverBandBottomFromOverallMm == null &&
@@ -2164,37 +3037,56 @@ export function EngravableZoneEditor({
 
   useEffect(() => {
     if (!onPrintableSurfaceDetectionChange) return;
-    if (!activeDisplayPhoto) {
-      onPrintableSurfaceDetectionChange(null);
-      return;
-    }
-
-    const photoBodyHeightPx = Math.max(1, activeDisplayPhoto.bodyBottomY - activeDisplayPhoto.bodyTopY);
-    const mapPhotoBodyYToOverallMm = (yPx: number) => round1(clamp(
-      clampedBodyTopFromOverallMm +
-        (((yPx - activeDisplayPhoto.bodyTopY) / photoBodyHeightPx) * bodyHeightMm),
-      clampedBodyTopFromOverallMm,
-      clampedBodyBottomFromOverallMm,
-    ));
-
-    if (activeDisplayPhoto.rimBottomY == null || activeDisplayPhoto.rimDetectionSource === "none") {
+    if (!autoDetectedBandValues) {
       onPrintableSurfaceDetectionChange(null);
       return;
     }
 
     onPrintableSurfaceDetectionChange({
-      source: activeDisplayPhoto.rimDetectionSource,
-      lidSeamFromOverallMm:
-        activeDisplayPhoto.rimTopY != null ? mapPhotoBodyYToOverallMm(activeDisplayPhoto.rimTopY) : null,
-      rimRingBottomFromOverallMm: mapPhotoBodyYToOverallMm(activeDisplayPhoto.rimBottomY),
-      confidence: Math.round((activeDisplayPhoto.rimDetectionConfidence ?? 0) * 100) / 100,
+      source: autoDetectedBandValues.source,
+      lidSeamFromOverallMm: autoDetectedBandValues.lidSeamFromOverallMm,
+      rimRingBottomFromOverallMm: autoDetectedBandValues.silverBandBottomFromOverallMm,
+      confidence: autoDetectedBandValues.confidence,
     });
   }, [
-    activeDisplayPhoto,
-    bodyHeightMm,
+    autoDetectedBandValues,
+    onPrintableSurfaceDetectionChange,
+  ]);
+  useEffect(() => {
+    setManualGuideSelection({
+      lid: false,
+      silver: false,
+      printableBottom: false,
+    });
+  }, [
+    activeDisplayPhoto?.src,
+    autoDetectedBandValues?.source,
+    autoDetectedBandValues?.lidSeamFromOverallMm,
+    autoDetectedBandValues?.silverBandBottomFromOverallMm,
     clampedBodyBottomFromOverallMm,
     clampedBodyTopFromOverallMm,
-    onPrintableSurfaceDetectionChange,
+    overallHeightMm,
+  ]);
+  useEffect(() => {
+    setManualHandleSelection({
+      top: false,
+      bottom: false,
+      reach: false,
+      upperCorner: false,
+      lowerCorner: false,
+      upperTransition: false,
+      lowerTransition: false,
+      outerTop: false,
+      outerBottom: false,
+      tubeDiameter: false,
+    });
+  }, [
+    activeDisplayPhoto?.src,
+    activeDisplayPhoto?.handleSide,
+    activeDisplayPhoto?.handleOuterRect?.x,
+    activeDisplayPhoto?.handleOuterRect?.y,
+    activeDisplayPhoto?.handleOuterRect?.width,
+    activeDisplayPhoto?.handleOuterRect?.height,
   ]);
   const scaledHandleOuterRect = activeDisplayPhoto?.handleOuterRect
     ? {
@@ -2204,38 +3096,203 @@ export function EngravableZoneEditor({
         height: (activeDisplayPhoto.handleOuterRect.height / activeDisplayPhoto.h) * targetPhotoHeightPx,
       }
     : null;
-  const defaultHandleTopMm = scaledHandleOuterRect ? round1(scaledHandleOuterRect.y / pxPerMm) : null;
-  const defaultHandleBottomMm = scaledHandleOuterRect
-    ? round1((scaledHandleOuterRect.y + scaledHandleOuterRect.height) / pxPerMm)
+  const defaultHandleTopMm = scaledHandleOuterRect
+    ? round1(mapDisplayedBodyPxToOverallMm(scaledHandleOuterRect.y))
     : null;
-  const defaultHandleReachMm = scaledHandleOuterRect && activeDisplayPhoto?.handleSide
+  const defaultHandleBottomMm = scaledHandleOuterRect
+    ? round1(mapDisplayedBodyPxToOverallMm(scaledHandleOuterRect.y + scaledHandleOuterRect.height))
+    : null;
+  const defaultHandleReachMm = scaledHandleOuterRect && resolvedHandleSide
     ? round1(
         Math.max(
           0,
-          activeDisplayPhoto.handleSide === "right"
+          resolvedHandleSide === "right"
             ? ((scaledHandleOuterRect.x + scaledHandleOuterRect.width) - (bodyLeftPx + bodyWidthPx)) / pxPerMm
             : (bodyLeftPx - scaledHandleOuterRect.x) / pxPerMm,
         ),
       )
     : null;
+  const defaultHandleSpanMm =
+    defaultHandleTopMm != null && defaultHandleBottomMm != null
+      ? Math.max(0, defaultHandleBottomMm - defaultHandleTopMm)
+      : null;
+  const visualHandleTopFallbackMm = round1(clamp(
+    Math.max(
+      (effectiveSilverBandGuideMm ?? clampedBodyTopFromOverallMm) + 8,
+      clampedBodyTopFromOverallMm + (bodyHeightMm * 0.08),
+    ),
+    clampedBodyTopFromOverallMm,
+    clampedBodyBottomFromOverallMm,
+  ));
+  const visualHandleBottomFallbackMm = round1(clamp(
+    Math.max(
+      visualHandleTopFallbackMm + Math.max(64, bodyHeightMm * 0.42),
+      clampedBodyTopFromOverallMm + (bodyHeightMm * 0.56),
+    ),
+    visualHandleTopFallbackMm + 24,
+    clampedBodyBottomFromOverallMm,
+  ));
+  const visualHandleReachFallbackMm = round1(Math.max(
+    defaultHandleReachMm ?? 0,
+    (bodyWidthPx / Math.max(1, pxPerMm)) * 0.34,
+  ));
+  const useVisualHandleFallback =
+    !manualHandleSelection.top &&
+    !manualHandleSelection.bottom &&
+    !manualHandleSelection.reach &&
+    !manualHandleSelection.upperCorner &&
+    !manualHandleSelection.lowerCorner &&
+    !manualHandleSelection.upperTransition &&
+    !manualHandleSelection.lowerTransition &&
+    resolvedHandleSide != null &&
+    (
+      handleTopFromOverallMm == null ||
+      handleBottomFromOverallMm == null ||
+      handleReachMm == null ||
+      defaultHandleSpanMm == null ||
+      defaultHandleSpanMm < Math.max(88, bodyHeightMm * 0.42) ||
+      (typeof handleTopFromOverallMm === "number" && handleTopFromOverallMm < visualHandleTopFallbackMm - 4)
+    );
   const effectiveHandleTopMm = typeof handleTopFromOverallMm === "number" && Number.isFinite(handleTopFromOverallMm)
     ? clamp(handleTopFromOverallMm, 0, overallHeightMm)
-    : defaultHandleTopMm;
+    : (useVisualHandleFallback ? visualHandleTopFallbackMm : defaultHandleTopMm);
   const effectiveHandleBottomMm = typeof handleBottomFromOverallMm === "number" && Number.isFinite(handleBottomFromOverallMm)
     ? clamp(handleBottomFromOverallMm, effectiveHandleTopMm ?? 0, overallHeightMm)
-    : defaultHandleBottomMm;
+    : (useVisualHandleFallback ? visualHandleBottomFallbackMm : defaultHandleBottomMm);
   const effectiveHandleReachMm = typeof handleReachMm === "number" && Number.isFinite(handleReachMm)
     ? Math.max(0, handleReachMm)
-    : defaultHandleReachMm;
-  const handleTopGuidePx = effectiveHandleTopMm != null ? effectiveHandleTopMm * pxPerMm : null;
-  const handleBottomGuidePx = effectiveHandleBottomMm != null ? effectiveHandleBottomMm * pxPerMm : null;
+    : (useVisualHandleFallback ? visualHandleReachFallbackMm : defaultHandleReachMm);
+  const defaultHandleCornerInsetMm = effectiveHandleTopMm != null && effectiveHandleBottomMm != null
+    ? round1(
+      Math.max(
+        4,
+        Math.min(
+          (Math.max(
+            8,
+            mapOverallMmToDisplayedBodyPx(effectiveHandleBottomMm) - mapOverallMmToDisplayedBodyPx(effectiveHandleTopMm),
+          ) * 0.18) / Math.max(1, pxPerMm),
+          18 / Math.max(1, pxPerMm),
+        ),
+      ),
+    )
+    : 10;
+  const defaultHandleCornerReachMm = effectiveHandleReachMm != null
+    ? round1(Math.max(6, effectiveHandleReachMm * HANDLE_GUIDE_REACH_FACTOR))
+    : null;
+  const effectiveHandleUpperCornerMm = typeof handleUpperCornerFromOverallMm === "number" && Number.isFinite(handleUpperCornerFromOverallMm)
+    ? clamp(
+      handleUpperCornerFromOverallMm,
+      (effectiveHandleTopMm ?? clampedBodyTopFromOverallMm) + 4,
+      (effectiveHandleBottomMm ?? clampedBodyBottomFromOverallMm) - 8,
+    )
+    : (effectiveHandleTopMm != null && effectiveHandleBottomMm != null
+      ? round1(clamp(
+        effectiveHandleTopMm + defaultHandleCornerInsetMm,
+        effectiveHandleTopMm + 4,
+        effectiveHandleBottomMm - 8,
+      ))
+      : null);
+  const effectiveHandleLowerCornerMm = typeof handleLowerCornerFromOverallMm === "number" && Number.isFinite(handleLowerCornerFromOverallMm)
+    ? clamp(
+      handleLowerCornerFromOverallMm,
+      (effectiveHandleUpperCornerMm ?? ((effectiveHandleTopMm ?? clampedBodyTopFromOverallMm) + 8)) + 4,
+      (effectiveHandleBottomMm ?? clampedBodyBottomFromOverallMm) - 4,
+    )
+    : (effectiveHandleTopMm != null && effectiveHandleBottomMm != null
+      ? round1(clamp(
+        effectiveHandleBottomMm - defaultHandleCornerInsetMm,
+        (effectiveHandleUpperCornerMm ?? (effectiveHandleTopMm + 8)) + 4,
+        effectiveHandleBottomMm - 4,
+      ))
+      : null);
+  const effectiveHandleUpperCornerReachMm = typeof handleUpperCornerReachMm === "number" && Number.isFinite(handleUpperCornerReachMm)
+    ? Math.max(0, handleUpperCornerReachMm)
+    : defaultHandleCornerReachMm;
+  const effectiveHandleLowerCornerReachMm = typeof handleLowerCornerReachMm === "number" && Number.isFinite(handleLowerCornerReachMm)
+    ? Math.max(0, handleLowerCornerReachMm)
+    : defaultHandleCornerReachMm;
+  const defaultHandleTransitionReachMm = effectiveHandleReachMm != null
+    ? round1(Math.max(4, effectiveHandleReachMm * 0.58))
+    : null;
+  const effectiveHandleUpperTransitionReachMm = typeof handleUpperTransitionReachMm === "number" && Number.isFinite(handleUpperTransitionReachMm)
+    ? Math.max(0, handleUpperTransitionReachMm)
+    : defaultHandleTransitionReachMm;
+  const effectiveHandleLowerTransitionReachMm = typeof handleLowerTransitionReachMm === "number" && Number.isFinite(handleLowerTransitionReachMm)
+    ? Math.max(0, handleLowerTransitionReachMm)
+    : defaultHandleTransitionReachMm;
+  const effectiveHandleUpperTransitionMm = typeof handleUpperTransitionFromOverallMm === "number" && Number.isFinite(handleUpperTransitionFromOverallMm)
+    ? clamp(
+      handleUpperTransitionFromOverallMm,
+      effectiveHandleTopMm ?? clampedBodyTopFromOverallMm,
+      (effectiveHandleUpperCornerMm ?? (effectiveHandleTopMm ?? clampedBodyTopFromOverallMm)) - 2,
+    )
+    : (effectiveHandleTopMm != null && effectiveHandleUpperCornerMm != null
+      ? round1(clamp(
+        effectiveHandleTopMm,
+        effectiveHandleTopMm,
+        effectiveHandleUpperCornerMm - 2,
+      ))
+      : effectiveHandleTopMm);
+  const effectiveHandleLowerTransitionMm = typeof handleLowerTransitionFromOverallMm === "number" && Number.isFinite(handleLowerTransitionFromOverallMm)
+    ? clamp(
+      handleLowerTransitionFromOverallMm,
+      (effectiveHandleLowerCornerMm ?? (effectiveHandleBottomMm ?? clampedBodyBottomFromOverallMm)) + 2,
+      effectiveHandleBottomMm ?? clampedBodyBottomFromOverallMm,
+    )
+    : (effectiveHandleBottomMm != null && effectiveHandleLowerCornerMm != null
+      ? round1(clamp(
+        effectiveHandleBottomMm,
+        effectiveHandleLowerCornerMm + 2,
+        effectiveHandleBottomMm,
+      ))
+      : effectiveHandleBottomMm);
+  const effectiveHandleOuterTopMm = typeof handleOuterTopFromOverallMm === "number" && Number.isFinite(handleOuterTopFromOverallMm)
+    ? clamp(
+      handleOuterTopFromOverallMm,
+      clampedBodyTopFromOverallMm,
+      (handleOuterBottomFromOverallMm ?? effectiveHandleLowerTransitionMm ?? clampedBodyBottomFromOverallMm) - 8,
+    )
+    : effectiveHandleTopMm;
+  const effectiveHandleOuterBottomMm = typeof handleOuterBottomFromOverallMm === "number" && Number.isFinite(handleOuterBottomFromOverallMm)
+    ? clamp(
+      handleOuterBottomFromOverallMm,
+      (effectiveHandleOuterTopMm ?? effectiveHandleUpperTransitionMm ?? clampedBodyTopFromOverallMm) + 8,
+      clampedBodyBottomFromOverallMm,
+    )
+    : effectiveHandleBottomMm;
+  const hasManualHandleOuterTop = typeof handleOuterTopFromOverallMm === "number" && Number.isFinite(handleOuterTopFromOverallMm);
+  const hasManualHandleOuterBottom = typeof handleOuterBottomFromOverallMm === "number" && Number.isFinite(handleOuterBottomFromOverallMm);
+  const handleTopGuidePx = effectiveHandleTopMm != null
+    ? mapOverallMmToDisplayedBodyPx(effectiveHandleTopMm)
+    : null;
+  const handleBottomGuidePx = effectiveHandleBottomMm != null
+    ? mapOverallMmToDisplayedBodyPx(effectiveHandleBottomMm)
+    : null;
+  const handleUpperCornerGuidePx = effectiveHandleUpperCornerMm != null
+    ? mapOverallMmToDisplayedBodyPx(effectiveHandleUpperCornerMm)
+    : null;
+  const handleLowerCornerGuidePx = effectiveHandleLowerCornerMm != null
+    ? mapOverallMmToDisplayedBodyPx(effectiveHandleLowerCornerMm)
+    : null;
+  const handleUpperTransitionGuidePx = effectiveHandleUpperTransitionMm != null
+    ? mapOverallMmToDisplayedBodyPx(effectiveHandleUpperTransitionMm)
+    : null;
+  const handleLowerTransitionGuidePx = effectiveHandleLowerTransitionMm != null
+    ? mapOverallMmToDisplayedBodyPx(effectiveHandleLowerTransitionMm)
+    : null;
+  const handleOuterTopGuidePx = effectiveHandleOuterTopMm != null
+    ? mapOverallMmToDisplayedBodyPx(effectiveHandleOuterTopMm)
+    : null;
+  const handleOuterBottomGuidePx = effectiveHandleOuterBottomMm != null
+    ? mapOverallMmToDisplayedBodyPx(effectiveHandleOuterBottomMm)
+    : null;
   const handleReachPx = effectiveHandleReachMm != null ? effectiveHandleReachMm * pxPerMm : null;
-  const transformedHandleOuterRect = scaledHandleOuterRect && activeDisplayPhoto?.handleSide && handleTopGuidePx != null && handleBottomGuidePx != null && handleReachPx != null
+  const transformedHandleOuterRect = scaledHandleOuterRect && resolvedHandleSide && handleTopGuidePx != null && handleBottomGuidePx != null && handleReachPx != null
     ? (() => {
-        const attachX = activeDisplayPhoto.handleSide === "right"
+        const attachX = resolvedHandleSide === "right"
           ? bodyLeftPx + bodyWidthPx
           : bodyLeftPx;
-        const outerX = activeDisplayPhoto.handleSide === "right"
+        const outerX = resolvedHandleSide === "right"
           ? attachX + handleReachPx
           : attachX - handleReachPx;
         return {
@@ -2246,6 +3303,57 @@ export function EngravableZoneEditor({
         };
       })()
     : scaledHandleOuterRect;
+  const transformedHandleInnerRect = activeDisplayPhoto?.handleInnerRect && resolvedHandleSide && transformedHandleOuterRect
+    ? (() => {
+        const sourceInnerRect = activeDisplayPhoto.handleInnerRect;
+        const sourceOuterRect = activeDisplayPhoto.handleOuterRect ?? sourceInnerRect;
+        const sourceOuterHeight = Math.max(1, sourceOuterRect.height);
+        const innerTopRatio = clamp((sourceInnerRect.y - sourceOuterRect.y) / sourceOuterHeight, 0, 1);
+        const innerHeightRatio = clamp(sourceInnerRect.height / sourceOuterHeight, 0.08, 1);
+        const targetHeight = Math.max(6, transformedHandleOuterRect.height * innerHeightRatio);
+        const targetY = clamp(
+          transformedHandleOuterRect.y + (transformedHandleOuterRect.height * innerTopRatio),
+          transformedHandleOuterRect.y,
+          transformedHandleOuterRect.y + transformedHandleOuterRect.height - targetHeight,
+        );
+        const sourceAttachX = resolvedHandleSide === "right"
+          ? activeDisplayPhoto.bodyCenterX + (activeDisplayPhoto.referenceBodyWidthPx / 2)
+          : activeDisplayPhoto.bodyCenterX - (activeDisplayPhoto.referenceBodyWidthPx / 2);
+        const sourceOuterEdgeX = resolvedHandleSide === "right"
+          ? sourceOuterRect.x + sourceOuterRect.width
+          : sourceOuterRect.x;
+        const sourceInnerFarX = resolvedHandleSide === "right"
+          ? sourceInnerRect.x + sourceInnerRect.width
+          : sourceInnerRect.x;
+        const sourceTotalReachPx = Math.max(1, Math.abs(sourceOuterEdgeX - sourceAttachX));
+        const sourceInnerReachPx = Math.max(4, Math.abs(sourceInnerFarX - sourceAttachX));
+        const innerReachRatio = clamp(sourceInnerReachPx / sourceTotalReachPx, 0.08, 0.92);
+        const targetInnerReachPx = Math.max(6, transformedHandleOuterRect.width * innerReachRatio);
+        const targetAttachX = resolvedHandleSide === "right"
+          ? bodyLeftPx + bodyWidthPx
+          : bodyLeftPx;
+        return resolvedHandleSide === "right"
+          ? {
+              x: targetAttachX,
+              y: targetY,
+              width: targetInnerReachPx,
+              height: targetHeight,
+            }
+          : {
+              x: targetAttachX - targetInnerReachPx,
+              y: targetY,
+              width: targetInnerReachPx,
+              height: targetHeight,
+            };
+      })()
+    : (activeDisplayPhoto?.handleInnerRect
+      ? {
+          x: photoLeftPx + ((activeDisplayPhoto.handleInnerRect.x / activeDisplayPhoto.w) * photoWidthPx),
+          y: photoTopPx + ((activeDisplayPhoto.handleInnerRect.y / activeDisplayPhoto.h) * targetPhotoHeightPx),
+          width: (activeDisplayPhoto.handleInnerRect.width / activeDisplayPhoto.w) * photoWidthPx,
+          height: (activeDisplayPhoto.handleInnerRect.height / activeDisplayPhoto.h) * targetPhotoHeightPx,
+        }
+      : null);
   const handlePathTransform = activeDisplayPhoto?.handleOuterRect && transformedHandleOuterRect
     ? (() => {
         const sx = transformedHandleOuterRect.width / Math.max(1, activeDisplayPhoto.handleOuterRect.width);
@@ -2255,20 +3363,421 @@ export function EngravableZoneEditor({
         return `matrix(${round1(sx)} 0 0 ${round1(sy)} ${round1(tx)} ${round1(ty)})`;
       })()
     : undefined;
+  const handleInnerPathTransform = activeDisplayPhoto?.handleInnerRect && transformedHandleInnerRect
+    ? (() => {
+        const sx = transformedHandleInnerRect.width / Math.max(1, activeDisplayPhoto.handleInnerRect.width);
+        const sy = transformedHandleInnerRect.height / Math.max(1, activeDisplayPhoto.handleInnerRect.height);
+        const tx = transformedHandleInnerRect.x - (activeDisplayPhoto.handleInnerRect.x * sx);
+        const ty = transformedHandleInnerRect.y - (activeDisplayPhoto.handleInnerRect.y * sy);
+        return `matrix(${round1(sx)} 0 0 ${round1(sy)} ${round1(tx)} ${round1(ty)})`;
+      })()
+    : undefined;
+  const previewHandleGuideRect = resolvedHandleSide
+    ? (() => {
+        if (handleTopGuidePx != null && handleBottomGuidePx != null && handleReachPx != null) {
+          const attachX = resolvedHandleSide === "right"
+            ? bodyLeftPx + bodyWidthPx
+            : bodyLeftPx;
+          const outerX = resolvedHandleSide === "right"
+            ? attachX + handleReachPx
+            : attachX - handleReachPx;
+          return {
+            x: Math.min(attachX, outerX),
+            y: handleTopGuidePx,
+            width: Math.max(8, Math.abs(outerX - attachX)),
+            height: Math.max(8, handleBottomGuidePx - handleTopGuidePx),
+          };
+        }
+        const guideTopPx = mapOverallMmToDisplayedBodyPx(visualHandleTopFallbackMm);
+        const guideBottomPx = mapOverallMmToDisplayedBodyPx(visualHandleBottomFallbackMm);
+        const attachX = resolvedHandleSide === "right"
+          ? bodyLeftPx + bodyWidthPx
+          : bodyLeftPx;
+        const outerX = resolvedHandleSide === "right"
+          ? attachX + (visualHandleReachFallbackMm * pxPerMm)
+          : attachX - (visualHandleReachFallbackMm * pxPerMm);
+        return {
+          x: Math.min(attachX, outerX),
+          y: guideTopPx,
+          width: Math.max(8, Math.abs(outerX - attachX)),
+          height: Math.max(8, guideBottomPx - guideTopPx),
+        };
+      })()
+    : null;
+  const overlayHandleTopY = activeDisplayPhoto && handleTopGuidePx != null
+    ? clamp(((handleTopGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayHandleBottomY = activeDisplayPhoto && handleBottomGuidePx != null
+    ? clamp(((handleBottomGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayHandleUpperCornerY = activeDisplayPhoto && handleUpperCornerGuidePx != null
+    ? clamp(((handleUpperCornerGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayHandleLowerCornerY = activeDisplayPhoto && handleLowerCornerGuidePx != null
+    ? clamp(((handleLowerCornerGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayHandleUpperTransitionY = activeDisplayPhoto && handleUpperTransitionGuidePx != null
+    ? clamp(((handleUpperTransitionGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayHandleLowerTransitionY = activeDisplayPhoto && handleLowerTransitionGuidePx != null
+    ? clamp(((handleLowerTransitionGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayHandleOuterTopY = activeDisplayPhoto && handleOuterTopGuidePx != null
+    ? clamp(((handleOuterTopGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayHandleOuterBottomY = activeDisplayPhoto && handleOuterBottomGuidePx != null
+    ? clamp(((handleOuterBottomGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayHandleAttachX = activeDisplayPhoto && resolvedHandleSide
+    ? (
+      resolvedHandleSide === "right"
+        ? (activeDisplayPhoto.bodyOutlineBounds?.maxX ?? (activeDisplayPhoto.bodyCenterX + (activeDisplayPhoto.referenceBodyWidthPx / 2)))
+        : (activeDisplayPhoto.bodyOutlineBounds?.minX ?? (activeDisplayPhoto.bodyCenterX - (activeDisplayPhoto.referenceBodyWidthPx / 2)))
+    )
+    : null;
+  const overlayHandleReachMmToPx = React.useCallback((reachMm: number | null | undefined) => {
+    if (!activeDisplayPhoto || reachMm == null || !Number.isFinite(reachMm)) return null;
+    return Math.max(
+      8,
+      (reachMm / Math.max(0.1, visualReferenceDiameterMm))
+      * Math.max(1, activeDisplayPhoto.bodyOutlineBounds?.width ?? activeDisplayPhoto.referenceBodyWidthPx),
+    );
+  }, [activeDisplayPhoto, visualReferenceDiameterMm]);
+  const mapHandleOffsetPxToMm = React.useCallback((offsetPx: number | null | undefined) => {
+    if (!activeDisplayPhoto || offsetPx == null || !Number.isFinite(offsetPx)) return null;
+    return round1(Math.max(
+      0,
+      (offsetPx / Math.max(1, activeDisplayPhoto.bodyOutlineBounds?.width ?? activeDisplayPhoto.referenceBodyWidthPx))
+      * Math.max(0.1, visualReferenceDiameterMm),
+    ));
+  }, [activeDisplayPhoto, visualReferenceDiameterMm]);
+  const overlayHandleUpperCornerX = resolvedHandleSide && overlayHandleAttachX != null
+    ? (() => {
+      const reachPx = overlayHandleReachMmToPx(effectiveHandleUpperCornerReachMm);
+      if (reachPx == null) return null;
+      return resolvedHandleSide === "right"
+        ? overlayHandleAttachX + reachPx
+        : overlayHandleAttachX - reachPx;
+    })()
+    : null;
+  const overlayHandleUpperTransitionX = resolvedHandleSide && overlayHandleAttachX != null
+    ? (() => {
+      const maxReachMm = Math.max(0, (effectiveHandleUpperCornerReachMm ?? 0) - 2);
+      const transitionReachMm = clamp(
+        effectiveHandleUpperTransitionReachMm ?? 0,
+        2,
+        Math.max(2, maxReachMm),
+      );
+      const reachPx = overlayHandleReachMmToPx(transitionReachMm);
+      if (reachPx == null) return null;
+      return resolvedHandleSide === "right"
+        ? overlayHandleAttachX + reachPx
+        : overlayHandleAttachX - reachPx;
+    })()
+    : null;
+  const overlayHandleLowerCornerX = resolvedHandleSide && overlayHandleAttachX != null
+    ? (() => {
+      const reachPx = overlayHandleReachMmToPx(effectiveHandleLowerCornerReachMm);
+      if (reachPx == null) return null;
+      return resolvedHandleSide === "right"
+        ? overlayHandleAttachX + reachPx
+        : overlayHandleAttachX - reachPx;
+    })()
+    : null;
+  const overlayHandleLowerTransitionX = resolvedHandleSide && overlayHandleAttachX != null
+    ? (() => {
+      const maxReachMm = Math.max(0, (effectiveHandleLowerCornerReachMm ?? 0) - 2);
+      const transitionReachMm = clamp(
+        effectiveHandleLowerTransitionReachMm ?? 0,
+        2,
+        Math.max(2, maxReachMm),
+      );
+      const reachPx = overlayHandleReachMmToPx(transitionReachMm);
+      if (reachPx == null) return null;
+      return resolvedHandleSide === "right"
+        ? overlayHandleAttachX + reachPx
+        : overlayHandleAttachX - reachPx;
+    })()
+    : null;
+  const defaultHandleTubeDiameterMm = (() => {
+    if (!activeDisplayPhoto?.handleOuterRect || !activeDisplayPhoto.handleInnerRect) {
+      return round1(Math.max(4, (effectiveHandleReachMm ?? 0) * 0.18));
+    }
+    const measuredOffsetPx = resolvedHandleSide === "right"
+      ? (activeDisplayPhoto.handleOuterRect.x + activeDisplayPhoto.handleOuterRect.width)
+        - (activeDisplayPhoto.handleInnerRect.x + activeDisplayPhoto.handleInnerRect.width)
+      : activeDisplayPhoto.handleInnerRect.x - activeDisplayPhoto.handleOuterRect.x;
+    return mapHandleOffsetPxToMm(clamp(measuredOffsetPx, 4, 32)) ?? round1(Math.max(4, (effectiveHandleReachMm ?? 0) * 0.18));
+  })();
+  const effectiveHandleTubeDiameterMm = typeof handleTubeDiameterMm === "number" && Number.isFinite(handleTubeDiameterMm)
+    ? round1(Math.max(2, handleTubeDiameterMm))
+    : defaultHandleTubeDiameterMm;
+  const overlayHandleSideOffsetPx = clamp(
+    overlayHandleReachMmToPx(effectiveHandleTubeDiameterMm) ?? 6,
+    4,
+    32,
+  );
+  const anchoredHandleGuidePath = resolvedHandleSide
+    && overlayHandleAttachX != null
+    && overlayHandleTopY != null
+    && overlayHandleBottomY != null
+    && overlayHandleUpperTransitionX != null
+    && overlayHandleUpperTransitionY != null
+    && overlayHandleLowerTransitionX != null
+    && overlayHandleLowerTransitionY != null
+    && overlayHandleUpperCornerX != null
+    && overlayHandleUpperCornerY != null
+    && overlayHandleLowerCornerX != null
+    && overlayHandleLowerCornerY != null
+    ? buildAnchoredHandleGuidePath({
+        attachX: overlayHandleAttachX,
+        topY: overlayHandleTopY,
+        bottomY: overlayHandleBottomY,
+        upperEntryX: overlayHandleUpperTransitionX,
+        upperEntryY: overlayHandleUpperTransitionY,
+        lowerExitX: overlayHandleLowerTransitionX,
+        lowerExitY: overlayHandleLowerTransitionY,
+        upperCornerX: overlayHandleUpperCornerX,
+        upperCornerY: overlayHandleUpperCornerY,
+        lowerCornerX: overlayHandleLowerCornerX,
+        lowerCornerY: overlayHandleLowerCornerY,
+      })
+    : null;
+  const resolvedOuterGuideTopY = hasManualHandleOuterTop && overlayHandleOuterTopY != null
+    ? overlayHandleOuterTopY
+    : overlayHandleTopY;
+  const resolvedOuterGuideBottomY = hasManualHandleOuterBottom && overlayHandleOuterBottomY != null
+    ? overlayHandleOuterBottomY
+    : overlayHandleBottomY;
+  const outerHandleGuideGeometry = resolvedHandleSide
+    && overlayHandleAttachX != null
+    && overlayHandleTopY != null
+    && overlayHandleBottomY != null
+    && resolvedOuterGuideTopY != null
+    && resolvedOuterGuideBottomY != null
+    && overlayHandleUpperTransitionX != null
+    && overlayHandleUpperTransitionY != null
+    && overlayHandleLowerTransitionX != null
+    && overlayHandleLowerTransitionY != null
+    && overlayHandleUpperCornerX != null
+    && overlayHandleUpperCornerY != null
+    && overlayHandleLowerCornerX != null
+    && overlayHandleLowerCornerY != null
+    ? (() => {
+        const sideSign = resolvedHandleSide === "right" ? 1 : -1;
+        const outerOffsetPx = Math.max(4, overlayHandleSideOffsetPx);
+        const topShiftPx = resolvedOuterGuideTopY - overlayHandleTopY;
+        const bottomShiftPx = resolvedOuterGuideBottomY - overlayHandleBottomY;
+        const attachX = round1(
+          resolvedHandleSide === "right"
+            ? overlayHandleAttachX + outerOffsetPx
+            : overlayHandleAttachX - outerOffsetPx,
+        );
+        const upperEntryX = round1(overlayHandleUpperTransitionX + (sideSign * outerOffsetPx));
+        const lowerExitX = round1(overlayHandleLowerTransitionX + (sideSign * outerOffsetPx));
+        const upperEntryY = round1(overlayHandleUpperTransitionY + topShiftPx);
+        const lowerExitY = round1(overlayHandleLowerTransitionY + bottomShiftPx);
+        const upperCornerX = round1(overlayHandleUpperCornerX + (sideSign * outerOffsetPx));
+        const lowerCornerX = round1(overlayHandleLowerCornerX + (sideSign * outerOffsetPx));
+        const upperCornerY = round1(clamp(
+          overlayHandleUpperCornerY + topShiftPx,
+          upperEntryY + 2,
+          lowerExitY - 8,
+        ));
+        const lowerCornerY = round1(clamp(
+          overlayHandleLowerCornerY + bottomShiftPx,
+          upperCornerY + 8,
+          lowerExitY - 2,
+        ));
+        return {
+          path: buildAnchoredHandleGuidePath({
+            attachX: overlayHandleAttachX,
+            topY: resolvedOuterGuideTopY,
+            bottomY: resolvedOuterGuideBottomY,
+            upperEntryX,
+            upperEntryY,
+            lowerExitX,
+            lowerExitY,
+            upperCornerX,
+            upperCornerY,
+            lowerCornerX,
+            lowerCornerY,
+          }),
+          attachPoints: {
+            x: round1(overlayHandleAttachX),
+            topY: round1(resolvedOuterGuideTopY),
+            bottomY: round1(resolvedOuterGuideBottomY),
+          },
+        };
+      })()
+    : null;
+  const anchoredHandleGuideOuterPath = outerHandleGuideGeometry?.path ?? null;
+  const visibleHandleGuideInnerPath = anchoredHandleGuidePath ?? activeDisplayPhoto?.handleInnerPath ?? null;
+  const visibleHandleGuideInnerTransform = anchoredHandleGuidePath ? undefined : handleInnerPathTransform;
+  const visibleHandleGuideOuterPath = anchoredHandleGuideOuterPath;
+  const anchoredHandleGuideAttachPoints = resolvedHandleSide
+    && overlayHandleAttachX != null
+    && overlayHandleTopY != null
+    && overlayHandleBottomY != null
+    ? {
+        x: overlayHandleAttachX,
+        topY: overlayHandleTopY,
+        bottomY: overlayHandleBottomY,
+      }
+    : null;
+  const anchoredHandleGuideOuterAttachPoints = outerHandleGuideGeometry?.attachPoints ?? null;
+  const anchoredHandleGuideCornerPoints = overlayHandleUpperCornerX != null
+    && overlayHandleUpperCornerY != null
+    && overlayHandleLowerCornerX != null
+    && overlayHandleLowerCornerY != null
+    ? {
+        upper: { x: overlayHandleUpperCornerX, y: overlayHandleUpperCornerY },
+        lower: { x: overlayHandleLowerCornerX, y: overlayHandleLowerCornerY },
+      }
+    : null;
+  const anchoredHandleGuideTransitionPoints = overlayHandleUpperTransitionX != null
+    && overlayHandleUpperTransitionY != null
+    && overlayHandleLowerTransitionX != null
+    && overlayHandleLowerTransitionY != null
+    ? {
+        upper: { x: overlayHandleUpperTransitionX, y: overlayHandleUpperTransitionY },
+        lower: { x: overlayHandleLowerTransitionX, y: overlayHandleLowerTransitionY },
+      }
+    : null;
+  const mapOverlayPointToContainerPoint = React.useCallback((point: { x: number; y: number } | null) => {
+    if (!activeDisplayPhoto || point == null) return null;
+    return {
+      x: photoLeftPx + ((point.x / Math.max(1, activeDisplayPhoto.w)) * photoWidthPx),
+      y: photoTopPx + ((point.y / Math.max(1, activeDisplayPhoto.h)) * targetPhotoHeightPx),
+    };
+  }, [activeDisplayPhoto, photoLeftPx, photoTopPx, photoWidthPx, targetPhotoHeightPx]);
+  const handleTopAttachButtonPoint = anchoredHandleGuideAttachPoints
+    ? mapOverlayPointToContainerPoint({ x: anchoredHandleGuideAttachPoints.x, y: anchoredHandleGuideAttachPoints.topY })
+    : null;
+  const handleBottomAttachButtonPoint = anchoredHandleGuideAttachPoints
+    ? mapOverlayPointToContainerPoint({ x: anchoredHandleGuideAttachPoints.x, y: anchoredHandleGuideAttachPoints.bottomY })
+    : null;
+  const handleUpperCornerButtonPoint = anchoredHandleGuideCornerPoints
+    ? mapOverlayPointToContainerPoint(anchoredHandleGuideCornerPoints.upper)
+    : null;
+  const handleLowerCornerButtonPoint = anchoredHandleGuideCornerPoints
+    ? mapOverlayPointToContainerPoint(anchoredHandleGuideCornerPoints.lower)
+    : null;
+  const handleUpperTransitionButtonPoint = anchoredHandleGuideTransitionPoints
+    ? mapOverlayPointToContainerPoint(anchoredHandleGuideTransitionPoints.upper)
+    : null;
+  const handleLowerTransitionButtonPoint = anchoredHandleGuideTransitionPoints
+    ? mapOverlayPointToContainerPoint(anchoredHandleGuideTransitionPoints.lower)
+    : null;
+  const handleOuterTopButtonPoint = anchoredHandleGuideOuterAttachPoints
+    ? mapOverlayPointToContainerPoint({ x: anchoredHandleGuideOuterAttachPoints.x, y: anchoredHandleGuideOuterAttachPoints.topY })
+    : null;
+  const handleOuterBottomButtonPoint = anchoredHandleGuideOuterAttachPoints
+    ? mapOverlayPointToContainerPoint({ x: anchoredHandleGuideOuterAttachPoints.x, y: anchoredHandleGuideOuterAttachPoints.bottomY })
+    : null;
   const straightWallBottomPx = derivedZoneGuides?.straightWallBottomYFromTopMm != null
     ? derivedZoneGuides.straightWallBottomYFromTopMm * pxPerMm
     : null;
   const rimTopGuidePx = effectiveLidSeamGuideMm != null
-    ? Math.round(effectiveLidSeamGuideMm * pxPerMm)
+    ? Math.round(mapOverallMmToDisplayedBodyPx(effectiveLidSeamGuideMm))
     : null;
   const rimBottomGuidePx = effectiveSilverBandGuideMm != null
-    ? Math.round(effectiveSilverBandGuideMm * pxPerMm)
+    ? Math.round(mapOverallMmToDisplayedBodyPx(effectiveSilverBandGuideMm))
     : null;
-  const overlayRimTopY = activeDisplayPhoto && rimTopGuidePx != null
-    ? clamp(((rimTopGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+  const fallbackVisualLidGuideMm = round1(clamp(
+    clampedBodyTopFromOverallMm + Math.max(4, Math.min(14, bodyHeightMm * 0.05)),
+    clampedBodyTopFromOverallMm,
+    clampedBodyBottomFromOverallMm,
+  ));
+  const fallbackVisualSilverGuideMm = round1(clamp(
+    fallbackVisualLidGuideMm + Math.max(6, Math.min(18, bodyHeightMm * 0.045)),
+    fallbackVisualLidGuideMm + 1,
+    clampedBodyBottomFromOverallMm,
+  ));
+  const fallbackReferenceBandHalfPhotoPx = activeDisplayPhoto
+    ? Math.max(4, Math.min(9, Math.round(activeDisplayPhoto.h * 0.0125)))
     : null;
-  const overlayRimBottomY = activeDisplayPhoto && rimBottomGuidePx != null
-    ? clamp(((rimBottomGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+  const fallbackRimTopGuidePx = activeDisplayPhoto && fallbackReferenceBandHalfPhotoPx != null
+    && Number.isFinite(activeDisplayPhoto.referenceBandCenterY)
+    ? Math.round(
+      photoTopPx
+      + (((activeDisplayPhoto.referenceBandCenterY - fallbackReferenceBandHalfPhotoPx) / Math.max(1, activeDisplayPhoto.h)) * targetPhotoHeightPx),
+    )
+    : null;
+  const fallbackRimBottomGuidePx = activeDisplayPhoto && fallbackReferenceBandHalfPhotoPx != null
+    && Number.isFinite(activeDisplayPhoto.referenceBandCenterY)
+    ? Math.round(
+      photoTopPx
+      + (((activeDisplayPhoto.referenceBandCenterY + fallbackReferenceBandHalfPhotoPx) / Math.max(1, activeDisplayPhoto.h)) * targetPhotoHeightPx),
+    )
+    : null;
+  const autoVisualLidGuidePx = derivedLidSeamGuidePx ?? fallbackRimTopGuidePx;
+  const autoVisualSilverGuidePx = derivedSilverBandGuidePx ?? fallbackRimBottomGuidePx;
+  const visualLidGuidePx = activeDisplayPhoto && !manualGuideSelection.lid
+    ? autoVisualLidGuidePx ?? rimTopGuidePx ?? Math.round(fallbackVisualLidGuideMm * pxPerMm)
+    : rimTopGuidePx ?? autoVisualLidGuidePx ?? Math.round(fallbackVisualLidGuideMm * pxPerMm);
+  const visualLidGuideMm = visualLidGuidePx != null
+    ? mapGuidePxToOverallMm(visualLidGuidePx)
+    : fallbackVisualLidGuideMm;
+  const minimumVisualSilverGuideMm = Math.max(
+    clampedBodyTopFromOverallMm + 2,
+    visualLidGuideMm + 1,
+  );
+  const visualSilverGuidePx = activeDisplayPhoto && !manualGuideSelection.silver
+    ? autoVisualSilverGuidePx ?? rimBottomGuidePx ?? Math.round(fallbackVisualSilverGuideMm * pxPerMm)
+    : rimBottomGuidePx ?? autoVisualSilverGuidePx ?? Math.round(fallbackVisualSilverGuideMm * pxPerMm);
+  const visualSilverGuideMm = visualSilverGuidePx != null
+    ? round1(clamp(
+      mapGuidePxToOverallMm(visualSilverGuidePx),
+      minimumVisualSilverGuideMm,
+      clampedBodyBottomFromOverallMm,
+    ))
+    : fallbackVisualSilverGuideMm;
+  const displayPrintableTopMm = visualSilverGuideMm ?? effectiveSilverBandGuideMm ?? resolvedPrintableTopMm;
+  const resolvedPrintableCenterMm = round1((displayPrintableTopMm + resolvedPrintableBottomMm) / 2);
+  const resolvedPrintableHeightMm = round1(Math.max(0, resolvedPrintableBottomMm - resolvedPrintableTopMm));
+  const printableTopGuidePx = Math.round(mapOverallMmToDisplayedBodyPx(resolvedPrintableTopMm));
+  const printableBottomGuidePx = Math.round(mapOverallMmToDisplayedBodyPx(resolvedPrintableBottomMm));
+  const printableCenterGuidePx = visualSilverGuidePx != null
+    ? Math.round((visualSilverGuidePx + printableBottomGuidePx) / 2)
+    : Math.round(mapOverallMmToDisplayedBodyPx(resolvedPrintableCenterMm));
+  const applyableBandValues = autoDetectedBandValues ?? (
+    visualLidGuidePx != null && visualSilverGuidePx != null
+      ? {
+          source: "visual-estimate",
+          confidence: null,
+          lidSeamFromOverallMm: visualLidGuideMm,
+          silverBandBottomFromOverallMm: visualSilverGuideMm,
+        }
+      : null
+  );
+  const autoDetectedBandsCommitted =
+    applyableBandValues != null &&
+    (applyableBandValues.lidSeamFromOverallMm == null || lidSeamFromOverallMm === applyableBandValues.lidSeamFromOverallMm) &&
+    silverBandBottomFromOverallMm === applyableBandValues.silverBandBottomFromOverallMm;
+  const overlayRimTopY = activeDisplayPhoto && visualLidGuidePx != null
+    ? clamp(((visualLidGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayRimBottomY = activeDisplayPhoto && visualSilverGuidePx != null
+    ? clamp(((visualSilverGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayPrintableTopY = activeDisplayPhoto
+    ? clamp(((printableTopGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayPrintableBottomY = activeDisplayPhoto
+    ? clamp(((printableBottomGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayPrintableCenterY = activeDisplayPhoto
+    ? clamp(((printableCenterGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayBodyGuideLeftX = activeDisplayPhoto
+    ? clamp(activeDisplayPhoto.bodyCenterX - (activeDisplayPhoto.referenceBodyWidthPx / 2), 0, activeDisplayPhoto.w)
+    : null;
+  const overlayBodyGuideRightX = activeDisplayPhoto
+    ? clamp(activeDisplayPhoto.bodyCenterX + (activeDisplayPhoto.referenceBodyWidthPx / 2), 0, activeDisplayPhoto.w)
+    : null;
+  const overlayPrintableCenterHalfWidthPx = activeDisplayPhoto
+    ? Math.max(12, Math.min(activeDisplayPhoto.referenceBodyWidthPx * 0.2, 34))
     : null;
   const overlayBodyTopY = activeDisplayPhoto
     ? clamp(((bodyZoneTopPx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
@@ -2286,6 +3795,9 @@ export function EngravableZoneEditor({
           ? (effectiveBaseDiameterMm / Math.max(0.1, visualReferenceDiameterMm)) * activeDisplayPhoto.referenceBodyWidthPx
           : (activeDisplayPhoto.baseWidthPx ?? activeDisplayPhoto.referenceBodyWidthPx * 0.84),
       )
+    : null;
+  const overlayPrintableBottomHalfWidthPx = activeDisplayPhoto
+    ? Math.max(12, (overlayBaseWidthPx ?? activeDisplayPhoto.referenceBodyWidthPx * 0.84) / 2)
     : null;
   const effectiveShoulderDiameterMm = typeof shoulderDiameterMm === "number" && Number.isFinite(shoulderDiameterMm)
     ? clamp(
@@ -2378,7 +3890,13 @@ export function EngravableZoneEditor({
     ? (activeDisplayPhoto?.bodyOutlinePath ?? null)
     : null;
   const readOnlyPreviewOutlinePath = !profileEditMode
-    ? (activeDisplayPhoto?.bodyOutlinePath ?? generatedFallbackOutlinePath ?? correctedBodyOverlay?.outlinePath ?? null)
+    ? (
+      activeDisplayPhoto?.tracedBodyOutlinePath ??
+      activeDisplayPhoto?.bodyOutlinePath ??
+      generatedFallbackOutlinePath ??
+      correctedBodyOverlay?.outlinePath ??
+      null
+    )
     : null;
   const showMainEditableOutlinePreview = profileEditMode && Boolean(editableOutlinePath);
   const selectedPoint = React.useMemo(
@@ -2500,78 +4018,273 @@ export function EngravableZoneEditor({
   const bevelLeftPx = Math.round(bodyCenterLinePx - bevelWidthPxEffective / 2);
   const bevelRightPx = Math.round(bodyCenterLinePx + bevelWidthPxEffective / 2);
 
-  const applyDragAtClientPoint = (clientX: number, clientY: number) => {
-    if (!dragging || !containerRef.current) return;
+  const applyGuideDrag = React.useCallback((
+    activeDrag: NonNullable<typeof dragging>,
+    clientX: number,
+    clientY: number,
+  ) => {
+    if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const yInContainer = clientY - rect.top;
     const mm = yInContainer / pxPerMm;
+    const mappedMm = mapDisplayedBodyPxToOverallMm(yInContainer);
 
-    if (dragging === "top") {
+    if (activeDrag === "top") {
       const clamped = clamp(mm, MIN_MARGIN_MM, clampedBodyBottomFromOverallMm - 10);
       onChange(round1(clamped), clampedBodyBottomFromOverallMm);
       return;
     }
-    if (dragging === "bottom") {
+    if (activeDrag === "bottom") {
       const clamped = clamp(mm, clampedBodyTopFromOverallMm + 10, overallHeightMm);
       onChange(clampedBodyTopFromOverallMm, round1(clamped));
       return;
     }
-    if (dragging === "lid-seam" && onLidSeamChange) {
+    if (activeDrag === "lid-seam" && onLidSeamChange) {
+      markGuideAsManual("lid");
       const maxMm = Math.min(
         clampedBodyTopFromOverallMm + 28,
-        (effectiveSilverBandGuideMm ?? clampedBodyBottomFromOverallMm) - 1,
+        (visualSilverGuideMm ?? clampedBodyBottomFromOverallMm) - 1,
       );
-      const clamped = clamp(mm, 0, Math.max(0, maxMm));
+      const clamped = clamp(mappedMm, 0, Math.max(0, maxMm));
       onLidSeamChange(round1(clamped));
       return;
     }
-    if (dragging === "silver-band" && onSilverBandBottomChange) {
+    if (activeDrag === "silver-band" && onSilverBandBottomChange) {
+      markGuideAsManual("silver");
       const minMm = Math.max(
         clampedBodyTopFromOverallMm + 2,
-        (effectiveLidSeamGuideMm ?? clampedBodyTopFromOverallMm) + 1,
+        (visualLidGuideMm ?? clampedBodyTopFromOverallMm) + 1,
       );
-      const clamped = clamp(mm, minMm, clampedBodyBottomFromOverallMm);
+      const clamped = clamp(mappedMm, minMm, clampedBodyBottomFromOverallMm);
       onSilverBandBottomChange(round1(clamped));
       return;
     }
-    if (dragging === "handle-top" && onHandleTopChange) {
-      const maxMm = Math.max(0, (effectiveHandleBottomMm ?? clampedBodyBottomFromOverallMm) - 8);
-      onHandleTopChange(round1(clamp(mm, 0, maxMm)));
+    if (activeDrag === "printable-bottom" && onPrintableBottomOverrideChange) {
+      markGuideAsManual("printableBottom");
+      const minMm = Math.max(displayPrintableTopMm + 1, clampedBodyTopFromOverallMm + 1);
+      onPrintableBottomOverrideChange(round1(clamp(mappedMm, minMm, clampedBodyBottomFromOverallMm)));
       return;
     }
-    if (dragging === "handle-bottom" && onHandleBottomChange) {
-      const minMm = Math.max(0, (effectiveHandleTopMm ?? 0) + 8);
-      onHandleBottomChange(round1(clamp(mm, minMm, overallHeightMm)));
+    if (activeDrag === "handle-top" && onHandleTopChange) {
+      markHandleAsManual("top");
+      const maxMm = Math.max(
+        0,
+        Math.min(
+          (effectiveHandleBottomMm ?? clampedBodyBottomFromOverallMm) - 8,
+          (effectiveHandleUpperCornerMm ?? clampedBodyBottomFromOverallMm) - 4,
+        ),
+      );
+      onHandleTopChange(round1(clamp(mappedMm, 0, maxMm)));
       return;
     }
-    if (dragging === "handle-reach" && onHandleReachChange && containerRef.current) {
+    if (activeDrag === "handle-bottom" && onHandleBottomChange) {
+      markHandleAsManual("bottom");
+      const minMm = Math.max(
+        0,
+        (effectiveHandleLowerCornerMm ?? (effectiveHandleTopMm ?? 0)) + 4,
+      );
+      onHandleBottomChange(round1(clamp(mappedMm, minMm, overallHeightMm)));
+      return;
+    }
+    if (activeDrag === "handle-outer-top" && onHandleOuterTopChange) {
+      markHandleAsManual("outerTop");
+      if (onHandleTubeDiameterChange && handleTopAttachButtonPoint) {
+        const xInContainer = clientX - rect.left;
+        const nextOffsetPx = Math.max(
+          0,
+          resolvedHandleSide === "right"
+            ? xInContainer - handleTopAttachButtonPoint.x
+            : handleTopAttachButtonPoint.x - xInContainer,
+        );
+        const nextTubeDiameterMm = mapHandleOffsetPxToMm(nextOffsetPx);
+        if (nextTubeDiameterMm != null) {
+          markHandleAsManual("tubeDiameter");
+          onHandleTubeDiameterChange(nextTubeDiameterMm);
+        }
+      }
+      const maxMm = Math.max(
+        clampedBodyTopFromOverallMm + 4,
+        (effectiveHandleOuterBottomMm ?? clampedBodyBottomFromOverallMm) - 8,
+      );
+      onHandleOuterTopChange(round1(clamp(
+        mappedMm,
+        clampedBodyTopFromOverallMm,
+        maxMm,
+      )));
+      return;
+    }
+    if (activeDrag === "handle-outer-bottom" && onHandleOuterBottomChange) {
+      markHandleAsManual("outerBottom");
+      if (onHandleTubeDiameterChange && handleBottomAttachButtonPoint) {
+        const xInContainer = clientX - rect.left;
+        const nextOffsetPx = Math.max(
+          0,
+          resolvedHandleSide === "right"
+            ? xInContainer - handleBottomAttachButtonPoint.x
+            : handleBottomAttachButtonPoint.x - xInContainer,
+        );
+        const nextTubeDiameterMm = mapHandleOffsetPxToMm(nextOffsetPx);
+        if (nextTubeDiameterMm != null) {
+          markHandleAsManual("tubeDiameter");
+          onHandleTubeDiameterChange(nextTubeDiameterMm);
+        }
+      }
+      const minMm = Math.min(
+        clampedBodyBottomFromOverallMm - 4,
+        (effectiveHandleOuterTopMm ?? clampedBodyTopFromOverallMm) + 8,
+      );
+      onHandleOuterBottomChange(round1(clamp(
+        mappedMm,
+        minMm,
+        clampedBodyBottomFromOverallMm,
+      )));
+      return;
+    }
+    if (activeDrag === "handle-reach" && onHandleReachChange) {
+      markHandleAsManual("reach");
       const xInContainer = clientX - rect.left;
-      const side = activeDisplayPhoto?.handleSide ?? "right";
+      const side = resolvedHandleSide ?? "right";
       const nextReachPx = side === "right"
         ? xInContainer - (bodyLeftPx + bodyWidthPx)
         : bodyLeftPx - xInContainer;
       onHandleReachChange(round1(Math.max(0, nextReachPx / pxPerMm)));
       return;
     }
-    if (dragging === "body-width" && onDiameterChange) {
+    if (
+      (
+        activeDrag === "handle-upper-corner"
+        || activeDrag === "handle-lower-corner"
+        || activeDrag === "handle-upper-transition"
+        || activeDrag === "handle-lower-transition"
+      )
+      && activeDisplayPhoto
+      && resolvedHandleSide
+      && overlayHandleAttachX != null
+    ) {
+      const xInContainer = clientX - rect.left;
+      const overlayX = clamp(
+        ((xInContainer - photoLeftPx) / Math.max(1, photoWidthPx)) * activeDisplayPhoto.w,
+        0,
+        activeDisplayPhoto.w,
+      );
+      const nextReachPx = resolvedHandleSide === "right"
+        ? overlayX - overlayHandleAttachX
+        : overlayHandleAttachX - overlayX;
+      const nextReachMm = round1(Math.max(
+        0,
+        (Math.max(0, nextReachPx) / Math.max(1, activeDisplayPhoto.bodyOutlineBounds?.width ?? activeDisplayPhoto.referenceBodyWidthPx))
+        * Math.max(0.1, visualReferenceDiameterMm),
+      ));
+      const nextSyncedReachMm = round1(
+        Math.max(
+          activeDrag === "handle-upper-corner" ? nextReachMm : (effectiveHandleUpperCornerReachMm ?? nextReachMm),
+          activeDrag === "handle-lower-corner" ? nextReachMm : (effectiveHandleLowerCornerReachMm ?? nextReachMm),
+        ) / HANDLE_GUIDE_REACH_FACTOR,
+      );
+      if (activeDrag === "handle-upper-corner") {
+        markHandleAsManual("upperCorner");
+        markHandleAsManual("reach");
+        if ((handleTopFromOverallMm == null || !Number.isFinite(handleTopFromOverallMm)) && effectiveHandleTopMm != null) {
+          onHandleTopChange?.(round1(effectiveHandleTopMm));
+        }
+        if ((handleBottomFromOverallMm == null || !Number.isFinite(handleBottomFromOverallMm)) && effectiveHandleBottomMm != null) {
+          onHandleBottomChange?.(round1(effectiveHandleBottomMm));
+        }
+        const minMm = Math.max((effectiveHandleTopMm ?? 0) + 4, 0);
+        const maxMm = Math.max(minMm, (effectiveHandleLowerCornerMm ?? (effectiveHandleBottomMm ?? overallHeightMm)) - 8);
+        onHandleUpperCornerChange?.(round1(clamp(mappedMm, minMm, maxMm)));
+        onHandleUpperCornerReachChange?.(nextReachMm);
+        onHandleReachChange?.(nextSyncedReachMm);
+        return;
+      }
+      if (activeDrag === "handle-upper-transition") {
+        markHandleAsManual("upperTransition");
+        if ((handleTopFromOverallMm == null || !Number.isFinite(handleTopFromOverallMm)) && effectiveHandleTopMm != null) {
+          onHandleTopChange?.(round1(effectiveHandleTopMm));
+        }
+        if ((handleBottomFromOverallMm == null || !Number.isFinite(handleBottomFromOverallMm)) && effectiveHandleBottomMm != null) {
+          onHandleBottomChange?.(round1(effectiveHandleBottomMm));
+        }
+        if ((handleUpperCornerFromOverallMm == null || !Number.isFinite(handleUpperCornerFromOverallMm)) && effectiveHandleUpperCornerMm != null) {
+          onHandleUpperCornerChange?.(round1(effectiveHandleUpperCornerMm));
+        }
+        if ((handleLowerCornerFromOverallMm == null || !Number.isFinite(handleLowerCornerFromOverallMm)) && effectiveHandleLowerCornerMm != null) {
+          onHandleLowerCornerChange?.(round1(effectiveHandleLowerCornerMm));
+        }
+        if ((handleUpperCornerReachMm == null || !Number.isFinite(handleUpperCornerReachMm)) && effectiveHandleUpperCornerReachMm != null) {
+          onHandleUpperCornerReachChange?.(round1(effectiveHandleUpperCornerReachMm));
+        }
+        if ((handleLowerCornerReachMm == null || !Number.isFinite(handleLowerCornerReachMm)) && effectiveHandleLowerCornerReachMm != null) {
+          onHandleLowerCornerReachChange?.(round1(effectiveHandleLowerCornerReachMm));
+        }
+        const minMm = effectiveHandleTopMm ?? 0;
+        const maxY = Math.max(minMm, (effectiveHandleUpperCornerMm ?? minMm) - 2);
+        onHandleUpperTransitionChange?.(round1(clamp(mappedMm, minMm, maxY)));
+        const maxMm = Math.max(2, (effectiveHandleUpperCornerReachMm ?? nextReachMm) - 2);
+        onHandleUpperTransitionReachChange?.(round1(clamp(nextReachMm, 2, maxMm)));
+        return;
+      }
+      if (activeDrag === "handle-lower-transition") {
+        markHandleAsManual("lowerTransition");
+        if ((handleTopFromOverallMm == null || !Number.isFinite(handleTopFromOverallMm)) && effectiveHandleTopMm != null) {
+          onHandleTopChange?.(round1(effectiveHandleTopMm));
+        }
+        if ((handleBottomFromOverallMm == null || !Number.isFinite(handleBottomFromOverallMm)) && effectiveHandleBottomMm != null) {
+          onHandleBottomChange?.(round1(effectiveHandleBottomMm));
+        }
+        if ((handleUpperCornerFromOverallMm == null || !Number.isFinite(handleUpperCornerFromOverallMm)) && effectiveHandleUpperCornerMm != null) {
+          onHandleUpperCornerChange?.(round1(effectiveHandleUpperCornerMm));
+        }
+        if ((handleLowerCornerFromOverallMm == null || !Number.isFinite(handleLowerCornerFromOverallMm)) && effectiveHandleLowerCornerMm != null) {
+          onHandleLowerCornerChange?.(round1(effectiveHandleLowerCornerMm));
+        }
+        if ((handleUpperCornerReachMm == null || !Number.isFinite(handleUpperCornerReachMm)) && effectiveHandleUpperCornerReachMm != null) {
+          onHandleUpperCornerReachChange?.(round1(effectiveHandleUpperCornerReachMm));
+        }
+        if ((handleLowerCornerReachMm == null || !Number.isFinite(handleLowerCornerReachMm)) && effectiveHandleLowerCornerReachMm != null) {
+          onHandleLowerCornerReachChange?.(round1(effectiveHandleLowerCornerReachMm));
+        }
+        const minY = Math.max(0, (effectiveHandleLowerCornerMm ?? (effectiveHandleBottomMm ?? overallHeightMm)) + 2);
+        const maxMmY = effectiveHandleBottomMm ?? overallHeightMm;
+        onHandleLowerTransitionChange?.(round1(clamp(mappedMm, minY, maxMmY)));
+        const maxMm = Math.max(2, (effectiveHandleLowerCornerReachMm ?? nextReachMm) - 2);
+        onHandleLowerTransitionReachChange?.(round1(clamp(nextReachMm, 2, maxMm)));
+        return;
+      }
+      markHandleAsManual("lowerCorner");
+      markHandleAsManual("reach");
+      if ((handleTopFromOverallMm == null || !Number.isFinite(handleTopFromOverallMm)) && effectiveHandleTopMm != null) {
+        onHandleTopChange?.(round1(effectiveHandleTopMm));
+      }
+      if ((handleBottomFromOverallMm == null || !Number.isFinite(handleBottomFromOverallMm)) && effectiveHandleBottomMm != null) {
+        onHandleBottomChange?.(round1(effectiveHandleBottomMm));
+      }
+      const minMm = Math.max((effectiveHandleUpperCornerMm ?? (effectiveHandleTopMm ?? 0)) + 8, 0);
+      const maxMm = Math.max(minMm, (effectiveHandleBottomMm ?? overallHeightMm) - 4);
+      onHandleLowerCornerChange?.(round1(clamp(mappedMm, minMm, maxMm)));
+      onHandleLowerCornerReachChange?.(nextReachMm);
+      onHandleReachChange?.(nextSyncedReachMm);
+      return;
+    }
+    if (activeDrag === "body-width" && onDiameterChange) {
       const xInContainer = clientX - rect.left;
       const halfWidthPx = Math.max(8, Math.abs(xInContainer - bodyCenterLinePx));
       onDiameterChange(Math.max(20, round1((halfWidthPx * 2) / pxPerMm)));
       return;
     }
-    if (dragging === "top-outer-width" && onTopOuterDiameterChange) {
+    if (activeDrag === "top-outer-width" && onTopOuterDiameterChange) {
       const xInContainer = clientX - rect.left;
       const halfWidthPx = Math.max(bodyWidthPx / 2, Math.abs(xInContainer - bodyCenterLinePx));
       onTopOuterDiameterChange(Math.max(effectiveBodyWrapDiameterMm, round1((halfWidthPx * 2) / pxPerMm)));
       return;
     }
-    if (dragging === "base-width" && onBaseDiameterChange) {
+    if (activeDrag === "base-width" && onBaseDiameterChange) {
       const xInContainer = clientX - rect.left;
       const halfWidthPx = Math.max(6, Math.abs(xInContainer - bodyCenterLinePx));
       onBaseDiameterChange(clamp(round1((halfWidthPx * 2) / pxPerMm), 20, Math.max(20, diameterMm)));
       return;
     }
-    if (dragging === "shoulder-width" && onShoulderDiameterChange) {
+    if (activeDrag === "shoulder-width" && onShoulderDiameterChange) {
       const xInContainer = clientX - rect.left;
       const halfWidthPx = Math.max(6, Math.abs(xInContainer - bodyCenterLinePx));
       onShoulderDiameterChange(clamp(
@@ -2581,7 +4294,7 @@ export function EngravableZoneEditor({
       ));
       return;
     }
-    if (dragging === "taper-upper-width" && onTaperUpperDiameterChange) {
+    if (activeDrag === "taper-upper-width" && onTaperUpperDiameterChange) {
       const xInContainer = clientX - rect.left;
       const halfWidthPx = Math.max(6, Math.abs(xInContainer - bodyCenterLinePx));
       onTaperUpperDiameterChange(clamp(
@@ -2591,7 +4304,7 @@ export function EngravableZoneEditor({
       ));
       return;
     }
-    if (dragging === "taper-lower-width" && onTaperLowerDiameterChange) {
+    if (activeDrag === "taper-lower-width" && onTaperLowerDiameterChange) {
       const xInContainer = clientX - rect.left;
       const halfWidthPx = Math.max(6, Math.abs(xInContainer - bodyCenterLinePx));
       onTaperLowerDiameterChange(clamp(
@@ -2601,7 +4314,7 @@ export function EngravableZoneEditor({
       ));
       return;
     }
-    if (dragging === "bevel-width" && onBevelDiameterChange) {
+    if (activeDrag === "bevel-width" && onBevelDiameterChange) {
       const xInContainer = clientX - rect.left;
       const halfWidthPx = Math.max(6, Math.abs(xInContainer - bodyCenterLinePx));
       onBevelDiameterChange(clamp(
@@ -2610,7 +4323,101 @@ export function EngravableZoneEditor({
         effectiveTaperLowerDiameterMm,
       ));
     }
-  };
+  }, [
+    activeDisplayPhoto?.handleSide,
+    bodyCenterLinePx,
+    bodyLeftPx,
+    bodyWidthPx,
+    clampedBodyBottomFromOverallMm,
+    clampedBodyTopFromOverallMm,
+    diameterMm,
+    displayPrintableTopMm,
+    effectiveBaseDiameterMm,
+    effectiveBodyWrapDiameterMm,
+    effectiveHandleBottomMm,
+    effectiveHandleLowerCornerMm,
+    effectiveHandleLowerCornerReachMm,
+    effectiveHandleOuterBottomMm,
+    effectiveHandleOuterTopMm,
+    effectiveHandleTopMm,
+    effectiveHandleUpperCornerMm,
+    effectiveHandleUpperCornerReachMm,
+    handleLowerTransitionButtonPoint,
+    handleUpperTransitionButtonPoint,
+    effectiveShoulderDiameterMm,
+    effectiveTaperLowerDiameterMm,
+    effectiveTaperUpperDiameterMm,
+    effectiveTopOuterDiameterMm,
+    mapHandleOffsetPxToMm,
+    mapDisplayedBodyPxToOverallMm,
+    markHandleAsManual,
+    markGuideAsManual,
+    onBaseDiameterChange,
+    onBevelDiameterChange,
+    onChange,
+    onDiameterChange,
+    onHandleBottomChange,
+    onHandleOuterBottomChange,
+    onHandleOuterTopChange,
+    onHandleTubeDiameterChange,
+    handleBottomFromOverallMm,
+    onHandleLowerCornerChange,
+    onHandleLowerCornerReachChange,
+    onHandleReachChange,
+    handleTopFromOverallMm,
+    onHandleTopChange,
+    onHandleUpperCornerChange,
+    onHandleUpperCornerReachChange,
+    onLidSeamChange,
+    onPrintableBottomOverrideChange,
+    onShoulderDiameterChange,
+    onSilverBandBottomChange,
+    onTaperLowerDiameterChange,
+    onTaperUpperDiameterChange,
+    onTopOuterDiameterChange,
+    overallHeightMm,
+    overlayHandleAttachX,
+    photoLeftPx,
+    photoWidthPx,
+    pxPerMm,
+    targetPhotoHeightPx,
+    visualLidGuideMm,
+    visualSilverGuideMm,
+    visualReferenceDiameterMm,
+  ]);
+
+  const applyDragAtClientPoint = React.useCallback((clientX: number, clientY: number) => {
+    if (!dragging) return;
+    applyGuideDrag(dragging, clientX, clientY);
+  }, [applyGuideDrag, dragging]);
+
+  const startGuideDrag = React.useCallback((
+    line:
+      | "top"
+      | "bottom"
+      | "lid-seam"
+      | "silver-band"
+      | "printable-bottom"
+      | "handle-top"
+      | "handle-bottom"
+      | "handle-outer-top"
+      | "handle-outer-bottom"
+      | "handle-reach"
+      | "handle-upper-corner"
+      | "handle-lower-corner"
+      | "handle-upper-transition"
+      | "handle-lower-transition"
+      | "top-outer-width"
+      | "body-width"
+      | "base-width"
+      | "shoulder-width"
+      | "taper-upper-width"
+      | "taper-lower-width"
+      | "bevel-width"
+  , clientX: number, clientY: number) => {
+    setDragging(line);
+    applyGuideDrag(line, clientX, clientY);
+  }, [applyGuideDrag]);
 
   const handlePointerDown = (
     line:
@@ -2618,9 +4425,16 @@ export function EngravableZoneEditor({
       | "bottom"
       | "lid-seam"
       | "silver-band"
+      | "printable-bottom"
       | "handle-top"
       | "handle-bottom"
+      | "handle-outer-top"
+      | "handle-outer-bottom"
       | "handle-reach"
+      | "handle-upper-corner"
+      | "handle-lower-corner"
+      | "handle-upper-transition"
+      | "handle-lower-transition"
       | "top-outer-width"
       | "body-width"
       | "base-width"
@@ -2631,8 +4445,36 @@ export function EngravableZoneEditor({
   ) => (e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setDragging(line);
-    applyDragAtClientPoint(e.clientX, e.clientY);
+    startGuideDrag(line, e.clientX, e.clientY);
+  };
+
+  const handleMouseDown = (
+    line:
+      | "top"
+      | "bottom"
+      | "lid-seam"
+      | "silver-band"
+      | "printable-bottom"
+      | "handle-top"
+      | "handle-bottom"
+      | "handle-outer-top"
+      | "handle-outer-bottom"
+      | "handle-reach"
+      | "handle-upper-corner"
+      | "handle-lower-corner"
+      | "handle-upper-transition"
+      | "handle-lower-transition"
+      | "top-outer-width"
+      | "body-width"
+      | "base-width"
+      | "shoulder-width"
+      | "taper-upper-width"
+      | "taper-lower-width"
+      | "bevel-width"
+  ) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    startGuideDrag(line, e.clientX, e.clientY);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -2952,174 +4794,48 @@ export function EngravableZoneEditor({
 
   useEffect(() => {
     if (!dragging) return;
-    const applyWindowDragAtClientPoint = (clientX: number, clientY: number) => {
-      if (!containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const yInContainer = clientY - rect.top;
-      const mm = yInContainer / pxPerMm;
-
-      if (dragging === "top") {
-        const clamped = clamp(mm, MIN_MARGIN_MM, clampedBodyBottomFromOverallMm - 10);
-        onChange(round1(clamped), clampedBodyBottomFromOverallMm);
-        return;
-      }
-      if (dragging === "bottom") {
-        const clamped = clamp(mm, clampedBodyTopFromOverallMm + 10, overallHeightMm);
-        onChange(clampedBodyTopFromOverallMm, round1(clamped));
-        return;
-      }
-      if (dragging === "lid-seam" && onLidSeamChange) {
-        const maxMm = Math.min(
-          clampedBodyTopFromOverallMm + 28,
-          (effectiveSilverBandGuideMm ?? clampedBodyBottomFromOverallMm) - 1,
-        );
-        onLidSeamChange(round1(clamp(mm, 0, Math.max(0, maxMm))));
-        return;
-      }
-      if (dragging === "silver-band" && onSilverBandBottomChange) {
-        const minMm = Math.max(
-          clampedBodyTopFromOverallMm + 2,
-          (effectiveLidSeamGuideMm ?? clampedBodyTopFromOverallMm) + 1,
-        );
-        onSilverBandBottomChange(round1(clamp(mm, minMm, clampedBodyBottomFromOverallMm)));
-        return;
-      }
-      if (dragging === "handle-top" && onHandleTopChange) {
-        const maxMm = Math.max(0, (effectiveHandleBottomMm ?? clampedBodyBottomFromOverallMm) - 8);
-        onHandleTopChange(round1(clamp(mm, 0, maxMm)));
-        return;
-      }
-      if (dragging === "handle-bottom" && onHandleBottomChange) {
-        const minMm = Math.max(0, (effectiveHandleTopMm ?? 0) + 8);
-        onHandleBottomChange(round1(clamp(mm, minMm, overallHeightMm)));
-        return;
-      }
-      if (dragging === "handle-reach" && onHandleReachChange) {
-        const xInContainer = clientX - rect.left;
-        const side = activeDisplayPhoto?.handleSide ?? "right";
-        const nextReachPx = side === "right"
-          ? xInContainer - (bodyLeftPx + bodyWidthPx)
-          : bodyLeftPx - xInContainer;
-        onHandleReachChange(round1(Math.max(0, nextReachPx / pxPerMm)));
-        return;
-      }
-      if (dragging === "body-width" && onDiameterChange) {
-        const xInContainer = clientX - rect.left;
-        const halfWidthPx = Math.max(8, Math.abs(xInContainer - bodyCenterLinePx));
-        onDiameterChange(Math.max(20, round1((halfWidthPx * 2) / pxPerMm)));
-        return;
-      }
-      if (dragging === "top-outer-width" && onTopOuterDiameterChange) {
-        const xInContainer = clientX - rect.left;
-        const halfWidthPx = Math.max(bodyWidthPx / 2, Math.abs(xInContainer - bodyCenterLinePx));
-        onTopOuterDiameterChange(Math.max(effectiveBodyWrapDiameterMm, round1((halfWidthPx * 2) / pxPerMm)));
-        return;
-      }
-      if (dragging === "base-width" && onBaseDiameterChange) {
-        const xInContainer = clientX - rect.left;
-        const halfWidthPx = Math.max(6, Math.abs(xInContainer - bodyCenterLinePx));
-        onBaseDiameterChange(clamp(round1((halfWidthPx * 2) / pxPerMm), 20, Math.max(20, diameterMm)));
-        return;
-      }
-      if (dragging === "shoulder-width" && onShoulderDiameterChange) {
-        const xInContainer = clientX - rect.left;
-        const halfWidthPx = Math.max(6, Math.abs(xInContainer - bodyCenterLinePx));
-        onShoulderDiameterChange(clamp(
-          round1((halfWidthPx * 2) / pxPerMm),
-          Math.max(effectiveBaseDiameterMm ?? 20, 20),
-          Math.max(effectiveBodyWrapDiameterMm, effectiveTopOuterDiameterMm ?? effectiveBodyWrapDiameterMm),
-        ));
-        return;
-      }
-      if (dragging === "taper-upper-width" && onTaperUpperDiameterChange) {
-        const xInContainer = clientX - rect.left;
-        const halfWidthPx = Math.max(6, Math.abs(xInContainer - bodyCenterLinePx));
-        onTaperUpperDiameterChange(clamp(
-          round1((halfWidthPx * 2) / pxPerMm),
-          Math.max(effectiveBaseDiameterMm ?? 20, 20),
-          effectiveShoulderDiameterMm,
-        ));
-        return;
-      }
-      if (dragging === "taper-lower-width" && onTaperLowerDiameterChange) {
-        const xInContainer = clientX - rect.left;
-        const halfWidthPx = Math.max(6, Math.abs(xInContainer - bodyCenterLinePx));
-        onTaperLowerDiameterChange(clamp(
-          round1((halfWidthPx * 2) / pxPerMm),
-          Math.max(effectiveBaseDiameterMm ?? 20, 20),
-          effectiveTaperUpperDiameterMm,
-        ));
-        return;
-      }
-      if (dragging === "bevel-width" && onBevelDiameterChange) {
-        const xInContainer = clientX - rect.left;
-        const halfWidthPx = Math.max(6, Math.abs(xInContainer - bodyCenterLinePx));
-        onBevelDiameterChange(clamp(
-          round1((halfWidthPx * 2) / pxPerMm),
-          Math.max(effectiveBaseDiameterMm ?? 20, 20),
-          effectiveTaperLowerDiameterMm,
-        ));
-      }
-    };
     const handleWindowPointerMove = (event: PointerEvent) => {
-      applyWindowDragAtClientPoint(event.clientX, event.clientY);
+      applyGuideDrag(dragging, event.clientX, event.clientY);
+    };
+    const handleWindowMouseMove = (event: MouseEvent) => {
+      applyGuideDrag(dragging, event.clientX, event.clientY);
     };
     const handleWindowPointerUp = () => {
       setDragging(null);
     };
+    const handleWindowMouseUp = () => {
+      setDragging(null);
+    };
     window.addEventListener("pointermove", handleWindowPointerMove);
+    window.addEventListener("mousemove", handleWindowMouseMove);
     window.addEventListener("pointerup", handleWindowPointerUp);
     window.addEventListener("pointercancel", handleWindowPointerUp);
+    window.addEventListener("mouseup", handleWindowMouseUp);
     return () => {
       window.removeEventListener("pointermove", handleWindowPointerMove);
+      window.removeEventListener("mousemove", handleWindowMouseMove);
       window.removeEventListener("pointerup", handleWindowPointerUp);
       window.removeEventListener("pointercancel", handleWindowPointerUp);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
     };
   }, [
-    activeDisplayPhoto?.handleSide,
-    bodyCenterLinePx,
-    bodyLeftPx,
-    bodyWidthPx,
-    clampedBodyBottomFromOverallMm,
-    clampedBodyTopFromOverallMm,
-    diameterMm,
     dragging,
-    effectiveHandleBottomMm,
-    effectiveHandleTopMm,
-    effectiveBaseDiameterMm,
-    effectiveLidSeamGuideMm,
-    effectiveShoulderDiameterMm,
-    effectiveSilverBandGuideMm,
-    effectiveTaperLowerDiameterMm,
-    effectiveTaperUpperDiameterMm,
-    effectiveTopOuterDiameterMm,
-    onBaseDiameterChange,
-    onBevelDiameterChange,
-    onChange,
-    onDiameterChange,
-    onHandleBottomChange,
-    onHandleReachChange,
-    onHandleTopChange,
-    onLidSeamChange,
-    onShoulderDiameterChange,
-    onSilverBandBottomChange,
-    onTaperLowerDiameterChange,
-    onTaperUpperDiameterChange,
-    onTopOuterDiameterChange,
-    overallHeightMm,
-    pxPerMm,
+    applyGuideDrag,
   ]);
 
   const baseWidthTopY = Math.round(bodyBottomPx - Math.max(18, Math.min(40, bodyZoneHeightPx * 0.08)));
   const baseDiameterLineY = clamp(Math.round(baseWidthTopY + 18), 22, canvasHeightPx - 14);
   const hasLidGuide =
-    rimTopGuidePx != null &&
-    rimTopGuidePx >= 0 &&
-    rimTopGuidePx <= canvasHeightPx;
+    visualLidGuidePx != null &&
+    visualLidGuidePx >= 0 &&
+    visualLidGuidePx <= canvasHeightPx;
   const hasSilverGuide =
-    rimBottomGuidePx != null &&
-    rimBottomGuidePx >= 0 &&
-    rimBottomGuidePx <= canvasHeightPx;
+    visualSilverGuidePx != null &&
+    visualSilverGuidePx >= 0 &&
+    visualSilverGuidePx <= canvasHeightPx;
+  const hasPrintableBottomGuide =
+    printableBottomGuidePx >= 0 &&
+    printableBottomGuidePx <= canvasHeightPx;
   const hasStraightWallGuide =
     straightWallBottomPx != null &&
     straightWallBottomPx > bodyZoneTopPx + 10 &&
@@ -3200,20 +4916,34 @@ export function EngravableZoneEditor({
 
   const handleLidSeamInputChange = (nextValue: number) => {
     if (!onLidSeamChange || !Number.isFinite(nextValue)) return;
+    markGuideAsManual("lid");
     const maxMm = Math.min(
       clampedBodyTopFromOverallMm + 28,
-      (effectiveSilverBandGuideMm ?? clampedBodyBottomFromOverallMm) - 1,
+      (visualSilverGuideMm ?? clampedBodyBottomFromOverallMm) - 1,
     );
     onLidSeamChange(round1(clamp(nextValue, 0, Math.max(0, maxMm))));
   };
 
   const handleSilverBandInputChange = (nextValue: number) => {
     if (!onSilverBandBottomChange || !Number.isFinite(nextValue)) return;
+    markGuideAsManual("silver");
     const minMm = Math.max(
       clampedBodyTopFromOverallMm + 2,
-      (effectiveLidSeamGuideMm ?? clampedBodyTopFromOverallMm) + 1,
+      (visualLidGuideMm ?? clampedBodyTopFromOverallMm) + 1,
     );
     onSilverBandBottomChange(round1(clamp(nextValue, minMm, clampedBodyBottomFromOverallMm)));
+  };
+  const handleApplyAutoDetectedBands = () => {
+    if (!applyableBandValues) return;
+    setManualGuideSelection({
+      lid: false,
+      silver: false,
+      printableBottom: false,
+    });
+    if (applyableBandValues.lidSeamFromOverallMm != null) {
+      onLidSeamChange?.(applyableBandValues.lidSeamFromOverallMm);
+    }
+    onSilverBandBottomChange?.(applyableBandValues.silverBandBottomFromOverallMm);
   };
 
   const toggleProfileEditMode = () => {
@@ -3445,10 +5175,12 @@ export function EngravableZoneEditor({
                 className={styles.bodyFrame}
                 style={{ left: bodyLeftPx, width: bodyWidthPx, height: canvasHeightPx }}
               />
-              <div
-                className={styles.bodyCenterLine}
-                style={{ left: bodyCenterLinePx, height: canvasHeightPx }}
-              />
+              {!activeDisplayPhoto && (
+                <div
+                  className={styles.bodyCenterLine}
+                  style={{ left: bodyCenterLinePx, height: canvasHeightPx }}
+                />
+              )}
             </>
           )}
 
@@ -3481,6 +5213,13 @@ export function EngravableZoneEditor({
               style={{ width: photoWidthPx, height: targetPhotoHeightPx, left: photoLeftPx, top: photoTopPx }}
               aria-hidden="true"
             >
+              {!profileEditMode && !showMainEditableOutlinePreview && readOnlyPreviewOutlinePath && (
+                <defs>
+                  <clipPath id={printableBandClipId}>
+                    <path d={readOnlyPreviewOutlinePath} />
+                  </clipPath>
+                </defs>
+              )}
               {showReadOnlyGuides && correctedBodyOverlay?.leftBevelMaskPath && (
                 <path d={correctedBodyOverlay.leftBevelMaskPath} className={styles.traceBaseMask} />
               )}
@@ -3497,19 +5236,239 @@ export function EngravableZoneEditor({
                 />
               )}
               {!profileEditMode && !showMainEditableOutlinePreview && readOnlyPreviewOutlinePath && (
+                <>
+                  {overlayPrintableTopY != null && overlayPrintableBottomY != null && overlayPrintableBottomY > overlayPrintableTopY + 1 && (
+                    <g clipPath={`url(#${printableBandClipId})`}>
+                      <rect
+                        x={0}
+                        y={overlayPrintableTopY}
+                        width={activeDisplayPhoto.w}
+                        height={Math.max(1, overlayPrintableBottomY - overlayPrintableTopY)}
+                        className={styles.tracePrintableBandFill}
+                      />
+                    </g>
+                  )}
+                  {overlayPrintableCenterY != null && overlayPrintableCenterHalfWidthPx != null && (
+                    <>
+                      <line
+                        x1={activeDisplayPhoto.bodyCenterX - overlayPrintableCenterHalfWidthPx}
+                        y1={overlayPrintableCenterY}
+                        x2={activeDisplayPhoto.bodyCenterX + overlayPrintableCenterHalfWidthPx}
+                        y2={overlayPrintableCenterY}
+                        className={styles.traceGuideUnderlay}
+                      />
+                      <line
+                        x1={activeDisplayPhoto.bodyCenterX - overlayPrintableCenterHalfWidthPx}
+                        y1={overlayPrintableCenterY}
+                        x2={activeDisplayPhoto.bodyCenterX + overlayPrintableCenterHalfWidthPx}
+                        y2={overlayPrintableCenterY}
+                        className={styles.tracePrintableCenterMark}
+                      />
+                    </>
+                  )}
+                </>
+              )}
+              {!profileEditMode && !showMainEditableOutlinePreview && readOnlyPreviewOutlinePath && (
                 <path
                   d={readOnlyPreviewOutlinePath ?? undefined}
                   className={styles.traceBodyOutline}
                 />
               )}
-              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && activeDisplayPhoto.handleOuterPath && (
+              {!profileEditMode && !showMainEditableOutlinePreview && (
+                <line
+                  x1={activeDisplayPhoto.bodyCenterX}
+                  y1={activeDisplayPhoto.bodyTopY}
+                  x2={activeDisplayPhoto.bodyCenterX}
+                  y2={activeDisplayPhoto.bodyBottomY}
+                  className={styles.traceCenterLine}
+                />
+              )}
+              {!profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && visibleHandleGuideInnerPath && (
+                <>
+                  {visibleHandleGuideOuterPath ? (
+                    <>
+                      <path
+                        d={visibleHandleGuideOuterPath}
+                        className={styles.traceHandleOuterReference}
+                      />
+                      {anchoredHandleGuideOuterAttachPoints && (
+                        <>
+                          <circle
+                            cx={anchoredHandleGuideOuterAttachPoints.x}
+                            cy={anchoredHandleGuideOuterAttachPoints.topY}
+                            r={2.2}
+                            className={`${styles.traceNode} ${styles.traceNodeHandleOuterAnchor}`}
+                          />
+                          <circle
+                            cx={anchoredHandleGuideOuterAttachPoints.x}
+                            cy={anchoredHandleGuideOuterAttachPoints.bottomY}
+                            r={2.2}
+                            className={`${styles.traceNode} ${styles.traceNodeHandleOuterAnchor}`}
+                          />
+                        </>
+                      )}
+                    </>
+                  ) : null}
+                  <path
+                    d={visibleHandleGuideInnerPath}
+                    transform={visibleHandleGuideInnerTransform}
+                    className={styles.traceHandleInnerReference}
+                  />
+                  {anchoredHandleGuideAttachPoints && (
+                    <>
+                      <circle
+                        cx={anchoredHandleGuideAttachPoints.x}
+                        cy={anchoredHandleGuideAttachPoints.topY}
+                        r={2.4}
+                        className={`${styles.traceNode} ${styles.traceNodeHandle}`}
+                      />
+                      <circle
+                        cx={anchoredHandleGuideAttachPoints.x}
+                        cy={anchoredHandleGuideAttachPoints.bottomY}
+                        r={2.4}
+                        className={`${styles.traceNode} ${styles.traceNodeHandle}`}
+                      />
+                    </>
+                  )}
+                  {anchoredHandleGuideCornerPoints && (
+                    <>
+                      <circle
+                        cx={anchoredHandleGuideCornerPoints.upper.x}
+                        cy={anchoredHandleGuideCornerPoints.upper.y}
+                        r={2.4}
+                        className={`${styles.traceNode} ${styles.traceNodeHandle}`}
+                      />
+                      <circle
+                        cx={anchoredHandleGuideCornerPoints.lower.x}
+                        cy={anchoredHandleGuideCornerPoints.lower.y}
+                        r={2.4}
+                        className={`${styles.traceNode} ${styles.traceNodeHandle}`}
+                      />
+                    </>
+                  )}
+                  {anchoredHandleGuideTransitionPoints && (
+                    <>
+                      <circle
+                        cx={anchoredHandleGuideTransitionPoints.upper.x}
+                        cy={anchoredHandleGuideTransitionPoints.upper.y}
+                        r={2.1}
+                        className={`${styles.traceNode} ${styles.traceNodeSilver}`}
+                      />
+                      <circle
+                        cx={anchoredHandleGuideTransitionPoints.lower.x}
+                        cy={anchoredHandleGuideTransitionPoints.lower.y}
+                        r={2.1}
+                        className={`${styles.traceNode} ${styles.traceNodeSilver}`}
+                      />
+                    </>
+                  )}
+                </>
+              )}
+              {!profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && !anchoredHandleGuidePath && !activeDisplayPhoto.handleInnerPath && transformedHandleInnerRect && (
+                <rect
+                  x={transformedHandleInnerRect.x}
+                  y={transformedHandleInnerRect.y}
+                  width={transformedHandleInnerRect.width}
+                  height={transformedHandleInnerRect.height}
+                  rx={Math.max(2, transformedHandleInnerRect.width * 0.08)}
+                  ry={Math.max(2, transformedHandleInnerRect.width * 0.08)}
+                  className={styles.traceHandleInnerReference}
+                />
+              )}
+              {!profileEditMode && !showMainEditableOutlinePreview && overlayRimTopY != null && overlayBodyGuideLeftX != null && overlayBodyGuideRightX != null && (
+                <>
+                  {overlayRimBottomY != null && overlayRimBottomY > overlayRimTopY + 1 && (
+                    <rect
+                      x={overlayBodyGuideLeftX}
+                      y={overlayRimTopY}
+                      width={Math.max(1, overlayBodyGuideRightX - overlayBodyGuideLeftX)}
+                      height={Math.max(1, overlayRimBottomY - overlayRimTopY)}
+                      className={styles.traceRingBandFill}
+                    />
+                  )}
+                  <line
+                    x1={overlayBodyGuideLeftX}
+                    y1={overlayRimTopY}
+                    x2={overlayBodyGuideRightX}
+                    y2={overlayRimTopY}
+                    className={styles.traceGuideUnderlay}
+                  />
+                  <line
+                    x1={overlayBodyGuideLeftX}
+                    y1={overlayRimTopY}
+                    x2={overlayBodyGuideRightX}
+                    y2={overlayRimTopY}
+                    className={styles.traceLidGuide}
+                  />
+                  <circle
+                    cx={overlayBodyGuideLeftX}
+                    cy={overlayRimTopY}
+                    r={2.1}
+                    className={`${styles.traceNode} ${styles.traceNodeLidGuide}`}
+                  />
+                  <circle
+                    cx={overlayBodyGuideRightX}
+                    cy={overlayRimTopY}
+                    r={2.1}
+                    className={`${styles.traceNode} ${styles.traceNodeLidGuide}`}
+                  />
+                </>
+              )}
+              {!profileEditMode && !showMainEditableOutlinePreview && overlayRimBottomY != null && overlayBodyGuideLeftX != null && overlayBodyGuideRightX != null && (
+                <>
+                  <line
+                    x1={overlayBodyGuideLeftX}
+                    y1={overlayRimBottomY}
+                    x2={overlayBodyGuideRightX}
+                    y2={overlayRimBottomY}
+                    className={styles.traceGuideUnderlay}
+                  />
+                  <line
+                    x1={overlayBodyGuideLeftX}
+                    y1={overlayRimBottomY}
+                    x2={overlayBodyGuideRightX}
+                    y2={overlayRimBottomY}
+                    className={styles.tracePowderGuide}
+                  />
+                  <circle
+                    cx={overlayBodyGuideLeftX}
+                    cy={overlayRimBottomY}
+                    r={2.1}
+                    className={`${styles.traceNode} ${styles.traceNodePowderGuide}`}
+                  />
+                  <circle
+                    cx={overlayBodyGuideRightX}
+                    cy={overlayRimBottomY}
+                    r={2.1}
+                    className={`${styles.traceNode} ${styles.traceNodePowderGuide}`}
+                  />
+                </>
+              )}
+              {!profileEditMode && !showMainEditableOutlinePreview && overlayPrintableBottomY != null && overlayPrintableBottomHalfWidthPx != null && (
+                <>
+                  <line
+                    x1={activeDisplayPhoto.bodyCenterX - overlayPrintableBottomHalfWidthPx}
+                    y1={overlayPrintableBottomY}
+                    x2={activeDisplayPhoto.bodyCenterX + overlayPrintableBottomHalfWidthPx}
+                    y2={overlayPrintableBottomY}
+                    className={styles.traceGuideUnderlay}
+                  />
+                  <line
+                    x1={activeDisplayPhoto.bodyCenterX - overlayPrintableBottomHalfWidthPx}
+                    y1={overlayPrintableBottomY}
+                    x2={activeDisplayPhoto.bodyCenterX + overlayPrintableBottomHalfWidthPx}
+                    y2={overlayPrintableBottomY}
+                    className={styles.tracePowderGuide}
+                  />
+                </>
+              )}
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && !anchoredHandleGuidePath && activeDisplayPhoto.handleOuterPath && (
                 <path
                   d={activeDisplayPhoto.handleOuterPath}
-                  transform={handlePathTransform}
                   className={styles.traceHandleOutline}
                 />
               )}
-              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && !activeDisplayPhoto.handleOuterPath && activeDisplayPhoto.handleOuterRect && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && !anchoredHandleGuidePath && !activeDisplayPhoto.handleOuterPath && activeDisplayPhoto.handleOuterRect && (
                 <rect
                   x={activeDisplayPhoto.handleOuterRect.x}
                   y={activeDisplayPhoto.handleOuterRect.y}
@@ -3520,14 +5479,13 @@ export function EngravableZoneEditor({
                   className={styles.traceHandleOutline}
                 />
               )}
-              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && activeDisplayPhoto.handleInnerPath && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && !anchoredHandleGuidePath && activeDisplayPhoto.handleInnerPath && (
                 <path
                   d={activeDisplayPhoto.handleInnerPath}
-                  transform={handlePathTransform}
                   className={styles.traceHandleHole}
                 />
               )}
-              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && !activeDisplayPhoto.handleInnerPath && activeDisplayPhoto.handleInnerRect && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && !anchoredHandleGuidePath && !activeDisplayPhoto.handleInnerPath && activeDisplayPhoto.handleInnerRect && (
                 <rect
                   x={activeDisplayPhoto.handleInnerRect.x}
                   y={activeDisplayPhoto.handleInnerRect.y}
@@ -3584,7 +5542,7 @@ export function EngravableZoneEditor({
                   />
                 </>
               )}
-              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && activeDisplayPhoto.handleOuterRect && (
+              {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && !anchoredHandleGuidePath && activeDisplayPhoto.handleOuterRect && (
                 <>
                   <circle
                     cx={activeDisplayPhoto.handleOuterRect.x}
@@ -3847,55 +5805,59 @@ export function EngravableZoneEditor({
               {showGuideLabels && <span className={styles.guideLineLabel}>Scale anchor</span>}
             </div>
           )}
-          {showReadOnlyGuides && hasLidGuide && rimTopGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
+          {!activeDisplayPhoto && hasLidGuide && visualLidGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
             <div
               className={`${styles.placementGuide} ${styles.lidPlacementGuide}`}
-              style={{ top: rimTopGuidePx, left: bodyLeftPx, width: bodyWidthPx }}
+              style={{ top: visualLidGuidePx, left: bodyLeftPx, width: bodyWidthPx }}
             >
               {showGuideLabels && <span className={styles.placementGuideLabel}>Lid top</span>}
             </div>
           )}
-          {showReadOnlyGuides && hasLidGuide && rimTopGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
+          {hasLidGuide && visualLidGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
             <>
               <button
                 type="button"
                 aria-label="Adjust lid top"
                 className={`${styles.guideNode} ${styles.guideNodeLid} ${dragging === "lid-seam" ? styles.guideNodeActive : ""}`}
-                style={{ left: bodyLeftPx, top: rimTopGuidePx }}
+                style={{ left: bodyLeftPx, top: visualLidGuidePx }}
                 onPointerDown={handlePointerDown("lid-seam")}
+                onMouseDown={handleMouseDown("lid-seam")}
               />
               <button
                 type="button"
                 aria-label="Adjust lid top"
                 className={`${styles.guideNode} ${styles.guideNodeLid} ${dragging === "lid-seam" ? styles.guideNodeActive : ""}`}
-                style={{ left: bodyLeftPx + bodyWidthPx, top: rimTopGuidePx }}
+                style={{ left: bodyLeftPx + bodyWidthPx, top: visualLidGuidePx }}
                 onPointerDown={handlePointerDown("lid-seam")}
+                onMouseDown={handleMouseDown("lid-seam")}
               />
             </>
           )}
-          {showReadOnlyGuides && hasSilverGuide && rimBottomGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
+          {!activeDisplayPhoto && hasSilverGuide && visualSilverGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
             <div
               className={`${styles.placementGuide} ${styles.coatingPlacementGuide}`}
-              style={{ top: rimBottomGuidePx, left: bodyLeftPx, width: bodyWidthPx }}
+              style={{ top: visualSilverGuidePx, left: bodyLeftPx, width: bodyWidthPx }}
             >
               {showGuideLabels && <span className={styles.placementGuideLabel}>Powder coat begins</span>}
             </div>
           )}
-          {showReadOnlyGuides && hasSilverGuide && rimBottomGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
+          {hasSilverGuide && visualSilverGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
             <>
               <button
                 type="button"
                 aria-label="Adjust silver band"
                 className={`${styles.guideNode} ${styles.guideNodeSilver} ${dragging === "silver-band" ? styles.guideNodeActive : ""}`}
-                style={{ left: bodyLeftPx, top: rimBottomGuidePx }}
+                style={{ left: bodyLeftPx, top: visualSilverGuidePx }}
                 onPointerDown={handlePointerDown("silver-band")}
+                onMouseDown={handleMouseDown("silver-band")}
               />
               <button
                 type="button"
                 aria-label="Adjust silver band"
                 className={`${styles.guideNode} ${styles.guideNodeSilver} ${dragging === "silver-band" ? styles.guideNodeActive : ""}`}
-                style={{ left: bodyLeftPx + bodyWidthPx, top: rimBottomGuidePx }}
+                style={{ left: bodyLeftPx + bodyWidthPx, top: visualSilverGuidePx }}
                 onPointerDown={handlePointerDown("silver-band")}
+                onMouseDown={handleMouseDown("silver-band")}
               />
             </>
           )}
@@ -3943,60 +5905,121 @@ export function EngravableZoneEditor({
               )}
             </>
           )}
-          {showReadOnlyGuides && !profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && transformedHandleOuterRect && (
+          {!profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && (
             <>
-              <div
-                className={`${styles.placementGuide} ${styles.handlePlacementGuide}`}
-                style={{ top: transformedHandleOuterRect.y, left: transformedHandleOuterRect.x, width: transformedHandleOuterRect.width }}
-              >
-                {showGuideLabels && <span className={styles.placementGuideLabel}>Handle top</span>}
-              </div>
-              <div
-                className={`${styles.placementGuide} ${styles.handlePlacementGuide}`}
-                style={{ top: transformedHandleOuterRect.y + transformedHandleOuterRect.height, left: transformedHandleOuterRect.x, width: transformedHandleOuterRect.width }}
+              {handleOuterTopButtonPoint && (
+                <button
+                  type="button"
+                  aria-label="Adjust outer handle top"
+                  className={`${styles.guideNode} ${styles.guideNodeHandleOuterAnchor} ${dragging === "handle-outer-top" ? styles.guideNodeActive : ""}`}
+                  style={{ left: handleOuterTopButtonPoint.x, top: handleOuterTopButtonPoint.y }}
+                  title="Adjust outer handle top"
+                  onPointerDown={handlePointerDown("handle-outer-top")}
+                  onMouseDown={handleMouseDown("handle-outer-top")}
+                />
+              )}
+              {handleOuterBottomButtonPoint && (
+                <button
+                  type="button"
+                  aria-label="Adjust outer handle bottom"
+                  className={`${styles.guideNode} ${styles.guideNodeHandleOuterAnchor} ${dragging === "handle-outer-bottom" ? styles.guideNodeActive : ""}`}
+                  style={{ left: handleOuterBottomButtonPoint.x, top: handleOuterBottomButtonPoint.y }}
+                  title="Adjust outer handle bottom"
+                  onPointerDown={handlePointerDown("handle-outer-bottom")}
+                  onMouseDown={handleMouseDown("handle-outer-bottom")}
+                />
+              )}
+              {handleTopAttachButtonPoint && (
+                <button
+                  type="button"
+                  aria-label="Adjust handle top"
+                  className={`${styles.guideNode} ${styles.guideNodeHandleOutline} ${dragging === "handle-top" ? styles.guideNodeActive : ""}`}
+                  style={{ left: handleTopAttachButtonPoint.x, top: handleTopAttachButtonPoint.y }}
+                  title="Adjust handle top"
+                  onPointerDown={handlePointerDown("handle-top")}
+                  onMouseDown={handleMouseDown("handle-top")}
+                />
+              )}
+              {handleBottomAttachButtonPoint && (
+                <button
+                  type="button"
+                  aria-label="Adjust handle bottom"
+                  className={`${styles.guideNode} ${styles.guideNodeHandleOutline} ${dragging === "handle-bottom" ? styles.guideNodeActive : ""}`}
+                  style={{ left: handleBottomAttachButtonPoint.x, top: handleBottomAttachButtonPoint.y }}
+                  title="Adjust handle bottom"
+                  onPointerDown={handlePointerDown("handle-bottom")}
+                  onMouseDown={handleMouseDown("handle-bottom")}
+                />
+              )}
+              {handleUpperCornerButtonPoint && (
+                <button
+                  type="button"
+                  aria-label="Adjust handle upper corner"
+                  className={`${styles.guideNode} ${styles.guideNodeHandleOutline} ${styles.guideNodeHandleCorner} ${dragging === "handle-upper-corner" ? styles.guideNodeActive : ""}`}
+                  style={{ left: handleUpperCornerButtonPoint.x, top: handleUpperCornerButtonPoint.y }}
+                  title="Adjust handle upper corner"
+                  onPointerDown={handlePointerDown("handle-upper-corner")}
+                  onMouseDown={handleMouseDown("handle-upper-corner")}
+                />
+              )}
+              {handleUpperTransitionButtonPoint && (
+                <button
+                  type="button"
+                  aria-label="Adjust handle upper transition"
+                  className={`${styles.guideNode} ${styles.guideNodeSilver} ${styles.guideNodeHandleTransition} ${dragging === "handle-upper-transition" ? styles.guideNodeActive : ""}`}
+                  style={{ left: handleUpperTransitionButtonPoint.x, top: handleUpperTransitionButtonPoint.y }}
+                  title="Adjust handle upper transition"
+                  onPointerDown={handlePointerDown("handle-upper-transition")}
+                  onMouseDown={handleMouseDown("handle-upper-transition")}
+                />
+              )}
+              {handleLowerCornerButtonPoint && (
+                <button
+                  type="button"
+                  aria-label="Adjust handle lower corner"
+                  className={`${styles.guideNode} ${styles.guideNodeHandleOutline} ${styles.guideNodeHandleCorner} ${dragging === "handle-lower-corner" ? styles.guideNodeActive : ""}`}
+                  style={{ left: handleLowerCornerButtonPoint.x, top: handleLowerCornerButtonPoint.y }}
+                  title="Adjust handle lower corner"
+                  onPointerDown={handlePointerDown("handle-lower-corner")}
+                  onMouseDown={handleMouseDown("handle-lower-corner")}
+                />
+              )}
+              {handleLowerTransitionButtonPoint && (
+                <button
+                  type="button"
+                  aria-label="Adjust handle lower transition"
+                  className={`${styles.guideNode} ${styles.guideNodeSilver} ${styles.guideNodeHandleTransition} ${dragging === "handle-lower-transition" ? styles.guideNodeActive : ""}`}
+                  style={{ left: handleLowerTransitionButtonPoint.x, top: handleLowerTransitionButtonPoint.y }}
+                  title="Adjust handle lower transition"
+                  onPointerDown={handlePointerDown("handle-lower-transition")}
+                  onMouseDown={handleMouseDown("handle-lower-transition")}
+                />
+              )}
+            </>
+          )}
+          {!activeDisplayPhoto && hasPrintableBottomGuide && !profileEditMode && !showMainEditableOutlinePreview && (
+            <div
+              className={`${styles.placementGuide} ${styles.coatingPlacementGuide}`}
+              style={{ top: printableBottomGuidePx, left: baseLeftPx, width: Math.max(0, baseRightPx - baseLeftPx) }}
+            />
+          )}
+          {hasPrintableBottomGuide && !profileEditMode && !showMainEditableOutlinePreview && (
+            <>
+              <button
+                type="button"
+                aria-label="Adjust printable bottom"
+                className={`${styles.guideNode} ${styles.guideNodeSilver} ${dragging === "printable-bottom" ? styles.guideNodeActive : ""}`}
+                style={{ left: bodyLeftPx, top: printableBottomGuidePx }}
+                onPointerDown={handlePointerDown("printable-bottom")}
+                onMouseDown={handleMouseDown("printable-bottom")}
               />
               <button
                 type="button"
-                aria-label="Adjust handle top"
-                className={`${styles.guideNode} ${styles.guideNodeHandleOutline} ${dragging === "handle-top" ? styles.guideNodeActive : ""}`}
-                style={{ left: transformedHandleOuterRect.x, top: transformedHandleOuterRect.y }}
-                title="Adjust handle top"
-                onPointerDown={handlePointerDown("handle-top")}
-              />
-              <button
-                type="button"
-                aria-label="Adjust handle top"
-                className={`${styles.guideNode} ${styles.guideNodeHandleOutline} ${dragging === "handle-top" ? styles.guideNodeActive : ""}`}
-                style={{ left: transformedHandleOuterRect.x + transformedHandleOuterRect.width, top: transformedHandleOuterRect.y }}
-                title="Adjust handle top"
-                onPointerDown={handlePointerDown("handle-top")}
-              />
-              <button
-                type="button"
-                aria-label="Adjust handle bottom"
-                className={`${styles.guideNode} ${styles.guideNodeHandleOutline} ${dragging === "handle-bottom" ? styles.guideNodeActive : ""}`}
-                style={{ left: transformedHandleOuterRect.x, top: transformedHandleOuterRect.y + transformedHandleOuterRect.height }}
-                title="Adjust handle bottom"
-                onPointerDown={handlePointerDown("handle-bottom")}
-              />
-              <button
-                type="button"
-                aria-label="Adjust handle bottom"
-                className={`${styles.guideNode} ${styles.guideNodeHandleOutline} ${dragging === "handle-bottom" ? styles.guideNodeActive : ""}`}
-                style={{ left: transformedHandleOuterRect.x + transformedHandleOuterRect.width, top: transformedHandleOuterRect.y + transformedHandleOuterRect.height }}
-                title="Adjust handle bottom"
-                onPointerDown={handlePointerDown("handle-bottom")}
-              />
-              <button
-                type="button"
-                aria-label="Adjust handle reach"
-                className={`${styles.guideNode} ${styles.guideNodeHandleOutline} ${styles.guideNodeHandleReach} ${dragging === "handle-reach" ? styles.guideNodeActive : ""}`}
-                style={{
-                  left: activeDisplayPhoto?.handleSide === "left" ? transformedHandleOuterRect.x : transformedHandleOuterRect.x + transformedHandleOuterRect.width,
-                  top: transformedHandleOuterRect.y + transformedHandleOuterRect.height / 2,
-                }}
-                title="Adjust handle reach"
-                onPointerDown={handlePointerDown("handle-reach")}
+                aria-label="Adjust printable bottom"
+                className={`${styles.guideNode} ${styles.guideNodeSilver} ${dragging === "printable-bottom" ? styles.guideNodeActive : ""}`}
+                style={{ left: bodyLeftPx + bodyWidthPx, top: printableBottomGuidePx }}
+                onPointerDown={handlePointerDown("printable-bottom")}
+                onMouseDown={handleMouseDown("printable-bottom")}
               />
             </>
           )}
@@ -4289,7 +6312,7 @@ export function EngravableZoneEditor({
               <span className={styles.readoutValue}>{round1(derivedZoneGuides.straightWallHeightMm)} mm</span>
             </div>
           )}
-          {effectiveLidSeamGuideMm != null && (
+          {visualLidGuideMm != null && (
             <div className={styles.readoutRow}>
             <span className={styles.readoutLabel}>Lid top</span>
               <span className={styles.readoutInputWrap}>
@@ -4299,17 +6322,17 @@ export function EngravableZoneEditor({
                   min={0}
                   max={round1(Math.max(0, Math.min(
                     clampedBodyTopFromOverallMm + 28,
-                    (effectiveSilverBandGuideMm ?? clampedBodyBottomFromOverallMm) - 1,
+                    (visualSilverGuideMm ?? clampedBodyBottomFromOverallMm) - 1,
                   )))}
                   step={0.1}
-                  value={round1(effectiveLidSeamGuideMm)}
+                  value={round1(visualLidGuideMm)}
                   onChange={(e) => handleLidSeamInputChange(Number(e.target.value))}
                 />
                 <span className={styles.dimensionUnit}>mm</span>
               </span>
             </div>
           )}
-          {effectiveSilverBandGuideMm != null && (
+          {visualSilverGuideMm != null && (
             <div className={styles.readoutRow}>
               <span className={styles.readoutLabel}>Silver / powder line</span>
               <span className={styles.readoutInputWrap}>
@@ -4318,11 +6341,11 @@ export function EngravableZoneEditor({
                   type="number"
                   min={round1(Math.max(
                     clampedBodyTopFromOverallMm + 2,
-                    (effectiveLidSeamGuideMm ?? clampedBodyTopFromOverallMm) + 1,
+                    (visualLidGuideMm ?? clampedBodyTopFromOverallMm) + 1,
                   ))}
                   max={round1(clampedBodyBottomFromOverallMm)}
                   step={0.1}
-                  value={round1(effectiveSilverBandGuideMm)}
+                  value={round1(visualSilverGuideMm)}
                   onChange={(e) => handleSilverBandInputChange(Number(e.target.value))}
                 />
                 <span className={styles.dimensionUnit}>mm</span>
@@ -4356,7 +6379,10 @@ export function EngravableZoneEditor({
                 step={0.1}
                 value={printableBottomOverrideMm != null ? round1(printableBottomOverrideMm) : ""}
                 placeholder={String(round1(resolvedPrintableBottomMm))}
-                onChange={(e) => onPrintableBottomOverrideChange?.(parseOptionalMmInput(e.target.value))}
+                onChange={(e) => {
+                  markGuideAsManual("printableBottom");
+                  onPrintableBottomOverrideChange?.(parseOptionalMmInput(e.target.value));
+                }}
               />
               <span className={styles.dimensionUnit}>mm</span>
             </span>
@@ -4364,6 +6390,10 @@ export function EngravableZoneEditor({
           <div className={`${styles.readoutRow} ${styles.readoutHighlight}`}>
             <span className={styles.readoutLabel}>Printable height</span>
             <span className={styles.readoutValue}>{resolvedPrintableHeightMm} mm</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Printable center</span>
+            <span className={styles.readoutValue}>{resolvedPrintableCenterMm} mm</span>
           </div>
           <div className={styles.readoutRow}>
             <span className={styles.readoutLabel}>Top exclusions</span>
@@ -4383,6 +6413,30 @@ export function EngravableZoneEditor({
                 : `${activeDisplayPhoto.rimDetectionSource} ${Math.round((activeDisplayPhoto.rimDetectionConfidence ?? 0) * 100)}%`}
             </span>
           </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Band action</span>
+            <span className={styles.readoutInputWrap}>
+              <button
+                type="button"
+                className={`${styles.editorToolBtn} ${applyableBandValues ? styles.editorToolBtnPrimary : ""}`}
+                disabled={!applyableBandValues}
+                onClick={handleApplyAutoDetectedBands}
+              >
+                {autoDetectedBandValues
+                  ? (autoDetectedBandsCommitted ? "Re-apply auto" : "Apply auto-detect")
+                  : applyableBandValues
+                    ? "Apply visual estimate"
+                    : "No auto-detect"}
+              </button>
+            </span>
+          </div>
+          {applyableBandValues && (
+            <div className={styles.guideHint}>
+              {autoDetectedBandValues
+                ? "Apply the detected band split, then drag the edge dots or adjust the mm fields for manual refinement."
+                : "Apply the visual estimate, then drag the edge dots or adjust the mm fields for manual refinement."}
+            </div>
+          )}
           <div className={printableDetectionWeak ? styles.readoutWarning : styles.readoutHint}>
             {printableDetectionWeak
               ? "Top band detection is weak. Set printable top / bottom manually instead of trusting the auto split."
@@ -4400,7 +6454,10 @@ export function EngravableZoneEditor({
                     max={round1((effectiveHandleBottomMm ?? overallHeightMm) - 8)}
                     step={0.1}
                     value={round1(effectiveHandleTopMm ?? 0)}
-                    onChange={(e) => onHandleTopChange?.(round1(Number(e.target.value)))}
+                    onChange={(e) => {
+                      markHandleAsManual("top");
+                      onHandleTopChange?.(round1(Number(e.target.value)));
+                    }}
                   />
                   <span className={styles.dimensionUnit}>mm</span>
                 </span>
@@ -4415,7 +6472,10 @@ export function EngravableZoneEditor({
                     max={round1(overallHeightMm)}
                     step={0.1}
                     value={round1(effectiveHandleBottomMm ?? 0)}
-                    onChange={(e) => onHandleBottomChange?.(round1(Number(e.target.value)))}
+                    onChange={(e) => {
+                      markHandleAsManual("bottom");
+                      onHandleBottomChange?.(round1(Number(e.target.value)));
+                    }}
                   />
                   <span className={styles.dimensionUnit}>mm</span>
                 </span>
@@ -4430,7 +6490,10 @@ export function EngravableZoneEditor({
                     max={300}
                     step={0.1}
                     value={round1(effectiveHandleReachMm ?? 0)}
-                    onChange={(e) => onHandleReachChange?.(round1(Number(e.target.value)))}
+                    onChange={(e) => {
+                      markHandleAsManual("reach");
+                      onHandleReachChange?.(round1(Number(e.target.value)));
+                    }}
                   />
                   <span className={styles.dimensionUnit}>mm</span>
                 </span>

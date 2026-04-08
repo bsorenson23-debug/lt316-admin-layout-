@@ -17,6 +17,7 @@ export interface TumblerItemLookupDimensions {
   topDiameterMm: number | null;
   bottomDiameterMm: number | null;
   usableHeightMm: number | null;
+  handleSpanMm?: number | null;
 }
 
 export interface TumblerItemLookupFitBounds {
