@@ -1,6 +1,7 @@
 import type { FlatItemLookupResponse } from "./flatItemLookup";
 import type { TumblerFinish } from "./materials";
 import type {
+  BodyReferenceQAContract,
   CanonicalBodyProfile,
   CanonicalDimensionCalibration,
   CanonicalHandleProfile,
@@ -62,6 +63,9 @@ export interface SmartTemplateLookupDimensionsDraft {
   canonicalHandleProfile?: CanonicalHandleProfile | null;
   canonicalBodyProfile?: CanonicalBodyProfile | null;
   canonicalDimensionCalibration?: CanonicalDimensionCalibration | null;
+  bodyReferenceQA?: BodyReferenceQAContract | null;
+  bodyReferenceWarnings?: string[] | null;
+  bodyReferenceContractVersion?: number | null;
   shoulderDiameterMm?: number | null;
   taperUpperDiameterMm?: number | null;
   taperLowerDiameterMm?: number | null;
@@ -77,6 +81,7 @@ export interface SmartTemplateLookupDimensionsDraft {
   topMarginMm?: number | null;
   bottomMarginMm?: number | null;
   bodyColorHex?: string | null;
+  lidColorHex?: string | null;
   rimColorHex?: string | null;
 }
 

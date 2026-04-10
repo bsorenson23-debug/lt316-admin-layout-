@@ -2,6 +2,7 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import {
   type CanonicalBodyProfile,
   type CanonicalDimensionCalibration,
@@ -20,12 +21,16 @@ import {
 import type { AutoDetectResult } from "@/lib/autoDetect";
 import type { FlatItemLookupResponse } from "@/types/flatItemLookup";
 import type { TumblerFinish } from "@/types/materials";
+import type { TraceSettingsAssistResponse } from "@/types/imageAssist";
 import type { RasterVectorizeResponse } from "@/types/rasterVectorize";
 import type { SmartTemplateLookupResponse } from "@/types/smartTemplateLookup";
 import type { TumblerItemLookupFitDebug, TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
 import type { CatalogBatchImportSummary } from "@/lib/catalogBatchImport";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
 import { lookupFlatItem as lookupFlatItemRequest } from "@/lib/flatItemLookup";
+import { cleanupImageForTracing } from "@/lib/imageCleanupClient";
+import { detectLogoPlacementAssist, recommendTraceSettingsAssist } from "@/lib/imageAssistClient";
+import { removeBackgroundWithFallback } from "@/lib/removeBg";
 import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
 import { importCatalogTemplates } from "@/lib/catalogBatchImport";
 import { FLAT_BED_ITEMS, type FlatBedItem } from "@/data/flatBedItems";
@@ -42,14 +47,16 @@ import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHan
 import { getDefaultLaserSettings } from "@/lib/scopedDefaults";
 import { deriveEngravableZoneFromFitDebug, getEngravableDimensions } from "@/lib/engravableDimensions";
 import {
-  buildPrintableSurfaceResolution,
   getPrintableSurfaceLocalBounds,
   getPrintableSurfaceResolutionFromDimensions,
   type PrintableSurfaceDetection,
 } from "@/lib/printableSurface";
+import { buildTemplateHandlePreset } from "@/lib/handlePresets";
+import { buildTemplateLidPreset, type LidAssemblyPreset } from "@/lib/lidPresets";
 import {
   cloneReferenceLayerState,
   createEditableBodyOutline,
+  createEditableBodyOutlineFromTraceDebug,
   createDefaultReferenceLayerState,
   createEditableBodyOutlineFromSeedSvgText,
   createReferencePaths,
@@ -57,13 +64,17 @@ import {
 } from "@/lib/editableBodyOutline";
 import { extractCanonicalHandleProfileFromCutout } from "@/lib/canonicalHandleProfile";
 import {
-  buildCanonicalBodyProfile,
-  buildCanonicalDimensionCalibration,
   resolveCanonicalHandleRenderMode,
   summarizeCanonicalHandleDebug,
   summarizeCanonicalOrientationQA,
   summarizeCanonicalSilhouetteMismatch,
 } from "@/lib/canonicalDimensionCalibration";
+import {
+  BODY_REFERENCE_CONTRACT_VERSION,
+  createPersistedBodyReferencePipeline,
+  deriveBodyReferencePipeline,
+  type BodyReferencePipelineResult,
+} from "@/lib/bodyReferencePipeline";
 import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -76,7 +87,8 @@ import {
   type PipelineDebugSection,
 } from "./PipelineDebugDrawer";
 import { SmartTemplateLookupPanel } from "./SmartTemplateLookupPanel";
-import type { EditableHandlePreview, FlatPreviewDimensions, ModelViewerProps, TumblerDimensions } from "./ModelViewer";
+import type { FlatPreviewDimensions, ModelViewerProps, TumblerDimensions } from "./ModelViewer";
+import type { EditableHandlePreview } from "@/lib/editableHandleGeometry";
 import styles from "./TemplateCreateForm.module.css";
 
 const ModelViewer = dynamic<ModelViewerProps>(
@@ -96,6 +108,9 @@ export interface TemplateCreateFormHandle {
 }
 
 type PreviewModelMode = "alignment-model" | "full-model" | "source-traced";
+type TemplateReadinessStatus = "ready" | "review" | "action";
+
+const CATALOG_BATCH_IMPORT_AVAILABLE = false;
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -176,6 +191,85 @@ function getHandleContourBounds(points: Array<{ x: number; y: number }> | undefi
   };
 }
 
+function approximatelyEqual(a: number | undefined, b: number | undefined, epsilon = 0.01): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  return Math.abs(a - b) <= epsilon;
+}
+
+function canonicalHandleContourPointsEqual(
+  a: Array<{ x: number; y: number }> | undefined,
+  b: Array<{ x: number; y: number }> | undefined,
+  epsilon = 0.01,
+): boolean {
+  if (!a?.length || !b?.length) return (a?.length ?? 0) === (b?.length ?? 0);
+  if (a.length !== b.length) return false;
+  return a.every((point, index) =>
+    approximatelyEqual(point.x, b[index]?.x, epsilon) &&
+    approximatelyEqual(point.y, b[index]?.y, epsilon));
+}
+
+function canonicalHandleCenterlineEqual(
+  a: CanonicalHandleProfile["centerline"] | undefined,
+  b: CanonicalHandleProfile["centerline"] | undefined,
+  epsilon = 0.01,
+): boolean {
+  if (!a?.length || !b?.length) return (a?.length ?? 0) === (b?.length ?? 0);
+  if (a.length !== b.length) return false;
+  return a.every((point, index) =>
+    approximatelyEqual(point.t, b[index]?.t, epsilon) &&
+    approximatelyEqual(point.x, b[index]?.x, epsilon) &&
+    approximatelyEqual(point.y, b[index]?.y, epsilon));
+}
+
+function canonicalHandleWidthProfileEqual(
+  a: CanonicalHandleProfile["widthProfile"] | undefined,
+  b: CanonicalHandleProfile["widthProfile"] | undefined,
+  epsilon = 0.01,
+): boolean {
+  if (!a?.length || !b?.length) return (a?.length ?? 0) === (b?.length ?? 0);
+  if (a.length !== b.length) return false;
+  return a.every((sample, index) =>
+    approximatelyEqual(sample.t, b[index]?.t, epsilon) &&
+    approximatelyEqual(sample.widthPx, b[index]?.widthPx, epsilon));
+}
+
+function canonicalHandleProfilesEqual(
+  a: CanonicalHandleProfile | undefined,
+  b: CanonicalHandleProfile | undefined,
+  epsilon = 0.01,
+): boolean {
+  if (!a || !b) return !a && !b;
+  return a.side === b.side &&
+    approximatelyEqual(a.confidence, b.confidence, epsilon) &&
+    approximatelyEqual(a.anchors.upper.sNorm, b.anchors.upper.sNorm, epsilon) &&
+    approximatelyEqual(a.anchors.upper.xPx, b.anchors.upper.xPx, epsilon) &&
+    approximatelyEqual(a.anchors.upper.yPx, b.anchors.upper.yPx, epsilon) &&
+    approximatelyEqual(a.anchors.lower.sNorm, b.anchors.lower.sNorm, epsilon) &&
+    approximatelyEqual(a.anchors.lower.xPx, b.anchors.lower.xPx, epsilon) &&
+    approximatelyEqual(a.anchors.lower.yPx, b.anchors.lower.yPx, epsilon) &&
+    canonicalHandleContourPointsEqual(a.outerContour, b.outerContour, epsilon) &&
+    canonicalHandleContourPointsEqual(a.innerContour, b.innerContour, epsilon) &&
+    canonicalHandleCenterlineEqual(a.centerline, b.centerline, epsilon) &&
+    canonicalHandleWidthProfileEqual(a.widthProfile, b.widthProfile, epsilon) &&
+    approximatelyEqual(a.upperAttachmentWidthPx, b.upperAttachmentWidthPx, epsilon) &&
+    approximatelyEqual(a.lowerAttachmentWidthPx, b.lowerAttachmentWidthPx, epsilon) &&
+    approximatelyEqual(a.upperOpeningGapPx, b.upperOpeningGapPx, epsilon) &&
+    approximatelyEqual(a.lowerOpeningGapPx, b.lowerOpeningGapPx, epsilon) &&
+    approximatelyEqual(a.symmetricExtrusionWidthPx, b.symmetricExtrusionWidthPx, epsilon) &&
+    approximatelyEqual(a.openingBox?.x, b.openingBox?.x, epsilon) &&
+    approximatelyEqual(a.openingBox?.y, b.openingBox?.y, epsilon) &&
+    approximatelyEqual(a.openingBox?.w, b.openingBox?.w, epsilon) &&
+    approximatelyEqual(a.openingBox?.h, b.openingBox?.h, epsilon) &&
+    a.svgPathOuter === b.svgPathOuter &&
+    a.svgPathInner === b.svgPathInner;
+}
+
+function buildSourceContourSignature(outline: EditableBodyOutline | null | undefined): string {
+  const contour = outline?.sourceContour;
+  if (!contour?.length) return "";
+  return contour.map((point) => `${round2(point.x)}:${round2(point.y)}`).join("|");
+}
+
 function deriveMeasuredEditableHandlePreview(args: {
   fitDebug?: TumblerItemLookupFitDebug | null;
   handleProfile?: CanonicalHandleProfile | null;
@@ -209,8 +303,16 @@ function deriveMeasuredEditableHandlePreview(args: {
   }): EditableHandlePreview | null => {
     const topFromOverallMm = clampY(pxToMmY(seed.innerTopPx), bodyTopFromOverallMm, bodyBottomFromOverallMm - 24);
     const bottomFromOverallMm = clampY(pxToMmY(seed.innerBottomPx), topFromOverallMm + 24, bodyBottomFromOverallMm);
-    const outerTopFromOverallMm = clampY(pxToMmY(seed.outerTopPx), bodyTopFromOverallMm, topFromOverallMm);
-    const outerBottomFromOverallMm = clampY(pxToMmY(seed.outerBottomPx), bottomFromOverallMm, bodyBottomFromOverallMm);
+    const outerTopFromOverallMm = clampY(
+      pxToMmY(seed.outerTopPx),
+      bodyTopFromOverallMm,
+      bottomFromOverallMm - 4,
+    );
+    const outerBottomFromOverallMm = clampY(
+      pxToMmY(seed.outerBottomPx),
+      outerTopFromOverallMm + 4,
+      bodyBottomFromOverallMm,
+    );
     const outerWidthMm = Math.abs(pxToMmX(seed.outerEdgeXpx) - pxToMmX(seed.attachXpx));
     if (!(outerWidthMm > 4)) return null;
     const measuredWallMm = Math.max(3, Math.abs(seed.wallThicknessPx * sx));
@@ -422,6 +524,44 @@ function resolveReferenceLayerState(dimensions?: ProductTemplate["dimensions"]):
   return cloneReferenceLayerState(dimensions?.referenceLayerState ?? createDefaultReferenceLayerState());
 }
 
+function normalizeTemplateNameToken(value: string | number | null | undefined): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function formatCapacityOzLabel(value: string | number | null | undefined): string {
+  const raw = value != null ? String(value).trim() : "";
+  if (!raw) return "";
+  const normalizedValue = raw.replace(/\s*oz$/i, "").trim();
+  return normalizedValue ? `${normalizedValue}oz` : "";
+}
+
+function buildTemplateDisplayName(args: {
+  brand?: string | null;
+  model?: string | null;
+  capacityOz?: string | number | null;
+  fallbackTitle?: string | null;
+  fallbackRaw?: string | null;
+}): string {
+  const brand = args.brand?.trim() ?? "";
+  const model = args.model?.trim() ?? "";
+  const capacityToken = formatCapacityOzLabel(args.capacityOz);
+  const tokens: string[] = [];
+  if (brand) tokens.push(brand);
+  if (model) tokens.push(model);
+
+  if (capacityToken) {
+    const existing = normalizeTemplateNameToken(`${brand} ${model}`);
+    const normalizedCapacity = normalizeTemplateNameToken(capacityToken);
+    if (!existing.includes(normalizedCapacity)) {
+      tokens.push(capacityToken);
+    }
+  }
+
+  return tokens.join(" ").trim() || args.fallbackTitle?.trim() || args.fallbackRaw?.trim() || "";
+}
+
 /** Convert an image file to a data URL (max 480px on longest side for face photos) */
 function fileToFacePhotoDataUrl(file: File, maxSize = 480): Promise<string> {
   return new Promise((resolve) => {
@@ -436,7 +576,46 @@ function fileToFacePhotoDataUrl(file: File, maxSize = 480): Promise<string> {
       const ctx = canvas.getContext("2d");
       if (!ctx) { URL.revokeObjectURL(img.src); resolve(""); return; }
       ctx.drawImage(img, 0, 0, w, h);
+      let hasTransparency = false;
+      let minX = w;
+      let minY = h;
+      let maxX = -1;
+      let maxY = -1;
+      try {
+        const imageData = ctx.getImageData(0, 0, w, h);
+        const data = imageData.data;
+        for (let y = 0; y < h; y += 1) {
+          for (let x = 0; x < w; x += 1) {
+            const alpha = data[((y * w + x) * 4) + 3] ?? 0;
+            if (alpha < 250) hasTransparency = true;
+            if (alpha > 10) {
+              if (x < minX) minX = x;
+              if (y < minY) minY = y;
+              if (x > maxX) maxX = x;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+      } catch {
+        hasTransparency = false;
+      }
       URL.revokeObjectURL(img.src);
+      if (hasTransparency && maxX >= minX && maxY >= minY) {
+        const pad = Math.max(4, Math.round(Math.max(w, h) * 0.02));
+        const cropX = Math.max(0, minX - pad);
+        const cropY = Math.max(0, minY - pad);
+        const cropW = Math.max(1, Math.min(w - cropX, (maxX - minX + 1) + (pad * 2)));
+        const cropH = Math.max(1, Math.min(h - cropY, (maxY - minY + 1) + (pad * 2)));
+        const cropCanvas = document.createElement("canvas");
+        cropCanvas.width = cropW;
+        cropCanvas.height = cropH;
+        const cropCtx = cropCanvas.getContext("2d");
+        if (cropCtx) {
+          cropCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+          resolve(cropCanvas.toDataURL("image/png"));
+          return;
+        }
+      }
       resolve(canvas.toDataURL("image/jpeg", 0.85));
     };
     img.onerror = () => { URL.revokeObjectURL(img.src); resolve(""); };
@@ -477,6 +656,16 @@ async function fetchImageUrlAsDataUrl(url: string): Promise<string> {
   return payload.dataUrl;
 }
 
+function normalizeImageIdentity(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}${parsed.pathname}`.toLowerCase();
+  } catch {
+    return url.split("?")[0]?.trim().toLowerCase() || null;
+  }
+}
+
 async function dataUrlToFile(dataUrl: string, fileName: string): Promise<File> {
   const response = await fetch(dataUrl);
   const blob = await response.blob();
@@ -486,52 +675,97 @@ async function dataUrlToFile(dataUrl: string, fileName: string): Promise<File> {
 
 async function removeBackgroundForOutlineSeed(sourceDataUrl: string, fileName: string): Promise<string> {
   const sourceFile = await dataUrlToFile(sourceDataUrl, fileName);
-  const formData = new FormData();
-  formData.set("image", sourceFile);
-
-  try {
-    const response = await fetch("/api/admin/image/remove-bg", {
-      method: "POST",
-      body: formData,
-    });
-    const payload = await response.json().catch(() => null) as { dataUrl?: string; error?: string } | null;
-    if (response.ok && payload?.dataUrl) {
-      return payload.dataUrl;
-    }
-  } catch {
-    // Fall through to the local client-side background-removal fallback.
-  }
-
-  const blob = await (await fetch(sourceDataUrl)).blob();
-  const { removeBackground } = await import("@imgly/background-removal");
-  const cleanBlob = await removeBackground(blob, { model: "isnet_quint8", proxyToWorker: false });
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const nextUrl = typeof reader.result === "string" ? reader.result : "";
-      if (nextUrl) {
-        resolve(nextUrl);
-        return;
-      }
-      reject(new Error("Background removal did not return a usable image."));
-    };
-    reader.onerror = () => reject(new Error("Background removal output could not be read."));
-    reader.readAsDataURL(cleanBlob);
+  const result = await removeBackgroundWithFallback({
+    file: sourceFile,
+    preferServer: true,
+    localModel: "isnet_quint8",
   });
+  return result.dataUrl;
 }
 
-async function vectorizeOutlineSeedSvg(sourceDataUrl: string, fileName: string): Promise<string> {
+interface OutlineSeedTracePreparation {
+  sourceDataUrl: string;
+  cleanedDataUrl: string;
+  cleanupApplied: boolean;
+  traceSettings: TraceSettingsAssistResponse | null;
+  traceSourceDataUrl: string;
+}
+
+function resolveOutlineSeedTraceSource(args: {
+  sourceDataUrl: string;
+  cleanedDataUrl: string;
+  cleanupApplied: boolean;
+  traceSettings: TraceSettingsAssistResponse | null;
+}): string {
+  const { sourceDataUrl, cleanedDataUrl, cleanupApplied, traceSettings } = args;
+  if (!cleanupApplied) return sourceDataUrl;
+  if (!traceSettings) return cleanedDataUrl;
+  return traceSettings.backgroundStrategy === "original"
+    ? sourceDataUrl
+    : cleanedDataUrl;
+}
+
+async function prepareOutlineSeedTrace(sourceDataUrl: string, fileName: string): Promise<OutlineSeedTracePreparation> {
+  const sourceFile = await dataUrlToFile(sourceDataUrl, fileName);
+  let cleanedDataUrl = sourceDataUrl;
+  let cleanupApplied = false;
+
+  try {
+    const cleanupResult = await cleanupImageForTracing(sourceFile);
+    cleanedDataUrl = cleanupResult.dataUrl || sourceDataUrl;
+    cleanupApplied = Boolean(cleanupResult.cleaned && cleanupResult.dataUrl);
+  } catch {
+    cleanedDataUrl = await removeBackgroundForOutlineSeed(sourceDataUrl, fileName);
+    cleanupApplied = cleanedDataUrl !== sourceDataUrl;
+  }
+
+  let traceSettings: TraceSettingsAssistResponse | null = null;
+  try {
+    const assistFile = await dataUrlToFile(
+      cleanedDataUrl,
+      `${fileName.replace(/\.[^.]+$/, "")}-assist.png`,
+    );
+    traceSettings = await recommendTraceSettingsAssist(assistFile);
+  } catch {
+    traceSettings = null;
+  }
+
+  return {
+    sourceDataUrl,
+    cleanedDataUrl,
+    cleanupApplied,
+    traceSettings,
+    traceSourceDataUrl: resolveOutlineSeedTraceSource({
+      sourceDataUrl,
+      cleanedDataUrl,
+      cleanupApplied,
+      traceSettings,
+    }),
+  };
+}
+
+async function vectorizeOutlineSeedSvg(
+  sourceDataUrl: string,
+  fileName: string,
+  traceSettings?: TraceSettingsAssistResponse | null,
+): Promise<string> {
+  const settings = traceSettings ?? null;
   const sourceFile = await dataUrlToFile(sourceDataUrl, fileName);
   const formData = new FormData();
   formData.set("image", sourceFile);
   formData.set("mode", "trace");
-  formData.set("thresholdMode", "auto");
-  formData.set("invert", "true");
+  formData.set("thresholdMode", settings?.thresholdMode ?? "auto");
+  formData.set("threshold", String(settings?.threshold ?? 160));
+  formData.set("invert", String(settings?.invert ?? true));
   formData.set("normalizeLevels", "true");
   formData.set("trimWhitespace", "true");
   formData.set("preserveText", "false");
-  formData.set("recipe", "badge");
-  formData.set("backgroundStrategy", "cutout");
+  formData.set("recipe", settings?.traceRecipe ?? "badge");
+  formData.set("backgroundStrategy", settings?.backgroundStrategy ?? "cutout");
+  formData.set("turdSize", String(settings?.turdSize ?? 0));
+  formData.set("alphaMax", String(settings?.alphaMax ?? 0.35));
+  formData.set("optTolerance", String(settings?.optTolerance ?? 0.05));
+  formData.set("posterizeSteps", String(settings?.posterizeSteps ?? 4));
   formData.set("preferLocal", "true");
 
   const response = await fetch("/api/admin/image/vectorize", {
@@ -881,6 +1115,34 @@ function inferDrinkwareGlbStatus(args: {
   if (!args.productType || args.productType === "flat") return null;
   const trimmedPath = args.glbPath.trim();
   if (!trimmedPath) {
+    if (args.lookupResult?.modelStatus === "placeholder-model") {
+      return {
+        status: "missing-model",
+        sourceLabel: args.lookupResult.modelSourceLabel
+          ? `${args.lookupResult.modelSourceLabel} is available as a fallback only and is not bound to this preview.`
+          : "A placeholder model is available as a fallback only and is not bound to this preview.",
+      };
+    }
+    if (args.editingTemplate?.glbStatus === "placeholder-model") {
+      return {
+        status: "missing-model",
+        sourceLabel: args.editingTemplate.glbSourceLabel
+          ? `${args.editingTemplate.glbSourceLabel} is saved as a fallback only and is not bound to this preview.`
+          : "A placeholder model is saved as a fallback only and is not bound to this preview.",
+      };
+    }
+    if (args.lookupResult?.modelStatus) {
+      return {
+        status: args.lookupResult.modelStatus,
+        sourceLabel: args.lookupResult.modelSourceLabel ?? null,
+      };
+    }
+    if (args.editingTemplate?.glbStatus) {
+      return {
+        status: args.editingTemplate.glbStatus,
+        sourceLabel: args.editingTemplate.glbSourceLabel ?? null,
+      };
+    }
     return {
       status: "missing-model",
       sourceLabel: "No product model is attached yet.",
@@ -1081,6 +1343,15 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [batchImportStatus, setBatchImportStatus] = React.useState<string | null>(null);
   const [batchImportError, setBatchImportError] = React.useState<string | null>(null);
   const [batchImportSummary, setBatchImportSummary] = React.useState<CatalogBatchImportSummary | null>(null);
+  const batchImportDisabledReason = React.useMemo(() => {
+    if (!CATALOG_BATCH_IMPORT_AVAILABLE) {
+      return "Catalog batch import is scaffolded but not available in this build yet.";
+    }
+    if (!batchImportUrl.trim()) {
+      return "Paste an official catalog or collection URL first.";
+    }
+    return null;
+  }, [batchImportUrl]);
   const [smartLookupApplied, setSmartLookupApplied] = React.useState(false);
   const clearLookupState = React.useCallback((options?: { keepInput?: boolean; clearFamilyKey?: boolean }) => {
     autoZoneSignatureRef.current = "";
@@ -1207,10 +1478,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     editingTemplate?.dimensions.handleLowerTransitionFromOverallMm,
   );
   const [handleOuterTopFromOverallMm, setHandleOuterTopFromOverallMm] = React.useState<number | undefined>(
-    editingTemplate?.dimensions.handleOuterTopFromOverallMm,
+    undefined,
   );
   const [handleOuterBottomFromOverallMm, setHandleOuterBottomFromOverallMm] = React.useState<number | undefined>(
-    editingTemplate?.dimensions.handleOuterBottomFromOverallMm,
+    undefined,
   );
   const [handleTubeDiameterMm, setHandleTubeDiameterMm] = React.useState<number | undefined>(
     editingTemplate?.dimensions.handleTubeDiameterMm,
@@ -1221,6 +1492,17 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [canonicalHandleProfile, setCanonicalHandleProfile] = React.useState<CanonicalHandleProfile | undefined>(
     editingTemplate?.dimensions.canonicalHandleProfile,
   );
+  const canonicalHandleProfileRef = React.useRef<CanonicalHandleProfile | undefined>(
+    editingTemplate?.dimensions.canonicalHandleProfile,
+  );
+  React.useEffect(() => {
+    canonicalHandleProfileRef.current = canonicalHandleProfile;
+  }, [canonicalHandleProfile]);
+  const commitCanonicalHandleProfile = React.useCallback((next: CanonicalHandleProfile | undefined) => {
+    if (canonicalHandleProfilesEqual(canonicalHandleProfileRef.current, next)) return;
+    canonicalHandleProfileRef.current = next;
+    setCanonicalHandleProfile((current) => (canonicalHandleProfilesEqual(current, next) ? current : next));
+  }, []);
   const [shoulderDiameterMm, setShoulderDiameterMm] = React.useState<number | undefined>(
     editingTemplate?.dimensions.shoulderDiameterMm,
   );
@@ -1261,9 +1543,29 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     lookupResult,
     editingTemplate,
   }), [editingTemplate, glbPath, lookupResult, productType]);
+  const resolvedDrinkwarePreviewModelUrl = React.useMemo(() => {
+    if (productType === "flat") {
+      return glbPath.trim() || undefined;
+    }
+    if (activeDrinkwareGlbStatus?.status !== "verified-product-model") {
+      return undefined;
+    }
+    return glbPath.trim() || undefined;
+  }, [activeDrinkwareGlbStatus?.status, glbPath, productType]);
   const [previewModelMode, setPreviewModelMode] = React.useState<PreviewModelMode>(
     productType !== "flat" ? "alignment-model" : "source-traced",
   );
+  const currentMatchedProfile = React.useMemo(() => {
+    if (productType === "flat") return null;
+    const profileId =
+      lookupResult?.matchedProfileId ??
+      findTumblerProfileIdForBrandModel({
+        brand,
+        model: name,
+        capacityOz: parseCapacityOzValue(capacity),
+      });
+    return profileId ? getTumblerProfileById(profileId) : null;
+  }, [brand, capacity, lookupResult?.matchedProfileId, name, productType]);
   const previewModeUserSelectedRef = React.useRef(false);
   const handlePreviewModelModeChange = React.useCallback((nextMode: PreviewModelMode) => {
     previewModeUserSelectedRef.current = true;
@@ -1293,6 +1595,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   );
   const [bodyColorHex, setBodyColorHex] = React.useState(
     editingTemplate?.dimensions.bodyColorHex ?? "#b0b8c4",
+  );
+  const [lidColorHex, setLidColorHex] = React.useState(
+    editingTemplate?.dimensions.lidColorHex ?? editingTemplate?.dimensions.bodyColorHex ?? "#b0b8c4",
   );
   const [rimColorHex, setRimColorHex] = React.useState(
     editingTemplate?.dimensions.rimColorHex ?? "#d0d0d0",
@@ -1441,8 +1746,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     editingTemplate?.tumblerMapping,
   );
   const [showMappingWizard, setShowMappingWizard] = React.useState(false);
-  const handleAutoSampleColors = React.useCallback((nextBody: string, nextRim: string) => {
+  const handleAutoSampleColors = React.useCallback((nextBody: string, nextLid: string, nextRim: string) => {
     setBodyColorHex((prev) => (prev === nextBody ? prev : nextBody));
+    setLidColorHex((prev) => (prev === nextLid ? prev : nextLid));
     setRimColorHex((prev) => (prev === nextRim ? prev : nextRim));
     if (!materialProfileTouchedRef.current && productType && productType !== "flat") {
       applyResolvedDrinkwareMaterial({
@@ -1459,6 +1765,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     applyResolvedDrinkwareMaterial,
     brand,
     capacity,
+    lidColorHex,
     laserType,
     name,
     productType,
@@ -1550,12 +1857,70 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   );
   const [frontBgStatus, setFrontBgStatus] = React.useState<"idle" | "processing" | "done" | "failed">("idle");
   const [backBgStatus, setBackBgStatus] = React.useState<"idle" | "processing" | "done" | "failed">("idle");
+  const [outlineAssistStatus, setOutlineAssistStatus] = React.useState<"idle" | "processing" | "done" | "failed">("idle");
+  const [outlineAssistNote, setOutlineAssistNote] = React.useState<string | null>(null);
+  const [logoAssistStatus, setLogoAssistStatus] = React.useState<"idle" | "processing" | "done" | "failed">("idle");
+  const [logoAssistNote, setLogoAssistNote] = React.useState<string | null>(null);
   const [frontUseOriginal, setFrontUseOriginal] = React.useState(false);
   const [backUseOriginal, setBackUseOriginal] = React.useState(false);
   const [mirrorForBack, setMirrorForBack] = React.useState(false);
   const autoZoneSignatureRef = React.useRef<string>("");
   const bodyOutlineSeedSignatureRef = React.useRef<string>("");
   const manufacturerLogoSignatureRef = React.useRef<string>("");
+  const referenceSelection = productReferenceSet?.canonicalViewSelection;
+  const referenceImagesById = React.useMemo(() => {
+    const nextMap = new Map<string, ProductReferenceSet["images"][number]>();
+    for (const image of productReferenceSet?.images ?? []) {
+      nextMap.set(image.id, image);
+    }
+    return nextMap;
+  }, [productReferenceSet]);
+  const canonicalFrontReferenceImage = referenceSelection?.canonicalFrontImageId
+    ? (referenceImagesById.get(referenceSelection.canonicalFrontImageId) ?? null)
+    : null;
+  const traceDebugReferenceImage = React.useMemo(() => {
+    const identity = normalizeImageIdentity(flatLookupResult?.traceDebug?.sourceImageUrl);
+    if (!identity) return null;
+    for (const image of referenceImagesById.values()) {
+      if (normalizeImageIdentity(image.url) === identity) {
+        return image;
+      }
+    }
+    return null;
+  }, [flatLookupResult?.traceDebug?.sourceImageUrl, referenceImagesById]);
+  const preferredBodyReferenceImage =
+    !lookupResult?.fitDebug &&
+    flatLookupResult?.traceDebug?.accepted &&
+    traceDebugReferenceImage
+      ? traceDebugReferenceImage
+      : canonicalFrontReferenceImage;
+  const resolvedCalibrationHandleSide = React.useMemo<"left" | "right" | null>(() => {
+    const candidates = [
+      lookupResult?.fitDebug?.handleSide,
+      preferredBodyReferenceImage?.handleSide,
+      canonicalFrontReferenceImage?.handleSide,
+      canonicalHandleProfile?.side,
+    ];
+    for (const candidate of candidates) {
+      if (candidate === "left" || candidate === "right") return candidate;
+    }
+    return null;
+  }, [
+    canonicalFrontReferenceImage?.handleSide,
+    canonicalHandleProfile?.side,
+    lookupResult?.fitDebug?.handleSide,
+    preferredBodyReferenceImage?.handleSide,
+  ]);
+  const normalizedCanonicalHandleProfile = React.useMemo<CanonicalHandleProfile | undefined>(() => {
+    if (!canonicalHandleProfile) return undefined;
+    if (!resolvedCalibrationHandleSide || canonicalHandleProfile.side === resolvedCalibrationHandleSide) {
+      return canonicalHandleProfile;
+    }
+    return {
+      ...canonicalHandleProfile,
+      side: resolvedCalibrationHandleSide,
+    };
+  }, [canonicalHandleProfile, resolvedCalibrationHandleSide]);
   const activeReferencePhotoDataUrl = React.useMemo(
     () => bodyReferencePhotoDataUrl || frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl || "",
     [bodyReferencePhotoDataUrl, frontCleanUrl, frontPhotoDataUrl, productPhotoFullUrl],
@@ -1565,7 +1930,18 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       setPrintableSurfaceDetection(null);
     }
   }, [activeReferencePhotoDataUrl, productType]);
-  const activeBodyReferenceOutline = referencePaths.bodyOutline ?? bodyOutlineProfile ?? null;
+  const activeBodyReferenceOutline = React.useMemo(
+    () => referencePaths.bodyOutline ?? bodyOutlineProfile ?? null,
+    [bodyOutlineProfile, referencePaths.bodyOutline],
+  );
+  const activeBodyReferenceOutlineSignature = React.useMemo(
+    () => buildSourceContourSignature(activeBodyReferenceOutline),
+    [activeBodyReferenceOutline],
+  );
+  const handleSyncBodyReferenceOutline = React.useMemo(
+    () => activeBodyReferenceOutline,
+    [activeBodyReferenceOutlineSignature],
+  );
   const calibrationBodyOutline = React.useMemo<EditableBodyOutline | null>(() => {
     if (productType === "flat" || overallHeightMm <= 0 || effectiveCylinderDiameterMm <= 0) {
       return null;
@@ -1600,6 +1976,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   ]);
   const persistedCanonicalBodyProfile = editingTemplate?.dimensions.canonicalBodyProfile ?? null;
   const persistedCanonicalDimensionCalibration = editingTemplate?.dimensions.canonicalDimensionCalibration ?? null;
+  const persistedBodyReferenceQa = editingTemplate?.dimensions.bodyReferenceQA ?? null;
+  const persistedBodyReferenceWarnings = editingTemplate?.dimensions.bodyReferenceWarnings ?? null;
+  const persistedBodyReferenceContractVersion = editingTemplate?.dimensions.bodyReferenceContractVersion ?? null;
   const persistedPrintableSurfaceResolution = React.useMemo(
     () => (editingTemplate
       ? getPrintableSurfaceResolutionFromDimensions(
@@ -1609,56 +1988,26 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       : null),
     [editingTemplate],
   );
-  const activeCanonicalBodyProfile = React.useMemo<CanonicalBodyProfile | null>(() => {
-    if (productType === "flat" || !overallHeightMm || !calibrationBodyOutline) return persistedCanonicalBodyProfile;
-    return buildCanonicalBodyProfile({
-      outline: calibrationBodyOutline,
-      overallHeightMm,
-      bodyTopFromOverallMm,
-      bodyBottomFromOverallMm,
-      bodyDiameterMm: effectiveCylinderDiameterMm,
-      handleSide: canonicalHandleProfile?.side ?? lookupResult?.fitDebug?.handleSide ?? null,
-      fitDebug: lookupResult?.fitDebug ?? null,
-    }) ?? persistedCanonicalBodyProfile;
-  }, [
-    bodyBottomFromOverallMm,
-    bodyTopFromOverallMm,
-    calibrationBodyOutline,
-    canonicalHandleProfile?.side,
-    effectiveCylinderDiameterMm,
-    persistedCanonicalBodyProfile,
-    lookupResult?.fitDebug,
-    overallHeightMm,
-    productType,
-  ]);
-  const provisionalCanonicalDimensionCalibration = React.useMemo<CanonicalDimensionCalibration | null>(() => {
-    if (productType === "flat" || !overallHeightMm || effectiveCylinderDiameterMm <= 0 || !calibrationBodyOutline) {
-      return persistedCanonicalDimensionCalibration;
-    }
-    return buildCanonicalDimensionCalibration({
-      outline: calibrationBodyOutline,
-      overallHeightMm,
-      bodyTopFromOverallMm,
-      bodyBottomFromOverallMm,
-      wrapDiameterMm: effectiveCylinderDiameterMm,
-      baseDiameterMm,
-      handleArcDeg,
-      handleSide: canonicalHandleProfile?.side ?? lookupResult?.fitDebug?.handleSide ?? null,
-      fitDebug: lookupResult?.fitDebug ?? null,
-    }) ?? persistedCanonicalDimensionCalibration;
-  }, [
-    baseDiameterMm,
-    bodyBottomFromOverallMm,
-    bodyTopFromOverallMm,
-    calibrationBodyOutline,
-    canonicalHandleProfile?.side,
-    effectiveCylinderDiameterMm,
-    handleArcDeg,
-    lookupResult?.fitDebug,
-    overallHeightMm,
-    persistedCanonicalDimensionCalibration,
-    productType,
-  ]);
+  const persistedBodyReferencePipeline = React.useMemo<BodyReferencePipelineResult | null>(
+    () => createPersistedBodyReferencePipeline({
+      outline: editingTemplate?.dimensions.bodyOutlineProfile ?? null,
+      canonicalBodyProfile: persistedCanonicalBodyProfile,
+      canonicalDimensionCalibration: persistedCanonicalDimensionCalibration,
+      printableSurfaceResolution: persistedPrintableSurfaceResolution,
+      bodyReferenceQA: persistedBodyReferenceQa,
+      bodyReferenceWarnings: persistedBodyReferenceWarnings,
+      bodyReferenceContractVersion: persistedBodyReferenceContractVersion,
+    }),
+    [
+      editingTemplate?.dimensions.bodyOutlineProfile,
+      persistedCanonicalBodyProfile,
+      persistedCanonicalDimensionCalibration,
+      persistedBodyReferenceContractVersion,
+      persistedBodyReferenceQa,
+      persistedBodyReferenceWarnings,
+      persistedPrintableSurfaceResolution,
+    ],
+  );
   const usePersistedPrintableSurfaceFallback =
     productType !== "flat" &&
     !printableSurfaceDetection &&
@@ -1704,6 +2053,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   React.useEffect(() => {
     if (productType === "flat") return;
     if (Number.isFinite(printableTopOverrideMm) || Number.isFinite(printableBottomOverrideMm)) return;
+    if (Number.isFinite(lidSeamFromOverallMm) || Number.isFinite(silverBandBottomFromOverallMm)) return;
     if (!Number.isFinite(printableSurfaceDetection?.rimRingBottomFromOverallMm)) return;
 
     const detectionKey = [
@@ -1722,32 +2072,40 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
     setSilverBandBottomFromOverallMm(round2(Math.max(0, printableSurfaceDetection?.rimRingBottomFromOverallMm ?? 0)));
   }, [
+    lidSeamFromOverallMm,
     printableBottomOverrideMm,
     printableSurfaceDetection?.lidSeamFromOverallMm,
     printableSurfaceDetection?.rimRingBottomFromOverallMm,
     printableSurfaceDetection?.source,
     printableTopOverrideMm,
     productType,
+    silverBandBottomFromOverallMm,
   ]);
   const hasSemanticTopBandData = React.useMemo(
     () => Number.isFinite(resolvedLidSeamForPersistence) || Number.isFinite(resolvedSilverBandBottomForPersistence),
     [resolvedLidSeamForPersistence, resolvedSilverBandBottomForPersistence],
   );
-  const activePrintableSurfaceResolution = React.useMemo(() => {
+  const activeBodyReferencePipeline = React.useMemo<BodyReferencePipelineResult | null>(() => {
     if (
       productType === "flat" ||
-      overallHeightMm <= 0 ||
+      !overallHeightMm ||
+      effectiveCylinderDiameterMm <= 0 ||
+      !calibrationBodyOutline ||
       !Number.isFinite(bodyTopFromOverallMm) ||
       !Number.isFinite(bodyBottomFromOverallMm) ||
       bodyBottomFromOverallMm <= bodyTopFromOverallMm
     ) {
-      return persistedPrintableSurfaceResolution;
+      return persistedBodyReferencePipeline;
     }
-
-    return buildPrintableSurfaceResolution({
+    return deriveBodyReferencePipeline({
+      outline: calibrationBodyOutline,
       overallHeightMm,
       bodyTopFromOverallMm,
       bodyBottomFromOverallMm,
+      wrapDiameterMm: effectiveCylinderDiameterMm,
+      baseDiameterMm,
+      handleArcDeg,
+      handleSide: resolvedCalibrationHandleSide,
       lidSeamFromOverallMm:
         resolvedLidSeamForPersistence ??
         (usePersistedPrintableSurfaceFallback ? persistedLidBoundaryMm : undefined),
@@ -1765,169 +2123,120 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           ? persistedPrintableSurfaceResolution?.printableSurfaceContract.printableBottomMm
           : undefined),
       baseBandStartMm: usePersistedPrintableSurfaceFallback ? persistedBaseBandStartMm : undefined,
-      handleKeepOutStartMm:
-        provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm ??
-        persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
-      handleKeepOutEndMm:
-        provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm ??
-        persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
       detection: printableSurfaceDetection,
-    });
-  }, [
-    bodyBottomFromOverallMm,
-    bodyTopFromOverallMm,
-    overallHeightMm,
-    persistedBaseBandStartMm,
-    persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
-    persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
-    persistedLidBoundaryMm,
-    persistedRimBoundaryMm,
-    persistedPrintableSurfaceResolution,
-    printableBottomOverrideMm,
-    printableSurfaceDetection,
-    printableTopOverrideMm,
-    productType,
-    provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
-    provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
-    resolvedLidSeamForPersistence,
-    resolvedSilverBandBottomForPersistence,
-    usePersistedPrintableSurfaceFallback,
-  ]);
-  const activeCanonicalDimensionCalibration = React.useMemo<CanonicalDimensionCalibration | null>(() => {
-    if (productType === "flat" || !overallHeightMm || effectiveCylinderDiameterMm <= 0 || !calibrationBodyOutline) {
-      return persistedCanonicalDimensionCalibration;
-    }
-    return buildCanonicalDimensionCalibration({
-      outline: calibrationBodyOutline,
-      overallHeightMm,
-      bodyTopFromOverallMm,
-      bodyBottomFromOverallMm,
-      wrapDiameterMm: effectiveCylinderDiameterMm,
-      baseDiameterMm,
-      handleArcDeg,
-      handleSide: canonicalHandleProfile?.side ?? lookupResult?.fitDebug?.handleSide ?? null,
-      axialSurfaceBands: activePrintableSurfaceResolution?.axialSurfaceBands ?? null,
-      printableSurfaceContract: activePrintableSurfaceResolution?.printableSurfaceContract ?? null,
       fitDebug: lookupResult?.fitDebug ?? null,
-    }) ?? provisionalCanonicalDimensionCalibration ?? persistedCanonicalDimensionCalibration;
+    }) ?? persistedBodyReferencePipeline;
   }, [
-    activePrintableSurfaceResolution?.axialSurfaceBands,
-    activePrintableSurfaceResolution?.printableSurfaceContract,
     baseDiameterMm,
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
     calibrationBodyOutline,
-    canonicalHandleProfile?.side,
     effectiveCylinderDiameterMm,
     handleArcDeg,
     lookupResult?.fitDebug,
     overallHeightMm,
-    persistedCanonicalDimensionCalibration,
-    productType,
-    provisionalCanonicalDimensionCalibration,
-  ]);
-  const previewPrintableSurfaceContract = React.useMemo(() => {
-    if (productType === "flat" || overallHeightMm <= 0) {
-      return activePrintableSurfaceResolution?.printableSurfaceContract ?? null;
-    }
-    if (activePrintableSurfaceResolution?.printableSurfaceContract) {
-      return activePrintableSurfaceResolution.printableSurfaceContract;
-    }
-
-    const fallbackBodyTopMm = Number.isFinite(bodyTopFromOverallMm)
-      ? Math.max(0, bodyTopFromOverallMm)
-      : (Number.isFinite(topMarginMm) ? Math.max(0, topMarginMm) : null);
-    const fallbackBodyBottomMm = Number.isFinite(bodyBottomFromOverallMm)
-      ? bodyBottomFromOverallMm
-      : (
-          Number.isFinite(bottomMarginMm)
-            ? Math.max((fallbackBodyTopMm ?? 0) + 1, overallHeightMm - bottomMarginMm)
-            : null
-        );
-    if (
-      fallbackBodyTopMm == null ||
-      fallbackBodyBottomMm == null ||
-      !Number.isFinite(fallbackBodyTopMm) ||
-      !Number.isFinite(fallbackBodyBottomMm) ||
-      fallbackBodyBottomMm <= fallbackBodyTopMm
-    ) {
-      return null;
-    }
-
-    return buildPrintableSurfaceResolution({
-      overallHeightMm,
-      bodyTopFromOverallMm: fallbackBodyTopMm,
-      bodyBottomFromOverallMm: fallbackBodyBottomMm,
-      lidSeamFromOverallMm: resolvedLidSeamForPersistence,
-      silverBandBottomFromOverallMm: resolvedSilverBandBottomForPersistence,
-      printableTopOverrideMm,
-      printableBottomOverrideMm,
-      handleKeepOutStartMm:
-        activeCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm ??
-        provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm ??
-        persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
-      handleKeepOutEndMm:
-        activeCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm ??
-        provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm ??
-        persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
-      detection: printableSurfaceDetection,
-    }).printableSurfaceContract;
-  }, [
-    activeCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
-    activeCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
-    activePrintableSurfaceResolution?.printableSurfaceContract,
-    bodyBottomFromOverallMm,
-    bodyTopFromOverallMm,
-    bottomMarginMm,
-    overallHeightMm,
-    persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
-    persistedCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
+    persistedBaseBandStartMm,
+    persistedBodyReferencePipeline,
+    persistedLidBoundaryMm,
+    persistedPrintableSurfaceResolution,
+    persistedRimBoundaryMm,
     printableBottomOverrideMm,
     printableSurfaceDetection,
     printableTopOverrideMm,
     productType,
-    provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutEndMm,
-    provisionalCanonicalDimensionCalibration?.wrapMappingMm.handleKeepOutStartMm,
+    resolvedCalibrationHandleSide,
     resolvedLidSeamForPersistence,
     resolvedSilverBandBottomForPersistence,
-    topMarginMm,
+    usePersistedPrintableSurfaceFallback,
   ]);
+  const activeCanonicalBodyProfile =
+    activeBodyReferencePipeline?.canonicalBodyProfile ?? null;
+  const activeCanonicalDimensionCalibration =
+    activeBodyReferencePipeline?.canonicalDimensionCalibration ?? null;
+  const activePrintableSurfaceResolution =
+    activeBodyReferencePipeline?.printableSurfaceResolution ?? null;
+  const bodyReferenceWarnings = activeBodyReferencePipeline?.warnings ?? [];
+  const bodyReferenceQa = activeBodyReferencePipeline?.qa ?? null;
+  const bodyReferenceContractVersion =
+    productType === "flat" ? null : BODY_REFERENCE_CONTRACT_VERSION;
+  const fullPreviewBodyTopMm = React.useMemo(() => {
+    const resolvedBodyTopMm =
+      activeCanonicalDimensionCalibration?.lidBodyLineMm != null
+        ? activeCanonicalDimensionCalibration.lidBodyLineMm
+        : bodyTopFromOverallMm;
+    return round2(Math.max(0, resolvedBodyTopMm));
+  }, [
+    activeCanonicalDimensionCalibration?.lidBodyLineMm,
+    bodyTopFromOverallMm,
+  ]);
+  const fullPreviewCanonicalDimensionCalibration =
+    activeCanonicalDimensionCalibration;
+  const fullPreviewCanonicalBodyProfile =
+    activeCanonicalBodyProfile;
+  const previewPrintableSurfaceContract =
+    activePrintableSurfaceResolution?.printableSurfaceContract ??
+    activeCanonicalDimensionCalibration?.printableSurfaceContract ??
+    null;
   const liveTumblerDims = React.useMemo<TumblerDimensions | null>(() => {
     if (!productType || productType === "flat" || effectiveCylinderDiameterMm <= 0 || printHeightMm <= 0) return null;
     const printableSurfaceContract = previewPrintableSurfaceContract;
+    const resolvedOverallHeightMm =
+      activeCanonicalDimensionCalibration?.totalHeightMm && activeCanonicalDimensionCalibration.totalHeightMm > 0
+        ? activeCanonicalDimensionCalibration.totalHeightMm
+        : overallHeightMm;
+    const resolvedDiameterMm =
+      activeCanonicalDimensionCalibration?.wrapDiameterMm && activeCanonicalDimensionCalibration.wrapDiameterMm > 0
+        ? activeCanonicalDimensionCalibration.wrapDiameterMm
+        : effectiveCylinderDiameterMm;
+    const resolvedBodyTopMm =
+      activeCanonicalDimensionCalibration?.lidBodyLineMm != null
+        ? activeCanonicalDimensionCalibration.lidBodyLineMm
+        : bodyTopFromOverallMm;
+    const resolvedBodyBottomMm =
+      activeCanonicalDimensionCalibration?.bodyBottomMm != null
+        ? activeCanonicalDimensionCalibration.bodyBottomMm
+        : bodyBottomFromOverallMm;
+    const resolvedRenderBodyTopMm = Math.max(0, resolvedBodyTopMm);
+    const resolvedPrintableContract =
+      activeCanonicalDimensionCalibration?.printableSurfaceContract ?? printableSurfaceContract;
     const resolvedPrintableHeightMm =
-      printableSurfaceContract?.printableHeightMm && printableSurfaceContract.printableHeightMm > 0
-        ? printableSurfaceContract.printableHeightMm
+      resolvedPrintableContract?.printableHeightMm && resolvedPrintableContract.printableHeightMm > 0
+        ? resolvedPrintableContract.printableHeightMm
         : printHeightMm;
     const resolvedPrintableTopOffsetMm =
-      overallHeightMm > 0 && Number.isFinite(printableSurfaceContract?.printableTopMm)
-        ? round2(Math.max(0, printableSurfaceContract?.printableTopMm ?? 0))
+      resolvedOverallHeightMm > 0 && Number.isFinite(resolvedPrintableContract?.printableTopMm)
+        ? round2(Math.max(0, resolvedPrintableContract?.printableTopMm ?? 0))
         : topMarginMm > 0
           ? round2(topMarginMm)
           : undefined;
 
     return {
-      overallHeightMm: overallHeightMm > 0 ? round2(overallHeightMm) : round2(printHeightMm),
-      diameterMm: round2(effectiveCylinderDiameterMm),
+      overallHeightMm: resolvedOverallHeightMm > 0 ? round2(resolvedOverallHeightMm) : round2(printHeightMm),
+      diameterMm: round2(resolvedDiameterMm),
       topDiameterMm: topOuterDiameterMm > 0 ? round2(topOuterDiameterMm) : undefined,
       bottomDiameterMm: baseDiameterMm > 0 ? round2(baseDiameterMm) : undefined,
-      bodyTopOffsetMm: overallHeightMm > 0 ? round2(Math.max(0, bodyTopFromOverallMm)) : undefined,
+      bodyTopOffsetMm: resolvedOverallHeightMm > 0 ? round2(Math.max(0, resolvedRenderBodyTopMm)) : undefined,
       bodyHeightMm:
-        overallHeightMm > 0
-          ? round2(Math.max(0, bodyBottomFromOverallMm - bodyTopFromOverallMm))
+        resolvedOverallHeightMm > 0
+          ? round2(Math.max(0, resolvedBodyBottomMm - resolvedRenderBodyTopMm))
           : undefined,
       printableHeightMm: round2(resolvedPrintableHeightMm),
       printableTopOffsetMm: resolvedPrintableTopOffsetMm,
       lidSeamFromOverallMm:
-        overallHeightMm > 0 && Number.isFinite(resolvedLidSeamForPersistence)
+        resolvedOverallHeightMm > 0 && Number.isFinite(resolvedLidSeamForPersistence)
           ? round2(Math.max(0, resolvedLidSeamForPersistence ?? 0))
           : undefined,
       silverBandBottomFromOverallMm:
-        overallHeightMm > 0 && Number.isFinite(resolvedSilverBandBottomForPersistence)
+        resolvedOverallHeightMm > 0 && Number.isFinite(resolvedSilverBandBottomForPersistence)
           ? round2(Math.max(0, resolvedSilverBandBottomForPersistence ?? 0))
           : undefined,
     };
   }, [
+    activeCanonicalDimensionCalibration?.bodyBottomMm,
+    activeCanonicalDimensionCalibration?.lidBodyLineMm,
+    activeCanonicalDimensionCalibration?.printableSurfaceContract,
+    activeCanonicalDimensionCalibration?.totalHeightMm,
+    activeCanonicalDimensionCalibration?.wrapDiameterMm,
     previewPrintableSurfaceContract,
     productType,
     effectiveCylinderDiameterMm,
@@ -1940,6 +2249,110 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     resolvedLidSeamForPersistence,
     resolvedSilverBandBottomForPersistence,
     topMarginMm,
+  ]);
+  const fullPreviewTumblerDims = React.useMemo<TumblerDimensions | null>(() => {
+    if (!productType || productType === "flat" || effectiveCylinderDiameterMm <= 0 || printHeightMm <= 0) return null;
+    const resolvedOverallHeightMm =
+      fullPreviewCanonicalDimensionCalibration?.totalHeightMm && fullPreviewCanonicalDimensionCalibration.totalHeightMm > 0
+        ? fullPreviewCanonicalDimensionCalibration.totalHeightMm
+        : (
+            activeCanonicalDimensionCalibration?.totalHeightMm && activeCanonicalDimensionCalibration.totalHeightMm > 0
+              ? activeCanonicalDimensionCalibration.totalHeightMm
+              : overallHeightMm
+          );
+    const resolvedDiameterMm =
+      fullPreviewCanonicalDimensionCalibration?.wrapDiameterMm && fullPreviewCanonicalDimensionCalibration.wrapDiameterMm > 0
+        ? fullPreviewCanonicalDimensionCalibration.wrapDiameterMm
+        : (
+            activeCanonicalDimensionCalibration?.wrapDiameterMm && activeCanonicalDimensionCalibration.wrapDiameterMm > 0
+              ? activeCanonicalDimensionCalibration.wrapDiameterMm
+              : effectiveCylinderDiameterMm
+          );
+    const resolvedBodyBottomMm =
+      fullPreviewCanonicalDimensionCalibration?.bodyBottomMm != null
+        ? fullPreviewCanonicalDimensionCalibration.bodyBottomMm
+        : (
+            activeCanonicalDimensionCalibration?.bodyBottomMm != null
+              ? activeCanonicalDimensionCalibration.bodyBottomMm
+              : bodyBottomFromOverallMm
+          );
+    const resolvedPrintableContract =
+      fullPreviewCanonicalDimensionCalibration?.printableSurfaceContract ??
+      activeCanonicalDimensionCalibration?.printableSurfaceContract ??
+      previewPrintableSurfaceContract;
+    const resolvedPrintableHeightMm =
+      resolvedPrintableContract?.printableHeightMm && resolvedPrintableContract.printableHeightMm > 0
+        ? resolvedPrintableContract.printableHeightMm
+        : printHeightMm;
+    const resolvedPrintableTopOffsetMm =
+      resolvedOverallHeightMm > 0 && Number.isFinite(resolvedPrintableContract?.printableTopMm)
+        ? round2(Math.max(0, resolvedPrintableContract?.printableTopMm ?? 0))
+        : topMarginMm > 0
+          ? round2(topMarginMm)
+          : undefined;
+
+    return {
+      overallHeightMm: resolvedOverallHeightMm > 0 ? round2(resolvedOverallHeightMm) : round2(printHeightMm),
+      diameterMm: round2(resolvedDiameterMm),
+      topDiameterMm: topOuterDiameterMm > 0 ? round2(topOuterDiameterMm) : undefined,
+      bottomDiameterMm: baseDiameterMm > 0 ? round2(baseDiameterMm) : undefined,
+      bodyTopOffsetMm: round2(Math.max(0, fullPreviewBodyTopMm)),
+      bodyHeightMm:
+        resolvedOverallHeightMm > 0
+          ? round2(Math.max(0, resolvedBodyBottomMm - fullPreviewBodyTopMm))
+          : undefined,
+      printableHeightMm: round2(resolvedPrintableHeightMm),
+      printableTopOffsetMm: resolvedPrintableTopOffsetMm,
+      lidSeamFromOverallMm:
+        resolvedOverallHeightMm > 0 && Number.isFinite(resolvedLidSeamForPersistence)
+          ? round2(Math.max(0, resolvedLidSeamForPersistence ?? 0))
+          : undefined,
+      silverBandBottomFromOverallMm:
+        resolvedOverallHeightMm > 0 && Number.isFinite(resolvedSilverBandBottomForPersistence)
+          ? round2(Math.max(0, resolvedSilverBandBottomForPersistence ?? 0))
+          : undefined,
+    };
+  }, [
+    activeCanonicalDimensionCalibration?.bodyBottomMm,
+    activeCanonicalDimensionCalibration?.printableSurfaceContract,
+    activeCanonicalDimensionCalibration?.totalHeightMm,
+    activeCanonicalDimensionCalibration?.wrapDiameterMm,
+    baseDiameterMm,
+    bodyBottomFromOverallMm,
+    effectiveCylinderDiameterMm,
+    fullPreviewBodyTopMm,
+    fullPreviewCanonicalDimensionCalibration?.bodyBottomMm,
+    fullPreviewCanonicalDimensionCalibration?.printableSurfaceContract,
+    fullPreviewCanonicalDimensionCalibration?.totalHeightMm,
+    fullPreviewCanonicalDimensionCalibration?.wrapDiameterMm,
+    overallHeightMm,
+    previewPrintableSurfaceContract,
+    printHeightMm,
+    productType,
+    resolvedLidSeamForPersistence,
+    resolvedSilverBandBottomForPersistence,
+    topMarginMm,
+    topOuterDiameterMm,
+  ]);
+  const fullPreviewLidPreset = React.useMemo<LidAssemblyPreset | null>(() => {
+    if (productType === "flat" || !currentMatchedProfile) return null;
+    const topRadiusMm = Math.max(
+      1,
+      ((topOuterDiameterMm > 0 ? topOuterDiameterMm : effectiveCylinderDiameterMm) / 2),
+    );
+    return buildTemplateLidPreset({
+      profile: currentMatchedProfile,
+      topRadiusMm,
+      ringTopMm: resolvedLidSeamForPersistence,
+      ringBottomMm: resolvedSilverBandBottomForPersistence,
+    });
+  }, [
+    currentMatchedProfile,
+    effectiveCylinderDiameterMm,
+    productType,
+    resolvedLidSeamForPersistence,
+    resolvedSilverBandBottomForPersistence,
+    topOuterDiameterMm,
   ]);
   const defaultEditableHandlePreview = React.useMemo<EditableHandlePreview | null>(() => {
     if (
@@ -1955,14 +2368,26 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     const pxToMmScaleX = activeCanonicalDimensionCalibration?.photoToFrontTransform.matrix?.[0];
     const pxToMmScaleY = activeCanonicalDimensionCalibration?.photoToFrontTransform.matrix?.[4];
     const fallbackTubeDiameterMm = estimateEditableHandleWallThicknessMm({
-      handleProfile: canonicalHandleProfile,
+      handleProfile: normalizedCanonicalHandleProfile,
       pxToMmScaleX,
       pxToMmScaleY,
       fallbackMm: Math.max(5, effectiveCylinderDiameterMm * 0.115),
     });
+    const presetHandlePreview = buildTemplateHandlePreset({
+      profile: currentMatchedProfile,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      effectiveCylinderDiameterMm,
+      ringBottomMm: resolvedSilverBandBottomForPersistence,
+      fallbackTubeDiameterMm,
+    });
+    if (presetHandlePreview) {
+      return presetHandlePreview;
+    }
+
     const measuredHandlePreview = deriveMeasuredEditableHandlePreview({
       fitDebug: lookupResult?.fitDebug ?? null,
-      handleProfile: canonicalHandleProfile,
+      handleProfile: normalizedCanonicalHandleProfile,
       calibration: activeCanonicalDimensionCalibration,
       bodyTopFromOverallMm,
       bodyBottomFromOverallMm,
@@ -1972,7 +2397,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       return measuredHandlePreview;
     }
 
-    const side = canonicalHandleProfile?.side ?? lookupResult?.fitDebug?.handleSide ?? null;
+    const side =
+      resolvedCalibrationHandleSide ??
+      normalizedCanonicalHandleProfile?.side ??
+      lookupResult?.fitDebug?.handleSide ??
+      ((handleArcDeg > 0 || (handleSpanMm ?? 0) > 0) ? "right" : null);
     if (!side) return null;
     const bodyHeight = Math.max(1, bodyBottomFromOverallMm - bodyTopFromOverallMm);
     const ringBottomMm = Number.isFinite(resolvedSilverBandBottomForPersistence)
@@ -1997,16 +2426,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       side,
       topFromOverallMm,
       bottomFromOverallMm,
-      outerTopFromOverallMm: round2(clampNumber(
-        topFromOverallMm - Math.max(4, Math.min(18, (bottomFromOverallMm - topFromOverallMm) * 0.1)),
-        bodyTopFromOverallMm,
-        topFromOverallMm,
-      )),
-      outerBottomFromOverallMm: round2(clampNumber(
-        bottomFromOverallMm + Math.max(4, Math.min(18, (bottomFromOverallMm - topFromOverallMm) * 0.1)),
-        bottomFromOverallMm,
-        bodyBottomFromOverallMm,
-      )),
+      outerTopFromOverallMm: topFromOverallMm,
+      outerBottomFromOverallMm: bottomFromOverallMm,
       reachMm,
       outerOffsetMm: fallbackTubeDiameterMm,
       upperCornerFromOverallMm: round2(clampNumber(
@@ -2031,11 +2452,15 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     activeCanonicalDimensionCalibration,
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
-    canonicalHandleProfile,
+    currentMatchedProfile,
     effectiveCylinderDiameterMm,
+    handleArcDeg,
+    handleSpanMm,
     lookupResult?.fitDebug,
+    normalizedCanonicalHandleProfile,
     overallHeightMm,
     productType,
+    resolvedCalibrationHandleSide,
     resolvedSilverBandBottomForPersistence,
   ]);
   const editableHandlePreview = React.useMemo<EditableHandlePreview | null>(() => {
@@ -2049,7 +2474,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       return null;
     }
 
-    const side = defaultEditableHandlePreview?.side ?? canonicalHandleProfile?.side ?? lookupResult?.fitDebug?.handleSide ?? null;
+    const side =
+      defaultEditableHandlePreview?.side ??
+      resolvedCalibrationHandleSide ??
+      normalizedCanonicalHandleProfile?.side ??
+      lookupResult?.fitDebug?.handleSide ??
+      ((handleArcDeg > 0 || (handleSpanMm ?? 0) > 0) ? "right" : null);
     if (!side) return null;
 
     const defaultTopMm = defaultEditableHandlePreview?.topFromOverallMm ?? bodyTopFromOverallMm;
@@ -2122,27 +2552,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     const lowerTransitionReachMm = Number.isFinite(handleLowerTransitionReachMm)
       ? round2(Math.max(0, handleLowerTransitionReachMm ?? 0))
       : (defaultEditableHandlePreview?.lowerTransitionReachMm ?? defaultTransitionReachMm);
-    const defaultOuterTopMm = defaultEditableHandlePreview?.outerTopFromOverallMm ?? round2(clampNumber(
-      topFromOverallMm - Math.max(4, Math.min(18, (bottomFromOverallMm - topFromOverallMm) * 0.1)),
-      bodyTopFromOverallMm,
-      topFromOverallMm,
-    ));
-    const defaultOuterBottomMm = defaultEditableHandlePreview?.outerBottomFromOverallMm ?? round2(clampNumber(
-      bottomFromOverallMm + Math.max(4, Math.min(18, (bottomFromOverallMm - topFromOverallMm) * 0.1)),
-      bottomFromOverallMm,
-      bodyBottomFromOverallMm,
-    ));
-    const outerTopFromOverallMm = Number.isFinite(handleOuterTopFromOverallMm)
-      ? round2(clampNumber(handleOuterTopFromOverallMm ?? 0, bodyTopFromOverallMm, topFromOverallMm))
-      : defaultOuterTopMm;
-    const outerBottomFromOverallMm = Number.isFinite(handleOuterBottomFromOverallMm)
-      ? round2(clampNumber(handleOuterBottomFromOverallMm ?? 0, bottomFromOverallMm, bodyBottomFromOverallMm))
-      : defaultOuterBottomMm;
     const pxToMmScaleX = activeCanonicalDimensionCalibration?.photoToFrontTransform.matrix?.[0];
     const pxToMmScaleY = activeCanonicalDimensionCalibration?.photoToFrontTransform.matrix?.[4];
     const fallbackWallMm = defaultEditableHandlePreview?.tubeDiameterMm ?? Math.max(5, reachMm * 0.18);
     const estimatedTubeDiameterMm = estimateEditableHandleWallThicknessMm({
-      handleProfile: canonicalHandleProfile,
+      handleProfile: normalizedCanonicalHandleProfile,
       pxToMmScaleX,
       pxToMmScaleY,
       fallbackMm: fallbackWallMm,
@@ -2155,8 +2569,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       side,
       topFromOverallMm,
       bottomFromOverallMm,
-      outerTopFromOverallMm,
-      outerBottomFromOverallMm,
+      outerTopFromOverallMm: topFromOverallMm,
+      outerBottomFromOverallMm: bottomFromOverallMm,
       reachMm,
       outerOffsetMm: tubeDiameterMm,
       upperCornerFromOverallMm,
@@ -2173,17 +2587,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     activeCanonicalDimensionCalibration?.photoToFrontTransform.matrix,
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
-    canonicalHandleProfile?.side,
-    canonicalHandleProfile?.innerContour,
-    canonicalHandleProfile?.outerContour,
     effectiveCylinderDiameterMm,
+    handleArcDeg,
     handleBottomFromOverallMm,
     handleLowerCornerFromOverallMm,
     handleLowerCornerReachMm,
     handleLowerTransitionFromOverallMm,
     handleLowerTransitionReachMm,
-    handleOuterBottomFromOverallMm,
-    handleOuterTopFromOverallMm,
     handleTubeDiameterMm,
     handleReachMm,
     handleTopFromOverallMm,
@@ -2191,27 +2601,29 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     handleUpperCornerReachMm,
     handleUpperTransitionFromOverallMm,
     handleUpperTransitionReachMm,
+    handleSpanMm,
     lookupResult?.fitDebug?.handleSide,
+    normalizedCanonicalHandleProfile?.innerContour,
+    normalizedCanonicalHandleProfile?.outerContour,
+    normalizedCanonicalHandleProfile?.side,
     overallHeightMm,
     productType,
+    resolvedCalibrationHandleSide,
     resolvedSilverBandBottomForPersistence,
     defaultEditableHandlePreview,
   ]);
-  const referenceSelection = productReferenceSet?.canonicalViewSelection;
-  const referenceImagesById = React.useMemo(() => {
-    const nextMap = new Map<string, ProductReferenceSet["images"][number]>();
-    for (const image of productReferenceSet?.images ?? []) {
-      nextMap.set(image.id, image);
-    }
-    return nextMap;
-  }, [productReferenceSet]);
   const canUseCanonicalPreviewModel = productType !== "flat" &&
     Boolean(activeCanonicalBodyProfile && activeCanonicalDimensionCalibration);
   const hasAlignmentPreviewModel = canUseCanonicalPreviewModel;
   const hasFullPreviewModel = canUseCanonicalPreviewModel;
   const hasSourcePreviewModel = React.useMemo(
-    () => Boolean(glbPath.trim() || previewModelFile || (productType === "flat" && liveFlatPreview)),
-    [glbPath, liveFlatPreview, previewModelFile, productType],
+    () => Boolean(
+      previewModelFile ||
+      (productType === "flat"
+        ? (glbPath.trim() || liveFlatPreview)
+        : resolvedDrinkwarePreviewModelUrl),
+    ),
+    [glbPath, liveFlatPreview, previewModelFile, productType, resolvedDrinkwarePreviewModelUrl],
   );
   const previewModeContextKey = React.useMemo(
     () => `${editingTemplate?.id ?? "draft"}:${productType ?? "unknown"}`,
@@ -2302,22 +2714,19 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     Math.abs((handleSpanMm ?? 0) - effectiveCylinderDiameterMm) <= 1;
   const canonicalHandleDebugSummary = React.useMemo(
     () => summarizeCanonicalHandleDebug({
-      handleProfile: canonicalHandleProfile,
+      handleProfile: normalizedCanonicalHandleProfile,
       calibration: activeCanonicalDimensionCalibration,
     }),
-    [activeCanonicalDimensionCalibration, canonicalHandleProfile],
+    [activeCanonicalDimensionCalibration, normalizedCanonicalHandleProfile],
   );
   const canonicalHandleRenderMode = React.useMemo(
     () => resolveCanonicalHandleRenderMode({
-      handleProfile: canonicalHandleProfile,
+      handleProfile: normalizedCanonicalHandleProfile,
       previewMode: previewModelMode === "source-traced" ? "full-model" : previewModelMode,
     }),
-    [canonicalHandleProfile, previewModelMode],
+    [normalizedCanonicalHandleProfile, previewModelMode],
   );
   const usingEditableHandlePreview = previewModelMode === "full-model" && Boolean(editableHandlePreview);
-  const canonicalFrontReferenceImage = referenceSelection?.canonicalFrontImageId
-    ? (referenceImagesById.get(referenceSelection.canonicalFrontImageId) ?? null)
-    : null;
   const canonicalBackReferenceImage = referenceSelection?.canonicalBackImageId
     ? (referenceImagesById.get(referenceSelection.canonicalBackImageId) ?? null)
     : null;
@@ -2328,12 +2737,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const hasAuxiliaryBack3q = referenceSelection?.canonicalBackStatus === "only-back-3q-found" && Boolean(auxiliaryBackReferenceImage);
 
   React.useEffect(() => {
-    if (frontCleanUrl) {
-      setBodyReferencePhotoDataUrl(frontCleanUrl);
-      return;
-    }
     if (frontPhotoDataUrl) {
       setBodyReferencePhotoDataUrl(frontPhotoDataUrl);
+      return;
+    }
+    if (frontCleanUrl) {
+      setBodyReferencePhotoDataUrl(frontCleanUrl);
       return;
     }
     if (productPhotoFullUrl) return;
@@ -2345,13 +2754,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
     const syncCanonicalHandleProfile = async () => {
       if (productType === "flat") {
-        setCanonicalHandleProfile(undefined);
+        commitCanonicalHandleProfile(undefined);
         return;
       }
       if (
         !bodyReferencePhotoDataUrl ||
-        !activeBodyReferenceOutline?.sourceContour ||
-        activeBodyReferenceOutline.sourceContour.length < 3
+        !handleSyncBodyReferenceOutline?.sourceContour ||
+        handleSyncBodyReferenceOutline.sourceContour.length < 3
       ) {
         return;
       }
@@ -2359,10 +2768,18 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       try {
         const nextProfile = await extractCanonicalHandleProfileFromCutout({
           imageDataUrl: bodyReferencePhotoDataUrl,
-          outline: activeBodyReferenceOutline,
+          outline: handleSyncBodyReferenceOutline,
         });
         if (cancelled) return;
-        setCanonicalHandleProfile(nextProfile ?? undefined);
+        commitCanonicalHandleProfile(
+          nextProfile
+            ? (
+                resolvedCalibrationHandleSide && nextProfile.side !== resolvedCalibrationHandleSide
+                  ? { ...nextProfile, side: resolvedCalibrationHandleSide }
+                  : nextProfile
+              )
+            : undefined,
+        );
       } catch {
         if (cancelled) return;
       }
@@ -2372,7 +2789,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     return () => {
       cancelled = true;
     };
-  }, [activeBodyReferenceOutline, bodyReferencePhotoDataUrl, productType]);
+  }, [
+    activeBodyReferenceOutlineSignature,
+    bodyReferencePhotoDataUrl,
+    commitCanonicalHandleProfile,
+    handleSyncBodyReferenceOutline,
+    productType,
+    resolvedCalibrationHandleSide,
+  ]);
 
   // Auto-mirror front photo as back when mirrorForBack is enabled
   React.useEffect(() => {
@@ -2394,17 +2818,50 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
 
     const fitDebug = lookupResult?.fitDebug ?? null;
+    const traceDebug = flatLookupResult?.traceDebug ?? null;
+    const referenceImagesById = new Map(
+      (productReferenceSet?.images ?? []).map((image) => [image.id, image] as const),
+    );
+    const canonicalFrontReferenceUrl =
+      productReferenceSet?.canonicalViewSelection?.canonicalFrontImageId
+        ? referenceImagesById.get(productReferenceSet.canonicalViewSelection.canonicalFrontImageId)?.url ?? null
+        : productReferenceSet?.canonicalFrontImageId
+          ? referenceImagesById.get(productReferenceSet.canonicalFrontImageId)?.url ?? null
+          : null;
+    // If the canonical hero asset has no fit-debug, use the accepted traced front
+    // image as the BODY REFERENCE owner so the photo and shell share one source.
+    const preferredBodyReferenceUrl =
+      !fitDebug &&
+      traceDebug?.accepted &&
+      (traceDebug.outlinePointsPx.length ?? 0) > 20 &&
+      traceDebug.sourceImageUrl
+        ? traceDebug.sourceImageUrl
+        : canonicalFrontReferenceUrl;
+    const traceMatchesReferenceImage = (() => {
+      const traceIdentity = normalizeImageIdentity(traceDebug?.sourceImageUrl);
+      const referenceIdentity = normalizeImageIdentity(preferredBodyReferenceUrl);
+      if (!traceIdentity) return false;
+      if (!referenceIdentity) return true;
+      return traceIdentity === referenceIdentity;
+    })();
     const canSeedFromFitDebug = Boolean(fitDebug && fitDebug.profilePoints.length > 1);
-    const seedPhotoDataUrl = frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl || "";
-    const canSeedFromPhotoVector = Boolean(seedPhotoDataUrl);
-    if (!canSeedFromPhotoVector && !canSeedFromFitDebug) return;
+    const canSeedFromTraceDebug = Boolean(
+      traceDebug?.accepted &&
+      (traceDebug.outlinePointsPx.length ?? 0) > 20 &&
+      traceMatchesReferenceImage,
+    );
+    if (!canSeedFromFitDebug && !canSeedFromTraceDebug) return;
 
     const signature = JSON.stringify({
-      seedMode: canSeedFromPhotoVector ? "photo-vector" : "fit-debug",
+      seedMode: canSeedFromFitDebug ? "fit-debug" : "trace-debug",
       fitDebugSource: fitDebug
         ? `${fitDebug.sourceImageUrl}:${fitDebug.imageWidthPx}x${fitDebug.imageHeightPx}:${fitDebug.fullTopPx}:${fitDebug.fullBottomPx}:${fitDebug.bodyTopPx}:${fitDebug.bodyBottomPx}`
         : "",
-      seedPhotoDataUrl: canSeedFromPhotoVector ? seedPhotoDataUrl : "",
+      traceDebugSource: traceDebug
+        ? `${traceDebug.sourceImageUrl}:${traceDebug.imageWidthPx}x${traceDebug.imageHeightPx}:${traceDebug.silhouetteBoundsPx.minY}:${traceDebug.silhouetteBoundsPx.maxY}:${traceDebug.outlinePointsPx.length}`
+        : "",
+      traceMatchesReferenceImage,
+      canonicalFrontReferenceUrl: normalizeImageIdentity(preferredBodyReferenceUrl),
       overallHeightMm: round2(overallHeightMm),
       bodyTopFromOverallMm: round2(bodyTopFromOverallMm),
       bodyBottomFromOverallMm: round2(bodyBottomFromOverallMm),
@@ -2425,19 +2882,28 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     let cancelled = false;
     const applyFallbackOutline = () => {
       if (cancelled) return false;
-      const outline = createEditableBodyOutline({
-        overallHeightMm,
-        bodyTopFromOverallMm,
-        bodyBottomFromOverallMm,
-        diameterMm: effectiveCylinderDiameterMm,
-        topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
-        baseDiameterMm: baseDiameterMm > 0 ? baseDiameterMm : undefined,
-        shoulderDiameterMm,
-        taperUpperDiameterMm,
-        taperLowerDiameterMm,
-        bevelDiameterMm,
-        fitDebug,
-      });
+      const outline = canSeedFromFitDebug
+        ? createEditableBodyOutline({
+            overallHeightMm,
+            bodyTopFromOverallMm,
+            bodyBottomFromOverallMm,
+            diameterMm: effectiveCylinderDiameterMm,
+            topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
+            baseDiameterMm: baseDiameterMm > 0 ? baseDiameterMm : undefined,
+            shoulderDiameterMm,
+            taperUpperDiameterMm,
+            taperLowerDiameterMm,
+            bevelDiameterMm,
+            fitDebug,
+          })
+        : createEditableBodyOutlineFromTraceDebug({
+            traceDebug: traceDebug!,
+            overallHeightMm,
+            bodyTopFromOverallMm,
+            bodyBottomFromOverallMm,
+            diameterMm: effectiveCylinderDiameterMm,
+            topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
+          });
       setBodyOutlineProfile(outline);
       setReferencePaths((current) => createReferencePaths({
         bodyOutline: outline,
@@ -2446,36 +2912,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       }));
       return true;
     };
-    const seedBodyOutlineFromSvgCutout = async () => {
+    const seedBodyOutlineFromProfile = async () => {
       try {
-        if (canSeedFromPhotoVector && seedPhotoDataUrl) {
-          const cleanDataUrl = frontCleanUrl || await removeBackgroundForOutlineSeed(seedPhotoDataUrl, "body-outline-seed.png");
-          if (!cancelled) {
-            setBodyReferencePhotoDataUrl(cleanDataUrl);
-          }
-          const svgText = await vectorizeOutlineSeedSvg(cleanDataUrl, "body-outline-seed.png");
-          const { outline } = createEditableBodyOutlineFromSeedSvgText({
-            svgText,
-            overallHeightMm,
-            bodyTopFromOverallMm,
-            bodyBottomFromOverallMm,
-            diameterMm: effectiveCylinderDiameterMm,
-            topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
-            side:
-              canonicalHandleProfile?.side === "left" || lookupResult?.fitDebug?.handleSide === "left"
-                ? "right"
-                : "left",
-          });
-          if (cancelled) return;
-          setBodyOutlineProfile(outline);
-          setReferencePaths((current) => createReferencePaths({
-            bodyOutline: outline,
-            lidProfile: current.lidProfile,
-            silverProfile: current.silverProfile,
-          }));
-          return;
-        }
-
         applyFallbackOutline();
       } catch {
         if (!cancelled && !applyFallbackOutline()) {
@@ -2484,7 +2922,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       }
     };
 
-    void seedBodyOutlineFromSvgCutout();
+    void seedBodyOutlineFromProfile();
     return () => {
       cancelled = true;
     };
@@ -2495,14 +2933,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyTopFromOverallMm,
     bevelDiameterMm,
     baseDiameterMm,
-    canonicalHandleProfile?.side,
     editingTemplate,
     effectiveCylinderDiameterMm,
-    frontPhotoDataUrl,
-    frontCleanUrl,
     lookupResult?.fitDebug,
+    flatLookupResult?.traceDebug,
+    normalizedCanonicalHandleProfile?.side,
     overallHeightMm,
-    productPhotoFullUrl,
+    productReferenceSet,
     productType,
     shoulderDiameterMm,
     taperLowerDiameterMm,
@@ -2510,7 +2947,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     topOuterDiameterMm,
   ]);
 
-  const resolveManufacturerLogoStamp = React.useCallback(async () => {
+  const resolveManufacturerLogoStamp = React.useCallback(async (options?: { useOpenAiAssist?: boolean }) => {
     if (productType === "flat") {
       return undefined;
     }
@@ -2526,20 +2963,43 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       options?: {
         sourceImageId?: string;
         preferredLogoBox?: ProductReferenceSet["images"][number]["logoBox"] | null;
+        useOpenAiAssist?: boolean;
       },
-    ) => extractManufacturerLogoStamp({
-      photoDataUrl,
-      overallHeightMm,
-      brand: brand.trim() || lookupResult?.brand || undefined,
-      topMarginMm,
-      bottomMarginMm,
-      fitDebug: lookupResult?.fitDebug ?? null,
-      outline: activeBodyReferenceOutline,
-      productReferenceSet: productReferenceSet ?? null,
-      sourceImageId: options?.sourceImageId,
-      preferredLogoBox: options?.preferredLogoBox ?? null,
-      source: options?.sourceImageId ? "lookup-photo" : stampSource,
-    });
+    ) => {
+      let assistedLogoBox = options?.preferredLogoBox ?? null;
+
+      if (options?.useOpenAiAssist) {
+        try {
+          const assistedDetection = await detectLogoPlacementAssist({
+            photoDataUrl,
+            fileName: options?.sourceImageId
+              ? `${options.sourceImageId}-logo-assist.png`
+              : "template-logo-assist.png",
+            brandHint: brand.trim() || lookupResult?.brand || undefined,
+          });
+          if (assistedDetection.detected && assistedDetection.logoBox) {
+            assistedLogoBox = assistedDetection.logoBox;
+          }
+        } catch {
+          // Keep the local extraction path usable when the assist model
+          // declines to return a usable box or the provider is unavailable.
+        }
+      }
+
+      return extractManufacturerLogoStamp({
+        photoDataUrl,
+        overallHeightMm,
+        brand: brand.trim() || lookupResult?.brand || undefined,
+        topMarginMm,
+        bottomMarginMm,
+        fitDebug: lookupResult?.fitDebug ?? null,
+        outline: activeBodyReferenceOutline,
+        productReferenceSet: productReferenceSet ?? null,
+        sourceImageId: options?.sourceImageId,
+        preferredLogoBox: assistedLogoBox,
+        source: options?.sourceImageId ? "lookup-photo" : stampSource,
+      });
+    };
 
     const directStamp = await attemptExtraction(primaryPhotoUrl);
     if (directStamp) return directStamp;
@@ -2602,74 +3062,92 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       manufacturerLogoSignatureRef.current = "";
       setManufacturerLogoStamp(undefined);
       setDetectedManufacturerLogoStamp(undefined);
+      setLogoAssistStatus("idle");
+      setLogoAssistNote(null);
+    }
+  }, [productType]);
+
+  const runAiOutlineAssist = React.useCallback(async () => {
+    if (productType === "flat") return;
+
+    const seedPhotoDataUrl = frontPhotoDataUrl || productPhotoFullUrl || "";
+    if (!seedPhotoDataUrl || overallHeightMm <= 0 || effectiveCylinderDiameterMm <= 0) {
+      setOutlineAssistStatus("failed");
+      setOutlineAssistNote("A front/reference photo and valid body dimensions are required before running AI outline prep.");
       return;
     }
 
-    const sourcePhotoUrl = bodyReferencePhotoDataUrl || frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl;
-    if (!sourcePhotoUrl || overallHeightMm <= 0) {
-      manufacturerLogoSignatureRef.current = "";
-      setManufacturerLogoStamp(undefined);
-      setDetectedManufacturerLogoStamp(undefined);
-      return;
-    }
+    setOutlineAssistStatus("processing");
+    setOutlineAssistNote("Running AI cleanup and trace recommendation for BODY REFERENCE...");
 
-    const signature = JSON.stringify({
-      version: MANUFACTURER_LOGO_STAMP_ALGO_VERSION,
-      sourcePhotoUrl,
-      overallHeightMm: round2(overallHeightMm),
-      topMarginMm: round2(topMarginMm),
-      bottomMarginMm: round2(bottomMarginMm),
-      brand: brand.trim().toLowerCase(),
-      outlineHash: activeBodyReferenceOutline?.sourceContourBounds
-        ? `${round2(activeBodyReferenceOutline.sourceContourBounds.minX)}:${round2(activeBodyReferenceOutline.sourceContourBounds.minY)}:${round2(activeBodyReferenceOutline.sourceContourBounds.width)}:${round2(activeBodyReferenceOutline.sourceContourBounds.height)}`
-        : "",
-      canonicalFrontReferenceImageId: canonicalFrontReferenceImage?.id ?? "",
-      lookupImageUrl: lookupResult?.imageUrl ?? "",
-      fitDebugSource: lookupResult?.fitDebug?.sourceImageUrl ?? "",
-      fitDebugSize: lookupResult?.fitDebug
-        ? `${lookupResult.fitDebug.imageWidthPx}x${lookupResult.fitDebug.imageHeightPx}:${lookupResult.fitDebug.fullTopPx}:${lookupResult.fitDebug.fullBottomPx}`
-        : "",
-    });
-
-    if (manufacturerLogoSignatureRef.current === signature) {
-      return;
-    }
-    manufacturerLogoSignatureRef.current = signature;
-
-    let cancelled = false;
-    resolveManufacturerLogoStamp()
-      .then((stamp) => {
-        if (cancelled) return;
-        setManufacturerLogoStamp(stamp ?? undefined);
-        setDetectedManufacturerLogoStamp(stamp ?? undefined);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setManufacturerLogoStamp(undefined);
-        setDetectedManufacturerLogoStamp(undefined);
+    try {
+      const preparedSeed = await prepareOutlineSeedTrace(seedPhotoDataUrl, "body-outline-seed.png");
+      const svgText = await vectorizeOutlineSeedSvg(
+        preparedSeed.traceSourceDataUrl,
+        "body-outline-seed.png",
+        preparedSeed.traceSettings,
+      );
+      const { outline } = createEditableBodyOutlineFromSeedSvgText({
+        svgText,
+        overallHeightMm,
+        bodyTopFromOverallMm,
+        bodyBottomFromOverallMm,
+        diameterMm: effectiveCylinderDiameterMm,
+        topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
+        side: resolvedCalibrationHandleSide === "left" ? "right" : "left",
       });
 
-    return () => {
-      cancelled = true;
-    };
+      setBodyReferencePhotoDataUrl(preparedSeed.cleanedDataUrl);
+      setBodyOutlineProfile(outline);
+      setReferencePaths((current) => createReferencePaths({
+        bodyOutline: outline,
+        lidProfile: current.lidProfile,
+        silverProfile: current.silverProfile,
+      }));
+      setOutlineAssistStatus("done");
+      setOutlineAssistNote(
+        preparedSeed.cleanupApplied
+          ? "AI outline prep applied. BODY REFERENCE is now using the prepared outline seed."
+          : "AI trace guidance applied. BODY REFERENCE kept the original image where possible.",
+      );
+    } catch (error) {
+      setOutlineAssistStatus("failed");
+      setOutlineAssistNote(error instanceof Error ? error.message : "AI outline prep failed.");
+    }
   }, [
-    brand,
-    bottomMarginMm,
-    canonicalFrontReferenceImage,
-    activeBodyReferenceOutline,
-    frontCleanUrl,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    effectiveCylinderDiameterMm,
     frontPhotoDataUrl,
-    bodyReferencePhotoDataUrl,
-    lookupResult?.brand,
-    lookupResult?.fitDebug,
-    lookupResult?.imageUrl,
     overallHeightMm,
-    productReferenceSet,
     productPhotoFullUrl,
     productType,
-    resolveManufacturerLogoStamp,
-    topMarginMm,
+    resolvedCalibrationHandleSide,
+    topOuterDiameterMm,
   ]);
+
+  const runLogoPlacementAssist = React.useCallback(async () => {
+    if (productType === "flat") return;
+
+    setLogoAssistStatus("processing");
+    setLogoAssistNote("Detecting manufacturer logo placement...");
+
+    try {
+      const stamp = await resolveManufacturerLogoStamp({ useOpenAiAssist: true });
+      if (stamp) {
+        setManufacturerLogoStamp(stamp);
+        setDetectedManufacturerLogoStamp(stamp);
+        setLogoAssistStatus("done");
+        setLogoAssistNote("Logo placement detected and applied.");
+      } else {
+        setLogoAssistStatus("failed");
+        setLogoAssistNote("No manufacturer logo could be detected from the current reference photo.");
+      }
+    } catch (error) {
+      setLogoAssistStatus("failed");
+      setLogoAssistNote(error instanceof Error ? error.message : "Logo placement assist failed.");
+    }
+  }, [productType, resolveManufacturerLogoStamp]);
 
   const applyLogoPlacementAdjustment = React.useCallback((mutate: (placement: NonNullable<ManufacturerLogoStamp["logoPlacement"]>) => NonNullable<ManufacturerLogoStamp["logoPlacement"]>) => {
     setManufacturerLogoStamp((current) => {
@@ -2787,7 +3265,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
     const wrapMapping = activeCanonicalDimensionCalibration?.wrapMappingMm;
     const printableContract = activePrintableSurfaceResolution?.printableSurfaceContract ?? activeCanonicalDimensionCalibration?.printableSurfaceContract ?? null;
-    const handleWidthSamples = canonicalHandleProfile?.widthProfile ?? [];
+    const handleWidthSamples = normalizedCanonicalHandleProfile?.widthProfile ?? [];
     const handleWidthSummary = handleWidthSamples.length
       ? `${handleWidthSamples.length} samples / median ${round2(handleWidthSamples[Math.floor(handleWidthSamples.length / 2)]?.widthPx ?? 0)} px`
       : "None";
@@ -2945,13 +3423,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         id: "handle-artifact",
         title: "Handle artifact",
         fields: [
-          { label: "Canonical handle profile", value: canonicalHandleProfile ? "yes" : "no", source: "canonicalHandleProfile" },
-          { label: "Handle side", value: canonicalHandleProfile?.side ?? "n/a", source: "canonicalHandleProfile.side" },
-          { label: "Handle confidence", value: fmtPct(canonicalHandleProfile?.confidence), source: "canonicalHandleProfile.confidence", warning: canonicalHandleProfile && canonicalHandleProfile.confidence < 0.8 ? "Low-confidence handle extraction." : undefined },
+          { label: "Canonical handle profile", value: normalizedCanonicalHandleProfile ? "yes" : "no", source: "canonicalHandleProfile" },
+          { label: "Handle side", value: normalizedCanonicalHandleProfile?.side ?? "n/a", source: "canonicalHandleProfile.side" },
+          { label: "Handle confidence", value: fmtPct(normalizedCanonicalHandleProfile?.confidence), source: "canonicalHandleProfile.confidence", warning: normalizedCanonicalHandleProfile && normalizedCanonicalHandleProfile.confidence < 0.8 ? "Low-confidence handle extraction." : undefined },
           {
             label: "Anchors",
-            value: canonicalHandleProfile
-              ? `upper ${round2(canonicalHandleProfile.anchors.upper.sNorm)} @ ${round2(canonicalHandleProfile.anchors.upper.xPx)}, ${round2(canonicalHandleProfile.anchors.upper.yPx)} / lower ${round2(canonicalHandleProfile.anchors.lower.sNorm)} @ ${round2(canonicalHandleProfile.anchors.lower.xPx)}, ${round2(canonicalHandleProfile.anchors.lower.yPx)}`
+            value: normalizedCanonicalHandleProfile
+              ? `upper ${round2(normalizedCanonicalHandleProfile.anchors.upper.sNorm)} @ ${round2(normalizedCanonicalHandleProfile.anchors.upper.xPx)}, ${round2(normalizedCanonicalHandleProfile.anchors.upper.yPx)} / lower ${round2(normalizedCanonicalHandleProfile.anchors.lower.sNorm)} @ ${round2(normalizedCanonicalHandleProfile.anchors.lower.xPx)}, ${round2(normalizedCanonicalHandleProfile.anchors.lower.yPx)}`
               : "n/a",
             source: "canonicalHandleProfile.anchors",
           },
@@ -3100,7 +3578,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     templateWidthMm,
   ]);
 
-  const pipelineDebugWarnings = React.useMemo(() => {
+  const pipelineDebugWarnings = bodyReferenceWarnings;
+  /*
     const warnings: string[] = [];
     const printableContract = activePrintableSurfaceResolution?.printableSurfaceContract ?? activeCanonicalDimensionCalibration?.printableSurfaceContract ?? null;
 
@@ -3146,16 +3625,207 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     templateWidthMm,
   ]);
 
+  */
+
+  const templateProvenanceBadges = React.useMemo(
+    () => {
+      const badges: Array<{ label: string; tone: TemplateReadinessStatus }> = [];
+      if (smartLookupApplied || lookupResult || flatLookupResult || flatLookupMatch) {
+        badges.push({ label: "Lookup seeded", tone: "ready" });
+      }
+      if (activeDrinkwareGlbStatus?.status === "verified-product-model") {
+        badges.push({ label: "Verified 3D model", tone: "ready" });
+      } else if (glbPath.trim()) {
+        badges.push({ label: "Custom 3D model", tone: "review" });
+      }
+      if ((productReferenceSet?.images.length ?? 0) > 0) {
+        badges.push({ label: `Reference set (${productReferenceSet?.images.length})`, tone: "ready" });
+      }
+      if (tumblerMapping?.isMapped) {
+        badges.push({ label: "Orientation mapped", tone: "ready" });
+      }
+      if (advancedGeometryOverridesUnlocked) {
+        badges.push({ label: "Geometry overrides unlocked", tone: "review" });
+      }
+      return badges;
+    },
+    [
+      activeDrinkwareGlbStatus?.status,
+      advancedGeometryOverridesUnlocked,
+      flatLookupMatch,
+      flatLookupResult,
+      glbPath,
+      lookupResult,
+      productReferenceSet?.images.length,
+      smartLookupApplied,
+      tumblerMapping?.isMapped,
+    ],
+  );
+
+  const saveBlockingIssues = React.useMemo(() => {
+    const issues: string[] = [];
+    if (!name.trim()) issues.push("Product name is required.");
+    if (!productType) issues.push("Product type is required.");
+    if (productType === "flat" && flatWidthMm <= 0) {
+      issues.push("Template width must be > 0 for flat products.");
+    }
+    if (productType && productType !== "flat" && templateWidthMm <= 0) {
+      issues.push("Wrap width / circumference must be > 0 for non-flat products.");
+    }
+    if (productType && productType !== "flat" && effectiveCylinderDiameterMm <= 0) {
+      issues.push("Cylinder diameter could not be derived from wrap width.");
+    }
+    if (productType && productType !== "flat" && !activeCanonicalBodyProfile) {
+      issues.push("Canonical body profile is missing. Finish BODY REFERENCE before saving.");
+    }
+    if (productType && productType !== "flat" && !activeCanonicalDimensionCalibration) {
+      issues.push("Canonical dimension calibration is missing. Re-run lookup or BODY REFERENCE before saving.");
+    }
+    if (productType && productType !== "flat" && bodyReferenceQa?.severity === "action") {
+      issues.push(...bodyReferenceWarnings);
+    }
+    if (productType && productType !== "flat" && glbPath.trim() && !tumblerMapping?.isMapped) {
+      issues.push("Map tumbler orientation before saving a 3D-backed drinkware template.");
+    }
+    if (hasBlockingGeometryMismatch) {
+      issues.push(`Cylinder diameter override is inconsistent with wrap width by ${derivedDiameterMismatchMm.toFixed(2)} mm. Recompute derived fields from wrap width or relock production geometry.`);
+    }
+    if (printHeightMm <= 0) issues.push("Print height must be > 0.");
+    if (productType && productType !== "flat" && printableHeightLooksLikeOverallHeight) {
+      issues.push("Printable height still matches overall assembled height. Re-run body analysis or set printable boundaries before saving.");
+    }
+    if (productType && productType !== "flat" && handleSpanContaminatesBodyWidth) {
+      issues.push("Overall handle span is matching the body diameter. Handle span metadata must not be used as body width or wrap math.");
+    }
+    if (
+      productType &&
+      productType !== "flat" &&
+      overallHeightMm > 0 &&
+      (bodyBottomFromOverallMm <= bodyTopFromOverallMm || bodyBottomFromOverallMm > overallHeightMm)
+    ) {
+      issues.push("Body top/bottom reference is invalid. Re-run lookup or adjust the body bounds.");
+    }
+    if (glbPath.trim() && glbUploadError?.startsWith("Model file not found:")) {
+      issues.push("3D model path is missing or invalid.");
+    }
+    return Array.from(new Set(issues));
+  }, [
+    activeCanonicalBodyProfile,
+    activeCanonicalDimensionCalibration,
+    bodyReferenceQa?.severity,
+    bodyReferenceWarnings,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    derivedDiameterMismatchMm,
+    effectiveCylinderDiameterMm,
+    flatWidthMm,
+    glbPath,
+    glbUploadError,
+    handleSpanContaminatesBodyWidth,
+    hasBlockingGeometryMismatch,
+    name,
+    overallHeightMm,
+    printHeightMm,
+    printableHeightLooksLikeOverallHeight,
+    productType,
+    templateWidthMm,
+    tumblerMapping?.isMapped,
+  ]);
+
+  const templateReadinessItems = React.useMemo(
+    () => {
+      const items: Array<{ label: string; status: TemplateReadinessStatus; detail: string }> = [];
+      items.push({
+        label: "Product identity",
+        status: name.trim() && productType ? "ready" : "action",
+        detail: name.trim() && productType ? "Name and product type are set." : "Add a product name and choose the product type.",
+      });
+      items.push({
+        label: "Reference photos",
+        status: productType === "flat"
+          ? "review"
+          : (activeReferencePhotoDataUrl || productPhotoFullUrl ? "ready" : "review"),
+        detail: productType === "flat"
+          ? "Not required for flat items."
+          : (activeReferencePhotoDataUrl || productPhotoFullUrl
+            ? "Front/reference imagery is attached for visual QA."
+            : "Add a front/reference photo so BODY REFERENCE can be reviewed against a real image."),
+      });
+      items.push({
+        label: "Body calibration",
+        status: productType === "flat"
+          ? "review"
+          : (activeCanonicalBodyProfile && activeCanonicalDimensionCalibration
+            ? (bodyReferenceQa?.severity === "action" ? "action" : (bodyReferenceWarnings.length > 0 ? "review" : "ready"))
+            : "action"),
+        detail: productType === "flat"
+          ? "Not required for flat items."
+          : (!activeCanonicalBodyProfile || !activeCanonicalDimensionCalibration
+            ? "Canonical body contracts are missing."
+            : bodyReferenceWarnings[0]
+              ? bodyReferenceWarnings[0]
+              : "Canonical body profile and printable surface contract are locked."),
+      });
+      items.push({
+        label: "3D preview + orientation",
+        status: productType === "flat"
+          ? "review"
+          : (!glbPath.trim()
+            ? "review"
+            : (glbUploadError?.startsWith("Model file not found:")
+              ? "action"
+              : (tumblerMapping?.isMapped ? "ready" : "action"))),
+        detail: productType === "flat"
+          ? "Not required for flat items."
+          : (!glbPath.trim()
+            ? "Optional. Add a GLB if this template should open with a 3D preview."
+            : (glbUploadError?.startsWith("Model file not found:")
+              ? "The configured GLB path is missing."
+              : (tumblerMapping?.isMapped
+                ? "Orientation mapping has been confirmed."
+                : "Map the tumbler orientation before saving."))),
+      });
+      items.push({
+        label: "Workflow provenance",
+        status: templateProvenanceBadges.length > 0 ? "ready" : "review",
+        detail: templateProvenanceBadges.length > 0
+          ? templateProvenanceBadges.map((badge) => badge.label).join(" • ")
+          : "No lookup or template provenance is attached yet.",
+      });
+      return items;
+    },
+    [
+      activeCanonicalBodyProfile,
+      activeCanonicalDimensionCalibration,
+      activeReferencePhotoDataUrl,
+      bodyReferenceQa?.severity,
+      bodyReferenceWarnings,
+      glbPath,
+      glbUploadError,
+      name,
+      productPhotoFullUrl,
+      productType,
+      templateProvenanceBadges,
+      tumblerMapping?.isMapped,
+    ],
+  );
+
+  const saveDisabledReason = saveBlockingIssues[0] ?? null;
+
   const pipelineDebugRawObjects = React.useMemo<PipelineDebugRawObject[]>(() => ([
     { id: "canonical-body-profile", label: "canonicalBodyProfile", value: activeCanonicalBodyProfile },
     { id: "canonical-dimension-calibration", label: "canonicalDimensionCalibration", value: activeCanonicalDimensionCalibration },
     { id: "printable-surface-contract", label: "printableSurfaceContract", value: activePrintableSurfaceResolution?.printableSurfaceContract ?? activeCanonicalDimensionCalibration?.printableSurfaceContract ?? null },
+    { id: "body-reference-qa", label: "bodyReferenceQA", value: bodyReferenceQa },
+    { id: "body-reference-contract-version", label: "bodyReferenceContractVersion", value: bodyReferenceContractVersion },
     { id: "canonical-handle-profile", label: "canonicalHandleProfile", value: canonicalHandleProfile ?? null },
     { id: "logo-placement", label: "logoPlacement", value: manufacturerLogoStamp?.logoPlacement ?? null },
   ]), [
     activeCanonicalBodyProfile,
     activeCanonicalDimensionCalibration,
     activePrintableSurfaceResolution?.printableSurfaceContract,
+    bodyReferenceContractVersion,
+    bodyReferenceQa,
     canonicalHandleProfile,
     manufacturerLogoStamp?.logoPlacement,
   ]);
@@ -3194,7 +3864,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       canonicalBodyProfile: activeCanonicalBodyProfile,
       canonicalDimensionCalibration: activeCanonicalDimensionCalibration,
       printableSurfaceContract: activePrintableSurfaceResolution?.printableSurfaceContract ?? activeCanonicalDimensionCalibration?.printableSurfaceContract ?? null,
-      canonicalHandleProfile: canonicalHandleProfile ?? null,
+      bodyReferenceQA: bodyReferenceQa,
+      bodyReferenceContractVersion,
+      canonicalHandleProfile: normalizedCanonicalHandleProfile ?? null,
       logoPlacement: manufacturerLogoStamp?.logoPlacement ?? null,
       viewer: {
         previewModelMode,
@@ -3209,6 +3881,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       activeDrinkwareGlbStatus?.sourceLabel,
       activeDrinkwareGlbStatus?.status,
       activePrintableSurfaceResolution?.printableSurfaceContract,
+      bodyReferenceContractVersion,
+      bodyReferenceQa,
       bodyReferencePhotoDataUrl,
       defaultPreviewModelMode,
       frontBgStatus,
@@ -3393,18 +4067,18 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     });
     const matchedProfile = profileId ? getTumblerProfileById(profileId) : null;
     const resolvedBodyDiameterMm = resolveBodyReferenceDiameterMm({
-      outsideDiameterMm: args.outsideDiameterMm,
-      topDiameterMm: args.topDiameterMm,
-      bottomDiameterMm: args.bottomDiameterMm,
+      outsideDiameterMm: matchedProfile?.outsideDiameterMm ?? args.outsideDiameterMm,
+      topDiameterMm: matchedProfile?.topDiameterMm ?? args.topDiameterMm,
+      bottomDiameterMm: matchedProfile?.bottomDiameterMm ?? args.bottomDiameterMm,
       fallbackOutsideDiameterMm: matchedProfile?.outsideDiameterMm ?? null,
     });
     const resolvedTopOuterDiameterMm =
-      args.topDiameterMm ??
       matchedProfile?.topDiameterMm ??
+      args.topDiameterMm ??
       resolvedBodyDiameterMm;
     const resolvedBaseDiameterMm =
-      args.bottomDiameterMm ??
       matchedProfile?.bottomDiameterMm ??
+      args.bottomDiameterMm ??
       resolvedBodyDiameterMm;
 
     if (resolvedBodyDiameterMm) {
@@ -3418,10 +4092,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       setBaseDiameterMm(round2(resolvedBaseDiameterMm));
     }
 
-    if (args.usableHeightMm) {
-      setPrintHeightMm(round2(args.usableHeightMm));
-    } else if (matchedProfile?.usableHeightMm) {
+    if (matchedProfile?.usableHeightMm) {
       setPrintHeightMm(round2(matchedProfile.usableHeightMm));
+    } else if (args.usableHeightMm) {
+      setPrintHeightMm(round2(args.usableHeightMm));
     }
 
     const profileArc = getProfileHandleArcDeg(matchedProfile);
@@ -3436,6 +4110,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       setBodyBottomFromOverallMm(round2(oh - bottomM));
       setTopMarginMm(topM);
       setBottomMarginMm(bottomM);
+      setLidSeamFromOverallMm(
+        typeof matchedProfile.lidSeamFromOverallMm === "number"
+          ? round2(matchedProfile.lidSeamFromOverallMm)
+          : undefined,
+      );
+      setSilverBandBottomFromOverallMm(
+        typeof matchedProfile.silverBandBottomFromOverallMm === "number"
+          ? round2(matchedProfile.silverBandBottomFromOverallMm)
+          : undefined,
+      );
       if (matchedProfile.shapeType === "tapered") {
         const top = matchedProfile.topDiameterMm ?? null;
         const bottom = matchedProfile.bottomDiameterMm ?? null;
@@ -3459,6 +4143,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       setTopMarginMm(topM);
       setBottomMarginMm(bottomM);
     }
+    setLidSeamFromOverallMm(undefined);
+    setSilverBandBottomFromOverallMm(undefined);
     if (
       resolvedTopOuterDiameterMm &&
       resolvedBaseDiameterMm &&
@@ -3480,6 +4166,29 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   ) => {
     const draft = result.templateDraft;
     const draftDims = draft.dimensions;
+    const resolvedProductReferenceSet =
+      draft.productReferenceSet ??
+      result.tumblerLookupResult?.productReferenceSet ??
+      undefined;
+    const resolvedReferenceImagesById = new Map(
+      (resolvedProductReferenceSet?.images ?? []).map((image) => [image.id, image] as const),
+    );
+    const canonicalFrontReferenceImage =
+      resolvedProductReferenceSet?.canonicalViewSelection?.canonicalFrontImageId
+        ? (resolvedReferenceImagesById.get(resolvedProductReferenceSet.canonicalViewSelection.canonicalFrontImageId) ?? null)
+        : resolvedProductReferenceSet?.canonicalFrontImageId
+          ? (resolvedReferenceImagesById.get(resolvedProductReferenceSet.canonicalFrontImageId) ?? null)
+          : null;
+    const tracedFrontReferenceUrl =
+      !result.tumblerLookupResult?.fitDebug &&
+      result.flatLookupResult?.traceDebug?.accepted &&
+      (result.flatLookupResult.traceDebug.outlinePointsPx.length ?? 0) > 20
+        ? result.flatLookupResult.traceDebug.sourceImageUrl
+        : null;
+    const preferredFrontPhotoUrl = tracedFrontReferenceUrl ?? canonicalFrontReferenceImage?.url ?? draft.productPhotoUrl ?? null;
+    const matchedLookupProfile = result.matchedProfileId
+      ? getTumblerProfileById(result.matchedProfileId)
+      : null;
     const matchedFlatItem = result.matchedFlatItemId
       ? (FLAT_BED_ITEMS.find((item) => item.id === result.matchedFlatItemId) ?? null)
       : null;
@@ -3492,25 +4201,70 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setSmartLookupApplied(true);
     setLookupResult(result.tumblerLookupResult ?? null);
     setFlatLookupResult(result.flatLookupResult ?? null);
-    setProductReferenceSet(
-      draft.productReferenceSet ??
-      result.tumblerLookupResult?.productReferenceSet ??
-      undefined,
-    );
+    setProductReferenceSet(resolvedProductReferenceSet);
     setFlatLookupMatch(
       result.flatLookupResult?.matchedItemId
         ? (FLAT_BED_ITEMS.find((item) => item.id === result.flatLookupResult!.matchedItemId) ?? null)
         : matchedFlatItem,
     );
 
+    // Smart lookup should not carry forward a stale auto-seeded BODY REFERENCE
+    // shell from a previous lookup. Let the current lookup/photo reseed it.
+    if (!editingTemplate) {
+      setBodyOutlineProfile(undefined);
+      setReferencePaths(createReferencePaths({
+        bodyOutline: null,
+        lidProfile: null,
+        silverProfile: null,
+      }));
+      setReferenceLayerState(cloneReferenceLayerState(null));
+    }
+
+    // When lookup owns the face photos, clear any prior in-memory render state first
+    // so rerunning lookup in the same open modal cannot keep a stale image alive.
+    if (!files.frontPhotoFile) {
+      setFrontOriginalUrl("");
+      setFrontPhotoDataUrl("");
+      setFrontCleanUrl("");
+      setFrontUseOriginal(false);
+      setFrontBgStatus("idle");
+      setBodyReferencePhotoDataUrl("");
+    }
+    if (!files.backPhotoFile) {
+      setBackOriginalUrl("");
+      setBackPhotoDataUrl("");
+      setBackCleanUrl("");
+      setBackUseOriginal(false);
+      setBackBgStatus("idle");
+    }
+
     let resolvedLookupPhotoFile: File | null = null;
     let resolvedLookupBackPhotoFile: File | null = null;
     if (primaryProductImageFile) {
       await handleProductImage(primaryProductImageFile);
       setLookupDebugImageUrl("");
-    } else if (draft.productPhotoUrl) {
+    }
+    if (!files.frontPhotoFile && preferredFrontPhotoUrl && draft.productType && draft.productType !== "flat") {
       try {
-        const resolved = await applyResolvedProductPhotoUrl(draft.productPhotoUrl, draft.productPhotoLabel ?? null);
+        const resolvedFront = await resolveLookupPhotoUrl(preferredFrontPhotoUrl);
+        resolvedLookupPhotoFile = resolvedFront.file;
+        setProductImageLabel(
+          canonicalFrontReferenceImage
+            ? draft.productPhotoLabel ?? "Canonical front reference"
+            : draft.productPhotoLabel ?? "Lookup product photo",
+        );
+        setLookupDebugImageUrl(resolvedFront.dataUrl);
+      } catch {
+        // Non-fatal: dimensions and categorization should still be applied.
+      }
+    } else if (!primaryProductImageFile && preferredFrontPhotoUrl) {
+      try {
+        const resolved = await applyResolvedProductPhotoUrl(
+          preferredFrontPhotoUrl,
+          canonicalFrontReferenceImage
+            ? draft.productPhotoLabel ?? "Canonical front reference"
+            : draft.productPhotoLabel ?? null,
+        );
         resolvedLookupPhotoFile = resolved.file;
       } catch {
         // Non-fatal: dimensions and categorization should still be applied.
@@ -3545,7 +4299,17 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       setBackBgStatus("idle");
     }
 
-    if (draft.name) setName(draft.name);
+    const normalizedDraftName =
+      result.tumblerLookupResult != null
+        ? buildTemplateDisplayName({
+            brand: draft.brand ?? result.tumblerLookupResult.brand,
+            model: result.tumblerLookupResult.model,
+            capacityOz: parseCapacityOzValue(draft.capacity) ?? result.tumblerLookupResult.capacityOz,
+            fallbackTitle: draft.name,
+            fallbackRaw: draft.name,
+          })
+        : draft.name;
+    if (normalizedDraftName) setName(normalizedDraftName);
     if (draft.brand !== undefined && draft.brand !== null) setBrand(draft.brand);
     if (draft.capacity !== undefined && draft.capacity !== null) setCapacity(draft.capacity);
     if (draft.laserType) setLaserType(draft.laserType);
@@ -3564,7 +4328,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     );
 
     if (draft.glbPath !== undefined) {
-      const nextGlbPath = draft.glbPath ?? "";
+      const nextGlbPath =
+        draft.productType === "flat"
+          ? (draft.glbPath ?? "")
+          : draft.glbStatus === "verified-product-model"
+            ? (draft.glbPath ?? "")
+            : "";
       setGlbPath(nextGlbPath);
       setGlbFileName(nextGlbPath ? (nextGlbPath.split("/").pop() ?? null) : null);
       setGlbUploadError(null);
@@ -3605,8 +4374,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       setHandleLowerTransitionReachMm(draftDims?.handleLowerTransitionReachMm ?? undefined);
       setHandleUpperTransitionFromOverallMm(draftDims?.handleUpperTransitionFromOverallMm ?? undefined);
       setHandleLowerTransitionFromOverallMm(draftDims?.handleLowerTransitionFromOverallMm ?? undefined);
-      setHandleOuterTopFromOverallMm(editingTemplate ? (draftDims?.handleOuterTopFromOverallMm ?? undefined) : undefined);
-      setHandleOuterBottomFromOverallMm(editingTemplate ? (draftDims?.handleOuterBottomFromOverallMm ?? undefined) : undefined);
+      setHandleOuterTopFromOverallMm(undefined);
+      setHandleOuterBottomFromOverallMm(undefined);
       setHandleTubeDiameterMm(editingTemplate ? (draftDims?.handleTubeDiameterMm ?? undefined) : undefined);
       setHandleSpanMm(draftDims?.handleSpanMm ?? undefined);
       setCanonicalHandleProfile(draftDims?.canonicalHandleProfile ?? undefined);
@@ -3669,25 +4438,33 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       if (draftDims?.taperCorrection) {
         setTaperCorrection(draftDims.taperCorrection);
       }
-      if (typeof draftDims?.overallHeightMm === "number") {
+      if (!matchedLookupProfile && typeof draftDims?.overallHeightMm === "number") {
         setOverallHeightMm(round2(draftDims.overallHeightMm));
       }
-      if (typeof draftDims?.bodyTopFromOverallMm === "number") {
+      if (!matchedLookupProfile && typeof draftDims?.bodyTopFromOverallMm === "number") {
         setBodyTopFromOverallMm(round2(draftDims.bodyTopFromOverallMm));
-      } else if (typeof draftDims?.topMarginMm === "number") {
+      } else if (!matchedLookupProfile && typeof draftDims?.topMarginMm === "number") {
         setBodyTopFromOverallMm(round2(draftDims.topMarginMm));
       }
-      if (typeof draftDims?.bodyBottomFromOverallMm === "number") {
+      if (!matchedLookupProfile && typeof draftDims?.bodyBottomFromOverallMm === "number") {
         setBodyBottomFromOverallMm(round2(draftDims.bodyBottomFromOverallMm));
-      } else if (typeof draftDims?.overallHeightMm === "number" && typeof draftDims?.bottomMarginMm === "number") {
+      } else if (
+        !matchedLookupProfile &&
+        typeof draftDims?.overallHeightMm === "number" &&
+        typeof draftDims?.bottomMarginMm === "number"
+      ) {
         setBodyBottomFromOverallMm(round2(draftDims.overallHeightMm - draftDims.bottomMarginMm));
       }
-      if (typeof draftDims?.lidSeamFromOverallMm === "number") {
+      if (typeof matchedLookupProfile?.lidSeamFromOverallMm === "number") {
+        setLidSeamFromOverallMm(round2(matchedLookupProfile.lidSeamFromOverallMm));
+      } else if (typeof draftDims?.lidSeamFromOverallMm === "number") {
         setLidSeamFromOverallMm(round2(draftDims.lidSeamFromOverallMm));
       } else {
         setLidSeamFromOverallMm(undefined);
       }
-      if (typeof draftDims?.silverBandBottomFromOverallMm === "number") {
+      if (typeof matchedLookupProfile?.silverBandBottomFromOverallMm === "number") {
+        setSilverBandBottomFromOverallMm(round2(matchedLookupProfile.silverBandBottomFromOverallMm));
+      } else if (typeof draftDims?.silverBandBottomFromOverallMm === "number") {
         setSilverBandBottomFromOverallMm(round2(draftDims.silverBandBottomFromOverallMm));
       } else {
         setSilverBandBottomFromOverallMm(undefined);
@@ -3758,16 +4535,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       } else {
         setHandleLowerTransitionFromOverallMm(undefined);
       }
-      if (editingTemplate && typeof draftDims?.handleOuterTopFromOverallMm === "number") {
-        setHandleOuterTopFromOverallMm(round2(draftDims.handleOuterTopFromOverallMm));
-      } else {
-        setHandleOuterTopFromOverallMm(undefined);
-      }
-      if (editingTemplate && typeof draftDims?.handleOuterBottomFromOverallMm === "number") {
-        setHandleOuterBottomFromOverallMm(round2(draftDims.handleOuterBottomFromOverallMm));
-      } else {
-        setHandleOuterBottomFromOverallMm(undefined);
-      }
+      setHandleOuterTopFromOverallMm(undefined);
+      setHandleOuterBottomFromOverallMm(undefined);
       if (editingTemplate && typeof draftDims?.handleTubeDiameterMm === "number") {
         setHandleTubeDiameterMm(round2(draftDims.handleTubeDiameterMm));
       } else {
@@ -3817,6 +4586,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       }
       if (draftDims?.bodyColorHex) {
         setBodyColorHex(draftDims.bodyColorHex);
+      }
+      if (draftDims?.lidColorHex) {
+        setLidColorHex(draftDims.lidColorHex);
+      } else if (draftDims?.bodyColorHex) {
+        setLidColorHex(draftDims.bodyColorHex);
       }
       if (draftDims?.rimColorHex) {
         setRimColorHex(draftDims.rimColorHex);
@@ -3908,13 +4682,15 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       const result = await lookupTumblerItem(raw);
       setLookupResult(result);
 
-      const parts: string[] = [];
-      if (result.brand) parts.push(result.brand);
-      if (result.model) parts.push(result.model);
-      if (result.capacityOz) parts.push(`${result.capacityOz}oz`);
-      setName(parts.length > 0 ? parts.join(" ") : result.title ?? raw);
+      setName(buildTemplateDisplayName({
+        brand: result.brand,
+        model: result.model,
+        capacityOz: result.capacityOz,
+        fallbackTitle: result.title,
+        fallbackRaw: raw,
+      }));
       if (result.brand) setBrand(result.brand);
-      if (result.capacityOz) setCapacity(`${result.capacityOz}oz`);
+      if (result.capacityOz) setCapacity(formatCapacityOzLabel(result.capacityOz));
       setFlatFamilyKey("");
       const inferredProductType = inferLookupProductType(
         [raw, result.title, result.model, result.brand].filter(Boolean).join(" "),
@@ -3929,7 +4705,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             : "";
       setGlbPath(nextLookupGlbPath);
       setGlbFileName(nextLookupGlbPath ? (nextLookupGlbPath.split("/").pop() ?? null) : null);
-      if (result.bodyColorHex) setBodyColorHex(result.bodyColorHex);
+      if (result.bodyColorHex) {
+        setBodyColorHex(result.bodyColorHex);
+        setLidColorHex(result.bodyColorHex);
+      }
       if (result.rimColorHex) setRimColorHex(result.rimColorHex);
       if (inferredProductType !== "flat" && !materialProfileTouchedRef.current) {
         applyResolvedDrinkwareMaterial({
@@ -3942,10 +4721,21 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       }
 
       if (inferredProductType !== "flat") {
-        const matchedProfile = result.matchedProfileId ? getTumblerProfileById(result.matchedProfileId) : null;
+        const inferredProfileId = findTumblerProfileIdForBrandModel({
+          brand: result.brand,
+          model: result.model,
+          capacityOz: result.capacityOz,
+        });
+        const matchedProfile = (
+          inferredProfileId
+            ? getTumblerProfileById(inferredProfileId)
+            : result.matchedProfileId
+              ? getTumblerProfileById(result.matchedProfileId)
+              : null
+        );
         const resolvedOverallHeightMm =
-          result.dimensions.overallHeightMm ??
           matchedProfile?.overallHeightMm ??
+          result.dimensions.overallHeightMm ??
           null;
         applyProfileOrDimensions({
           brand: result.brand,
@@ -4016,6 +4806,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   };
 
   const handleCatalogBatchImport = async () => {
+    if (!CATALOG_BATCH_IMPORT_AVAILABLE) {
+      setBatchImportError("Catalog batch import is not available in this build yet.");
+      setBatchImportStatus(null);
+      return;
+    }
     const trimmedUrl = batchImportUrl.trim();
     if (!trimmedUrl) {
       setBatchImportError("Paste an official collection or category URL first.");
@@ -4064,13 +4859,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       const { draft, response } = result;
       const sug = response.suggestion;
       // Build a display name from brand + model + capacity
-      const parts: string[] = [];
-      if (sug.brand) parts.push(sug.brand);
-      if (sug.model) parts.push(sug.model);
-      if (sug.capacityOz) parts.push(`${sug.capacityOz}oz`);
-      if (parts.length > 0) setName(parts.join(" "));
+      const detectedName = buildTemplateDisplayName({
+        brand: sug.brand,
+        model: sug.model,
+        capacityOz: sug.capacityOz,
+      });
+      if (detectedName) setName(detectedName);
       if (sug.brand) setBrand(sug.brand);
-      if (sug.capacityOz) setCapacity(`${sug.capacityOz}oz`);
+      if (sug.capacityOz) setCapacity(formatCapacityOzLabel(sug.capacityOz));
       // Handle arc: prefer profile-specific value, fall back to 90 if hasHandle
       const profileId = findTumblerProfileIdForBrandModel({
         brand: sug.brand,
@@ -4217,47 +5013,20 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   };
 
   const handleSave = React.useCallback(async () => {
-    const errs: string[] = [];
-    if (!name.trim()) errs.push("Product name is required.");
-    if (!productType) errs.push("Product type is required.");
-    if (productType === "flat" && flatWidthMm <= 0) errs.push("Template width must be > 0 for flat products.");
-    if (productType && productType !== "flat" && templateWidthMm <= 0) errs.push("Wrap width / circumference must be > 0 for non-flat products.");
-    if (productType && productType !== "flat" && effectiveCylinderDiameterMm <= 0) errs.push("Cylinder diameter could not be derived from wrap width.");
-    if (hasBlockingGeometryMismatch) {
-      errs.push(`Cylinder diameter override is inconsistent with wrap width by ${derivedDiameterMismatchMm.toFixed(2)} mm. Recompute derived fields from wrap width or relock production geometry.`);
-    }
-    if (printHeightMm <= 0) errs.push("Print height must be > 0.");
-    if (productType && productType !== "flat" && printableHeightLooksLikeOverallHeight) {
-      errs.push("Printable height still matches overall assembled height. Re-run body analysis or set printable boundaries before saving.");
-    }
-    if (productType && productType !== "flat" && handleSpanContaminatesBodyWidth) {
-      errs.push("Overall handle span is matching the body diameter. Handle span metadata must not be used as body width or wrap math.");
-    }
-    if (
-      productType &&
-      productType !== "flat" &&
-      overallHeightMm > 0 &&
-      (bodyBottomFromOverallMm <= bodyTopFromOverallMm || bodyBottomFromOverallMm > overallHeightMm)
-    ) {
-      errs.push("Body top/bottom reference is invalid. Re-run lookup or adjust the body bounds.");
-    }
+    const errs = [...saveBlockingIssues];
     if (glbPath.trim()) {
       const glbOk = await verifyCurrentGlbPath({ clearOnMissing: false });
       if (!glbOk) errs.push("3D model path is missing or invalid.");
     }
     if (errs.length > 0) {
-      setErrors(errs);
+      setErrors(Array.from(new Set(errs)));
       return;
     }
     setErrors([]);
 
     const resolvedManufacturerLogoStamp = productType === "flat"
       ? undefined
-      : (manufacturerLogoStamp ?? await resolveManufacturerLogoStamp());
-    if (productType !== "flat") {
-      setManufacturerLogoStamp(resolvedManufacturerLogoStamp);
-      setDetectedManufacturerLogoStamp(resolvedManufacturerLogoStamp);
-    }
+      : manufacturerLogoStamp;
 
     const now = new Date().toISOString();
     const templateMaterial = inferTemplateMaterial(
@@ -4369,14 +5138,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           productType === "flat" || !Number.isFinite(handleLowerTransitionFromOverallMm)
             ? undefined
             : round2(Math.max(0, handleLowerTransitionFromOverallMm ?? 0)),
-        handleOuterTopFromOverallMm:
-          productType === "flat" || !Number.isFinite(handleOuterTopFromOverallMm)
-            ? undefined
-            : round2(Math.max(0, handleOuterTopFromOverallMm ?? 0)),
-        handleOuterBottomFromOverallMm:
-          productType === "flat" || !Number.isFinite(handleOuterBottomFromOverallMm)
-            ? undefined
-            : round2(Math.max(0, handleOuterBottomFromOverallMm ?? 0)),
+        handleOuterTopFromOverallMm: undefined,
+        handleOuterBottomFromOverallMm: undefined,
         handleTubeDiameterMm:
           productType === "flat" || !Number.isFinite(handleTubeDiameterMm)
             ? undefined
@@ -4385,9 +5148,18 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           productType === "flat" || !Number.isFinite(handleSpanMm)
             ? undefined
             : round2(Math.max(0, handleSpanMm ?? 0)),
-        canonicalHandleProfile: productType === "flat" ? undefined : canonicalHandleProfile,
+        canonicalHandleProfile: productType === "flat" ? undefined : normalizedCanonicalHandleProfile,
         canonicalBodyProfile: productType === "flat" ? undefined : (activeCanonicalBodyProfile ?? undefined),
         canonicalDimensionCalibration: productType === "flat" ? undefined : (activeCanonicalDimensionCalibration ?? undefined),
+        bodyReferenceQA: productType === "flat" ? undefined : (bodyReferenceQa ?? undefined),
+        bodyReferenceWarnings:
+          productType === "flat" || bodyReferenceWarnings.length === 0
+            ? undefined
+            : [...bodyReferenceWarnings],
+        bodyReferenceContractVersion:
+          productType === "flat"
+            ? undefined
+            : (bodyReferenceContractVersion ?? undefined),
         axialSurfaceBands: productType === "flat" ? undefined : (activePrintableSurfaceResolution?.axialSurfaceBands ?? undefined),
         printableSurfaceContract:
           productType === "flat"
@@ -4438,6 +5210,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         referencePhotoAnchorY,
         referencePhotoCenterMode,
         bodyColorHex: bodyColorHex || undefined,
+        lidColorHex: lidColorHex || undefined,
         rimColorHex: rimColorHex || undefined,
       },
       laserSettings: {
@@ -4467,6 +5240,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   }, [
     backPhotoDataUrl,
     bodyColorHex,
+    lidColorHex,
     bodyBottomFromOverallMm,
     bodyOutlineProfile,
     bodyTopFromOverallMm,
@@ -4475,6 +5249,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     capacity,
     activeCanonicalBodyProfile,
     activeCanonicalDimensionCalibration,
+    bodyReferenceContractVersion,
+    bodyReferenceQa,
+    bodyReferenceWarnings,
     canonicalHandleProfile,
     advancedGeometryOverridesUnlocked,
     derivedDiameterMismatchMm,
@@ -4550,6 +5327,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     thumbDataUrl,
     topOuterDiameterMm,
     baseDiameterMm,
+    saveBlockingIssues,
     topMarginMm,
     tumblerMapping,
     verifyCurrentGlbPath,
@@ -4563,6 +5341,36 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
   return (
     <div className={styles.form}>
+      <div className={styles.section}>
+        <div className={styles.sectionTitle}>Template readiness</div>
+        <div className={styles.readinessList}>
+          {templateReadinessItems.map((item) => (
+            <div key={item.label} className={styles.readinessItem}>
+              <div className={styles.readinessItemHeader}>
+                <span className={styles.readinessItemLabel}>{item.label}</span>
+                <span
+                  className={
+                    item.status === "ready"
+                      ? styles.lookupBadgePrimary
+                      : item.status === "action"
+                        ? styles.lookupBadgeWarning
+                        : styles.lookupBadgeReview
+                  }
+                >
+                  {item.status === "ready" ? "Ready" : item.status === "action" ? "Needs action" : "Review"}
+                </span>
+              </div>
+              <div className={styles.readinessItemDetail}>{item.detail}</div>
+            </div>
+          ))}
+        </div>
+        {saveDisabledReason && (
+          <div className={styles.readinessBlocker}>
+            Save is blocked: {saveDisabledReason}
+          </div>
+        )}
+      </div>
+
       {errors.length > 0 && (
         <div ref={errorSummaryRef} className={styles.errorSummary} role="alert" aria-live="assertive">
           <div className={styles.errorSummaryTitle}>Can&apos;t save template yet</div>
@@ -4581,10 +5389,41 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           canOpenMapping={Boolean(glbPath.trim()) && Boolean(productType) && productType !== "flat"}
           onClearResult={() => setSmartLookupApplied(false)}
         />
+        <div className={styles.externalToolNotice}>
+          Need manual raster cleanup or tracing from a product photo?
+          {" "}
+          <Link
+            href="/admin/image-to-svg"
+            target="_blank"
+            rel="noreferrer"
+            className={styles.externalToolLink}
+          >
+            Open Image to SVG in a new tab
+          </Link>
+          .
+        </div>
       </div>
       {/* ── Product identity ──────────────────────────────────────── */}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Product identity</div>
+        {templateProvenanceBadges.length > 0 && (
+          <div className={styles.readinessBadgeRow}>
+            {templateProvenanceBadges.map((badge) => (
+              <span
+                key={badge.label}
+                className={
+                  badge.tone === "ready"
+                    ? styles.lookupBadgePrimary
+                    : badge.tone === "action"
+                      ? styles.lookupBadgeWarning
+                      : styles.lookupBadgeReview
+                }
+              >
+                {badge.label}
+              </span>
+            ))}
+          </div>
+        )}
 
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>Product name *</label>
@@ -4625,7 +5464,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           >
             <option value="">Optional</option>
             <option value="fiber">Fiber</option>
-            <option value="co2">CO₂</option>
+            <option value="co2">CO2</option>
             <option value="diode">Diode</option>
           </select>
           <span className={styles.fieldHint}>Optional. Leave blank if the template should not preselect a laser source.</span>
@@ -4713,7 +5552,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               <div className={styles.lookupSummary}>
                 <div className={styles.lookupSummaryHeader}>
                   <div className={styles.lookupSummaryTitle}>
-                    {lookupResult.title || name || "Resolved item"}
+                    {name || lookupResult.title || "Resolved item"}
                   </div>
                   <div className={styles.lookupBadgeRow}>
                     <span className={styles.lookupBadgePrimary}>
@@ -4824,7 +5663,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               <TumblerLookupDebugPanel
                 debug={lookupResult.fitDebug}
                 imageUrl={bodyReferencePhotoDataUrl || lookupDebugImageUrl}
-                handleProfile={canonicalHandleProfile}
+                handleProfile={normalizedCanonicalHandleProfile}
               />
             )}
 
@@ -4851,7 +5690,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               className={styles.lookupRow}
               onSubmit={(event) => {
                 event.preventDefault();
-                if (!isBatchImporting && batchImportUrl.trim()) {
+                if (!isBatchImporting && !batchImportDisabledReason && batchImportUrl.trim()) {
                   void handleCatalogBatchImport();
                 }
               }}
@@ -4867,7 +5706,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 type="button"
                 className={styles.detectBtn}
                 onClick={() => void handleCatalogBatchImport()}
-                disabled={isBatchImporting || !batchImportUrl.trim()}
+                disabled={isBatchImporting || Boolean(batchImportDisabledReason)}
+                title={batchImportDisabledReason ?? undefined}
               >
                 {isBatchImporting ? "Importing..." : "Batch upload"}
               </button>
@@ -4875,7 +5715,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             <div className={styles.lookupAssistText} role="status" aria-live="polite">
               {isBatchImporting
                 ? batchImportStatus ?? "Importing catalog styles into templates."
-                : "Current live provider support is Stanley 1913 official catalog URLs. The workflow is provider-based so more catalogs can use this same screen later."}
+                : batchImportDisabledReason ?? "Current live provider support is Stanley 1913 official catalog URLs. The workflow is provider-based so more catalogs can use this same screen later."}
             </div>
 
             {batchImportStatus && !isBatchImporting && (
@@ -5011,15 +5851,34 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                     setFrontPhotoDataUrl(original);
                     setFrontUseOriginal(false);
                     setFrontBgStatus("idle");
+                    setBodyReferencePhotoDataUrl("");
+                    setManufacturerLogoStamp(undefined);
+                    setDetectedManufacturerLogoStamp(undefined);
+                    setOutlineAssistStatus("idle");
+                    setOutlineAssistNote(null);
+                    setLogoAssistStatus("idle");
+                    setLogoAssistNote(null);
                   }}
-                  onClear={() => { setFrontPhotoDataUrl(""); setFrontOriginalUrl(""); setFrontCleanUrl(""); setFrontBgStatus("idle"); }}
+                  onClear={() => {
+                    setFrontPhotoDataUrl("");
+                    setFrontOriginalUrl("");
+                    setFrontCleanUrl("");
+                    setFrontBgStatus("idle");
+                    setBodyReferencePhotoDataUrl("");
+                    setManufacturerLogoStamp(undefined);
+                    setDetectedManufacturerLogoStamp(undefined);
+                    setOutlineAssistStatus("idle");
+                    setOutlineAssistNote(null);
+                    setLogoAssistStatus("idle");
+                    setLogoAssistNote(null);
+                  }}
                 />
               </div>
-              {frontPhotoDataUrl && (
+              {(frontPhotoDataUrl || productPhotoFullUrl) && (
                 <div className={styles.bgPreviewGroup}>
                   <div className={styles.bgPreviewItem}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={frontPhotoDataUrl} alt="Front" className={styles.thumbPreview} />
+                    <img src={frontPhotoDataUrl || productPhotoFullUrl} alt="Front" className={styles.thumbPreview} />
                     {frontBgStatus === "done" && <span className={styles.bgPreviewLabelDone}>BG removed</span>}
                   </div>
                   {frontBgStatus === "idle" && (
@@ -5027,9 +5886,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       type="button"
                       className={styles.bgRemoveBtn}
                       onClick={async () => {
+                        const currentFrontPreviewUrl = frontPhotoDataUrl || productPhotoFullUrl;
+                        if (!currentFrontPreviewUrl) return;
                         setFrontBgStatus("processing");
                         try {
-                          const res = await fetch(frontPhotoDataUrl);
+                          const res = await fetch(currentFrontPreviewUrl);
                           const blob = await res.blob();
                           const { removeBackground } = await import("@imgly/background-removal");
                           const clean = await removeBackground(blob, { model: "isnet_quint8", proxyToWorker: false });
@@ -5070,13 +5931,36 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                   {frontBgStatus === "failed" && (
                     <span className={styles.bgFailed}>BG removal failed — using original</span>
                   )}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className={styles.detectBtn}
+                      onClick={() => void runAiOutlineAssist()}
+                      disabled={outlineAssistStatus === "processing"}
+                    >
+                      {outlineAssistStatus === "processing" ? "Preparing outline…" : "AI Prep Outline"}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.detectBtn}
+                      onClick={() => void runLogoPlacementAssist()}
+                      disabled={logoAssistStatus === "processing" || overallHeightMm <= 0}
+                    >
+                      {logoAssistStatus === "processing" ? "Detecting logo…" : "Detect Logo"}
+                    </button>
+                  </div>
+                  {(outlineAssistNote || logoAssistNote) && (
+                    <div className={styles.lookupAssistText} role="status" aria-live="polite">
+                      {[outlineAssistNote, logoAssistNote].filter(Boolean).join(" ")}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           </div>
 
           {/* ── Front captured prompt ── */}
-          {frontPhotoDataUrl && !backPhotoDataUrl && !mirrorForBack && (
+          {(frontPhotoDataUrl || productPhotoFullUrl) && !backPhotoDataUrl && !mirrorForBack && (
             <div className={styles.frontCapturedBanner}>
               <div className={styles.frontCapturedTitle}>Front photo captured</div>
               <div className={styles.frontCapturedHint}>
@@ -5373,6 +6257,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       <button
                         type="button"
                         className={`${styles.detectBtn} ${previewModelMode === "source-traced" ? styles.detectBtnActive : ""}`}
+                        disabled={!hasSourcePreviewModel}
                         aria-pressed={previewModelMode === "source-traced"}
                         onClick={() => handlePreviewModelModeChange("source-traced")}
                       >
@@ -5397,7 +6282,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                   <>
                     <ModelViewer
                       file={previewModelFile}
-                      modelUrl={glbPath.trim() || undefined}
+                      modelUrl={resolvedDrinkwarePreviewModelUrl}
                       flatPreview={
                         preferGeneratedFlatPreview
                           ? liveFlatPreview
@@ -5405,17 +6290,39 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       }
                       bedWidthMm={liveFlatPreview?.widthMm}
                       bedHeightMm={liveFlatPreview?.heightMm}
-                      tumblerDims={liveTumblerDims}
+                      tumblerDims={
+                        previewModelMode === "full-model"
+                          ? (fullPreviewTumblerDims ?? liveTumblerDims)
+                          : liveTumblerDims
+                      }
                       handleArcDeg={handleArcDeg}
                       glbPath={glbPath || null}
                       tumblerMapping={tumblerMapping}
                       bodyTintColor={productType === "flat" ? undefined : bodyColorHex}
+                      lidTintColor={productType === "flat" ? undefined : lidColorHex}
                       rimTintColor={productType === "flat" ? undefined : rimColorHex}
+                      lidAssemblyPreset={productType === "flat" ? undefined : fullPreviewLidPreset}
                       manufacturerLogoStamp={productType === "flat" ? undefined : manufacturerLogoStamp}
-                      showTemplateSurfaceZones={true}
-                      dimensionCalibration={productType === "flat" ? undefined : activeCanonicalDimensionCalibration}
-                      canonicalBodyProfile={productType === "flat" ? undefined : activeCanonicalBodyProfile}
-                      canonicalHandleProfile={productType === "flat" ? undefined : canonicalHandleProfile}
+                      showTemplateSurfaceZones={previewModelMode === "alignment-model"}
+                      dimensionCalibration={
+                        productType === "flat"
+                          ? undefined
+                          : (
+                              previewModelMode === "full-model"
+                                ? (fullPreviewCanonicalDimensionCalibration ?? activeCanonicalDimensionCalibration)
+                                : activeCanonicalDimensionCalibration
+                            )
+                      }
+                      canonicalBodyProfile={
+                        productType === "flat"
+                          ? undefined
+                          : (
+                              previewModelMode === "full-model"
+                                ? (fullPreviewCanonicalBodyProfile ?? activeCanonicalBodyProfile)
+                                : activeCanonicalBodyProfile
+                            )
+                      }
+                      canonicalHandleProfile={productType === "flat" ? undefined : normalizedCanonicalHandleProfile}
                       editableHandlePreview={productType === "flat" ? undefined : editableHandlePreview}
                       previewModelMode={previewModelMode}
                     />
@@ -5526,27 +6433,27 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               <span className={styles.fieldHint}>Front projection and wrap circumference stay distinct but share one mm calibration.</span>
             </div>
             <div className={styles.fieldRow}>
-              <label className={styles.fieldLabel}>Photo â†’ front</label>
+              <label className={styles.fieldLabel}>Photo -&gt; front</label>
               <div className={styles.readOnly}>
-                {activeCanonicalDimensionCalibration.photoToFrontTransform.matrix.map((value) => value.toFixed(4)).join(", ")}
+                {activeCanonicalDimensionCalibration!.photoToFrontTransform.matrix.map((value) => value.toFixed(4)).join(", ")}
               </div>
             </div>
             <div className={styles.fieldRow}>
               <label className={styles.fieldLabel}>Front axis (px)</label>
               <div className={styles.readOnly}>
-                {activeCanonicalDimensionCalibration.frontAxisPx.xTop.toFixed(1)}, {activeCanonicalDimensionCalibration.frontAxisPx.yTop.toFixed(1)}
-                {" â†’ "}
-                {activeCanonicalDimensionCalibration.frontAxisPx.xBottom.toFixed(1)}, {activeCanonicalDimensionCalibration.frontAxisPx.yBottom.toFixed(1)}
+                {activeCanonicalDimensionCalibration!.frontAxisPx.xTop.toFixed(1)}, {activeCanonicalDimensionCalibration!.frontAxisPx.yTop.toFixed(1)}
+                {" -> "}
+                {activeCanonicalDimensionCalibration!.frontAxisPx.xBottom.toFixed(1)}, {activeCanonicalDimensionCalibration!.frontAxisPx.yBottom.toFixed(1)}
               </div>
             </div>
             <div className={styles.fieldRow}>
               <label className={styles.fieldLabel}>SVG front box</label>
               <div className={styles.readOnly}>
-                {activeCanonicalDimensionCalibration.svgFrontViewBoxMm.x.toFixed(1)},
+                {activeCanonicalDimensionCalibration!.svgFrontViewBoxMm.x.toFixed(1)},
                 {" "}
-                {activeCanonicalDimensionCalibration.svgFrontViewBoxMm.y.toFixed(1)},
+                {activeCanonicalDimensionCalibration!.svgFrontViewBoxMm.y.toFixed(1)},
                 {" "}
-                {activeCanonicalDimensionCalibration.svgFrontViewBoxMm.width.toFixed(1)} Ã— {activeCanonicalDimensionCalibration.svgFrontViewBoxMm.height.toFixed(1)} mm
+                {activeCanonicalDimensionCalibration!.svgFrontViewBoxMm.width.toFixed(1)} x {activeCanonicalDimensionCalibration!.svgFrontViewBoxMm.height.toFixed(1)} mm
               </div>
             </div>
             <div className={styles.fieldRow}>
@@ -5579,8 +6486,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             <div className={styles.fieldRow}>
               <label className={styles.fieldLabel}>Handle keep-out</label>
               <div className={styles.readOnly}>
-                {activeCanonicalDimensionCalibration.wrapMappingMm.handleKeepOutArcDeg && activeCanonicalDimensionCalibration.wrapMappingMm.handleMeridianMm != null
-                  ? `center ${activeCanonicalDimensionCalibration.wrapMappingMm.handleMeridianMm.toFixed(1)} mm / arc ${activeCanonicalDimensionCalibration.wrapMappingMm.handleKeepOutArcDeg.toFixed(1)}° / sector ${activeCanonicalDimensionCalibration.wrapMappingMm.handleKeepOutStartMm?.toFixed(1)} → ${activeCanonicalDimensionCalibration.wrapMappingMm.handleKeepOutEndMm?.toFixed(1)} mm`
+                {activeCanonicalDimensionCalibration!.wrapMappingMm.handleKeepOutArcDeg && activeCanonicalDimensionCalibration!.wrapMappingMm.handleMeridianMm != null
+                  ? `center ${activeCanonicalDimensionCalibration!.wrapMappingMm.handleMeridianMm.toFixed(1)} mm / arc ${activeCanonicalDimensionCalibration!.wrapMappingMm.handleKeepOutArcDeg.toFixed(1)} deg / sector ${activeCanonicalDimensionCalibration!.wrapMappingMm.handleKeepOutStartMm?.toFixed(1)} -> ${activeCanonicalDimensionCalibration!.wrapMappingMm.handleKeepOutEndMm?.toFixed(1)} mm`
                   : "None"}
               </div>
               <span className={styles.fieldHint}>Wrap math stays body-only; the handle reserves an exclusion sector instead of receiving wrap artwork.</span>
@@ -5589,7 +6496,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               <label className={styles.fieldLabel}>Front logo</label>
               <div className={styles.readOnly}>
                 {manufacturerLogoStamp?.logoPlacement
-                  ? `${manufacturerLogoStamp.logoPlacement.source} / θ ${((manufacturerLogoStamp.logoPlacement.thetaCenter * 180) / Math.PI).toFixed(1)}° / span ${((manufacturerLogoStamp.logoPlacement.thetaSpan * 180) / Math.PI).toFixed(1)}° / s ${manufacturerLogoStamp.logoPlacement.sCenter.toFixed(3)} / ${Math.round(manufacturerLogoStamp.logoPlacement.confidence * 100)}%`
+                  ? `${manufacturerLogoStamp.logoPlacement!.source} / theta ${((manufacturerLogoStamp.logoPlacement!.thetaCenter * 180) / Math.PI).toFixed(1)} deg / span ${((manufacturerLogoStamp.logoPlacement!.thetaSpan * 180) / Math.PI).toFixed(1)} deg / s ${manufacturerLogoStamp.logoPlacement!.sCenter.toFixed(3)} / ${Math.round(manufacturerLogoStamp.logoPlacement!.confidence * 100)}%`
                   : "Not detected"}
               </div>
               <span className={styles.fieldHint}>Stored in canonical body-local coordinates and reused by preview, wrap preview, and guide export.</span>
@@ -5598,7 +6505,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               <div className={styles.fieldRow}>
                 <label className={styles.fieldLabel}>Logo boundary</label>
                 <div className={styles.readOnly}>
-                  {logoPlacementSurfaceStatus.logoTopMm.toFixed(1)}–{logoPlacementSurfaceStatus.logoBottomMm.toFixed(1)} mm
+                  {logoPlacementSurfaceStatus.logoTopMm.toFixed(1)}-{logoPlacementSurfaceStatus.logoBottomMm.toFixed(1)} mm
                 </div>
                 <span
                   className={`${styles.fieldHint} ${
@@ -5615,9 +6522,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                             : logoPlacementSurfaceStatus.overlapsTop
                               ? "top boundary"
                               : "bottom boundary"
-                        } (${logoPlacementSurfaceStatus.printableTopMm.toFixed(1)}–${logoPlacementSurfaceStatus.printableBottomMm.toFixed(1)} mm from body top).`
-                      : `Locked production check: logo region stays inside the printable ${logoPlacementSurfaceStatus.printableTopMm.toFixed(1)}–${logoPlacementSurfaceStatus.printableBottomMm.toFixed(1)} mm band.`
-                    : `Manual geometry overrides are enabled. Printable-boundary checks remain advisory for the ${logoPlacementSurfaceStatus.printableTopMm.toFixed(1)}–${logoPlacementSurfaceStatus.printableBottomMm.toFixed(1)} mm band.`}
+                        } (${logoPlacementSurfaceStatus.printableTopMm.toFixed(1)}-${logoPlacementSurfaceStatus.printableBottomMm.toFixed(1)} mm from body top).`
+                      : `Locked production check: logo region stays inside the printable ${logoPlacementSurfaceStatus.printableTopMm.toFixed(1)}-${logoPlacementSurfaceStatus.printableBottomMm.toFixed(1)} mm band.`
+                    : `Manual geometry overrides are enabled. Printable-boundary checks remain advisory for the ${logoPlacementSurfaceStatus.printableTopMm.toFixed(1)}-${logoPlacementSurfaceStatus.printableBottomMm.toFixed(1)} mm band.`}
                 </span>
               </div>
             )}
@@ -5633,7 +6540,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       thetaCenter: Math.max(-Math.PI, placement.thetaCenter - (Math.PI / 90)),
                     }))}
                   >
-                    θ -
+                    theta -
                   </button>
                   <button
                     type="button"
@@ -5643,7 +6550,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       thetaCenter: Math.min(Math.PI, placement.thetaCenter + (Math.PI / 90)),
                     }))}
                   >
-                    θ +
+                    theta +
                   </button>
                   <button
                     type="button"
@@ -6087,22 +6994,22 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                   </div>
                 </div>
               </div>
-              <div className={`${styles.surfaceContractSummaryNote} ${activePrintableSurfaceResolution.automaticDetectionWeak ? styles.surfaceContractSummaryWarning : ""}`}>
-                {activePrintableSurfaceResolution.automaticDetectionWeak
-                  ? "Auto top-band detection is weak. Set printable top / bottom explicitly before saving production geometry."
+              <div className={`${styles.surfaceContractSummaryNote} ${bodyReferenceQa?.severity === "action" ? styles.surfaceContractSummaryWarning : ""}`}>
+                {bodyReferenceQa?.severity === "action" && bodyReferenceWarnings[0]
+                  ? bodyReferenceWarnings[0]
                   : "Axial bands only affect printable height. Wrap width and centerline stay unchanged."}
               </div>
             </div>
           )}
           <EngravableZoneEditor
             photoDataUrl={activeReferencePhotoDataUrl}
-            overallHeightMm={overallHeightMm}
-            bodyTopFromOverallMm={bodyTopFromOverallMm}
-            bodyBottomFromOverallMm={bodyBottomFromOverallMm}
-            lidSeamFromOverallMm={lidSeamFromOverallMm}
-            silverBandBottomFromOverallMm={silverBandBottomFromOverallMm}
-            diameterMm={effectiveCylinderDiameterMm}
-            bodyWrapDiameterMm={effectiveCylinderDiameterMm}
+            overallHeightMm={activeCanonicalDimensionCalibration?.totalHeightMm ?? overallHeightMm}
+            bodyTopFromOverallMm={activeCanonicalDimensionCalibration?.lidBodyLineMm ?? bodyTopFromOverallMm}
+            bodyBottomFromOverallMm={activeCanonicalDimensionCalibration?.bodyBottomMm ?? bodyBottomFromOverallMm}
+            lidSeamFromOverallMm={resolvedLidSeamForPersistence ?? lidSeamFromOverallMm}
+            silverBandBottomFromOverallMm={resolvedSilverBandBottomForPersistence ?? silverBandBottomFromOverallMm}
+            diameterMm={activeCanonicalDimensionCalibration?.wrapDiameterMm ?? effectiveCylinderDiameterMm}
+            bodyWrapDiameterMm={activeCanonicalDimensionCalibration?.wrapDiameterMm ?? effectiveCylinderDiameterMm}
             topOuterDiameterMm={topOuterDiameterMm}
             baseDiameterMm={baseDiameterMm}
             photoWidthScalePct={referencePhotoWidthScalePct}
@@ -6113,9 +7020,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             photoAnchorY={referencePhotoAnchorY}
             photoCenterMode={referencePhotoCenterMode}
             bodyColorHex={bodyColorHex}
+            lidColorHex={lidColorHex}
             rimColorHex={rimColorHex}
             fitDebug={lookupResult?.fitDebug ?? null}
-            canonicalHandleProfile={canonicalHandleProfile ?? null}
+            canonicalHandleProfile={normalizedCanonicalHandleProfile ?? null}
             outlineProfile={bodyOutlineProfile}
             referencePaths={referencePaths}
             referenceLayerState={referenceLayerState}
@@ -6155,13 +7063,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             handleLowerTransitionFromOverallMm={
               handleLowerTransitionFromOverallMm ?? editableHandlePreview?.lowerTransitionFromOverallMm
             }
-            handleOuterTopFromOverallMm={
-              handleOuterTopFromOverallMm ?? editableHandlePreview?.outerTopFromOverallMm
-            }
-            handleOuterBottomFromOverallMm={
-              handleOuterBottomFromOverallMm ?? editableHandlePreview?.outerBottomFromOverallMm
-            }
+            handleOuterTopFromOverallMm={editableHandlePreview?.outerTopFromOverallMm}
+            handleOuterBottomFromOverallMm={editableHandlePreview?.outerBottomFromOverallMm}
             handleTubeDiameterMm={handleTubeDiameterMm ?? editableHandlePreview?.tubeDiameterMm}
+            editableHandlePreview={editableHandlePreview}
             shoulderDiameterMm={shoulderDiameterMm}
             taperUpperDiameterMm={taperUpperDiameterMm}
             taperLowerDiameterMm={taperLowerDiameterMm}
@@ -6177,8 +7082,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             onHandleLowerTransitionReachChange={setHandleLowerTransitionReachMm}
             onHandleUpperTransitionChange={setHandleUpperTransitionFromOverallMm}
             onHandleLowerTransitionChange={setHandleLowerTransitionFromOverallMm}
-            onHandleOuterTopChange={setHandleOuterTopFromOverallMm}
-            onHandleOuterBottomChange={setHandleOuterBottomFromOverallMm}
+            onHandleOuterTopChange={undefined}
+            onHandleOuterBottomChange={undefined}
             onHandleTubeDiameterChange={setHandleTubeDiameterMm}
             onShoulderDiameterChange={setShoulderDiameterMm}
             onTaperUpperDiameterChange={setTaperUpperDiameterMm}
@@ -6339,7 +7244,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           <button type="button" className={styles.cancelBtn} onClick={onCancel}>
             Cancel
           </button>
-          <button type="button" className={styles.saveBtn} onClick={() => void handleSave()}>
+          <button
+            type="button"
+            className={styles.saveBtn}
+            onClick={() => void handleSave()}
+            disabled={saveBlockingIssues.length > 0 || lookingUpItem || detecting || checkingGlbPath}
+            title={saveDisabledReason ?? undefined}
+          >
             {isEdit ? "Save changes" : "Save template"}
           </button>
         </div>

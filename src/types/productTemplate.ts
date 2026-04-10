@@ -55,6 +55,20 @@ export interface EditableBodyOutline {
   };
 }
 
+export interface NormalizedMeasurementContour {
+  contour: EditableBodyOutlineContourPoint[];
+  bounds: {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+    width: number;
+    height: number;
+  };
+  mirrored: boolean;
+  bodyOnly: boolean;
+}
+
 export interface CanonicalHandleAnchor {
   sNorm: number;
   xPx: number;
@@ -162,6 +176,17 @@ export interface CanonicalDimensionCalibration {
   };
 }
 
+export interface BodyReferenceQAContract {
+  pass: boolean;
+  severity: "ready" | "review" | "action";
+  shellAuthority: "outline-profile" | "dimensional-seed";
+  scaleAuthority: "validated-midband-ratio" | "outline-ratio-fallback" | "none";
+  acceptedRowCount: number;
+  rejectedRowCount: number;
+  fallbackMode: "none" | "outline-only" | "missing-measurement-contour";
+  issues: string[];
+}
+
 export interface ReferencePaths {
   bodyOutline: EditableBodyOutline | null;
   lidProfile: EditableBodyOutline | null;
@@ -201,9 +226,9 @@ export interface ProductTemplateDimensions {
   bodyTopFromOverallMm?: number;
   /** Distance from the overall top to the physical tumbler body bottom (mm). */
   bodyBottomFromOverallMm?: number;
-  /** Lid seam / rotary grab reference measured from the overall top (mm). */
+  /** Top edge of the silver ring / lid seam measured from the overall top (mm). */
   lidSeamFromOverallMm?: number;
-  /** Bottom edge of the non-powder-coated silver band measured from the overall top (mm). */
+  /** Bottom edge of the top silver ring measured from the overall top (mm). */
   silverBandBottomFromOverallMm?: number;
   /** Top edge of the handle silhouette measured from the overall top (mm). */
   handleTopFromOverallMm?: number;
@@ -241,6 +266,12 @@ export interface ProductTemplateDimensions {
   canonicalBodyProfile?: CanonicalBodyProfile;
   /** Shared mm calibration consumed by photo overlay, body outline, bed mapping, and GLB alignment. */
   canonicalDimensionCalibration?: CanonicalDimensionCalibration;
+  /** Persisted BODY REFERENCE QA used to rehydrate the hard-gated contract on reload. */
+  bodyReferenceQA?: BodyReferenceQAContract;
+  /** Persisted BODY REFERENCE warning ledger from the active contract. */
+  bodyReferenceWarnings?: string[];
+  /** Persisted BODY REFERENCE contract version for drift detection across releases. */
+  bodyReferenceContractVersion?: number;
   /** Width at the shoulder break where the straight wall transitions into the lower taper (mm). */
   shoulderDiameterMm?: number;
   /** Width at the upper taper control point (mm). */
@@ -287,6 +318,8 @@ export interface ProductTemplateDimensions {
   referencePhotoCenterMode?: "body" | "photo";
   /** Sampled body color from the engravable zone */
   bodyColorHex?: string;
+  /** Sampled lid cap color from the reference photo */
+  lidColorHex?: string;
   /** Sampled rim / engraved render color */
   rimColorHex?: string;
 }
