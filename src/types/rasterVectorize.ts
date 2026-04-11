@@ -1,3 +1,5 @@
+import type { TemplatePipelineDiagnostics, TemplatePipelineStageRecord } from "./templatePipelineDiagnostics";
+
 export type RasterTraceMode = "trace" | "posterize";
 export type RasterTraceRecipe = "badge" | "line-art" | "script-logo" | "stamp";
 export type RasterPreviewBackground = "light" | "dark" | "checker";
@@ -32,4 +34,6 @@ export interface RasterVectorizeResponse {
   jobId?: string;
   sourcePath?: string;
   branchPreviews?: RasterVectorizeBranchPreviews;
+  debug?: TemplatePipelineStageRecord;
+  diagnostics?: TemplatePipelineDiagnostics;
 }

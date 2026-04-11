@@ -10,6 +10,15 @@ import type {
   RasterVectorizeBranchPreviews,
   RasterVectorizeResponse,
 } from "@/types/rasterVectorize";
+import {
+  createTemplatePipelineDiagnostics,
+  fingerprintBytes,
+  fingerprintText,
+  fingerprintJson,
+  upsertTemplatePipelineStage,
+  updateTemplatePipelineInputFingerprints,
+} from "@/lib/templatePipelineDiagnostics";
+import { analyzeAlphaSilhouette } from "@/lib/imageToSvgSilhouette";
 import { prepareRasterTraceInput } from "@/server/rasterVectorize/preprocess";
 import type { PotraceOptions } from "potrace";
 
@@ -21,6 +30,13 @@ const DEFAULT_TRACE_MAX_DIMENSION = 6144;
 const MIN_TRACE_MAX_DIMENSION = 1024;
 const MAX_TRACE_MAX_DIMENSION = 8192;
 const TRACE_INPUT_DENSITY = 600;
+const ASSET_PIPELINE_HEALTH_TTL_MS = 30_000;
+const VECTORIZE_DIAGNOSTICS_VERSION = "2026-04-10-v1";
+
+let assetPipelineHealthCache: {
+  checkedAt: number;
+  reachable: boolean;
+} | null = null;
 
 interface ImageDoctorRequestBody {
   vectorSettings?: {
@@ -45,6 +61,37 @@ function getAssetPipelineUrl(): string {
 
 function assetPipelineUrl(pathname: string): string {
   return `${getAssetPipelineUrl()}${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
+}
+
+async function isAssetPipelineReachable(): Promise<boolean> {
+  const now = Date.now();
+  if (assetPipelineHealthCache && now - assetPipelineHealthCache.checkedAt < ASSET_PIPELINE_HEALTH_TTL_MS) {
+    return assetPipelineHealthCache.reachable;
+  }
+
+  let reachable = false;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1200);
+    try {
+      const response = await fetch(assetPipelineUrl("/health"), {
+        method: "GET",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      reachable = response.ok || response.status === 404 || response.status === 405;
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch {
+    reachable = false;
+  }
+
+  assetPipelineHealthCache = {
+    checkedAt: now,
+    reachable,
+  };
+  return reachable;
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -436,13 +483,6 @@ function buildPotraceInput(mask: Uint8Array, width: number, height: number): Pro
     .toBuffer();
 }
 
-function percentileUint8(values: number[], fraction: number): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * fraction)));
-  return sorted[index] ?? 0;
-}
-
 function medianWindow(values: number[], centerIndex: number, radius: number): number {
   const start = Math.max(0, centerIndex - radius);
   const end = Math.min(values.length, centerIndex + radius + 1);
@@ -571,6 +611,34 @@ function countMaskPixels(mask: Uint8Array): number {
   return total;
 }
 
+function measureMaskBounds(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+): { left: number; right: number; top: number; bottom: number } | null {
+  let left = width;
+  let right = -1;
+  let top = height;
+  let bottom = -1;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (mask[(y * width) + x] !== 1) {
+        continue;
+      }
+
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+
+  return right >= left && bottom >= top
+    ? { left, right, top, bottom }
+    : null;
+}
+
 async function runLocalPotraceFallback(args: {
   imageBuffer: Buffer;
   traceMode: RasterTraceMode;
@@ -597,22 +665,13 @@ async function runLocalPotraceFallback(args: {
   );
   const imageCenterX = (info.width - 1) / 2;
   const alphaValues: number[] = [];
-  const hasUsefulAlpha = (() => {
-    let alphaPixels = 0;
-    for (let offset = 3; offset < data.length; offset += info.channels) {
-      const alpha = data[offset] ?? 255;
-      if (alpha > 0) {
-        alphaValues.push(alpha);
-      }
-      if (alpha < 245) {
-        alphaPixels += 1;
-      }
+  for (let offset = 3; offset < data.length; offset += info.channels) {
+    const alpha = data[offset] ?? 255;
+    if (alpha > 0) {
+      alphaValues.push(alpha);
     }
-    return alphaPixels > (info.width * info.height * 0.01);
-  })();
-  const tightAlphaThreshold = hasUsefulAlpha
-    ? Math.min(232, Math.max(96, percentileUint8(alphaValues, 0.34)))
-    : 0;
+  }
+  const alphaSilhouette = analyzeAlphaSilhouette(alphaValues, info.width * info.height);
 
   const mask = new Uint8Array(info.width * info.height);
   for (let y = 0; y < info.height; y += 1) {
@@ -623,13 +682,43 @@ async function runLocalPotraceFallback(args: {
       const blue = data[index + 2] ?? red;
       const alpha = data[index + 3] ?? 255;
       const luma = Math.round((0.2126 * red) + (0.7152 * green) + (0.0722 * blue));
-      const isForeground = hasUsefulAlpha
-        ? alpha >= tightAlphaThreshold
+      const isForeground = alphaSilhouette.hasUsefulAlpha
+        ? alpha >= alphaSilhouette.tightThreshold
         : args.invert
           ? luma >= threshold
           : luma <= threshold;
       mask[(y * info.width) + x] = isForeground ? 1 : 0;
     }
+  }
+
+  if (alphaSilhouette.hasUsefulAlpha) {
+    const bounds = measureMaskBounds(mask, info.width, info.height);
+    if (!bounds) {
+      throw new Error("Could not derive a local alpha silhouette trace from the image.");
+    }
+
+    const potraceInput = await buildPotraceInput(mask, info.width, info.height);
+    const svg = await traceSvg(potraceInput, {
+      turdSize: Math.max(0, Math.min(12, args.turdSize)),
+      alphaMax: Math.min(1.33, Math.max(0.05, args.alphaMax)),
+      optCurve: true,
+      optTolerance: Math.min(1, Math.max(0.05, args.optTolerance)),
+      threshold: 128,
+      blackOnWhite: true,
+      turnPolicy: "majority",
+      color: args.outputColor,
+      background: "transparent",
+    });
+
+    return {
+      svg,
+      mode: args.traceMode,
+      pathCount: countPaths(svg),
+      width: (bounds.right - bounds.left) + 1,
+      height: (bounds.bottom - bounds.top) + 1,
+      engine: "potrace",
+      branchPreviews: {},
+    };
   }
 
   const rows: SilhouetteRow[] = [];
@@ -1264,7 +1353,36 @@ export async function POST(req: NextRequest) {
   );
 
   try {
+    const requestStartedAt = Date.now();
     const imageBuffer = Buffer.from(await imageFile.arrayBuffer());
+    let diagnostics = updateTemplatePipelineInputFingerprints(
+      createTemplatePipelineDiagnostics({
+        contractVersions: {
+          vectorize: VECTORIZE_DIAGNOSTICS_VERSION,
+        },
+      }),
+      {
+        sourceImage: fingerprintBytes(imageBuffer),
+      },
+    );
+    diagnostics = upsertTemplatePipelineStage(diagnostics, {
+      id: "source-image",
+      status: "ready",
+      authority: "uploaded-image",
+      warnings: [],
+      errors: [],
+      artifacts: {
+        fileName: imageFile.name,
+        mimeType: imageFile.type || null,
+        sizeBytes: imageFile.size,
+        traceMode,
+        recipe,
+        thresholdMode,
+        threshold,
+        invert,
+        preserveText,
+      },
+    });
     const preparedTraceInput = await prepareRasterTraceInput(imageBuffer, {
       maxDimension,
       recipe,
@@ -1277,6 +1395,9 @@ export async function POST(req: NextRequest) {
     try {
       if (preferLocal) {
         throw new Error("Local vectorize path requested.");
+      }
+      if (!(await isAssetPipelineReachable())) {
+        throw new Error("Asset pipeline unavailable.");
       }
       const job = await fetchJson<AssetPipelineManifest>(assetPipelineUrl("/jobs"), {
         method: "POST",
@@ -1374,12 +1495,53 @@ export async function POST(req: NextRequest) {
         sourcePath: selectedSvgPath,
         branchPreviews,
       };
+      diagnostics = updateTemplatePipelineInputFingerprints(diagnostics, {
+        workingImage: fingerprintBytes(preparedTraceInput.buffer),
+        svg: fingerprintText(svg),
+      });
+      diagnostics = upsertTemplatePipelineStage(diagnostics, {
+        id: "vectorize",
+        status: "ready",
+        authority: "server-vectorize",
+        engine: "asset-pipeline",
+        timingMs: Date.now() - requestStartedAt,
+        fallback: {
+          used: false,
+          from: null,
+          reason: null,
+        },
+        cache: null,
+        warnings: [],
+        errors: [],
+        artifacts: {
+          mode: traceMode,
+          recipe,
+          branchPreviewsAvailable: Boolean(
+            branchPreviews.colorPreview ||
+            branchPreviews.textPreview ||
+            branchPreviews.arcTextPreview ||
+            branchPreviews.scriptTextPreview ||
+            branchPreviews.shapePreview ||
+            branchPreviews.contourPreview
+          ),
+          jobId: manifest.jobId,
+          sourcePath: selectedSvgPath,
+          outputFingerprint: fingerprintJson({
+            pathCount: response.pathCount,
+            width: response.width,
+            height: response.height,
+          }),
+        },
+      });
+      response.debug = diagnostics.stages.find((stage) => stage.id === "vectorize") ?? undefined;
+      response.diagnostics = diagnostics;
 
       return NextResponse.json(response);
     } catch (assetPipelineError) {
+      const fallbackReason = getErrorMessage(assetPipelineError, String(assetPipelineError));
       console.warn(
         "[vectorize] asset pipeline unavailable; falling back to local Potrace:",
-        getErrorMessage(assetPipelineError, String(assetPipelineError)),
+        fallbackReason,
       );
 
       const fallbackResponse = await runLocalPotraceFallback({
@@ -1395,6 +1557,44 @@ export async function POST(req: NextRequest) {
         optTolerance,
         posterizeSteps,
       });
+      diagnostics = updateTemplatePipelineInputFingerprints(diagnostics, {
+        workingImage: fingerprintBytes(preparedTraceInput.buffer),
+        svg: fingerprintText(fallbackResponse.svg),
+      });
+      diagnostics = upsertTemplatePipelineStage(diagnostics, {
+        id: "vectorize",
+        status: "warning",
+        authority: "server-vectorize",
+        engine: fallbackResponse.engine ?? "potrace",
+        timingMs: Date.now() - requestStartedAt,
+        fallback: {
+          used: true,
+          from: "asset-pipeline",
+          reason: fallbackReason,
+        },
+        cache: null,
+        warnings: [`Asset pipeline fallback used: ${fallbackReason}`],
+        errors: [],
+        artifacts: {
+          mode: traceMode,
+          recipe,
+          branchPreviewsAvailable: Boolean(
+            fallbackResponse.branchPreviews?.colorPreview ||
+            fallbackResponse.branchPreviews?.textPreview ||
+            fallbackResponse.branchPreviews?.arcTextPreview ||
+            fallbackResponse.branchPreviews?.scriptTextPreview ||
+            fallbackResponse.branchPreviews?.shapePreview ||
+            fallbackResponse.branchPreviews?.contourPreview
+          ),
+          outputFingerprint: fingerprintJson({
+            pathCount: fallbackResponse.pathCount,
+            width: fallbackResponse.width,
+            height: fallbackResponse.height,
+          }),
+        },
+      });
+      fallbackResponse.debug = diagnostics.stages.find((stage) => stage.id === "vectorize") ?? undefined;
+      fallbackResponse.diagnostics = diagnostics;
 
       return NextResponse.json(fallbackResponse);
     }

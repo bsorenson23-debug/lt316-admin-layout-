@@ -3,11 +3,13 @@ import type {
   EditableBodyOutlineContourPoint,
   EditableBodyOutlinePoint,
   EditableOutlineHandle,
+  NormalizedMeasurementContour,
   EditableOutlinePointType,
   ReferenceLayerKey,
   ReferenceLayerState,
   ReferencePaths,
 } from "@/types/productTemplate";
+import type { FlatItemLookupTraceDebug } from "@/types/flatItemLookup";
 import type { TumblerItemLookupFitDebug } from "@/types/tumblerItemLookup";
 
 export interface ImportedEditableBodyOutlineSource {
@@ -58,6 +60,15 @@ type ImportOutlineArgs = {
   side?: "left" | "right";
 };
 
+type TraceImportArgs = {
+  traceDebug: FlatItemLookupTraceDebug;
+  overallHeightMm: number;
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+  diameterMm: number;
+  topOuterDiameterMm?: number | null;
+};
+
 type DerivedOutlineDimensions = {
   bodyTopFromOverallMm?: number;
   bodyBottomFromOverallMm?: number;
@@ -92,6 +103,15 @@ const ROLE_ORDER: Array<EditableBodyOutlinePoint["role"]> = [
   "base",
   "custom",
 ];
+
+type SeededOutlineRole =
+  | "topOuter"
+  | "body"
+  | "shoulder"
+  | "upperTaper"
+  | "lowerTaper"
+  | "bevel"
+  | "base";
 
 function round1(value: number): number {
   return Math.round(value * 10) / 10;
@@ -160,9 +180,64 @@ function widthForRole(points: EditableBodyOutlinePoint[], role: EditableBodyOutl
   return point ? round1(point.x * 2) : undefined;
 }
 
+function resolveFitDebugAnchorRadius(args: {
+  role: EditableBodyOutlinePoint["role"];
+  measuredRadiusMm: number;
+  seedRadiusMm: number;
+}): number {
+  const { role, measuredRadiusMm, seedRadiusMm } = args;
+  if (!(seedRadiusMm > 0)) {
+    return round1(Math.max(0.1, measuredRadiusMm));
+  }
+  if (!(measuredRadiusMm > 0)) {
+    return round1(seedRadiusMm);
+  }
+
+  const config = role === "body" || role === "shoulder"
+    ? { minRatio: 0.88, maxRatio: 1.12, measuredWeight: 0.55 }
+    : role === "upperTaper" || role === "lowerTaper"
+      ? { minRatio: 0.78, maxRatio: 1.18, measuredWeight: 0.35 }
+      : { minRatio: 0.72, maxRatio: 1.16, measuredWeight: 0.2 };
+
+  if (
+    measuredRadiusMm < seedRadiusMm * config.minRatio ||
+    measuredRadiusMm > seedRadiusMm * config.maxRatio
+  ) {
+    return round1(seedRadiusMm);
+  }
+
+  return round1(
+    (seedRadiusMm * (1 - config.measuredWeight))
+    + (measuredRadiusMm * config.measuredWeight),
+  );
+}
+
 function nearestHalfWidthAtY(contour: EditableBodyOutlineContourPoint[], y: number): number {
   if (contour.length === 0) return 0;
-  const window = Math.max(2, (Math.max(...contour.map((point) => point.y)) - Math.min(...contour.map((point) => point.y))) * 0.015);
+  const bounds = getBounds(contour);
+  if (!bounds) return 0;
+
+  const sampleYs = [y];
+  const window = Math.max(2, bounds.height * 0.015);
+  for (let offset = window * 0.5; offset <= window; offset += window * 0.5) {
+    sampleYs.push(y - offset, y + offset);
+  }
+
+  const segments = sampleYs
+    .flatMap((sampleY) => getContourSegmentsAtY(contour, sampleY))
+    .filter((segment) => Number.isFinite(segment.width) && segment.width > 0.1);
+
+  if (segments.length > 0) {
+    const centeredSegment = segments.reduce((best, segment) => {
+      const bestDistance = Math.abs(best.centerX);
+      const segmentDistance = Math.abs(segment.centerX);
+      if (segmentDistance < bestDistance - 0.05) return segment;
+      if (bestDistance < segmentDistance - 0.05) return best;
+      return segment.width < best.width ? segment : best;
+    });
+    return round1(Math.max(Math.abs(centeredSegment.leftX), Math.abs(centeredSegment.rightX)));
+  }
+
   const matching = contour.filter((point) => Math.abs(point.y - y) <= window);
   const source = matching.length > 0 ? matching : contour;
   const widths = source.map((point) => Math.abs(point.x));
@@ -207,6 +282,30 @@ function buildContourFromProfile(points: EditableBodyOutlinePoint[]): EditableBo
     .reverse()
     .map((point) => ({ x: round1(-point.x), y: round1(point.y) }));
   return [...right, ...left];
+}
+
+function interpolateFitDebugRadius(
+  profilePoints: TumblerItemLookupFitDebug["profilePoints"],
+  yMm: number,
+): number {
+  const sorted = [...profilePoints]
+    .filter((point) => Number.isFinite(point.yMm) && Number.isFinite(point.radiusMm))
+    .sort((a, b) => a.yMm - b.yMm);
+  if (sorted.length === 0) return 0;
+  if (sorted.length === 1) return round1(sorted[0]!.radiusMm);
+
+  const clampedY = clamp(yMm, sorted[0]!.yMm, sorted[sorted.length - 1]!.yMm);
+  for (let index = 0; index < sorted.length - 1; index += 1) {
+    const current = sorted[index]!;
+    const next = sorted[index + 1]!;
+    if (clampedY < current.yMm || clampedY > next.yMm) continue;
+    const span = next.yMm - current.yMm;
+    if (Math.abs(span) < 0.001) return round1(current.radiusMm);
+    const t = (clampedY - current.yMm) / span;
+    return round1(current.radiusMm + ((next.radiusMm - current.radiusMm) * t));
+  }
+
+  return round1(sorted[sorted.length - 1]!.radiusMm);
 }
 
 function getContourIntersectionsAtY(
@@ -265,6 +364,30 @@ function getContourSegmentsAtY(
   return segments;
 }
 
+function sampleHalfWidthFromContour(
+  contour: EditableBodyOutlineContourPoint[],
+  centerX: number,
+  y: number,
+): number {
+  const segments = getContourSegmentsAtY(contour, y);
+  if (segments.length === 0) {
+    return nearestHalfWidthAtY(
+      contour.map((point) => ({ x: round1(point.x - centerX), y: point.y })),
+      y,
+    );
+  }
+
+  const bodySegment = segments.reduce((best, segment) => {
+    const bestDistance = Math.abs(best.centerX - centerX);
+    const segmentDistance = Math.abs(segment.centerX - centerX);
+    if (segmentDistance < bestDistance - 0.05) return segment;
+    if (bestDistance < segmentDistance - 0.05) return best;
+    return segment.width > best.width ? segment : best;
+  });
+
+  return round1(Math.max(centerX - bodySegment.leftX, bodySegment.rightX - centerX));
+}
+
 function median(values: number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -281,24 +404,46 @@ function percentile(values: number[], ratio: number): number {
   return sorted[index] ?? 0;
 }
 
+function computeHalfWidthRoughness(values: number[]): number {
+  if (values.length < 3) return Number.POSITIVE_INFINITY;
+  const deltas: number[] = [];
+  const curvature: number[] = [];
+
+  for (let index = 1; index < values.length; index += 1) {
+    deltas.push(Math.abs(values[index]! - values[index - 1]!));
+  }
+  for (let index = 1; index < deltas.length; index += 1) {
+    curvature.push(Math.abs(deltas[index]! - deltas[index - 1]!));
+  }
+
+  return percentile(deltas, 0.9) + (percentile(curvature, 0.9) * 1.5);
+}
+
 function estimateBodyCenterX(contour: EditableBodyOutlineContourPoint[]): number {
   const bounds = getBounds(contour);
   if (!bounds) return 0;
 
-  const sampleCount = Math.max(32, Math.min(180, Math.round(bounds.height * 1.5)));
-  const minSampleY = bounds.minY + (bounds.height * 0.08);
-  const maxSampleY = bounds.minY + (bounds.height * 0.72);
+  const sampleRanges: Array<[number, number]> = [
+    [0.04, 0.22],
+    [0.74, 0.98],
+  ];
+  const sampleCount = Math.max(18, Math.min(64, Math.round(bounds.height * 0.18)));
   const centers: number[] = [];
 
-  for (let index = 0; index < sampleCount; index += 1) {
-    const t = sampleCount === 1 ? 0 : index / (sampleCount - 1);
-    const y = round1(minSampleY + ((maxSampleY - minSampleY) * t));
-    const segments = getContourSegmentsAtY(contour, y);
-    if (segments.length === 0) continue;
-    const bodySegment = segments.reduce((best, segment) =>
-      segment.width > best.width ? segment : best,
-    );
-    centers.push(bodySegment.centerX);
+  for (const [startRatio, endRatio] of sampleRanges) {
+    const minSampleY = bounds.minY + (bounds.height * startRatio);
+    const maxSampleY = bounds.minY + (bounds.height * endRatio);
+
+    for (let index = 0; index < sampleCount; index += 1) {
+      const t = sampleCount === 1 ? 0 : index / (sampleCount - 1);
+      const y = round1(minSampleY + ((maxSampleY - minSampleY) * t));
+      const segments = getContourSegmentsAtY(contour, y);
+      if (segments.length === 0) continue;
+      const bodySegment = segments.reduce((best, segment) =>
+        segment.width > best.width ? segment : best,
+      );
+      centers.push(bodySegment.centerX);
+    }
   }
 
   if (centers.length === 0) {
@@ -330,6 +475,21 @@ function estimateReferenceWidth(contour: EditableBodyOutlineContourPoint[]): num
 
   if (widths.length === 0) return bounds.width;
   return Math.max(0.1, round1(median(widths)));
+}
+
+function selectCenteredContourSegment(
+  segments: ContourSegment[],
+  centerX: number,
+): ContourSegment {
+  return segments.reduce((best, segment) => {
+    const bestDistance = Math.abs(best.centerX - centerX);
+    const segmentDistance = Math.abs(segment.centerX - centerX);
+    if (segmentDistance < bestDistance - 0.25) return segment;
+    if (bestDistance < segmentDistance - 0.25) return best;
+    if (segment.width < best.width - 0.25) return segment;
+    if (best.width < segment.width - 0.25) return best;
+    return segment;
+  });
 }
 
 function buildMirroredSourceContour(contour: EditableBodyOutlineContourPoint[]): EditableBodyOutlineContourPoint[] | null {
@@ -372,7 +532,23 @@ function buildMirroredSourceContour(contour: EditableBodyOutlineContourPoint[]):
   const rightBand = midBandRows.map((row) => row.rightHalfWidth).filter((value) => value > 0);
   const leftSpread = percentile(leftBand, 0.9);
   const rightSpread = percentile(rightBand, 0.9);
-  const sourceSide = rightSpread > leftSpread * 1.06 ? "left" : leftSpread > rightSpread * 1.06 ? "right" : "left";
+  const leftRoughness = computeHalfWidthRoughness(leftBand);
+  const rightRoughness = computeHalfWidthRoughness(rightBand);
+  const sourceSide = Number.isFinite(leftRoughness) && Number.isFinite(rightRoughness)
+    ? (
+      leftRoughness < rightRoughness * 0.92
+        ? "left"
+        : rightRoughness < leftRoughness * 0.92
+          ? "right"
+          : rightSpread > leftSpread * 1.06
+            ? "left"
+            : leftSpread > rightSpread * 1.06
+              ? "right"
+              : leftRoughness <= rightRoughness
+                ? "left"
+                : "right"
+    )
+    : (rightSpread > leftSpread * 1.06 ? "left" : leftSpread > rightSpread * 1.06 ? "right" : "left");
 
   const left = rows.map((row) => ({
     x: round1(sourceSide === "left" ? row.leftX : (2 * centerX) - row.rightX),
@@ -383,6 +559,48 @@ function buildMirroredSourceContour(contour: EditableBodyOutlineContourPoint[]):
     y: row.y,
   }));
 
+  return [...left, ...right];
+}
+
+function buildBodyOnlySourceContour(args: {
+  contour: EditableBodyOutlineContourPoint[];
+  overallHeightMm: number;
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+}): EditableBodyOutlineContourPoint[] | null {
+  const bounds = getBounds(args.contour);
+  if (!bounds) return null;
+
+  const bodyHeightMm = Math.max(1, args.bodyBottomFromOverallMm - args.bodyTopFromOverallMm);
+  const overallHeightMm = Math.max(bodyHeightMm, args.overallHeightMm);
+  const sourceBodyTopY = bounds.minY + (bounds.height * clamp(args.bodyTopFromOverallMm / overallHeightMm, 0, 1));
+  const sourceBodyBottomY = bounds.minY + (bounds.height * clamp(args.bodyBottomFromOverallMm / overallHeightMm, 0, 1));
+  const croppedHeight = sourceBodyBottomY - sourceBodyTopY;
+  if (croppedHeight < Math.max(12, bounds.height * 0.22)) {
+    return null;
+  }
+
+  const centerX = estimateBodyCenterX(args.contour);
+  const sampleCount = Math.max(48, Math.min(240, Math.round(croppedHeight * 1.6)));
+  const rows: Array<{ y: number; leftX: number; rightX: number }> = [];
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const t = sampleCount === 1 ? 0 : index / (sampleCount - 1);
+    const y = round1(sourceBodyTopY + (croppedHeight * t));
+    const segments = getContourSegmentsAtY(args.contour, y);
+    if (segments.length === 0) continue;
+    const bodySegment = selectCenteredContourSegment(segments, centerX);
+    rows.push({
+      y,
+      leftX: bodySegment.leftX,
+      rightX: bodySegment.rightX,
+    });
+  }
+
+  if (rows.length < 8) return null;
+
+  const left = rows.map((row) => ({ x: round1(row.leftX), y: row.y }));
+  const right = [...rows].reverse().map((row) => ({ x: round1(row.rightX), y: row.y }));
   return [...left, ...right];
 }
 
@@ -620,6 +838,38 @@ export function cloneEditableBodyOutline(
   };
 }
 
+export function normalizeMeasurementContour(args: {
+  outline: EditableBodyOutline | null | undefined;
+  overallHeightMm: number;
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+}): NormalizedMeasurementContour | null {
+  const baseContour =
+    args.outline?.sourceContour && args.outline.sourceContour.length >= 3
+      ? args.outline.sourceContour
+      : (args.outline?.directContour && args.outline.directContour.length >= 3
+          ? args.outline.directContour
+          : null);
+  if (!baseContour || baseContour.length < 3) return null;
+
+  const mirroredContour = buildMirroredSourceContour(baseContour) ?? baseContour;
+  const bodyOnlyContour = buildBodyOnlySourceContour({
+    contour: mirroredContour,
+    overallHeightMm: args.overallHeightMm,
+    bodyTopFromOverallMm: args.bodyTopFromOverallMm,
+    bodyBottomFromOverallMm: args.bodyBottomFromOverallMm,
+  }) ?? mirroredContour;
+  const bounds = getBounds(bodyOnlyContour) ?? getBounds(mirroredContour) ?? getBounds(baseContour);
+  if (!bounds) return null;
+
+  return {
+    contour: bodyOnlyContour,
+    bounds,
+    mirrored: mirroredContour !== baseContour,
+    bodyOnly: bodyOnlyContour !== mirroredContour,
+  };
+}
+
 export function sortEditableOutlinePoints(points: EditableBodyOutlinePoint[]): EditableBodyOutlinePoint[] {
   return [...points].sort((a, b) => {
     const deltaY = a.y - b.y;
@@ -639,6 +889,81 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
   const taperUpperDiameter = round1(args.taperUpperDiameterMm ?? Math.max(baseDiameter, shoulderDiameter * 0.88));
   const taperLowerDiameter = round1(args.taperLowerDiameterMm ?? Math.max(baseDiameter, taperUpperDiameter * 0.76));
   const bevelDiameter = round1(args.bevelDiameterMm ?? Math.max(baseDiameter, taperLowerDiameter * 0.92));
+  const roleSeedRadiusMm: Record<SeededOutlineRole, number> = {
+    topOuter: topOuterDiameter / 2,
+    body: bodyDiameter / 2,
+    shoulder: shoulderDiameter / 2,
+    upperTaper: taperUpperDiameter / 2,
+    lowerTaper: taperLowerDiameter / 2,
+    bevel: bevelDiameter / 2,
+    base: baseDiameter / 2,
+  };
+
+  const fitProfilePoints = args.fitDebug?.profilePoints ?? null;
+  if (fitProfilePoints && fitProfilePoints.length > 1) {
+    const anchors: Array<{ role: EditableBodyOutlinePoint["role"]; y: number; pointType: EditableOutlinePointType }> = [
+      { role: "topOuter", y: bodyTop, pointType: "corner" },
+      { role: "body", y: round1(bodyTop + bodyHeight * 0.14), pointType: "smooth" },
+      { role: "shoulder", y: round1(bodyTop + bodyHeight * 0.58), pointType: "smooth" },
+      { role: "upperTaper", y: round1(bodyTop + bodyHeight * 0.72), pointType: "corner" },
+      { role: "lowerTaper", y: round1(bodyTop + bodyHeight * 0.86), pointType: "corner" },
+      { role: "bevel", y: round1(bodyTop + bodyHeight * 0.96), pointType: "corner" },
+      { role: "base", y: bodyBottom, pointType: "corner" },
+    ];
+    const points = anchors.map(({ role, y, pointType }) => {
+      const seedRadiusMm =
+        roleSeedRadiusMm[role as SeededOutlineRole]
+        ?? (bodyDiameter / 2);
+      const measuredRadiusMm = interpolateFitDebugRadius(fitProfilePoints, y);
+      return {
+        id: makeId(role ?? "point"),
+        x: Math.max(0.1, resolveFitDebugAnchorRadius({
+          role,
+          measuredRadiusMm,
+          seedRadiusMm,
+        })),
+        y,
+        inHandle: null,
+        outHandle: null,
+        pointType,
+        role,
+      };
+    });
+    const fitDebug = args.fitDebug!;
+    const sourceContour = [
+      ...fitProfilePoints.map((point) => ({
+        x: round1((fitDebug.centerXPx ?? 0) + point.radiusPx),
+        y: round1(point.yPx),
+      })),
+      ...[...fitProfilePoints].reverse().map((point) => ({
+        x: round1((fitDebug.centerXPx ?? 0) - point.radiusPx),
+        y: round1(point.yPx),
+      })),
+    ];
+    const sourceContourBounds = getBounds(sourceContour) ?? {
+      minX: fitDebug.silhouetteBoundsPx.minX,
+      minY: fitDebug.bodyTopPx,
+      maxX: fitDebug.silhouetteBoundsPx.maxX,
+      maxY: fitDebug.bodyBottomPx,
+      width: Math.max(1, fitDebug.silhouetteBoundsPx.maxX - fitDebug.silhouetteBoundsPx.minX),
+      height: Math.max(1, fitDebug.bodyBottomPx - fitDebug.bodyTopPx),
+    };
+
+    return {
+      closed: true,
+      version: 1,
+      points,
+      directContour: buildContourFromProfile(points),
+      sourceContour,
+      sourceContourBounds,
+      sourceContourViewport: {
+        minX: 0,
+        minY: 0,
+        width: Math.max(1, fitDebug.imageWidthPx),
+        height: Math.max(1, fitDebug.imageHeightPx),
+      },
+    };
+  }
 
   const pointDefs: Array<Omit<EditableBodyOutlinePoint, "id" | "inHandle" | "outHandle">> = [
     { role: "topOuter", x: topOuterDiameter / 2, y: bodyTop, pointType: "corner" },
@@ -662,6 +987,100 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
     version: 1,
     points,
     directContour: buildContourFromProfile(points),
+  };
+}
+
+export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): EditableBodyOutline {
+  const {
+    traceDebug,
+    overallHeightMm,
+    bodyTopFromOverallMm,
+    bodyBottomFromOverallMm,
+    diameterMm,
+    topOuterDiameterMm,
+  } = args;
+  const rawSourceContour = traceDebug.outlinePointsPx.map((point) => ({
+    x: round1(point.xPx),
+    y: round1(point.yPx),
+  }));
+  const rawBounds = getBounds(rawSourceContour) ?? {
+    minX: traceDebug.silhouetteBoundsPx.minX,
+    minY: traceDebug.silhouetteBoundsPx.minY,
+    maxX: traceDebug.silhouetteBoundsPx.maxX,
+    maxY: traceDebug.silhouetteBoundsPx.maxY,
+    width: Math.max(1, traceDebug.silhouetteBoundsPx.maxX - traceDebug.silhouetteBoundsPx.minX),
+    height: Math.max(1, traceDebug.silhouetteBoundsPx.maxY - traceDebug.silhouetteBoundsPx.minY),
+  };
+  const mirroredContour = buildMirroredSourceContour(rawSourceContour) ?? rawSourceContour;
+  const bodySourceContour = buildBodyOnlySourceContour({
+    contour: mirroredContour,
+    overallHeightMm,
+    bodyTopFromOverallMm,
+    bodyBottomFromOverallMm,
+  }) ?? mirroredContour;
+  const contour = bodySourceContour;
+  const bounds = getBounds(contour) ?? rawBounds;
+  const bodyHeightMm = Math.max(10, bodyBottomFromOverallMm - bodyTopFromOverallMm);
+  const resolvedTopOuterDiameterMm =
+    topOuterDiameterMm && topOuterDiameterMm > Math.max(1, diameterMm * 0.6)
+      ? topOuterDiameterMm
+      : diameterMm;
+  const topOuterDiameter = round1(resolvedTopOuterDiameterMm);
+  const centerX = estimateBodyCenterX(contour);
+  const usesBodyOnlyContour = bodySourceContour.length > 0 && bodySourceContour !== mirroredContour;
+  const resolveSourceY = (yMm: number) => (
+    usesBodyOnlyContour
+      ? bounds.minY + (clamp((yMm - bodyTopFromOverallMm) / Math.max(1, bodyHeightMm), 0, 1) * bounds.height)
+      : rawBounds.minY + (clamp(yMm / Math.max(1, overallHeightMm), 0, 1) * rawBounds.height)
+  );
+  const sourceBodyY = bodyTopFromOverallMm + (bodyHeightMm * 0.14);
+  const sourceSampleY = resolveSourceY(sourceBodyY);
+  const sourceHalfWidth = Math.max(0.1, sampleHalfWidthFromContour(contour, centerX, sourceSampleY));
+  const scaleX = Math.max(0.001, diameterMm / Math.max(0.2, sourceHalfWidth * 2));
+  const anchors: Array<{ role: EditableBodyOutlinePoint["role"]; y: number; pointType: EditableOutlinePointType }> = [
+    { role: "topOuter", y: round1(bodyTopFromOverallMm), pointType: "corner" },
+    { role: "body", y: round1(bodyTopFromOverallMm + bodyHeightMm * 0.14), pointType: "smooth" },
+    { role: "shoulder", y: round1(bodyTopFromOverallMm + bodyHeightMm * 0.58), pointType: "smooth" },
+    { role: "upperTaper", y: round1(bodyTopFromOverallMm + bodyHeightMm * 0.72), pointType: "corner" },
+    { role: "lowerTaper", y: round1(bodyTopFromOverallMm + bodyHeightMm * 0.86), pointType: "corner" },
+    { role: "bevel", y: round1(bodyTopFromOverallMm + bodyHeightMm * 0.96), pointType: "corner" },
+    { role: "base", y: round1(bodyBottomFromOverallMm), pointType: "corner" },
+  ];
+  const points = anchors.map(({ role, y, pointType }) => {
+    const sourceY = resolveSourceY(y);
+    const halfWidthMm = round1(sampleHalfWidthFromContour(contour, centerX, sourceY) * scaleX);
+    const seedRadiusMm =
+      role === "topOuter"
+        ? topOuterDiameter / 2
+        : diameterMm / 2;
+    return {
+      id: makeId(role ?? "point"),
+      x: Math.max(0.1, (
+        role === "topOuter"
+          ? seedRadiusMm
+          : halfWidthMm
+      )),
+      y,
+      inHandle: null,
+      outHandle: null,
+      pointType,
+      role,
+    };
+  });
+
+  return {
+    closed: true,
+    version: 1,
+    points,
+    directContour: buildContourFromProfile(points),
+    sourceContour: contour,
+    sourceContourBounds: bounds,
+    sourceContourViewport: {
+      minX: 0,
+      minY: 0,
+      width: Math.max(1, traceDebug.imageWidthPx),
+      height: Math.max(1, traceDebug.imageHeightPx),
+    },
   };
 }
 

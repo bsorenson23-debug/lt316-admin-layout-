@@ -3,7 +3,12 @@
 import React, { useRef, useEffect, useState } from "react";
 import { deriveEngravableZoneFromFitDebug } from "@/lib/engravableDimensions";
 import { extractCanonicalHandleProfileFromCutout } from "@/lib/canonicalHandleProfile";
-import type { PrintableSurfaceDetection } from "@/lib/printableSurface";
+import {
+  solveEditableHandleGuideGeometry,
+  solveEditableHandlePreviewGeometry,
+  type EditableHandlePreview,
+} from "@/lib/editableHandleGeometry";
+import type { PrintableSurfaceBoundarySource, PrintableSurfaceDetection } from "@/lib/printableSurface";
 import {
   buildContourSvgPath,
   buildDirectContourSvgPath,
@@ -31,6 +36,7 @@ import type {
   ReferencePaths,
 } from "@/types/productTemplate";
 import type { PrintableSurfaceContract } from "@/types/printableSurface";
+import type { TemplatePipelineStageRecord } from "@/types/templatePipelineDiagnostics";
 import type { ImportedEditableBodyOutlineSource } from "@/lib/editableBodyOutline";
 import type { TumblerItemLookupFitDebug } from "@/types/tumblerItemLookup";
 import styles from "./EngravableZoneEditor.module.css";
@@ -44,7 +50,7 @@ interface Props {
   bodyTopFromOverallMm: number;
   /** Physical tumbler body bottom from the overall top (mm). */
   bodyBottomFromOverallMm: number;
-  /** Lid seam / rotary-grab reference from the overall top (mm). */
+  /** Top edge of the silver ring / lid seam from the overall top (mm). */
   lidSeamFromOverallMm?: number;
   /** Bottom edge of the non-powder-coated silver band from the overall top (mm). */
   silverBandBottomFromOverallMm?: number;
@@ -105,16 +111,22 @@ interface Props {
   photoCenterMode: "body" | "photo";
   /** Current sampled / saved body color */
   bodyColorHex: string;
+  /** Current sampled / saved lid color */
+  lidColorHex: string;
   /** Current sampled / saved rim / engrave color */
   rimColorHex: string;
   /** Traced profile details from the lookup image, when available */
   fitDebug?: TumblerItemLookupFitDebug | null;
   canonicalHandleProfile?: CanonicalHandleProfile | null;
+  editableHandlePreview?: EditableHandlePreview | null;
   outlineProfile?: EditableBodyOutline;
   referencePaths?: ReferencePaths;
   referenceLayerState?: ReferenceLayerState;
   dimensionCalibration?: CanonicalDimensionCalibration;
   printableSurfaceContract?: PrintableSurfaceContract | null;
+  printableTopBoundarySource?: PrintableSurfaceBoundarySource | null;
+  printableTopBoundaryConfidence?: number | null;
+  printableTopBoundaryWeak?: boolean;
   printableTopOverrideMm?: number;
   printableBottomOverrideMm?: number;
   onChange: (bodyTopFromOverallMm: number, bodyBottomFromOverallMm: number) => void;
@@ -148,7 +160,7 @@ interface Props {
   onPhotoOffsetXChange: (offsetPct: number) => void;
   onPhotoAnchorYChange: (anchor: "center" | "bottom") => void;
   onPhotoCenterModeChange: (mode: "body" | "photo") => void;
-  onColorsChange: (bodyColorHex: string, rimColorHex: string) => void;
+  onColorsChange: (bodyColorHex: string, lidColorHex: string, rimColorHex: string) => void;
   onBaseDiameterDerived?: (diameterMm: number) => void;
   onDiameterChange?: (diameterMm: number) => void;
   onTopOuterDiameterChange?: (diameterMm: number) => void;
@@ -156,7 +168,49 @@ interface Props {
   onOutlineProfileChange?: (outline: EditableBodyOutline | undefined) => void;
   onReferencePathsChange?: (paths: ReferencePaths) => void;
   onReferenceLayerStateChange?: (state: ReferenceLayerState) => void;
+  onPipelineStage?: (stage: TemplatePipelineStageRecord) => void;
 }
+
+type DisplayPhotoRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type DisplayPhotoBounds = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  width: number;
+  height: number;
+};
+
+type DisplayPhotoState = {
+  src: string;
+  w: number;
+  h: number;
+  bodyCenterX: number;
+  referenceBodyWidthPx: number;
+  referenceBandCenterY: number;
+  bodyTopY: number;
+  bodyBottomY: number;
+  rimTopY: number | null;
+  rimBottomY: number | null;
+  rimDetectionSource: PrintableSurfaceDetection["source"];
+  rimDetectionConfidence: number;
+  bodyOutlinePath: string | null;
+  bodyOutlineBounds: DisplayPhotoBounds | null;
+  tracedBodyOutlinePath: string | null;
+  handleOuterPath: string | null;
+  handleInnerPath: string | null;
+  handleSide: "left" | "right" | null;
+  handleOuterRect: DisplayPhotoRect | null;
+  handleInnerRect: DisplayPhotoRect | null;
+  topOuterWidthPx: number | null;
+  baseWidthPx: number | null;
+};
 
 /** Display height for the editor canvas in px */
 const DEFAULT_CANVAS_HEIGHT = 320;
@@ -166,6 +220,7 @@ const MIN_MARGIN_MM = 0;
 const VISIBLE_TUMBLER_HEIGHT_PCT = 0.98;
 /** Display-only zoom-out so the full body-reference photo fits comfortably in the panel. */
 const BODY_REFERENCE_DISPLAY_FIT_PCT = 0.92;
+const BODY_REFERENCE_MAX_VISIBLE_HEIGHT_PCT = 0.98;
 const MIN_PHOTO_SCALE_PCT = 60;
 const MAX_PHOTO_SCALE_PCT = 180;
 const MAX_PHOTO_OFFSET_Y_PCT = 25;
@@ -179,6 +234,127 @@ function round1(n: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function approximatelyEqual(a: number | null | undefined, b: number | null | undefined, epsilon = 0.01): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  return Math.abs(a - b) <= epsilon;
+}
+
+function displayPhotoRectEquals(a: DisplayPhotoRect | null, b: DisplayPhotoRect | null, epsilon = 0.01): boolean {
+  if (!a || !b) return a === b;
+  return (
+    approximatelyEqual(a.x, b.x, epsilon) &&
+    approximatelyEqual(a.y, b.y, epsilon) &&
+    approximatelyEqual(a.width, b.width, epsilon) &&
+    approximatelyEqual(a.height, b.height, epsilon)
+  );
+}
+
+function displayPhotoBoundsEquals(a: DisplayPhotoBounds | null, b: DisplayPhotoBounds | null, epsilon = 0.01): boolean {
+  if (!a || !b) return a === b;
+  return (
+    approximatelyEqual(a.minX, b.minX, epsilon) &&
+    approximatelyEqual(a.minY, b.minY, epsilon) &&
+    approximatelyEqual(a.maxX, b.maxX, epsilon) &&
+    approximatelyEqual(a.maxY, b.maxY, epsilon) &&
+    approximatelyEqual(a.width, b.width, epsilon) &&
+    approximatelyEqual(a.height, b.height, epsilon)
+  );
+}
+
+function displayPhotoEquals(a: DisplayPhotoState | null, b: DisplayPhotoState | null, epsilon = 0.01): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.src === b.src &&
+    approximatelyEqual(a.w, b.w, epsilon) &&
+    approximatelyEqual(a.h, b.h, epsilon) &&
+    approximatelyEqual(a.bodyCenterX, b.bodyCenterX, epsilon) &&
+    approximatelyEqual(a.referenceBodyWidthPx, b.referenceBodyWidthPx, epsilon) &&
+    approximatelyEqual(a.referenceBandCenterY, b.referenceBandCenterY, epsilon) &&
+    approximatelyEqual(a.bodyTopY, b.bodyTopY, epsilon) &&
+    approximatelyEqual(a.bodyBottomY, b.bodyBottomY, epsilon) &&
+    approximatelyEqual(a.rimTopY, b.rimTopY, epsilon) &&
+    approximatelyEqual(a.rimBottomY, b.rimBottomY, epsilon) &&
+    a.rimDetectionSource === b.rimDetectionSource &&
+    approximatelyEqual(a.rimDetectionConfidence, b.rimDetectionConfidence, epsilon) &&
+    a.bodyOutlinePath === b.bodyOutlinePath &&
+    displayPhotoBoundsEquals(a.bodyOutlineBounds, b.bodyOutlineBounds, epsilon) &&
+    a.tracedBodyOutlinePath === b.tracedBodyOutlinePath &&
+    a.handleOuterPath === b.handleOuterPath &&
+    a.handleInnerPath === b.handleInnerPath &&
+    a.handleSide === b.handleSide &&
+    displayPhotoRectEquals(a.handleOuterRect, b.handleOuterRect, epsilon) &&
+    displayPhotoRectEquals(a.handleInnerRect, b.handleInnerRect, epsilon) &&
+    approximatelyEqual(a.topOuterWidthPx, b.topOuterWidthPx, epsilon) &&
+    approximatelyEqual(a.baseWidthPx, b.baseWidthPx, epsilon)
+  );
+}
+
+function stableSerialize(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "null";
+  } catch {
+    return "__unserializable__";
+  }
+}
+
+function editableOutlineSignature(outline: EditableBodyOutline | null | undefined): string {
+  if (!outline) return "__none__";
+  return stableSerialize({
+    closed: outline.closed,
+    version: outline.version ?? 1,
+    points: outline.points.map((point) => ({
+      x: round1(point.x),
+      y: round1(point.y),
+      role: point.role ?? null,
+      pointType: point.pointType ?? null,
+      inHandle: point.inHandle
+        ? { x: round1(point.inHandle.x), y: round1(point.inHandle.y) }
+        : null,
+      outHandle: point.outHandle
+        ? { x: round1(point.outHandle.x), y: round1(point.outHandle.y) }
+        : null,
+    })),
+    directContour: outline.directContour?.map((point) => ({
+      x: round1(point.x),
+      y: round1(point.y),
+    })) ?? null,
+    sourceContour: outline.sourceContour?.map((point) => ({
+      x: round1(point.x),
+      y: round1(point.y),
+    })) ?? null,
+    sourceContourViewport: outline.sourceContourViewport
+      ? {
+          minX: round1(outline.sourceContourViewport.minX),
+          minY: round1(outline.sourceContourViewport.minY),
+          width: round1(outline.sourceContourViewport.width),
+          height: round1(outline.sourceContourViewport.height),
+        }
+      : null,
+    sourceContourBounds: outline.sourceContourBounds
+      ? {
+          minX: round1(outline.sourceContourBounds.minX),
+          minY: round1(outline.sourceContourBounds.minY),
+          maxX: round1(outline.sourceContourBounds.maxX),
+          maxY: round1(outline.sourceContourBounds.maxY),
+          width: round1(outline.sourceContourBounds.width),
+          height: round1(outline.sourceContourBounds.height),
+        }
+      : null,
+  });
+}
+
+function referencePathsSignature(paths: ReferencePaths): string {
+  return stableSerialize({
+    bodyOutline: editableOutlineSignature(paths.bodyOutline),
+    lidProfile: editableOutlineSignature(paths.lidProfile),
+    silverProfile: editableOutlineSignature(paths.silverProfile),
+  });
+}
+
+function referenceLayerStateSignature(state: ReferenceLayerState): string {
+  return stableSerialize(state);
 }
 
 function parseOptionalMmInput(value: string): number | undefined {
@@ -608,6 +784,37 @@ function detectRimBandRows(args: {
         1,
       )
       : null;
+    const preferFitDebugBand = fitDebugBand != null && (
+      photoConfidence <= 0.58 ||
+      (fitAgreement != null && fitAgreement >= 0.35)
+    );
+    if (preferFitDebugBand) {
+      const useBlendedBand = fitAgreement != null && fitAgreement >= 0.55 && photoConfidence >= 0.6;
+      return {
+        rimTopY: useBlendedBand
+          ? clamp(
+            Math.round((fitDebugBand.rimTopY * 0.72) + (metallicBand.start * 0.28)),
+            0,
+            height - 1,
+          )
+          : fitDebugBand.rimTopY,
+        rimBottomY: useBlendedBand
+          ? clamp(
+            Math.round((fitDebugBand.rimBottomY * 0.72) + (metallicBand.end * 0.28)),
+            0,
+            height - 1,
+          )
+          : fitDebugBand.rimBottomY,
+        rimDetectionSource: "fit-debug",
+        rimDetectionConfidence: clamp(
+          fitAgreement != null
+            ? Math.max(0.78, (fitAgreement * 0.72) + (photoConfidence * 0.28))
+            : 0.82,
+          0.78,
+          0.94,
+        ),
+      };
+    }
     return {
       rimTopY: metallicBand.start,
       rimBottomY: metallicBand.end,
@@ -642,6 +849,29 @@ function buildOpenPath(points: Array<{ x: number; y: number }>): string | null {
   return `M ${points
     .map((point, index) => `${index === 0 ? "" : "L "}${round1(point.x)} ${round1(point.y)}`)
     .join(" ")}`;
+}
+
+function translateLinearPath(path: string | null, dx: number, dy: number): string | null {
+  if (!path) return null;
+  const tokens = path.trim().split(/\s+/);
+  const translated: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (!token) continue;
+    if (token === "M" || token === "L" || token === "Z") {
+      translated.push(token);
+      continue;
+    }
+    const x = Number(token);
+    const y = Number(tokens[index + 1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      translated.push(token);
+      continue;
+    }
+    translated.push(`${round1(x + dx)}`, `${round1(y + dy)}`);
+    index += 1;
+  }
+  return translated.join(" ");
 }
 
 function buildAnchoredHandleGuidePath(args: {
@@ -689,6 +919,79 @@ function buildAnchoredHandleGuidePath(args: {
     `Q ${resolvedLowerCornerX} ${resolvedLowerExitY} ${resolvedLowerExitX} ${resolvedLowerExitY}`,
     `L ${resolvedAttachX} ${resolvedBottomY}`,
   ].join(" ");
+}
+
+type HandleGuidePoint = {
+  x: number;
+  y: number;
+};
+
+function offsetHandleGuidePoint(args: {
+  point: HandleGuidePoint;
+  from: HandleGuidePoint;
+  to: HandleGuidePoint;
+  side: "left" | "right";
+  offsetPx: number;
+}): HandleGuidePoint {
+  const {
+    point,
+    from,
+    to,
+    side,
+    offsetPx,
+  } = args;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.max(1, Math.hypot(dx, dy));
+  const normalX = side === "right" ? (dy / length) : (-dy / length);
+  const normalY = side === "right" ? (-dx / length) : (dx / length);
+  return {
+    x: round1(point.x + (normalX * offsetPx)),
+    y: round1(point.y + (normalY * offsetPx)),
+  };
+}
+
+function buildOffsetHandleGuideGeometry(args: {
+  side: "left" | "right";
+  offsetPx: number;
+  attachX: number;
+  topY: number;
+  bottomY: number;
+  upperEntryX: number;
+  upperEntryY: number;
+  lowerExitX: number;
+  lowerExitY: number;
+  upperCornerX: number;
+  upperCornerY: number;
+  lowerCornerX: number;
+  lowerCornerY: number;
+}) {
+  const solved = solveEditableHandleGuideGeometry({
+    side: args.side,
+    outerOffset: args.offsetPx,
+    inner: {
+      attachTop: { x: args.attachX, y: args.topY },
+      upperTransition: { x: args.upperEntryX, y: args.upperEntryY },
+      upperCorner: { x: args.upperCornerX, y: args.upperCornerY },
+      lowerCorner: { x: args.lowerCornerX, y: args.lowerCornerY },
+      lowerTransition: { x: args.lowerExitX, y: args.lowerExitY },
+      attachBottom: { x: args.attachX, y: args.bottomY },
+    },
+  });
+
+  return {
+    path: solved.outerPath,
+    attachPoints: {
+      top: {
+        x: solved.outerPoints.attachTop.x,
+        y: solved.outerPoints.attachTop.y,
+      },
+      bottom: {
+        x: solved.outerPoints.attachBottom.x,
+        y: solved.outerPoints.attachBottom.y,
+      },
+    },
+  };
 }
 
 function buildAnchoredHandleGuideFromRect(args: {
@@ -822,7 +1125,7 @@ function createContourMask(
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   const mask = new Uint8Array(width * height);
   if (!ctx || contour.length < 3) {
     return mask;
@@ -1303,6 +1606,8 @@ function cropVisibleBounds(
   fitDebug?: TumblerItemLookupFitDebug | null,
 ): {
   dataUrl: string;
+  offsetX: number;
+  offsetY: number;
   width: number;
   height: number;
   bodyCenterX: number;
@@ -1328,10 +1633,12 @@ function cropVisibleBounds(
   const srcCanvas = document.createElement("canvas");
   srcCanvas.width = img.naturalWidth;
   srcCanvas.height = img.naturalHeight;
-  const srcCtx = srcCanvas.getContext("2d");
+  const srcCtx = srcCanvas.getContext("2d", { willReadFrequently: true });
   if (!srcCtx) {
     return {
       dataUrl: img.src,
+      offsetX: 0,
+      offsetY: 0,
       width: img.naturalWidth,
       height: img.naturalHeight,
       bodyCenterX: img.naturalWidth / 2,
@@ -1397,6 +1704,8 @@ function cropVisibleBounds(
   if (maxX < minX || maxY < minY) {
     return {
       dataUrl: img.src,
+      offsetX: 0,
+      offsetY: 0,
       width: img.naturalWidth,
       height: img.naturalHeight,
       bodyCenterX: img.naturalWidth / 2,
@@ -1429,10 +1738,12 @@ function cropVisibleBounds(
   const cropCanvas = document.createElement("canvas");
   cropCanvas.width = cropW;
   cropCanvas.height = cropH;
-  const cropCtx = cropCanvas.getContext("2d");
+  const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
   if (!cropCtx) {
     return {
       dataUrl: img.src,
+      offsetX: 0,
+      offsetY: 0,
       width: img.naturalWidth,
       height: img.naturalHeight,
       bodyCenterX: img.naturalWidth / 2,
@@ -1774,6 +2085,8 @@ function cropVisibleBounds(
 
   return {
     dataUrl: cropCanvas.toDataURL("image/png"),
+    offsetX: cropX,
+    offsetY: cropY,
     width: cropW,
     height: cropH,
     bodyCenterX,
@@ -1825,6 +2138,8 @@ function cropBoundsFromFitDebug(
   fitDebug: TumblerItemLookupFitDebug | null | undefined,
 ): {
   dataUrl: string;
+  offsetX: number;
+  offsetY: number;
   width: number;
   height: number;
   bodyCenterX: number;
@@ -1868,7 +2183,7 @@ function cropBoundsFromFitDebug(
   const cropCanvas = document.createElement("canvas");
   cropCanvas.width = cropW;
   cropCanvas.height = cropH;
-  const cropCtx = cropCanvas.getContext("2d");
+  const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
   if (!cropCtx) return null;
 
   cropCtx.drawImage(img, paddedMinX, paddedMinY, cropW, cropH, 0, 0, cropW, cropH);
@@ -2030,6 +2345,8 @@ function cropBoundsFromFitDebug(
 
   return {
     dataUrl: cropCanvas.toDataURL("image/png"),
+    offsetX: paddedMinX,
+    offsetY: paddedMinY,
     width: cropW,
     height: cropH,
     bodyCenterX: centerX,
@@ -2091,14 +2408,19 @@ export function EngravableZoneEditor({
   photoAnchorY,
   photoCenterMode,
   bodyColorHex,
+  lidColorHex,
   rimColorHex,
   fitDebug,
   canonicalHandleProfile,
+  editableHandlePreview,
   outlineProfile,
   referencePaths,
   referenceLayerState,
   dimensionCalibration,
   printableSurfaceContract,
+  printableTopBoundarySource,
+  printableTopBoundaryConfidence,
+  printableTopBoundaryWeak,
   printableTopOverrideMm,
   printableBottomOverrideMm,
   onChange,
@@ -2139,6 +2461,8 @@ export function EngravableZoneEditor({
   onBaseDiameterChange,
   onOutlineProfileChange,
   onReferencePathsChange,
+  onReferenceLayerStateChange,
+  onPipelineStage,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgOutlineInputRef = useRef<HTMLInputElement>(null);
@@ -2152,12 +2476,11 @@ export function EngravableZoneEditor({
     | "handle-top"
     | "handle-bottom"
     | "handle-reach"
+    | "handle-thickness"
     | "handle-upper-corner"
     | "handle-lower-corner"
     | "handle-upper-transition"
     | "handle-lower-transition"
-    | "handle-outer-top"
-    | "handle-outer-bottom"
     | "top-outer-width"
     | "body-width"
     | "base-width"
@@ -2187,11 +2510,9 @@ export function EngravableZoneEditor({
     lowerCorner: false,
     upperTransition: false,
     lowerTransition: false,
-    outerTop: false,
-    outerBottom: false,
     tubeDiameter: false,
   });
-  const markHandleAsManual = React.useCallback((handle: "top" | "bottom" | "reach" | "upperCorner" | "lowerCorner" | "upperTransition" | "lowerTransition" | "outerTop" | "outerBottom" | "tubeDiameter") => {
+  const markHandleAsManual = React.useCallback((handle: "top" | "bottom" | "reach" | "upperCorner" | "lowerCorner" | "upperTransition" | "lowerTransition" | "tubeDiameter") => {
     setManualHandleSelection((current) => (
       current[handle]
         ? current
@@ -2206,6 +2527,7 @@ export function EngravableZoneEditor({
   const [selectedSegmentIndex, setSelectedSegmentIndex] = useState<number | null>(null);
   const [outlineHistory, setOutlineHistory] = useState<EditableBodyOutline[]>([]);
   const [outlineFuture, setOutlineFuture] = useState<EditableBodyOutline[]>([]);
+  const outlineSyncSignatureRef = useRef<string>("__init__");
   const [outlineDraft, setOutlineDraft] = useState<EditableBodyOutline | undefined>(
     outlineProfile ? cloneEditableBodyOutline(outlineProfile) : undefined,
   );
@@ -2224,9 +2546,13 @@ export function EngravableZoneEditor({
       silverProfile: referencePaths?.silverProfile ?? null,
     }),
   );
+  const lastSyncedReferencePathsSignatureRef = React.useRef<string | null>(null);
+  const lastReportedReferencePathsSyncStageRef = React.useRef<string | null>(null);
   const [localReferenceLayerState, setLocalReferenceLayerState] = useState<ReferenceLayerState>(
     cloneReferenceLayerState(referenceLayerState ?? createDefaultReferenceLayerState()),
   );
+  const lastSyncedLayerStateSignatureRef = React.useRef<string | null>(null);
+  const lastReportedLayerSyncStageRef = React.useRef<string | null>(null);
   const [outlineDragState, setOutlineDragState] = useState<{
     kind: "point" | "handle" | "segment";
     pointId?: string;
@@ -2237,30 +2563,8 @@ export function EngravableZoneEditor({
     startOutline: EditableBodyOutline;
     shiftKey: boolean;
   } | null>(null);
-  const [displayPhoto, setDisplayPhoto] = useState<{
-    src: string;
-    w: number;
-    h: number;
-    bodyCenterX: number;
-    referenceBodyWidthPx: number;
-    referenceBandCenterY: number;
-    bodyTopY: number;
-    bodyBottomY: number;
-    rimTopY: number | null;
-    rimBottomY: number | null;
-    rimDetectionSource: PrintableSurfaceDetection["source"];
-    rimDetectionConfidence: number;
-    bodyOutlinePath: string | null;
-    bodyOutlineBounds: { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } | null;
-    tracedBodyOutlinePath: string | null;
-    handleOuterPath: string | null;
-    handleInnerPath: string | null;
-    handleSide: "left" | "right" | null;
-    handleOuterRect: { x: number; y: number; width: number; height: number } | null;
-    handleInnerRect: { x: number; y: number; width: number; height: number } | null;
-    topOuterWidthPx: number | null;
-    baseWidthPx: number | null;
-  } | null>(null);
+  const [displayPhoto, setDisplayPhoto] = useState<DisplayPhotoState | null>(null);
+  const displayPhotoRef = useRef<DisplayPhotoState | null>(null);
   const activeDisplayPhoto = photoDataUrl ? displayPhoto : null;
   const canvasHeightPx = DEFAULT_CANVAS_HEIGHT;
   const outlineTransformMode = profileEditMode && shapeWorkflowMode === "fit";
@@ -2268,6 +2572,14 @@ export function EngravableZoneEditor({
   const showGuideLabels = false;
   const showHandleTrace = true;
   const showReadOnlyGuides = false;
+  const reportPipelineStage = React.useEffectEvent((stage: TemplatePipelineStageRecord) => {
+    onPipelineStage?.(stage);
+  });
+  const commitDisplayPhoto = React.useCallback((next: DisplayPhotoState | null) => {
+    if (displayPhotoEquals(displayPhotoRef.current, next)) return;
+    displayPhotoRef.current = next;
+    setDisplayPhoto((current) => (displayPhotoEquals(current, next) ? current : next));
+  }, []);
 
   useEffect(() => {
     if (!photoDataUrl) return;
@@ -2376,7 +2688,7 @@ export function EngravableZoneEditor({
         const sourceCanvas = document.createElement("canvas");
         sourceCanvas.width = img.naturalWidth || img.width;
         sourceCanvas.height = img.naturalHeight || img.height;
-        const sourceCtx = sourceCanvas.getContext("2d");
+        const sourceCtx = sourceCanvas.getContext("2d", { willReadFrequently: true });
         const sourceHandleTrace = (() => {
           if (!sourceCtx) {
             return {
@@ -2443,8 +2755,14 @@ export function EngravableZoneEditor({
               height: sourceHandleInnerBounds.height,
             }
           : null;
+        const tracedDisplayPhoto = cropBoundsFromFitDebug(img, fitDebug) ?? cropVisibleBounds(img, fitDebug);
+        const translatedTracedBodyOutlinePath = translateLinearPath(
+          tracedDisplayPhoto.tracedBodyOutlinePath,
+          tracedDisplayPhoto.offsetX,
+          tracedDisplayPhoto.offsetY,
+        );
         if (!cancelled) {
-          setDisplayPhoto({
+          commitDisplayPhoto({
             src: photoDataUrl,
             w: img.naturalWidth || img.width,
             h: img.naturalHeight || img.height,
@@ -2459,9 +2777,9 @@ export function EngravableZoneEditor({
             rimDetectionConfidence: sourceRimDetection.rimDetectionConfidence,
             bodyOutlinePath: sourceBodyOutlinePath,
             bodyOutlineBounds: scaledBounds,
-            tracedBodyOutlinePath: sourceBodyOutlinePath,
-            handleOuterPath: sourceHandleTrace.outerPath ?? sourceHandleProfile?.svgPathOuter ?? null,
-            handleInnerPath: sourceHandleTrace.innerPath ?? sourceHandleProfile?.svgPathInner ?? null,
+            tracedBodyOutlinePath: translatedTracedBodyOutlinePath ?? sourceBodyOutlinePath,
+            handleOuterPath: sourceHandleProfile?.svgPathOuter ?? sourceHandleTrace.outerPath ?? null,
+            handleInnerPath: sourceHandleProfile?.svgPathInner ?? sourceHandleTrace.innerPath ?? null,
             handleSide: sourceHandleTrace.handleSide ?? sourceHandleProfile?.side ?? fitDebug?.handleSide ?? null,
             handleOuterRect: pickTallestRect([
               sourceHandleTrace.outerRect,
@@ -2479,10 +2797,9 @@ export function EngravableZoneEditor({
         }
         return;
       }
-
       const cropped = cropBoundsFromFitDebug(img, fitDebug) ?? cropVisibleBounds(img, fitDebug);
       if (!cancelled) {
-        setDisplayPhoto({
+        commitDisplayPhoto({
           src: cropped.dataUrl,
           w: cropped.width,
           h: cropped.height,
@@ -2510,7 +2827,7 @@ export function EngravableZoneEditor({
     };
     img.onerror = () => {
       if (!cancelled) {
-        setDisplayPhoto(null);
+        commitDisplayPhoto(null);
       }
     };
     img.src = photoDataUrl;
@@ -2518,19 +2835,117 @@ export function EngravableZoneEditor({
     return () => {
       cancelled = true;
     };
-  }, [canonicalHandleProfile, fitDebug, outlineProfile, photoDataUrl, referencePaths?.bodyOutline]);
+  }, [canonicalHandleProfile, commitDisplayPhoto, fitDebug, outlineProfile, photoDataUrl, referencePaths?.bodyOutline]);
+
+  const syncedReferencePaths = React.useMemo(() => createReferencePaths({
+    bodyOutline: referencePaths?.bodyOutline ?? outlineProfile ?? null,
+    lidProfile: referencePaths?.lidProfile ?? null,
+    silverProfile: referencePaths?.silverProfile ?? null,
+  }), [outlineProfile, referencePaths?.bodyOutline, referencePaths?.lidProfile, referencePaths?.silverProfile]);
+  const syncedReferencePathsSignature = React.useMemo(
+    () => referencePathsSignature(syncedReferencePaths),
+    [syncedReferencePaths],
+  );
+  const syncedReferencePathsRef = React.useRef(syncedReferencePaths);
 
   useEffect(() => {
-    setLocalReferencePaths(createReferencePaths({
-      bodyOutline: referencePaths?.bodyOutline ?? outlineProfile ?? null,
-      lidProfile: referencePaths?.lidProfile ?? null,
-      silverProfile: referencePaths?.silverProfile ?? null,
-    }));
-  }, [outlineProfile, referencePaths]);
+    syncedReferencePathsRef.current = syncedReferencePaths;
+  }, [syncedReferencePaths]);
 
   useEffect(() => {
-    setLocalReferenceLayerState(cloneReferenceLayerState(referenceLayerState ?? createDefaultReferenceLayerState()));
-  }, [referenceLayerState]);
+    const nextPaths = syncedReferencePathsRef.current;
+    const skippedStageKey = `reference-paths-sync:skip:${syncedReferencePathsSignature}`;
+    if (lastSyncedReferencePathsSignatureRef.current === syncedReferencePathsSignature) {
+      if (lastReportedReferencePathsSyncStageRef.current !== skippedStageKey) {
+        lastReportedReferencePathsSyncStageRef.current = skippedStageKey;
+        reportPipelineStage({
+          id: "viewer-sync",
+          status: "skip",
+          authority: "engravable-zone-editor",
+          engine: "reference-paths-sync",
+          warnings: [],
+          errors: [],
+          artifacts: {
+            source: "reference-paths",
+            action: "skipped-no-change",
+            signature: syncedReferencePathsSignature,
+          },
+        });
+      }
+      return;
+    }
+    lastSyncedReferencePathsSignatureRef.current = syncedReferencePathsSignature;
+    setLocalReferencePaths((current) => (
+      referencePathsSignature(current) === syncedReferencePathsSignature ? current : nextPaths
+    ));
+    lastReportedReferencePathsSyncStageRef.current = `reference-paths-sync:ready:${syncedReferencePathsSignature}`;
+    reportPipelineStage({
+      id: "viewer-sync",
+      status: "ready",
+      authority: "engravable-zone-editor",
+      engine: "reference-paths-sync",
+      warnings: [],
+      errors: [],
+      artifacts: {
+        source: "reference-paths",
+        action: "applied",
+        signature: syncedReferencePathsSignature,
+      },
+    });
+  }, [syncedReferencePathsSignature]);
+
+  const syncedLayerState = React.useMemo(
+    () => cloneReferenceLayerState(referenceLayerState ?? createDefaultReferenceLayerState()),
+    [referenceLayerState],
+  );
+  const syncedLayerStateSignature = React.useMemo(() => referenceLayerStateSignature(syncedLayerState), [syncedLayerState]);
+  const syncedLayerStateRef = React.useRef(syncedLayerState);
+
+  useEffect(() => {
+    syncedLayerStateRef.current = syncedLayerState;
+  }, [syncedLayerState]);
+
+  useEffect(() => {
+    const nextLayerState = syncedLayerStateRef.current;
+    const skippedStageKey = `reference-layer-sync:skip:${syncedLayerStateSignature}`;
+    if (lastSyncedLayerStateSignatureRef.current === syncedLayerStateSignature) {
+      if (lastReportedLayerSyncStageRef.current !== skippedStageKey) {
+        lastReportedLayerSyncStageRef.current = skippedStageKey;
+        reportPipelineStage({
+          id: "viewer-sync",
+          status: "skip",
+          authority: "engravable-zone-editor",
+          engine: "reference-layer-sync",
+          warnings: [],
+          errors: [],
+          artifacts: {
+            source: "reference-layers",
+            action: "skipped-no-change",
+            signature: syncedLayerStateSignature,
+          },
+        });
+      }
+      return;
+    }
+    lastSyncedLayerStateSignatureRef.current = syncedLayerStateSignature;
+    setLocalReferenceLayerState((current) => (
+      referenceLayerStateSignature(current) === syncedLayerStateSignature ? current : nextLayerState
+    ));
+    lastReportedLayerSyncStageRef.current = `reference-layer-sync:ready:${syncedLayerStateSignature}`;
+    reportPipelineStage({
+      id: "viewer-sync",
+      status: "ready",
+      authority: "engravable-zone-editor",
+      engine: "reference-layer-sync",
+      warnings: [],
+      errors: [],
+      artifacts: {
+        source: "reference-layers",
+        action: "applied",
+        signature: syncedLayerStateSignature,
+      },
+    });
+  }, [syncedLayerStateSignature]);
 
   const generatedFallbackOutline = React.useMemo<EditableBodyOutline>(() => createEditableBodyOutline({
     overallHeightMm,
@@ -2563,9 +2978,26 @@ export function EngravableZoneEditor({
       : null
   ), []);
   const activeLayer: ReferenceLayerKey = "bodyOutline";
-  const activeLayerPath = selectUsableOutline(localReferencePaths.bodyOutline)
-    ?? selectUsableOutline(outlineProfile)
-    ?? generatedFallbackOutline;
+  const activeLayerPath = React.useMemo(
+    () => (
+      selectUsableOutline(localReferencePaths.bodyOutline)
+      ?? selectUsableOutline(outlineProfile)
+      ?? generatedFallbackOutline
+    ),
+    [generatedFallbackOutline, localReferencePaths.bodyOutline, outlineProfile, selectUsableOutline],
+  );
+  const activeLayerPathSignature = React.useMemo(() => (
+    activeLayerPath
+      ? JSON.stringify(
+          activeLayerPath.points.map((point) => [
+            round1(point.x),
+            round1(point.y),
+            point.role ?? "",
+            point.pointType ?? "",
+          ]),
+        )
+      : "__none__"
+  ), [activeLayerPath]);
   const activeLayerLocked = localReferenceLayerState.locked.bodyOutline;
   const activeLayerVisible = localReferenceLayerState.visibility.bodyOutline;
 
@@ -2611,6 +3043,12 @@ export function EngravableZoneEditor({
   ]);
 
   useEffect(() => {
+    const nextSignature = activeLayer === "bodyOutline" ? activeLayerPathSignature : "__none__";
+    if (outlineSyncSignatureRef.current === nextSignature) {
+      return;
+    }
+    outlineSyncSignatureRef.current = nextSignature;
+
     let cancelled = false;
     if (activeLayerPath) {
       queueMicrotask(() => {
@@ -2642,6 +3080,7 @@ export function EngravableZoneEditor({
   }, [
     activeLayer,
     activeLayerPath,
+    activeLayerPathSignature,
   ]);
 
   const derivedZoneGuides = React.useMemo(
@@ -2788,6 +3227,12 @@ export function EngravableZoneEditor({
   const calibrationPhotoWidthPx = activeDisplayPhoto && calibrationScaleXToMm != null
     ? activeDisplayPhoto.w * Math.abs(calibrationScaleXToMm) * pxPerMm
     : null;
+  const contourAlignedDisplayScale = contourAlignedUniformScale != null && activeDisplayPhoto
+    ? Math.min(
+        contourAlignedUniformScale * BODY_REFERENCE_DISPLAY_FIT_PCT,
+        (canvasHeightPx * BODY_REFERENCE_MAX_VISIBLE_HEIGHT_PCT) / Math.max(1, activeDisplayPhoto.h),
+      )
+    : null;
   const autoHeightFitPhotoHeightPx = contourAlignedUniformScale != null && activeDisplayPhoto
     ? activeDisplayPhoto.h * contourAlignedUniformScale
     : calibrationPhotoHeightPx != null
@@ -2795,9 +3240,11 @@ export function EngravableZoneEditor({
     : (activeDisplayPhoto
       ? (activeDisplayPhoto.h * bodyZoneHeightPx) / tracedBodyHeightPx
       : canvasHeightPx * VISIBLE_TUMBLER_HEIGHT_PCT);
-  const basePhotoHeightPx = Math.max(80, autoHeightFitPhotoHeightPx * BODY_REFERENCE_DISPLAY_FIT_PCT);
-  const basePhotoWidthPx = contourAlignedUniformScale != null && activeDisplayPhoto
-    ? Math.max(40, (activeDisplayPhoto.w * contourAlignedUniformScale) * BODY_REFERENCE_DISPLAY_FIT_PCT)
+  const basePhotoHeightPx = contourAlignedDisplayScale != null && activeDisplayPhoto
+    ? Math.max(80, activeDisplayPhoto.h * contourAlignedDisplayScale)
+    : Math.max(80, autoHeightFitPhotoHeightPx * BODY_REFERENCE_DISPLAY_FIT_PCT);
+  const basePhotoWidthPx = contourAlignedDisplayScale != null && activeDisplayPhoto
+    ? Math.max(40, activeDisplayPhoto.w * contourAlignedDisplayScale)
     : calibrationPhotoWidthPx != null
       ? Math.max(40, calibrationPhotoWidthPx * BODY_REFERENCE_DISPLAY_FIT_PCT)
     : (activeDisplayPhoto
@@ -2877,6 +3324,12 @@ export function EngravableZoneEditor({
   const contourAlignedPhotoRightRelPx = useContourAlignedPhotoFit && activeDisplayPhoto?.bodyOutlineBounds && contourMaxXRelPx != null
     ? contourMaxXRelPx + ((activeDisplayPhoto.w - activeDisplayPhoto.bodyOutlineBounds.maxX) * photoScaleXPx)
     : null;
+  const contourAlignedBodyCenterTargetPx = useContourAlignedPhotoFit && contourMinYPx != null && contourMaxYPx != null
+    ? (contourMinYPx + contourMaxYPx) / 2
+    : null;
+  const contourAlignedBodyCenterInPhotoPx = useContourAlignedPhotoFit && activeDisplayPhoto?.bodyOutlineBounds
+    ? ((activeDisplayPhoto.bodyOutlineBounds.minY + activeDisplayPhoto.bodyOutlineBounds.maxY) / 2) * photoScaleYPx
+    : null;
   const sideSpanPx = useContourAlignedPhotoFit && contourAlignedPhotoLeftRelPx != null && contourAlignedPhotoRightRelPx != null
     ? Math.max(
       Math.abs(contourAlignedPhotoLeftRelPx),
@@ -2911,11 +3364,19 @@ export function EngravableZoneEditor({
   const bodyLeftPx = Math.round(bodyCenterLinePx - bodyWidthPx / 2);
   const bodyCenterInPhotoPx = (scaledBodyTopInPhotoPx + scaledBodyBottomInPhotoPx) / 2;
   const targetBodyCenterPx = (bodyZoneTopPx + bodyZoneBottomPx) / 2;
-  const basePhotoTopPx = useContourAlignedPhotoFit && activeDisplayPhoto?.bodyOutlineBounds && contourMinYPx != null && contourMaxYPx != null
+  const basePhotoTopPx = useContourAlignedPhotoFit && activeDisplayPhoto?.bodyOutlineBounds
     ? (
       effectivePhotoAnchorY === "bottom"
-        ? contourMaxYPx - (activeDisplayPhoto.bodyOutlineBounds.maxY * photoScaleYPx)
-        : contourMinYPx - (activeDisplayPhoto.bodyOutlineBounds.minY * photoScaleYPx)
+        ? (
+            contourMaxYPx != null
+              ? contourMaxYPx - (activeDisplayPhoto.bodyOutlineBounds.maxY * photoScaleYPx)
+              : bodyZoneBottomPx - scaledBodyBottomInPhotoPx
+          )
+        : (
+            contourAlignedBodyCenterTargetPx != null && contourAlignedBodyCenterInPhotoPx != null
+              ? contourAlignedBodyCenterTargetPx - contourAlignedBodyCenterInPhotoPx
+              : targetBodyCenterPx - bodyCenterInPhotoPx
+          )
     )
     : (
       effectivePhotoAnchorY === "bottom"
@@ -2930,6 +3391,20 @@ export function EngravableZoneEditor({
     ? Math.round(photoTopPx + scaledBodyBottomInPhotoPx)
     : bodyBottomPx;
   const displayedBodyHeightPx = Math.max(1, displayedBodyBottomPx - displayedBodyTopPx);
+  const mapOverallMmToDisplayedPhotoPx = (overallMm: number) => {
+    if (!activeDisplayPhoto || overallHeightMm <= 0) {
+      return overallMm * pxPerMm;
+    }
+    const ratio = clamp(overallMm / Math.max(0.1, overallHeightMm), 0, 1);
+    return photoTopPx + (ratio * targetPhotoHeightPx);
+  };
+  const mapDisplayedPhotoPxToOverallMm = (displayPx: number) => {
+    if (!activeDisplayPhoto || targetPhotoHeightPx <= 0) {
+      return displayPx / pxPerMm;
+    }
+    const ratio = (displayPx - photoTopPx) / Math.max(1, targetPhotoHeightPx);
+    return clamp(ratio, 0, 1) * overallHeightMm;
+  };
   const mapOverallMmToDisplayedBodyPx = (overallMm: number) => {
     if (!activeDisplayPhoto || clampedBodyBottomFromOverallMm <= clampedBodyTopFromOverallMm) {
       return overallMm * pxPerMm;
@@ -2949,7 +3424,9 @@ export function EngravableZoneEditor({
   const derivedLidSeamGuidePx = scaledRimTopInPhotoPx != null ? Math.round(photoTopPx + scaledRimTopInPhotoPx) : null;
   const derivedSilverBandGuidePx = scaledRimBottomInPhotoPx != null ? Math.round(photoTopPx + scaledRimBottomInPhotoPx) : null;
   const mapGuidePxToOverallMm = (guidePx: number) => round1(clamp(
-    mapDisplayedBodyPxToOverallMm(guidePx),
+    activeDisplayPhoto
+      ? mapDisplayedPhotoPxToOverallMm(guidePx)
+      : (guidePx / pxPerMm),
     0,
     overallHeightMm,
   ));
@@ -2957,8 +3434,8 @@ export function EngravableZoneEditor({
     ? clamp(lidSeamFromOverallMm, 0, overallHeightMm)
     : (derivedLidSeamGuidePx != null ? mapGuidePxToOverallMm(derivedLidSeamGuidePx) : null);
   const minimumSilverBandBottomMm = Math.max(
-    clampedBodyTopFromOverallMm + 2,
-    effectiveLidSeamGuideMm != null ? effectiveLidSeamGuideMm + 1 : clampedBodyTopFromOverallMm + 2,
+    0.5,
+    effectiveLidSeamGuideMm != null ? effectiveLidSeamGuideMm + 1 : 1,
   );
   const effectiveSilverBandGuideMm = typeof silverBandBottomFromOverallMm === "number" && Number.isFinite(silverBandBottomFromOverallMm)
     ? clamp(silverBandBottomFromOverallMm, minimumSilverBandBottomMm, clampedBodyBottomFromOverallMm)
@@ -3003,8 +3480,8 @@ export function EngravableZoneEditor({
       ? round1(clamp(
         mapGuidePxToOverallMm(derivedSilverBandGuidePx),
         Math.max(
-          clampedBodyTopFromOverallMm + 2,
-          (detectedLidSeamFromOverallMm ?? clampedBodyTopFromOverallMm) + 1,
+          0.5,
+          (detectedLidSeamFromOverallMm ?? 0) + 1,
         ),
         clampedBodyBottomFromOverallMm,
       ))
@@ -3014,9 +3491,32 @@ export function EngravableZoneEditor({
       return null;
     }
 
+    const seededRingBottomMm = Number.isFinite(silverBandBottomFromOverallMm)
+      ? round1(clamp(
+        silverBandBottomFromOverallMm ?? detectedSilverBandBottomFromOverallMm,
+        clampedBodyTopFromOverallMm,
+        clampedBodyBottomFromOverallMm,
+      ))
+      : null;
+    const corroboratedBySeededRing =
+      seededRingBottomMm != null &&
+      Math.abs(detectedSilverBandBottomFromOverallMm - seededRingBottomMm) <= Math.max(
+        1.5,
+        (clampedBodyBottomFromOverallMm - clampedBodyTopFromOverallMm) * 0.015,
+      );
+    const corroboratedByBodyTop =
+      Math.abs(detectedSilverBandBottomFromOverallMm - clampedBodyTopFromOverallMm) <= Math.max(
+        1.5,
+        (clampedBodyBottomFromOverallMm - clampedBodyTopFromOverallMm) * 0.015,
+      );
+
     return {
       source: activeDisplayPhoto.rimDetectionSource,
-      confidence: Math.round((activeDisplayPhoto.rimDetectionConfidence ?? 0) * 100) / 100,
+      confidence: Math.round((
+        (corroboratedBySeededRing || corroboratedByBodyTop)
+          ? Math.max(0.72, activeDisplayPhoto.rimDetectionConfidence ?? 0)
+          : (activeDisplayPhoto.rimDetectionConfidence ?? 0)
+      ) * 100) / 100,
       lidSeamFromOverallMm: detectedLidSeamFromOverallMm,
       silverBandBottomFromOverallMm: detectedSilverBandBottomFromOverallMm,
     };
@@ -3028,12 +3528,29 @@ export function EngravableZoneEditor({
     derivedSilverBandGuidePx,
     overallHeightMm,
     pxPerMm,
+    silverBandBottomFromOverallMm,
   ]);
-  const printableDetectionWeak =
+  const legacyPrintableDetectionWeak =
     printableTopOverrideMm == null &&
     silverBandBottomFromOverallMm == null &&
     (printableSurfaceContract == null || activeDisplayPhoto?.rimDetectionSource !== "fit-debug") &&
     resolvedPrintableTopMm > clampedBodyTopFromOverallMm + 0.1;
+  const printableDetectionWeak =
+    printableTopOverrideMm != null || printableBottomOverrideMm != null
+      ? false
+      : (printableTopBoundaryWeak ?? legacyPrintableDetectionWeak);
+  const bandDetectDisplaySource =
+    printableTopBoundarySource ??
+    autoDetectedBandValues?.source ??
+    activeDisplayPhoto?.rimDetectionSource ??
+    "none";
+  const bandDetectDisplayConfidence = Number.isFinite(printableTopBoundaryConfidence)
+    ? printableTopBoundaryConfidence ?? null
+    : ((autoDetectedBandValues?.confidence ?? activeDisplayPhoto?.rimDetectionConfidence) ?? null);
+  const bandDetectDisplayValue =
+    bandDetectDisplaySource === "none"
+      ? "manual"
+      : `${bandDetectDisplaySource} ${Math.round((bandDetectDisplayConfidence ?? 0) * 100)}%`;
 
   useEffect(() => {
     if (!onPrintableSurfaceDetectionChange) return;
@@ -3076,8 +3593,6 @@ export function EngravableZoneEditor({
       lowerCorner: false,
       upperTransition: false,
       lowerTransition: false,
-      outerTop: false,
-      outerBottom: false,
       tubeDiameter: false,
     });
   }, [
@@ -3246,22 +3761,8 @@ export function EngravableZoneEditor({
         effectiveHandleBottomMm,
       ))
       : effectiveHandleBottomMm);
-  const effectiveHandleOuterTopMm = typeof handleOuterTopFromOverallMm === "number" && Number.isFinite(handleOuterTopFromOverallMm)
-    ? clamp(
-      handleOuterTopFromOverallMm,
-      clampedBodyTopFromOverallMm,
-      (handleOuterBottomFromOverallMm ?? effectiveHandleLowerTransitionMm ?? clampedBodyBottomFromOverallMm) - 8,
-    )
-    : effectiveHandleTopMm;
-  const effectiveHandleOuterBottomMm = typeof handleOuterBottomFromOverallMm === "number" && Number.isFinite(handleOuterBottomFromOverallMm)
-    ? clamp(
-      handleOuterBottomFromOverallMm,
-      (effectiveHandleOuterTopMm ?? effectiveHandleUpperTransitionMm ?? clampedBodyTopFromOverallMm) + 8,
-      clampedBodyBottomFromOverallMm,
-    )
-    : effectiveHandleBottomMm;
-  const hasManualHandleOuterTop = typeof handleOuterTopFromOverallMm === "number" && Number.isFinite(handleOuterTopFromOverallMm);
-  const hasManualHandleOuterBottom = typeof handleOuterBottomFromOverallMm === "number" && Number.isFinite(handleOuterBottomFromOverallMm);
+  const effectiveHandleOuterTopMm = effectiveHandleTopMm;
+  const effectiveHandleOuterBottomMm = effectiveHandleBottomMm;
   const handleTopGuidePx = effectiveHandleTopMm != null
     ? mapOverallMmToDisplayedBodyPx(effectiveHandleTopMm)
     : null;
@@ -3287,91 +3788,6 @@ export function EngravableZoneEditor({
     ? mapOverallMmToDisplayedBodyPx(effectiveHandleOuterBottomMm)
     : null;
   const handleReachPx = effectiveHandleReachMm != null ? effectiveHandleReachMm * pxPerMm : null;
-  const transformedHandleOuterRect = scaledHandleOuterRect && resolvedHandleSide && handleTopGuidePx != null && handleBottomGuidePx != null && handleReachPx != null
-    ? (() => {
-        const attachX = resolvedHandleSide === "right"
-          ? bodyLeftPx + bodyWidthPx
-          : bodyLeftPx;
-        const outerX = resolvedHandleSide === "right"
-          ? attachX + handleReachPx
-          : attachX - handleReachPx;
-        return {
-          x: Math.min(attachX, outerX),
-          y: handleTopGuidePx,
-          width: Math.abs(outerX - attachX),
-          height: Math.max(8, handleBottomGuidePx - handleTopGuidePx),
-        };
-      })()
-    : scaledHandleOuterRect;
-  const transformedHandleInnerRect = activeDisplayPhoto?.handleInnerRect && resolvedHandleSide && transformedHandleOuterRect
-    ? (() => {
-        const sourceInnerRect = activeDisplayPhoto.handleInnerRect;
-        const sourceOuterRect = activeDisplayPhoto.handleOuterRect ?? sourceInnerRect;
-        const sourceOuterHeight = Math.max(1, sourceOuterRect.height);
-        const innerTopRatio = clamp((sourceInnerRect.y - sourceOuterRect.y) / sourceOuterHeight, 0, 1);
-        const innerHeightRatio = clamp(sourceInnerRect.height / sourceOuterHeight, 0.08, 1);
-        const targetHeight = Math.max(6, transformedHandleOuterRect.height * innerHeightRatio);
-        const targetY = clamp(
-          transformedHandleOuterRect.y + (transformedHandleOuterRect.height * innerTopRatio),
-          transformedHandleOuterRect.y,
-          transformedHandleOuterRect.y + transformedHandleOuterRect.height - targetHeight,
-        );
-        const sourceAttachX = resolvedHandleSide === "right"
-          ? activeDisplayPhoto.bodyCenterX + (activeDisplayPhoto.referenceBodyWidthPx / 2)
-          : activeDisplayPhoto.bodyCenterX - (activeDisplayPhoto.referenceBodyWidthPx / 2);
-        const sourceOuterEdgeX = resolvedHandleSide === "right"
-          ? sourceOuterRect.x + sourceOuterRect.width
-          : sourceOuterRect.x;
-        const sourceInnerFarX = resolvedHandleSide === "right"
-          ? sourceInnerRect.x + sourceInnerRect.width
-          : sourceInnerRect.x;
-        const sourceTotalReachPx = Math.max(1, Math.abs(sourceOuterEdgeX - sourceAttachX));
-        const sourceInnerReachPx = Math.max(4, Math.abs(sourceInnerFarX - sourceAttachX));
-        const innerReachRatio = clamp(sourceInnerReachPx / sourceTotalReachPx, 0.08, 0.92);
-        const targetInnerReachPx = Math.max(6, transformedHandleOuterRect.width * innerReachRatio);
-        const targetAttachX = resolvedHandleSide === "right"
-          ? bodyLeftPx + bodyWidthPx
-          : bodyLeftPx;
-        return resolvedHandleSide === "right"
-          ? {
-              x: targetAttachX,
-              y: targetY,
-              width: targetInnerReachPx,
-              height: targetHeight,
-            }
-          : {
-              x: targetAttachX - targetInnerReachPx,
-              y: targetY,
-              width: targetInnerReachPx,
-              height: targetHeight,
-            };
-      })()
-    : (activeDisplayPhoto?.handleInnerRect
-      ? {
-          x: photoLeftPx + ((activeDisplayPhoto.handleInnerRect.x / activeDisplayPhoto.w) * photoWidthPx),
-          y: photoTopPx + ((activeDisplayPhoto.handleInnerRect.y / activeDisplayPhoto.h) * targetPhotoHeightPx),
-          width: (activeDisplayPhoto.handleInnerRect.width / activeDisplayPhoto.w) * photoWidthPx,
-          height: (activeDisplayPhoto.handleInnerRect.height / activeDisplayPhoto.h) * targetPhotoHeightPx,
-        }
-      : null);
-  const handlePathTransform = activeDisplayPhoto?.handleOuterRect && transformedHandleOuterRect
-    ? (() => {
-        const sx = transformedHandleOuterRect.width / Math.max(1, activeDisplayPhoto.handleOuterRect.width);
-        const sy = transformedHandleOuterRect.height / Math.max(1, activeDisplayPhoto.handleOuterRect.height);
-        const tx = transformedHandleOuterRect.x - (activeDisplayPhoto.handleOuterRect.x * sx);
-        const ty = transformedHandleOuterRect.y - (activeDisplayPhoto.handleOuterRect.y * sy);
-        return `matrix(${round1(sx)} 0 0 ${round1(sy)} ${round1(tx)} ${round1(ty)})`;
-      })()
-    : undefined;
-  const handleInnerPathTransform = activeDisplayPhoto?.handleInnerRect && transformedHandleInnerRect
-    ? (() => {
-        const sx = transformedHandleInnerRect.width / Math.max(1, activeDisplayPhoto.handleInnerRect.width);
-        const sy = transformedHandleInnerRect.height / Math.max(1, activeDisplayPhoto.handleInnerRect.height);
-        const tx = transformedHandleInnerRect.x - (activeDisplayPhoto.handleInnerRect.x * sx);
-        const ty = transformedHandleInnerRect.y - (activeDisplayPhoto.handleInnerRect.y * sy);
-        return `matrix(${round1(sx)} 0 0 ${round1(sy)} ${round1(tx)} ${round1(ty)})`;
-      })()
-    : undefined;
   const previewHandleGuideRect = resolvedHandleSide
     ? (() => {
         if (handleTopGuidePx != null && handleBottomGuidePx != null && handleReachPx != null) {
@@ -3410,6 +3826,12 @@ export function EngravableZoneEditor({
   const overlayHandleBottomY = activeDisplayPhoto && handleBottomGuidePx != null
     ? clamp(((handleBottomGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
     : null;
+  const overlayHandleOuterTopY = activeDisplayPhoto && handleOuterTopGuidePx != null
+    ? clamp(((handleOuterTopGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
+  const overlayHandleOuterBottomY = activeDisplayPhoto && handleOuterBottomGuidePx != null
+    ? clamp(((handleOuterBottomGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
+    : null;
   const overlayHandleUpperCornerY = activeDisplayPhoto && handleUpperCornerGuidePx != null
     ? clamp(((handleUpperCornerGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
     : null;
@@ -3421,12 +3843,6 @@ export function EngravableZoneEditor({
     : null;
   const overlayHandleLowerTransitionY = activeDisplayPhoto && handleLowerTransitionGuidePx != null
     ? clamp(((handleLowerTransitionGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
-    : null;
-  const overlayHandleOuterTopY = activeDisplayPhoto && handleOuterTopGuidePx != null
-    ? clamp(((handleOuterTopGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
-    : null;
-  const overlayHandleOuterBottomY = activeDisplayPhoto && handleOuterBottomGuidePx != null
-    ? clamp(((handleOuterBottomGuidePx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h, 0, activeDisplayPhoto.h)
     : null;
   const overlayHandleAttachX = activeDisplayPhoto && resolvedHandleSide
     ? (
@@ -3517,7 +3933,141 @@ export function EngravableZoneEditor({
     4,
     32,
   );
-  const anchoredHandleGuidePath = resolvedHandleSide
+  const transformedHandleOuterRect = scaledHandleOuterRect && resolvedHandleSide && handleOuterTopGuidePx != null && handleOuterBottomGuidePx != null && handleReachPx != null
+    ? (() => {
+        const attachX = resolvedHandleSide === "right"
+          ? bodyLeftPx + bodyWidthPx
+          : bodyLeftPx;
+        const outerX = resolvedHandleSide === "right"
+          ? attachX + handleReachPx + overlayHandleSideOffsetPx
+          : attachX - handleReachPx - overlayHandleSideOffsetPx;
+        return {
+          x: Math.min(attachX, outerX),
+          y: handleOuterTopGuidePx,
+          width: Math.abs(outerX - attachX),
+          height: Math.max(8, handleOuterBottomGuidePx - handleOuterTopGuidePx),
+        };
+      })()
+    : scaledHandleOuterRect;
+  const transformedHandleInnerRect = activeDisplayPhoto?.handleInnerRect && resolvedHandleSide && transformedHandleOuterRect
+    ? (() => {
+        const sourceInnerRect = activeDisplayPhoto.handleInnerRect;
+        const sourceOuterRect = activeDisplayPhoto.handleOuterRect ?? sourceInnerRect;
+        const sourceOuterHeight = Math.max(1, sourceOuterRect.height);
+        const innerTopRatio = clamp((sourceInnerRect.y - sourceOuterRect.y) / sourceOuterHeight, 0, 1);
+        const innerHeightRatio = clamp(sourceInnerRect.height / sourceOuterHeight, 0.08, 1);
+        const targetHeight = Math.max(6, transformedHandleOuterRect.height * innerHeightRatio);
+        const targetY = clamp(
+          transformedHandleOuterRect.y + (transformedHandleOuterRect.height * innerTopRatio),
+          transformedHandleOuterRect.y,
+          transformedHandleOuterRect.y + transformedHandleOuterRect.height - targetHeight,
+        );
+        const sourceAttachX = resolvedHandleSide === "right"
+          ? activeDisplayPhoto.bodyCenterX + (activeDisplayPhoto.referenceBodyWidthPx / 2)
+          : activeDisplayPhoto.bodyCenterX - (activeDisplayPhoto.referenceBodyWidthPx / 2);
+        const sourceOuterEdgeX = resolvedHandleSide === "right"
+          ? sourceOuterRect.x + sourceOuterRect.width
+          : sourceOuterRect.x;
+        const sourceInnerFarX = resolvedHandleSide === "right"
+          ? sourceInnerRect.x + sourceInnerRect.width
+          : sourceInnerRect.x;
+        const sourceTotalReachPx = Math.max(1, Math.abs(sourceOuterEdgeX - sourceAttachX));
+        const sourceInnerReachPx = Math.max(4, Math.abs(sourceInnerFarX - sourceAttachX));
+        const innerReachRatio = clamp(sourceInnerReachPx / sourceTotalReachPx, 0.08, 0.92);
+        const targetInnerReachPx = Math.max(6, transformedHandleOuterRect.width * innerReachRatio);
+        const targetAttachX = resolvedHandleSide === "right"
+          ? bodyLeftPx + bodyWidthPx
+          : bodyLeftPx;
+        return resolvedHandleSide === "right"
+          ? {
+              x: targetAttachX,
+              y: targetY,
+              width: targetInnerReachPx,
+              height: targetHeight,
+            }
+          : {
+              x: targetAttachX - targetInnerReachPx,
+              y: targetY,
+              width: targetInnerReachPx,
+              height: targetHeight,
+            };
+      })()
+    : (activeDisplayPhoto?.handleInnerRect
+      ? {
+          x: photoLeftPx + ((activeDisplayPhoto.handleInnerRect.x / activeDisplayPhoto.w) * photoWidthPx),
+          y: photoTopPx + ((activeDisplayPhoto.handleInnerRect.y / activeDisplayPhoto.h) * targetPhotoHeightPx),
+          width: (activeDisplayPhoto.handleInnerRect.width / activeDisplayPhoto.w) * photoWidthPx,
+          height: (activeDisplayPhoto.handleInnerRect.height / activeDisplayPhoto.h) * targetPhotoHeightPx,
+        }
+      : null);
+  const handlePathTransform = activeDisplayPhoto?.handleOuterRect && transformedHandleOuterRect
+    ? (() => {
+        const sx = transformedHandleOuterRect.width / Math.max(1, activeDisplayPhoto.handleOuterRect.width);
+        const sy = transformedHandleOuterRect.height / Math.max(1, activeDisplayPhoto.handleOuterRect.height);
+        const tx = transformedHandleOuterRect.x - (activeDisplayPhoto.handleOuterRect.x * sx);
+        const ty = transformedHandleOuterRect.y - (activeDisplayPhoto.handleOuterRect.y * sy);
+        return `matrix(${round1(sx)} 0 0 ${round1(sy)} ${round1(tx)} ${round1(ty)})`;
+      })()
+    : undefined;
+  const handleInnerPathTransform = activeDisplayPhoto?.handleInnerRect && transformedHandleInnerRect
+    ? (() => {
+        const sx = transformedHandleInnerRect.width / Math.max(1, activeDisplayPhoto.handleInnerRect.width);
+        const sy = transformedHandleInnerRect.height / Math.max(1, activeDisplayPhoto.handleInnerRect.height);
+        const tx = transformedHandleInnerRect.x - (activeDisplayPhoto.handleInnerRect.x * sx);
+        const ty = transformedHandleInnerRect.y - (activeDisplayPhoto.handleInnerRect.y * sy);
+        return `matrix(${round1(sx)} 0 0 ${round1(sy)} ${round1(tx)} ${round1(ty)})`;
+      })()
+    : undefined;
+  const mapOverallMmToOverlayY = React.useCallback((value: number | null | undefined) => {
+    if (!activeDisplayPhoto || value == null || !Number.isFinite(value)) return null;
+    const displayedPx = mapOverallMmToDisplayedBodyPx(value);
+    return clamp(
+      ((displayedPx - photoTopPx) / Math.max(1, targetPhotoHeightPx)) * activeDisplayPhoto.h,
+      0,
+      activeDisplayPhoto.h,
+    );
+  }, [activeDisplayPhoto, mapOverallMmToDisplayedBodyPx, photoTopPx, targetPhotoHeightPx]);
+  const canonicalHandleGuideGeometry = editableHandlePreview
+    && resolvedHandleSide
+    && overlayHandleAttachX != null
+    && activeDisplayPhoto
+    ? (() => {
+        const reachToOverlayX = (reachMm: number | null | undefined) => {
+          const reachPx = overlayHandleReachMmToPx(reachMm ?? 0);
+          if (reachPx == null) return null;
+          return resolvedHandleSide === "right"
+            ? overlayHandleAttachX + reachPx
+            : overlayHandleAttachX - reachPx;
+        };
+        const toPoint = (fromOverallMm: number, reachMm: number) => {
+          const y = mapOverallMmToOverlayY(fromOverallMm);
+          const x = reachMm <= 0 ? overlayHandleAttachX : reachToOverlayX(reachMm);
+          if (x == null || y == null) return null;
+          return { x, y };
+        };
+        const preview = editableHandlePreview;
+        const attachTop = toPoint(preview.topFromOverallMm, 0);
+        const attachBottom = toPoint(preview.bottomFromOverallMm, 0);
+        const upperTransition = toPoint(preview.upperTransitionFromOverallMm, preview.upperTransitionReachMm);
+        const upperCorner = toPoint(preview.upperCornerFromOverallMm, preview.upperCornerReachMm);
+        const lowerCorner = toPoint(preview.lowerCornerFromOverallMm, preview.lowerCornerReachMm);
+        const lowerTransition = toPoint(preview.lowerTransitionFromOverallMm, preview.lowerTransitionReachMm);
+        if (!attachTop || !attachBottom || !upperTransition || !upperCorner || !lowerCorner || !lowerTransition) {
+          return null;
+        }
+        return solveEditableHandlePreviewGeometry({
+          handle: preview,
+          toPoint: (fromOverallMm, reachMm) => {
+            const point = toPoint(fromOverallMm, reachMm);
+            if (!point) {
+              return { x: overlayHandleAttachX, y: 0 };
+            }
+            return point;
+          },
+        });
+      })()
+    : null;
+  const fallbackAnchoredHandleGuidePath = resolvedHandleSide
     && overlayHandleAttachX != null
     && overlayHandleTopY != null
     && overlayHandleBottomY != null
@@ -3543,18 +4093,10 @@ export function EngravableZoneEditor({
         lowerCornerY: overlayHandleLowerCornerY,
       })
     : null;
-  const resolvedOuterGuideTopY = hasManualHandleOuterTop && overlayHandleOuterTopY != null
-    ? overlayHandleOuterTopY
-    : overlayHandleTopY;
-  const resolvedOuterGuideBottomY = hasManualHandleOuterBottom && overlayHandleOuterBottomY != null
-    ? overlayHandleOuterBottomY
-    : overlayHandleBottomY;
-  const outerHandleGuideGeometry = resolvedHandleSide
+  const fallbackOuterHandleGuideGeometry = resolvedHandleSide
     && overlayHandleAttachX != null
     && overlayHandleTopY != null
     && overlayHandleBottomY != null
-    && resolvedOuterGuideTopY != null
-    && resolvedOuterGuideBottomY != null
     && overlayHandleUpperTransitionX != null
     && overlayHandleUpperTransitionY != null
     && overlayHandleLowerTransitionX != null
@@ -3563,70 +4105,63 @@ export function EngravableZoneEditor({
     && overlayHandleUpperCornerY != null
     && overlayHandleLowerCornerX != null
     && overlayHandleLowerCornerY != null
-    ? (() => {
-        const sideSign = resolvedHandleSide === "right" ? 1 : -1;
-        const outerOffsetPx = Math.max(4, overlayHandleSideOffsetPx);
-        const topShiftPx = resolvedOuterGuideTopY - overlayHandleTopY;
-        const bottomShiftPx = resolvedOuterGuideBottomY - overlayHandleBottomY;
-        const attachX = round1(
-          resolvedHandleSide === "right"
-            ? overlayHandleAttachX + outerOffsetPx
-            : overlayHandleAttachX - outerOffsetPx,
-        );
-        const upperEntryX = round1(overlayHandleUpperTransitionX + (sideSign * outerOffsetPx));
-        const lowerExitX = round1(overlayHandleLowerTransitionX + (sideSign * outerOffsetPx));
-        const upperEntryY = round1(overlayHandleUpperTransitionY + topShiftPx);
-        const lowerExitY = round1(overlayHandleLowerTransitionY + bottomShiftPx);
-        const upperCornerX = round1(overlayHandleUpperCornerX + (sideSign * outerOffsetPx));
-        const lowerCornerX = round1(overlayHandleLowerCornerX + (sideSign * outerOffsetPx));
-        const upperCornerY = round1(clamp(
-          overlayHandleUpperCornerY + topShiftPx,
-          upperEntryY + 2,
-          lowerExitY - 8,
-        ));
-        const lowerCornerY = round1(clamp(
-          overlayHandleLowerCornerY + bottomShiftPx,
-          upperCornerY + 8,
-          lowerExitY - 2,
-        ));
-        return {
-          path: buildAnchoredHandleGuidePath({
-            attachX: overlayHandleAttachX,
-            topY: resolvedOuterGuideTopY,
-            bottomY: resolvedOuterGuideBottomY,
-            upperEntryX,
-            upperEntryY,
-            lowerExitX,
-            lowerExitY,
-            upperCornerX,
-            upperCornerY,
-            lowerCornerX,
-            lowerCornerY,
-          }),
-          attachPoints: {
-            x: round1(overlayHandleAttachX),
-            topY: round1(resolvedOuterGuideTopY),
-            bottomY: round1(resolvedOuterGuideBottomY),
-          },
-        };
-      })()
-    : null;
-  const anchoredHandleGuideOuterPath = outerHandleGuideGeometry?.path ?? null;
-  const visibleHandleGuideInnerPath = anchoredHandleGuidePath ?? activeDisplayPhoto?.handleInnerPath ?? null;
-  const visibleHandleGuideInnerTransform = anchoredHandleGuidePath ? undefined : handleInnerPathTransform;
-  const visibleHandleGuideOuterPath = anchoredHandleGuideOuterPath;
-  const anchoredHandleGuideAttachPoints = resolvedHandleSide
-    && overlayHandleAttachX != null
-    && overlayHandleTopY != null
-    && overlayHandleBottomY != null
-    ? {
-        x: overlayHandleAttachX,
+    ? buildOffsetHandleGuideGeometry({
+        side: resolvedHandleSide,
+        offsetPx: Math.max(4, overlayHandleSideOffsetPx),
+        attachX: overlayHandleAttachX,
         topY: overlayHandleTopY,
         bottomY: overlayHandleBottomY,
+        upperEntryX: overlayHandleUpperTransitionX,
+        upperEntryY: overlayHandleUpperTransitionY,
+        lowerExitX: overlayHandleLowerTransitionX,
+        lowerExitY: overlayHandleLowerTransitionY,
+        upperCornerX: overlayHandleUpperCornerX,
+        upperCornerY: overlayHandleUpperCornerY,
+        lowerCornerX: overlayHandleLowerCornerX,
+        lowerCornerY: overlayHandleLowerCornerY,
+      })
+    : null;
+  const anchoredHandleGuidePath = canonicalHandleGuideGeometry?.innerPath ?? fallbackAnchoredHandleGuidePath;
+  const anchoredHandleGuideOuterPath = canonicalHandleGuideGeometry?.outerPath ?? fallbackOuterHandleGuideGeometry?.path ?? null;
+  const hasPhotoBackedHandleGuidePath = Boolean(activeDisplayPhoto?.handleInnerPath || activeDisplayPhoto?.handleOuterPath);
+  const usingAnchoredHandleGuidePath = !hasPhotoBackedHandleGuidePath && Boolean(anchoredHandleGuidePath);
+  const visibleHandleGuideInnerPath = hasPhotoBackedHandleGuidePath
+    ? (activeDisplayPhoto?.handleInnerPath ?? null)
+    : (anchoredHandleGuidePath ?? null);
+  const visibleHandleGuideInnerTransform = hasPhotoBackedHandleGuidePath
+    ? undefined
+    : (anchoredHandleGuidePath ? undefined : handleInnerPathTransform);
+  const visibleHandleGuideOuterPath = hasPhotoBackedHandleGuidePath
+    ? (activeDisplayPhoto?.handleOuterPath ?? null)
+    : anchoredHandleGuideOuterPath;
+  const anchoredHandleGuideAttachPoints = canonicalHandleGuideGeometry
+    ? {
+        top: canonicalHandleGuideGeometry.innerPoints.attachTop,
+        bottom: canonicalHandleGuideGeometry.innerPoints.attachBottom,
+      }
+    : (
+      resolvedHandleSide
+        && overlayHandleAttachX != null
+        && overlayHandleTopY != null
+        && overlayHandleBottomY != null
+        ? {
+            top: { x: overlayHandleAttachX, y: overlayHandleTopY },
+            bottom: { x: overlayHandleAttachX, y: overlayHandleBottomY },
+          }
+        : null
+    );
+  const anchoredHandleGuideOuterCornerPoints = canonicalHandleGuideGeometry
+    ? {
+        upper: canonicalHandleGuideGeometry.outerPoints.upperCorner,
+        lower: canonicalHandleGuideGeometry.outerPoints.lowerCorner,
       }
     : null;
-  const anchoredHandleGuideOuterAttachPoints = outerHandleGuideGeometry?.attachPoints ?? null;
-  const anchoredHandleGuideCornerPoints = overlayHandleUpperCornerX != null
+  const anchoredHandleGuideCornerPoints = canonicalHandleGuideGeometry
+    ? {
+        upper: canonicalHandleGuideGeometry.innerPoints.upperCorner,
+        lower: canonicalHandleGuideGeometry.innerPoints.lowerCorner,
+      }
+    : (overlayHandleUpperCornerX != null
     && overlayHandleUpperCornerY != null
     && overlayHandleLowerCornerX != null
     && overlayHandleLowerCornerY != null
@@ -3634,8 +4169,13 @@ export function EngravableZoneEditor({
         upper: { x: overlayHandleUpperCornerX, y: overlayHandleUpperCornerY },
         lower: { x: overlayHandleLowerCornerX, y: overlayHandleLowerCornerY },
       }
-    : null;
-  const anchoredHandleGuideTransitionPoints = overlayHandleUpperTransitionX != null
+    : null);
+  const anchoredHandleGuideTransitionPoints = canonicalHandleGuideGeometry
+    ? {
+        upper: canonicalHandleGuideGeometry.innerPoints.upperTransition,
+        lower: canonicalHandleGuideGeometry.innerPoints.lowerTransition,
+      }
+    : (overlayHandleUpperTransitionX != null
     && overlayHandleUpperTransitionY != null
     && overlayHandleLowerTransitionX != null
     && overlayHandleLowerTransitionY != null
@@ -3643,7 +4183,7 @@ export function EngravableZoneEditor({
         upper: { x: overlayHandleUpperTransitionX, y: overlayHandleUpperTransitionY },
         lower: { x: overlayHandleLowerTransitionX, y: overlayHandleLowerTransitionY },
       }
-    : null;
+    : null);
   const mapOverlayPointToContainerPoint = React.useCallback((point: { x: number; y: number } | null) => {
     if (!activeDisplayPhoto || point == null) return null;
     return {
@@ -3652,10 +4192,10 @@ export function EngravableZoneEditor({
     };
   }, [activeDisplayPhoto, photoLeftPx, photoTopPx, photoWidthPx, targetPhotoHeightPx]);
   const handleTopAttachButtonPoint = anchoredHandleGuideAttachPoints
-    ? mapOverlayPointToContainerPoint({ x: anchoredHandleGuideAttachPoints.x, y: anchoredHandleGuideAttachPoints.topY })
+    ? mapOverlayPointToContainerPoint(anchoredHandleGuideAttachPoints.top)
     : null;
   const handleBottomAttachButtonPoint = anchoredHandleGuideAttachPoints
-    ? mapOverlayPointToContainerPoint({ x: anchoredHandleGuideAttachPoints.x, y: anchoredHandleGuideAttachPoints.bottomY })
+    ? mapOverlayPointToContainerPoint(anchoredHandleGuideAttachPoints.bottom)
     : null;
   const handleUpperCornerButtonPoint = anchoredHandleGuideCornerPoints
     ? mapOverlayPointToContainerPoint(anchoredHandleGuideCornerPoints.upper)
@@ -3669,24 +4209,44 @@ export function EngravableZoneEditor({
   const handleLowerTransitionButtonPoint = anchoredHandleGuideTransitionPoints
     ? mapOverlayPointToContainerPoint(anchoredHandleGuideTransitionPoints.lower)
     : null;
-  const handleOuterTopButtonPoint = anchoredHandleGuideOuterAttachPoints
-    ? mapOverlayPointToContainerPoint({ x: anchoredHandleGuideOuterAttachPoints.x, y: anchoredHandleGuideOuterAttachPoints.topY })
+  const handleOuterUpperCornerButtonPoint = anchoredHandleGuideOuterCornerPoints
+    ? mapOverlayPointToContainerPoint(anchoredHandleGuideOuterCornerPoints.upper)
     : null;
-  const handleOuterBottomButtonPoint = anchoredHandleGuideOuterAttachPoints
-    ? mapOverlayPointToContainerPoint({ x: anchoredHandleGuideOuterAttachPoints.x, y: anchoredHandleGuideOuterAttachPoints.bottomY })
+  const handleOuterLowerCornerButtonPoint = anchoredHandleGuideOuterCornerPoints
+    ? mapOverlayPointToContainerPoint(anchoredHandleGuideOuterCornerPoints.lower)
     : null;
+  const handleThicknessButtonPoint =
+    handleOuterUpperCornerButtonPoint && handleOuterLowerCornerButtonPoint
+      ? {
+          x: round1((handleOuterUpperCornerButtonPoint.x + handleOuterLowerCornerButtonPoint.x) / 2),
+          y: round1((handleOuterUpperCornerButtonPoint.y + handleOuterLowerCornerButtonPoint.y) / 2),
+        }
+      : null;
+  const handleThicknessBaselinePoint =
+    handleUpperCornerButtonPoint && handleLowerCornerButtonPoint
+      ? {
+          x: round1((handleUpperCornerButtonPoint.x + handleLowerCornerButtonPoint.x) / 2),
+          y: round1((handleUpperCornerButtonPoint.y + handleLowerCornerButtonPoint.y) / 2),
+        }
+      : null;
   const straightWallBottomPx = derivedZoneGuides?.straightWallBottomYFromTopMm != null
     ? derivedZoneGuides.straightWallBottomYFromTopMm * pxPerMm
     : null;
   const rimTopGuidePx = effectiveLidSeamGuideMm != null
-    ? Math.round(mapOverallMmToDisplayedBodyPx(effectiveLidSeamGuideMm))
+    ? Math.round(mapOverallMmToDisplayedPhotoPx(effectiveLidSeamGuideMm))
     : null;
   const rimBottomGuidePx = effectiveSilverBandGuideMm != null
-    ? Math.round(mapOverallMmToDisplayedBodyPx(effectiveSilverBandGuideMm))
+    ? Math.round(mapOverallMmToDisplayedPhotoPx(effectiveSilverBandGuideMm))
     : null;
   const fallbackVisualLidGuideMm = round1(clamp(
-    clampedBodyTopFromOverallMm + Math.max(4, Math.min(14, bodyHeightMm * 0.05)),
-    clampedBodyTopFromOverallMm,
+    Math.max(
+      0,
+      Math.min(
+        clampedBodyBottomFromOverallMm - 2,
+        clampedBodyTopFromOverallMm - Math.max(4, Math.min(14, bodyHeightMm * 0.05)),
+      ),
+    ),
+    0,
     clampedBodyBottomFromOverallMm,
   ));
   const fallbackVisualSilverGuideMm = round1(clamp(
@@ -3720,7 +4280,7 @@ export function EngravableZoneEditor({
     ? mapGuidePxToOverallMm(visualLidGuidePx)
     : fallbackVisualLidGuideMm;
   const minimumVisualSilverGuideMm = Math.max(
-    clampedBodyTopFromOverallMm + 2,
+    0.5,
     visualLidGuideMm + 1,
   );
   const visualSilverGuidePx = activeDisplayPhoto && !manualGuideSelection.silver
@@ -3889,15 +4449,31 @@ export function EngravableZoneEditor({
   const sourceContourPreviewPath = hasSourceContourPreview
     ? (activeDisplayPhoto?.bodyOutlinePath ?? null)
     : null;
-  const readOnlyPreviewOutlinePath = !profileEditMode
+  const rawPhotoTracePreviewPath = activeDisplayPhoto?.tracedBodyOutlinePath
+    ?? sourceContourPreviewPath
+    ?? null;
+  const preferredPhotoBackedOutlinePath = !profileEditMode
     ? (
-      activeDisplayPhoto?.tracedBodyOutlinePath ??
       activeDisplayPhoto?.bodyOutlinePath ??
-      generatedFallbackOutlinePath ??
+      activeDisplayPhoto?.tracedBodyOutlinePath ??
       correctedBodyOverlay?.outlinePath ??
       null
     )
     : null;
+  const readOnlyPreviewOutlinePath = !profileEditMode
+    ? (
+      preferredPhotoBackedOutlinePath ??
+      correctedBodyOverlay?.outlinePath ??
+      generatedFallbackOutlinePath ??
+      null
+    )
+    : null;
+  const usingMeasuredReadOnlyOverlay = !profileEditMode
+    && Boolean(
+      readOnlyPreviewOutlinePath &&
+      correctedBodyOverlay?.outlinePath &&
+      readOnlyPreviewOutlinePath === correctedBodyOverlay.outlinePath,
+    );
   const showMainEditableOutlinePreview = profileEditMode && Boolean(editableOutlinePath);
   const selectedPoint = React.useMemo(
     () => sortedEditablePoints.find((point) => point.id === selectedPointId) ?? null,
@@ -4042,7 +4618,7 @@ export function EngravableZoneEditor({
     if (activeDrag === "lid-seam" && onLidSeamChange) {
       markGuideAsManual("lid");
       const maxMm = Math.min(
-        clampedBodyTopFromOverallMm + 28,
+        Math.max(0, clampedBodyBottomFromOverallMm - 2),
         (visualSilverGuideMm ?? clampedBodyBottomFromOverallMm) - 1,
       );
       const clamped = clamp(mappedMm, 0, Math.max(0, maxMm));
@@ -4052,8 +4628,8 @@ export function EngravableZoneEditor({
     if (activeDrag === "silver-band" && onSilverBandBottomChange) {
       markGuideAsManual("silver");
       const minMm = Math.max(
-        clampedBodyTopFromOverallMm + 2,
-        (visualLidGuideMm ?? clampedBodyTopFromOverallMm) + 1,
+        0.5,
+        (visualLidGuideMm ?? 0) + 1,
       );
       const clamped = clamp(mappedMm, minMm, clampedBodyBottomFromOverallMm);
       onSilverBandBottomChange(round1(clamped));
@@ -4086,15 +4662,14 @@ export function EngravableZoneEditor({
       onHandleBottomChange(round1(clamp(mappedMm, minMm, overallHeightMm)));
       return;
     }
-    if (activeDrag === "handle-outer-top" && onHandleOuterTopChange) {
-      markHandleAsManual("outerTop");
-      if (onHandleTubeDiameterChange && handleTopAttachButtonPoint) {
+    if (activeDrag === "handle-thickness") {
+      if (onHandleTubeDiameterChange && handleThicknessBaselinePoint) {
         const xInContainer = clientX - rect.left;
         const nextOffsetPx = Math.max(
           0,
           resolvedHandleSide === "right"
-            ? xInContainer - handleTopAttachButtonPoint.x
-            : handleTopAttachButtonPoint.x - xInContainer,
+            ? xInContainer - handleThicknessBaselinePoint.x
+            : handleThicknessBaselinePoint.x - xInContainer,
         );
         const nextTubeDiameterMm = mapHandleOffsetPxToMm(nextOffsetPx);
         if (nextTubeDiameterMm != null) {
@@ -4102,42 +4677,6 @@ export function EngravableZoneEditor({
           onHandleTubeDiameterChange(nextTubeDiameterMm);
         }
       }
-      const maxMm = Math.max(
-        clampedBodyTopFromOverallMm + 4,
-        (effectiveHandleOuterBottomMm ?? clampedBodyBottomFromOverallMm) - 8,
-      );
-      onHandleOuterTopChange(round1(clamp(
-        mappedMm,
-        clampedBodyTopFromOverallMm,
-        maxMm,
-      )));
-      return;
-    }
-    if (activeDrag === "handle-outer-bottom" && onHandleOuterBottomChange) {
-      markHandleAsManual("outerBottom");
-      if (onHandleTubeDiameterChange && handleBottomAttachButtonPoint) {
-        const xInContainer = clientX - rect.left;
-        const nextOffsetPx = Math.max(
-          0,
-          resolvedHandleSide === "right"
-            ? xInContainer - handleBottomAttachButtonPoint.x
-            : handleBottomAttachButtonPoint.x - xInContainer,
-        );
-        const nextTubeDiameterMm = mapHandleOffsetPxToMm(nextOffsetPx);
-        if (nextTubeDiameterMm != null) {
-          markHandleAsManual("tubeDiameter");
-          onHandleTubeDiameterChange(nextTubeDiameterMm);
-        }
-      }
-      const minMm = Math.min(
-        clampedBodyBottomFromOverallMm - 4,
-        (effectiveHandleOuterTopMm ?? clampedBodyTopFromOverallMm) + 8,
-      );
-      onHandleOuterBottomChange(round1(clamp(
-        mappedMm,
-        minMm,
-        clampedBodyBottomFromOverallMm,
-      )));
       return;
     }
     if (activeDrag === "handle-reach" && onHandleReachChange) {
@@ -4343,6 +4882,7 @@ export function EngravableZoneEditor({
     effectiveHandleUpperCornerMm,
     effectiveHandleUpperCornerReachMm,
     handleLowerTransitionButtonPoint,
+    handleThicknessBaselinePoint,
     handleUpperTransitionButtonPoint,
     effectiveShoulderDiameterMm,
     effectiveTaperLowerDiameterMm,
@@ -4357,8 +4897,6 @@ export function EngravableZoneEditor({
     onChange,
     onDiameterChange,
     onHandleBottomChange,
-    onHandleOuterBottomChange,
-    onHandleOuterTopChange,
     onHandleTubeDiameterChange,
     handleBottomFromOverallMm,
     onHandleLowerCornerChange,
@@ -4400,9 +4938,8 @@ export function EngravableZoneEditor({
       | "printable-bottom"
       | "handle-top"
       | "handle-bottom"
-      | "handle-outer-top"
-      | "handle-outer-bottom"
       | "handle-reach"
+      | "handle-thickness"
       | "handle-upper-corner"
       | "handle-lower-corner"
       | "handle-upper-transition"
@@ -4428,9 +4965,8 @@ export function EngravableZoneEditor({
       | "printable-bottom"
       | "handle-top"
       | "handle-bottom"
-      | "handle-outer-top"
-      | "handle-outer-bottom"
       | "handle-reach"
+      | "handle-thickness"
       | "handle-upper-corner"
       | "handle-lower-corner"
       | "handle-upper-transition"
@@ -4457,9 +4993,8 @@ export function EngravableZoneEditor({
       | "printable-bottom"
       | "handle-top"
       | "handle-bottom"
-      | "handle-outer-top"
-      | "handle-outer-bottom"
       | "handle-reach"
+      | "handle-thickness"
       | "handle-upper-corner"
       | "handle-lower-corner"
       | "handle-upper-transition"
@@ -4687,6 +5222,52 @@ export function EngravableZoneEditor({
       enterFitMode: false,
     });
   }, [activeLayerPath, applySeedOutlineToActiveLayer, editableOutline]);
+
+  const handleRebuildOutlineFromPhotoTrace = React.useCallback(() => {
+    if (!activeDisplayPhoto) {
+      setOutlineImportError("No reference photo is available to rebuild the outline.");
+      return;
+    }
+
+    const pathData = activeDisplayPhoto.tracedBodyOutlinePath ?? activeDisplayPhoto.bodyOutlinePath;
+    if (!pathData) {
+      setOutlineImportError("No traced body contour is available from the current photo.");
+      return;
+    }
+
+    try {
+      const svgText = [
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${round1(activeDisplayPhoto.w)} ${round1(activeDisplayPhoto.h)}" width="${round1(activeDisplayPhoto.w)}" height="${round1(activeDisplayPhoto.h)}">`,
+        `<path d="${pathData}" fill="none" stroke="#000" stroke-width="1" />`,
+        "</svg>",
+      ].join("");
+      const { source, outline } = createEditableBodyOutlineFromSeedSvgText({
+        svgText,
+        overallHeightMm,
+        bodyTopFromOverallMm: clampedBodyTopFromOverallMm,
+        bodyBottomFromOverallMm: clampedBodyBottomFromOverallMm,
+        diameterMm: effectiveTopOuterDiameterMm && effectiveTopOuterDiameterMm > 0 ? effectiveTopOuterDiameterMm : diameterMm,
+        topOuterDiameterMm: effectiveTopOuterDiameterMm,
+        side: "right",
+      });
+      applySeedOutlineToActiveLayer({
+        outline,
+        source,
+        enterFitMode: true,
+      });
+      setOutlineImportError(null);
+    } catch (error) {
+      setOutlineImportError(error instanceof Error ? error.message : "Unable to rebuild outline from the current photo trace.");
+    }
+  }, [
+    activeDisplayPhoto,
+    applySeedOutlineToActiveLayer,
+    clampedBodyBottomFromOverallMm,
+    clampedBodyTopFromOverallMm,
+    diameterMm,
+    effectiveTopOuterDiameterMm,
+    overallHeightMm,
+  ]);
 
   // Release drag on escape
   useEffect(() => {
@@ -4918,7 +5499,7 @@ export function EngravableZoneEditor({
     if (!onLidSeamChange || !Number.isFinite(nextValue)) return;
     markGuideAsManual("lid");
     const maxMm = Math.min(
-      clampedBodyTopFromOverallMm + 28,
+      Math.max(0, clampedBodyBottomFromOverallMm - 2),
       (visualSilverGuideMm ?? clampedBodyBottomFromOverallMm) - 1,
     );
     onLidSeamChange(round1(clamp(nextValue, 0, Math.max(0, maxMm))));
@@ -4928,8 +5509,8 @@ export function EngravableZoneEditor({
     if (!onSilverBandBottomChange || !Number.isFinite(nextValue)) return;
     markGuideAsManual("silver");
     const minMm = Math.max(
-      clampedBodyTopFromOverallMm + 2,
-      (visualLidGuideMm ?? clampedBodyTopFromOverallMm) + 1,
+      0.5,
+      (visualLidGuideMm ?? 0) + 1,
     );
     onSilverBandBottomChange(round1(clamp(nextValue, minMm, clampedBodyBottomFromOverallMm)));
   };
@@ -4965,7 +5546,7 @@ export function EngravableZoneEditor({
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.ceil(containerWidthPx));
     canvas.height = canvasHeightPx;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
 
     const img = new Image();
@@ -4983,22 +5564,32 @@ export function EngravableZoneEditor({
       const rimSampleX = bodyLeftPx + bodyWidthPx * 0.24;
       const rimSampleW = bodyWidthPx * 0.4;
 
+      const lidSampleY = Math.max(0, bodyTopPx);
+      const lidSampleH = Math.max(6, rimSampleY - lidSampleY);
+      const lidSampleX = bodyLeftPx + bodyWidthPx * 0.22;
+      const lidSampleW = bodyWidthPx * 0.42;
+
       const sampledBody = sampleRegionColor(ctx, bodySampleX, bodySampleY, bodySampleW, bodySampleH, "average");
+      const sampledLid = lidSampleH > 0
+        ? sampleRegionColor(ctx, lidSampleX, lidSampleY, lidSampleW, lidSampleH, "average")
+        : null;
       const sampledRim = sampleRegionColor(ctx, rimSampleX, rimSampleY, rimSampleW, rimSampleH, "bright");
 
-      if (!sampledBody && !sampledRim) return;
+      if (!sampledBody && !sampledLid && !sampledRim) return;
 
       const nextBody = sampledBody ?? bodyColorHex;
+      const nextLid = sampledLid ?? lidColorHex ?? nextBody;
       const nextRim = sampledRim ?? rimColorHex;
 
-      if (nextBody !== bodyColorHex || nextRim !== rimColorHex) {
-        onColorsChange(nextBody, nextRim);
+      if (nextBody !== bodyColorHex || nextLid !== lidColorHex || nextRim !== rimColorHex) {
+        onColorsChange(nextBody, nextLid, nextRim);
       }
     };
     img.src = activeDisplayPhoto.src;
   }, [
     activeDisplayPhoto,
     bodyColorHex,
+    lidColorHex,
     rimColorHex,
     onColorsChange,
     containerWidthPx,
@@ -5220,18 +5811,18 @@ export function EngravableZoneEditor({
                   </clipPath>
                 </defs>
               )}
-              {showReadOnlyGuides && correctedBodyOverlay?.leftBevelMaskPath && (
+              {showReadOnlyGuides && usingMeasuredReadOnlyOverlay && correctedBodyOverlay?.leftBevelMaskPath && (
                 <path d={correctedBodyOverlay.leftBevelMaskPath} className={styles.traceBaseMask} />
               )}
-              {showReadOnlyGuides && correctedBodyOverlay?.rightBevelMaskPath && (
+              {showReadOnlyGuides && usingMeasuredReadOnlyOverlay && correctedBodyOverlay?.rightBevelMaskPath && (
                 <path d={correctedBodyOverlay.rightBevelMaskPath} className={styles.traceBaseMask} />
               )}
-              {showReadOnlyGuides && correctedBodyOverlay?.bottomMaskPath && (
+              {showReadOnlyGuides && usingMeasuredReadOnlyOverlay && correctedBodyOverlay?.bottomMaskPath && (
                 <path d={correctedBodyOverlay.bottomMaskPath} className={styles.traceBaseMask} />
               )}
-              {(profileEditMode || showMainEditableOutlinePreview) && sourceContourPreviewPath && (
+              {(profileEditMode || showMainEditableOutlinePreview) && rawPhotoTracePreviewPath && (
                 <path
-                  d={sourceContourPreviewPath}
+                  d={rawPhotoTracePreviewPath}
                   className={styles.traceBodyOutlineRaw}
                 />
               )}
@@ -5286,51 +5877,33 @@ export function EngravableZoneEditor({
               {!profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && visibleHandleGuideInnerPath && (
                 <>
                   {visibleHandleGuideOuterPath ? (
-                    <>
-                      <path
-                        d={visibleHandleGuideOuterPath}
-                        className={styles.traceHandleOuterReference}
-                      />
-                      {anchoredHandleGuideOuterAttachPoints && (
-                        <>
-                          <circle
-                            cx={anchoredHandleGuideOuterAttachPoints.x}
-                            cy={anchoredHandleGuideOuterAttachPoints.topY}
-                            r={2.2}
-                            className={`${styles.traceNode} ${styles.traceNodeHandleOuterAnchor}`}
-                          />
-                          <circle
-                            cx={anchoredHandleGuideOuterAttachPoints.x}
-                            cy={anchoredHandleGuideOuterAttachPoints.bottomY}
-                            r={2.2}
-                            className={`${styles.traceNode} ${styles.traceNodeHandleOuterAnchor}`}
-                          />
-                        </>
-                      )}
-                    </>
+                    <path
+                      d={visibleHandleGuideOuterPath}
+                      className={styles.traceHandleOuterReference}
+                    />
                   ) : null}
                   <path
                     d={visibleHandleGuideInnerPath}
                     transform={visibleHandleGuideInnerTransform}
                     className={styles.traceHandleInnerReference}
                   />
-                  {anchoredHandleGuideAttachPoints && (
+                  {usingAnchoredHandleGuidePath && anchoredHandleGuideAttachPoints && (
                     <>
                       <circle
-                        cx={anchoredHandleGuideAttachPoints.x}
-                        cy={anchoredHandleGuideAttachPoints.topY}
+                        cx={anchoredHandleGuideAttachPoints.top.x}
+                        cy={anchoredHandleGuideAttachPoints.top.y}
                         r={2.4}
                         className={`${styles.traceNode} ${styles.traceNodeHandle}`}
                       />
                       <circle
-                        cx={anchoredHandleGuideAttachPoints.x}
-                        cy={anchoredHandleGuideAttachPoints.bottomY}
+                        cx={anchoredHandleGuideAttachPoints.bottom.x}
+                        cy={anchoredHandleGuideAttachPoints.bottom.y}
                         r={2.4}
                         className={`${styles.traceNode} ${styles.traceNodeHandle}`}
                       />
                     </>
                   )}
-                  {anchoredHandleGuideCornerPoints && (
+                  {usingAnchoredHandleGuidePath && anchoredHandleGuideCornerPoints && (
                     <>
                       <circle
                         cx={anchoredHandleGuideCornerPoints.upper.x}
@@ -5346,7 +5919,7 @@ export function EngravableZoneEditor({
                       />
                     </>
                   )}
-                  {anchoredHandleGuideTransitionPoints && (
+                  {usingAnchoredHandleGuidePath && anchoredHandleGuideTransitionPoints && (
                     <>
                       <circle
                         cx={anchoredHandleGuideTransitionPoints.upper.x}
@@ -5585,6 +6158,14 @@ export function EngravableZoneEditor({
                 >
                   Use Current Outline
                 </button>
+                <button
+                  type="button"
+                  className={styles.editorToolBtn}
+                  onClick={handleRebuildOutlineFromPhotoTrace}
+                  disabled={!activeDisplayPhoto?.bodyOutlinePath && !activeDisplayPhoto?.tracedBodyOutlinePath}
+                >
+                  Rebuild from Photo Trace
+                </button>
                 <div className={styles.pathEditorHint}>
                   Use a verified SVG or the current saved outline as the shape source. Preview match is the acceptance gate.
                 </div>
@@ -5810,14 +6391,14 @@ export function EngravableZoneEditor({
               className={`${styles.placementGuide} ${styles.lidPlacementGuide}`}
               style={{ top: visualLidGuidePx, left: bodyLeftPx, width: bodyWidthPx }}
             >
-              {showGuideLabels && <span className={styles.placementGuideLabel}>Lid top</span>}
+              {showGuideLabels && <span className={styles.placementGuideLabel}>Silver ring top</span>}
             </div>
           )}
           {hasLidGuide && visualLidGuidePx != null && !profileEditMode && !showMainEditableOutlinePreview && (
             <>
               <button
                 type="button"
-                aria-label="Adjust lid top"
+                aria-label="Adjust silver ring top"
                 className={`${styles.guideNode} ${styles.guideNodeLid} ${dragging === "lid-seam" ? styles.guideNodeActive : ""}`}
                 style={{ left: bodyLeftPx, top: visualLidGuidePx }}
                 onPointerDown={handlePointerDown("lid-seam")}
@@ -5825,7 +6406,7 @@ export function EngravableZoneEditor({
               />
               <button
                 type="button"
-                aria-label="Adjust lid top"
+                aria-label="Adjust silver ring top"
                 className={`${styles.guideNode} ${styles.guideNodeLid} ${dragging === "lid-seam" ? styles.guideNodeActive : ""}`}
                 style={{ left: bodyLeftPx + bodyWidthPx, top: visualLidGuidePx }}
                 onPointerDown={handlePointerDown("lid-seam")}
@@ -5907,26 +6488,15 @@ export function EngravableZoneEditor({
           )}
           {!profileEditMode && !showMainEditableOutlinePreview && showHandleTrace && (
             <>
-              {handleOuterTopButtonPoint && (
+              {handleThicknessButtonPoint && (
                 <button
                   type="button"
-                  aria-label="Adjust outer handle top"
-                  className={`${styles.guideNode} ${styles.guideNodeHandleOuterAnchor} ${dragging === "handle-outer-top" ? styles.guideNodeActive : ""}`}
-                  style={{ left: handleOuterTopButtonPoint.x, top: handleOuterTopButtonPoint.y }}
-                  title="Adjust outer handle top"
-                  onPointerDown={handlePointerDown("handle-outer-top")}
-                  onMouseDown={handleMouseDown("handle-outer-top")}
-                />
-              )}
-              {handleOuterBottomButtonPoint && (
-                <button
-                  type="button"
-                  aria-label="Adjust outer handle bottom"
-                  className={`${styles.guideNode} ${styles.guideNodeHandleOuterAnchor} ${dragging === "handle-outer-bottom" ? styles.guideNodeActive : ""}`}
-                  style={{ left: handleOuterBottomButtonPoint.x, top: handleOuterBottomButtonPoint.y }}
-                  title="Adjust outer handle bottom"
-                  onPointerDown={handlePointerDown("handle-outer-bottom")}
-                  onMouseDown={handleMouseDown("handle-outer-bottom")}
+                  aria-label="Adjust handle thickness"
+                  className={`${styles.guideNode} ${styles.guideNodeHandleOuterAnchor} ${styles.guideNodeHandleReach} ${dragging === "handle-thickness" ? styles.guideNodeActive : ""}`}
+                  style={{ left: handleThicknessButtonPoint.x, top: handleThicknessButtonPoint.y }}
+                  title="Adjust handle thickness"
+                  onPointerDown={handlePointerDown("handle-thickness")}
+                  onMouseDown={handleMouseDown("handle-thickness")}
                 />
               )}
               {handleTopAttachButtonPoint && (
@@ -6314,14 +6884,14 @@ export function EngravableZoneEditor({
           )}
           {visualLidGuideMm != null && (
             <div className={styles.readoutRow}>
-            <span className={styles.readoutLabel}>Lid top</span>
+            <span className={styles.readoutLabel}>Silver ring top</span>
               <span className={styles.readoutInputWrap}>
                 <input
                   className={styles.readoutInput}
                   type="number"
                   min={0}
                   max={round1(Math.max(0, Math.min(
-                    clampedBodyTopFromOverallMm + 28,
+                    Math.max(0, clampedBodyBottomFromOverallMm - 2),
                     (visualSilverGuideMm ?? clampedBodyBottomFromOverallMm) - 1,
                   )))}
                   step={0.1}
@@ -6334,14 +6904,14 @@ export function EngravableZoneEditor({
           )}
           {visualSilverGuideMm != null && (
             <div className={styles.readoutRow}>
-              <span className={styles.readoutLabel}>Silver / powder line</span>
+              <span className={styles.readoutLabel}>Silver ring bottom</span>
               <span className={styles.readoutInputWrap}>
                 <input
                   className={styles.readoutInput}
                   type="number"
                   min={round1(Math.max(
-                    clampedBodyTopFromOverallMm + 2,
-                    (visualLidGuideMm ?? clampedBodyTopFromOverallMm) + 1,
+                    0.5,
+                    (visualLidGuideMm ?? 0) + 1,
                   ))}
                   max={round1(clampedBodyBottomFromOverallMm)}
                   step={0.1}
@@ -6407,11 +6977,7 @@ export function EngravableZoneEditor({
           </div>
           <div className={styles.readoutRow}>
             <span className={styles.readoutLabel}>Band detect</span>
-            <span className={styles.readoutValue}>
-              {activeDisplayPhoto?.rimDetectionSource === "none" || !activeDisplayPhoto
-                ? "manual"
-                : `${activeDisplayPhoto.rimDetectionSource} ${Math.round((activeDisplayPhoto.rimDetectionConfidence ?? 0) * 100)}%`}
-            </span>
+            <span className={styles.readoutValue}>{bandDetectDisplayValue}</span>
           </div>
           <div className={styles.readoutRow}>
             <span className={styles.readoutLabel}>Band action</span>
@@ -6514,6 +7080,13 @@ export function EngravableZoneEditor({
               <span className={styles.colorSwatchValue}>
                 <span className={styles.colorSwatchChip} style={{ backgroundColor: bodyColorHex }} />
                 <span className={styles.readoutValue}>{bodyColorHex}</span>
+              </span>
+            </div>
+            <div className={styles.colorSwatchRow}>
+              <span className={styles.readoutLabel}>Lid color</span>
+              <span className={styles.colorSwatchValue}>
+                <span className={styles.colorSwatchChip} style={{ backgroundColor: lidColorHex }} />
+                <span className={styles.readoutValue}>{lidColorHex}</span>
               </span>
             </div>
             <div className={styles.colorSwatchRow}>

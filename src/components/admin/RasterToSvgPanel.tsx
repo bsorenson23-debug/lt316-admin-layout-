@@ -10,29 +10,54 @@ import type {
   RasterVectorizeBranchPreviews,
   RasterVectorizeResponse,
 } from "@/types/rasterVectorize";
+import type { TemplatePipelineDiagnostics } from "@/types/templatePipelineDiagnostics";
+import type { TraceSettingsAssistResponse } from "@/types/imageAssist";
+import {
+  clearImageToSvgSession,
+  DEFAULT_IMAGE_TO_SVG_SESSION,
+  type ImageToSvgSessionSnapshot,
+  type ImageToSvgThresholdMode,
+  normalizeImageToSvgSession,
+  readImageToSvgSession,
+  type PersistedImageToSvgFile,
+  writeImageToSvgSession,
+} from "@/lib/imageToSvgSession";
+import {
+  createTemplatePipelineDiagnostics,
+  fingerprintText,
+  mergeTemplatePipelineDiagnostics,
+  templatePipelineDiagnosticsEqual,
+  upsertTemplatePipelineStage,
+  updateTemplatePipelineInputFingerprints,
+} from "@/lib/templatePipelineDiagnostics";
+import { analyzeAlphaSilhouette } from "@/lib/imageToSvgSilhouette";
+import { recommendTraceSettingsAssist } from "@/lib/imageAssistClient";
+import { cleanupImageForTracing } from "@/lib/imageCleanupClient";
+import { removeBackgroundWithFallback } from "@/lib/removeBg";
 import { svgToDataUrl } from "@/utils/svg";
 import { despeckleSvgPaths, repairSvgPaths } from "@/utils/svgPathRepair";
 import { FileDropZone } from "./shared/FileDropZone";
 import styles from "./RasterToSvgPanel.module.css";
 
 interface Props {
-  onAddAsset: (svgContent: string, fileName: string) => void;
+  onAddAsset: (svgContent: string, fileName: string) => Promise<void> | void;
+  variant?: "panel" | "page";
   openSignal?: number;
   onPreviewChange?: (preview: RasterToSvgPreviewState | null) => void;
+  persistSessionKey?: string | null;
+  resetSignal?: number;
 }
 
 type Status = "idle" | "running" | "done" | "error";
-type ThresholdMode = "auto" | "manual";
+type ThresholdMode = ImageToSvgThresholdMode;
 
 export interface RasterToSvgPreviewState {
-  sourceFileName: string | null;
-  previewSvgText: string | null;
-  previewFile: File | null;
   status: Status;
-  previewImageUrl?: string | null;
-  previewLabel?: string | null;
-  previewBackground?: RasterPreviewBackground;
-  previewTarget?: RasterBedPreviewTarget;
+  previewTarget: RasterBedPreviewTarget;
+  previewLabel: string;
+  previewImageUrl: string | null;
+  previewSvgText: string | null;
+  sourceFileName: string | null;
 }
 
 interface RecipeDefinition {
@@ -351,8 +376,9 @@ async function buildThresholdPreview(
     normalizeLevels: boolean;
     preserveText: boolean;
     recipe: RasterTraceRecipe;
+    preferAlphaSilhouette: boolean;
   },
-): Promise<{ blob: Blob; effectiveThreshold: number }> {
+): Promise<{ blob: Blob; effectiveThreshold: number | null; previewMode: "threshold" | "silhouette" }> {
   const bitmap = await createImageBitmap(blob);
   const canvas = document.createElement("canvas");
   canvas.width = bitmap.width;
@@ -372,6 +398,7 @@ async function buildThresholdPreview(
   const pixels = imageData.data;
   const histogram = new Array<number>(256).fill(0);
   const grayscale = new Uint8Array(canvas.width * canvas.height);
+  const alphaValues: number[] = [];
 
   let minLuma = 255;
   let maxLuma = 0;
@@ -383,6 +410,7 @@ async function buildThresholdPreview(
       grayscale[index] = 255;
       continue;
     }
+    alphaValues.push(alpha);
 
     const luma = clampByte(computeLuma(pixels[offset], pixels[offset + 1], pixels[offset + 2]));
     grayscale[index] = luma;
@@ -406,127 +434,153 @@ async function buildThresholdPreview(
     histogram[value] += 1;
   }
 
-  const effectiveThreshold = options.thresholdMode === "auto"
-    ? computeOtsuThreshold(histogram, sampleCount)
-    : options.threshold;
+  const alphaSilhouette = options.preferAlphaSilhouette
+    ? analyzeAlphaSilhouette(alphaValues, canvas.width * canvas.height)
+    : null;
+  const useAlphaSilhouette = Boolean(alphaSilhouette?.hasUsefulAlpha);
+  const effectiveThreshold = useAlphaSilhouette
+    ? null
+    : options.thresholdMode === "auto"
+      ? computeOtsuThreshold(histogram, sampleCount)
+      : options.threshold;
 
-  const darkMask = new Uint8Array(canvas.width * canvas.height);
-  for (let offset = 0, index = 0; offset < pixels.length; offset += 4, index += 1) {
-    const alpha = pixels[offset + 3];
-    if (alpha <= 16) {
-      continue;
-    }
-
-    const isDark = grayscale[index] <= effectiveThreshold;
-    darkMask[index] = options.invert ? (isDark ? 0 : 1) : (isDark ? 1 : 0);
-  }
-
-  const separationMask = new Uint8Array(darkMask.length);
-  const colorDeltaThreshold =
-    options.recipe === "line-art"
-      ? 16
-      : options.recipe === "script-logo" || options.preserveText
-        ? 12
-        : options.recipe === "stamp"
-          ? 20
-          : 18;
-
-  const gradientThreshold =
-    options.recipe === "line-art"
-      ? 8
-      : options.recipe === "script-logo" || options.preserveText
-        ? 6
-        : 10;
-
-  for (let y = 0; y < canvas.height; y += 1) {
-    for (let x = 0; x < canvas.width; x += 1) {
-      const index = y * canvas.width + x;
-      if (darkMask[index] !== 1) {
-        continue;
-      }
-
-      let markSeparation = false;
-      const offset = index * 4;
-      const baseRed = pixels[offset];
-      const baseGreen = pixels[offset + 1];
-      const baseBlue = pixels[offset + 2];
-      const baseGray = grayscale[index];
-
-      for (let neighborY = y - 1; neighborY <= y + 1 && !markSeparation; neighborY += 1) {
-        for (let neighborX = x - 1; neighborX <= x + 1; neighborX += 1) {
-          if (neighborX === x && neighborY === y) {
-            continue;
-          }
-
-          if (
-            neighborX < 0 ||
-            neighborY < 0 ||
-            neighborX >= canvas.width ||
-            neighborY >= canvas.height
-          ) {
-            markSeparation = true;
-            break;
-          }
-
-          const neighborIndex = neighborY * canvas.width + neighborX;
-          if (darkMask[neighborIndex] === 0) {
-            markSeparation = true;
-            break;
-          }
-
-          const neighborOffset = neighborIndex * 4;
-          const delta = Math.sqrt(
-            (pixels[neighborOffset] - baseRed) ** 2 +
-            (pixels[neighborOffset + 1] - baseGreen) ** 2 +
-            (pixels[neighborOffset + 2] - baseBlue) ** 2,
-          );
-          const grayscaleDelta = Math.abs(grayscale[neighborIndex] - baseGray);
-          if (delta >= colorDeltaThreshold || grayscaleDelta >= gradientThreshold) {
-            markSeparation = true;
-            break;
-          }
-        }
-      }
-
-      if (markSeparation) {
-        separationMask[index] = 1;
-      }
-    }
-  }
-
-  const separationRadius =
-    options.recipe === "stamp" ? 2 : options.recipe === "script-logo" || options.preserveText ? 1 : 1;
-  if (separationRadius > 1) {
-    const grown = new Uint8Array(separationMask.length);
+  const finalDarkMask = new Uint8Array(canvas.width * canvas.height);
+  if (useAlphaSilhouette) {
     for (let y = 0; y < canvas.height; y += 1) {
       for (let x = 0; x < canvas.width; x += 1) {
         const index = y * canvas.width + x;
-        if (separationMask[index] !== 1) {
+        const alpha = pixels[(index * 4) + 3];
+        if (alpha <= 16) {
+          continue;
+        }
+        finalDarkMask[index] = alpha >= (alphaSilhouette?.tightThreshold ?? 0) ? 1 : 0;
+      }
+    }
+  } else {
+    const darkMask = new Uint8Array(canvas.width * canvas.height);
+    for (let offset = 0, index = 0; offset < pixels.length; offset += 4, index += 1) {
+      const alpha = pixels[offset + 3];
+      if (alpha <= 16) {
+        continue;
+      }
+
+      const isDark = grayscale[index] <= (effectiveThreshold ?? options.threshold);
+      darkMask[index] = options.invert ? (isDark ? 0 : 1) : (isDark ? 1 : 0);
+    }
+
+    const separationMask = new Uint8Array(darkMask.length);
+    const colorDeltaThreshold =
+      options.recipe === "line-art"
+        ? 16
+        : options.recipe === "script-logo" || options.preserveText
+          ? 12
+          : options.recipe === "stamp"
+            ? 20
+            : 18;
+
+    const gradientThreshold =
+      options.recipe === "line-art"
+        ? 8
+        : options.recipe === "script-logo" || options.preserveText
+          ? 6
+          : 10;
+
+    for (let y = 0; y < canvas.height; y += 1) {
+      for (let x = 0; x < canvas.width; x += 1) {
+        const index = y * canvas.width + x;
+        if (darkMask[index] !== 1) {
           continue;
         }
 
-        for (let neighborY = Math.max(0, y - separationRadius); neighborY <= Math.min(canvas.height - 1, y + separationRadius); neighborY += 1) {
-          for (let neighborX = Math.max(0, x - separationRadius); neighborX <= Math.min(canvas.width - 1, x + separationRadius); neighborX += 1) {
-            grown[(neighborY * canvas.width) + neighborX] = 1;
+        let markSeparation = false;
+        const offset = index * 4;
+        const baseRed = pixels[offset];
+        const baseGreen = pixels[offset + 1];
+        const baseBlue = pixels[offset + 2];
+        const baseGray = grayscale[index];
+
+        for (let neighborY = y - 1; neighborY <= y + 1 && !markSeparation; neighborY += 1) {
+          for (let neighborX = x - 1; neighborX <= x + 1; neighborX += 1) {
+            if (neighborX === x && neighborY === y) {
+              continue;
+            }
+
+            if (
+              neighborX < 0 ||
+              neighborY < 0 ||
+              neighborX >= canvas.width ||
+              neighborY >= canvas.height
+            ) {
+              markSeparation = true;
+              break;
+            }
+
+            const neighborIndex = neighborY * canvas.width + neighborX;
+            if (darkMask[neighborIndex] === 0) {
+              markSeparation = true;
+              break;
+            }
+
+            const neighborOffset = neighborIndex * 4;
+            const delta = Math.sqrt(
+              (pixels[neighborOffset] - baseRed) ** 2 +
+              (pixels[neighborOffset + 1] - baseGreen) ** 2 +
+              (pixels[neighborOffset + 2] - baseBlue) ** 2,
+            );
+            const grayscaleDelta = Math.abs(grayscale[neighborIndex] - baseGray);
+            if (delta >= colorDeltaThreshold || grayscaleDelta >= gradientThreshold) {
+              markSeparation = true;
+              break;
+            }
           }
+        }
+
+        if (markSeparation) {
+          separationMask[index] = 1;
         }
       }
     }
-    separationMask.set(grown);
+
+    const separationRadius =
+      options.recipe === "stamp" ? 2 : options.recipe === "script-logo" || options.preserveText ? 1 : 1;
+    if (separationRadius > 1) {
+      const grown = new Uint8Array(separationMask.length);
+      for (let y = 0; y < canvas.height; y += 1) {
+        for (let x = 0; x < canvas.width; x += 1) {
+          const index = y * canvas.width + x;
+          if (separationMask[index] !== 1) {
+            continue;
+          }
+
+          for (let neighborY = Math.max(0, y - separationRadius); neighborY <= Math.min(canvas.height - 1, y + separationRadius); neighborY += 1) {
+            for (let neighborX = Math.max(0, x - separationRadius); neighborX <= Math.min(canvas.width - 1, x + separationRadius); neighborX += 1) {
+              grown[(neighborY * canvas.width) + neighborX] = 1;
+            }
+          }
+        }
+      }
+      separationMask.set(grown);
+    }
+
+    for (let offset = 0, index = 0; offset < pixels.length; offset += 4, index += 1) {
+      const alpha = pixels[offset + 3];
+      if (alpha <= 16) {
+        continue;
+      }
+
+      finalDarkMask[index] = darkMask[index] === 1 && separationMask[index] !== 1 ? 1 : 0;
+    }
   }
 
-  const finalDarkMask = new Uint8Array(darkMask.length);
-  for (let offset = 0, index = 0; offset < pixels.length; offset += 4, index += 1) {
-    const alpha = pixels[offset + 3];
-    if (alpha <= 16) {
-      pixels[offset] = 255;
-      pixels[offset + 1] = 255;
-      pixels[offset + 2] = 255;
-      pixels[offset + 3] = 255;
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    if (pixels[offset + 3] > 16) {
       continue;
     }
 
-    finalDarkMask[index] = darkMask[index] === 1 && separationMask[index] !== 1 ? 1 : 0;
+    pixels[offset] = 255;
+    pixels[offset + 1] = 255;
+    pixels[offset + 2] = 255;
+    pixels[offset + 3] = 255;
   }
 
   const smoothingKernel =
@@ -594,6 +648,7 @@ async function buildThresholdPreview(
   return {
     blob: previewBlob,
     effectiveThreshold,
+    previewMode: useAlphaSilhouette ? "silhouette" : "threshold",
   };
 }
 
@@ -936,9 +991,41 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   return response.blob();
 }
 
-export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }: Props) {
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file for session restore"));
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("Could not serialize file for session restore"));
+        return;
+      }
+      resolve(reader.result);
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function persistedFileToFile(persisted: PersistedImageToSvgFile | null): Promise<File | null> {
+  if (!persisted) return null;
+  const blob = await dataUrlToBlob(persisted.dataUrl);
+  return new File([blob], persisted.name, {
+    type: persisted.type || blob.type || "image/png",
+  });
+}
+
+export function RasterToSvgPanel({
+  onAddAsset,
+  variant = "panel",
+  openSignal,
+  onPreviewChange,
+  persistSessionKey,
+  resetSignal,
+}: Props) {
   const vectorizeRequestIdRef = React.useRef(0);
-  const [open, setOpen] = React.useState(false);
+  const hydratedSessionRef = React.useRef(false);
+  const lastResetSignalRef = React.useRef(resetSignal ?? 0);
+  const [panelOpen, setPanelOpen] = React.useState(false);
   const [sourceFile, setSourceFile] = React.useState<File | null>(null);
   const [workingFile, setWorkingFile] = React.useState<File | null>(null);
   const [hybridFile, setHybridFile] = React.useState<File | null>(null);
@@ -959,15 +1046,31 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
   const [previewBackground, setPreviewBackground] = React.useState<RasterPreviewBackground>("light");
   const [bedPreviewTarget, setBedPreviewTarget] = React.useState<RasterBedPreviewTarget>("result");
   const [bgStatus, setBgStatus] = React.useState<Status>("idle");
+  const [cleanupStatus, setCleanupStatus] = React.useState<Status>("idle");
   const [traceStatus, setTraceStatus] = React.useState<Status>("idle");
+  const [assistStatus, setAssistStatus] = React.useState<Status>("idle");
   const [traceError, setTraceError] = React.useState<string | null>(null);
+  const [assistNote, setAssistNote] = React.useState<string | null>(null);
   const [svgText, setSvgText] = React.useState<string | null>(null);
   const [stats, setStats] = React.useState<{ pathCount: number; width: number; height: number } | null>(null);
   const [traceEngine, setTraceEngine] = React.useState<"potrace" | "asset-pipeline" | null>(null);
   const [branchPreviews, setBranchPreviews] = React.useState<RasterVectorizeBranchPreviews | null>(null);
   const [hiddenSvgColors, setHiddenSvgColors] = React.useState<string[]>([]);
   const [bgEngine, setBgEngine] = React.useState<string | null>(null);
+  const [cleanupEngine, setCleanupEngine] = React.useState<string | null>(null);
   const [despeckleLevel, setDespeckleLevel] = React.useState(1);
+  const [diagnostics, setDiagnostics] = React.useState<TemplatePipelineDiagnostics | null>(null);
+  const [sourceSessionDataUrl, setSourceSessionDataUrl] = React.useState<string | null>(null);
+  const [workingSessionDataUrl, setWorkingSessionDataUrl] = React.useState<string | null>(null);
+  const isOpen = variant === "page" ? true : panelOpen;
+
+  const commitDiagnostics = React.useCallback((updater: (current: TemplatePipelineDiagnostics) => TemplatePipelineDiagnostics) => {
+    setDiagnostics((current) => {
+      const base = current ?? createTemplatePipelineDiagnostics();
+      const next = updater(base);
+      return templatePipelineDiagnosticsEqual(base, next) ? current ?? base : next;
+    });
+  }, []);
 
   const activeFile = React.useMemo(() => {
     if (backgroundStrategy === "cutout" && workingFile) return workingFile;
@@ -980,6 +1083,7 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
   const [hybridPreviewUrl, setHybridPreviewUrl] = React.useState<string | null>(null);
   const [thresholdPreviewUrl, setThresholdPreviewUrl] = React.useState<string | null>(null);
   const [effectiveThreshold, setEffectiveThreshold] = React.useState<number | null>(null);
+  const [thresholdPreviewMode, setThresholdPreviewMode] = React.useState<"threshold" | "silhouette">("threshold");
 
   React.useEffect(() => {
     if (!sourceFile) {
@@ -992,6 +1096,26 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
   }, [sourceFile]);
 
   React.useEffect(() => {
+    if (!sourceFile) {
+      setSourceSessionDataUrl(null);
+      return;
+    }
+
+    let cancelled = false;
+    void blobToDataUrl(sourceFile)
+      .then((result) => {
+        if (!cancelled) setSourceSessionDataUrl(result);
+      })
+      .catch(() => {
+        if (!cancelled) setSourceSessionDataUrl(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceFile]);
+
+  React.useEffect(() => {
     if (!workingFile) {
       setWorkingPreviewUrl(null);
       return;
@@ -1000,6 +1124,107 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
     setWorkingPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [workingFile]);
+
+  React.useEffect(() => {
+    if (!workingFile) {
+      setWorkingSessionDataUrl(null);
+      return;
+    }
+
+    let cancelled = false;
+    void blobToDataUrl(workingFile)
+      .then((result) => {
+        if (!cancelled) setWorkingSessionDataUrl(result);
+      })
+      .catch(() => {
+        if (!cancelled) setWorkingSessionDataUrl(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workingFile]);
+
+  React.useEffect(() => {
+    if (!sourceFile || !sourceSessionDataUrl) {
+      setDiagnostics((current) => current ? upsertTemplatePipelineStage(current, {
+        id: "source-image",
+        status: "skip",
+        authority: "none",
+        warnings: [],
+        errors: [],
+        artifacts: {
+          reason: "No source image is loaded.",
+        },
+      }) : current);
+      return;
+    }
+
+    commitDiagnostics((current) => updateTemplatePipelineInputFingerprints(
+      upsertTemplatePipelineStage(current, {
+        id: "source-image",
+        status: "ready",
+        authority: "uploaded-image",
+        warnings: [],
+        errors: [],
+        artifacts: {
+          fileName: sourceFile.name,
+          mimeType: sourceFile.type || null,
+          backgroundStrategy,
+        },
+      }),
+      {
+        sourceImage: fingerprintText(sourceSessionDataUrl),
+      },
+    ));
+  }, [backgroundStrategy, commitDiagnostics, sourceFile, sourceSessionDataUrl]);
+
+  React.useEffect(() => {
+    if (!sourceFile) return;
+
+    const workingFingerprint = workingSessionDataUrl ? fingerprintText(workingSessionDataUrl) : null;
+    const stageStatus =
+      bgStatus === "error" || cleanupStatus === "error"
+        ? "error"
+        : workingFile
+          ? "ready"
+          : (bgStatus === "running" || cleanupStatus === "running")
+            ? "warning"
+            : "skip";
+
+    commitDiagnostics((current) => updateTemplatePipelineInputFingerprints(
+      upsertTemplatePipelineStage(current, {
+        id: "bg-cleanup",
+        status: stageStatus,
+        authority: workingFile ? "cleaned-raster" : "original-raster",
+        engine: cleanupEngine ?? bgEngine,
+        warnings: [],
+        errors: traceError && stageStatus === "error" ? [traceError] : [],
+        artifacts: {
+          backgroundStrategy,
+          bgStatus,
+          cleanupStatus,
+          bgEngine,
+          cleanupEngine,
+          hasWorkingFile: Boolean(workingFile),
+        },
+      }),
+      {
+        workingImage: workingFingerprint,
+      },
+    ));
+  }, [
+    backgroundStrategy,
+    bgEngine,
+    bgStatus,
+    cleanupEngine,
+    cleanupStatus,
+    commitDiagnostics,
+    sourceFile,
+    traceError,
+    workingFile,
+    workingSessionDataUrl,
+  ]);
 
   React.useEffect(() => {
     if (!hybridFile) {
@@ -1040,6 +1265,7 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
     if (!activeFile) {
       setThresholdPreviewUrl(null);
       setEffectiveThreshold(null);
+      setThresholdPreviewMode("threshold");
       return;
     }
 
@@ -1055,15 +1281,18 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
           normalizeLevels,
           preserveText,
           recipe: traceRecipe,
+          preferAlphaSilhouette: traceMode === "trace" && backgroundStrategy === "cutout",
         });
         if (cancelled) return;
         objectUrl = URL.createObjectURL(preview.blob);
         setThresholdPreviewUrl(objectUrl);
         setEffectiveThreshold(preview.effectiveThreshold);
+        setThresholdPreviewMode(preview.previewMode);
       } catch {
         if (cancelled) return;
         setThresholdPreviewUrl(null);
         setEffectiveThreshold(null);
+        setThresholdPreviewMode("threshold");
       }
     })();
 
@@ -1071,7 +1300,7 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [activeFile, invert, normalizeLevels, preserveText, threshold, thresholdMode, traceRecipe]);
+  }, [activeFile, backgroundStrategy, invert, normalizeLevels, preserveText, threshold, thresholdMode, traceMode, traceRecipe]);
 
   React.useEffect(() => {
     if (traceMode === "trace") {
@@ -1085,6 +1314,16 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
       return current;
     });
   }, [branchPreviews?.colorPreview, traceMode]);
+
+  const cutoutSilhouetteModeActive = React.useMemo(
+    () => traceMode === "trace" && backgroundStrategy === "cutout" && thresholdPreviewMode === "silhouette",
+    [backgroundStrategy, thresholdPreviewMode, traceMode],
+  );
+
+  const shouldForceLocalSilhouetteTrace = React.useMemo(
+    () => traceMode === "trace" && backgroundStrategy === "cutout" && Boolean(workingFile),
+    [backgroundStrategy, traceMode, workingFile],
+  );
 
   const hiddenSvgColorSet = React.useMemo(() => new Set(hiddenSvgColors), [hiddenSvgColors]);
   const posterizedPaintEntries = React.useMemo(
@@ -1111,94 +1350,11 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
     () => (cleanedSvgText ? svgToDataUrl(cleanedSvgText) : null),
     [cleanedSvgText],
   );
-  const bedPreviewImageUrl = React.useMemo(() => {
-    switch (bedPreviewTarget) {
-      case "source":
-        if (backgroundStrategy === "hybrid" && hybridPreviewUrl) return hybridPreviewUrl;
-        if (backgroundStrategy === "cutout" && workingPreviewUrl) return workingPreviewUrl;
-        return sourcePreviewUrl;
-      case "thresholdPreview":
-        return thresholdPreviewUrl;
-      case "colorPreview":
-      case "textPreview":
-      case "arcTextPreview":
-      case "scriptTextPreview":
-      case "shapePreview":
-      case "contourPreview":
-        return branchPreviews?.[bedPreviewTarget] ?? null;
-      case "result":
-      default:
-        return null;
-    }
-  }, [backgroundStrategy, bedPreviewTarget, branchPreviews, hybridPreviewUrl, sourcePreviewUrl, thresholdPreviewUrl, workingPreviewUrl]);
 
-  React.useEffect(() => {
-    if (openSignal > 0) {
-      setOpen(true);
-    }
-  }, [openSignal]);
-
-  const bedPreviewLabel = React.useMemo(() => {
-    if (bedPreviewTarget === "result") return "Smart trace result";
-    if (bedPreviewTarget === "source") {
-      if (backgroundStrategy === "hybrid" && hybridFile) return "Hybrid raster review";
-      if (backgroundStrategy === "cutout" && workingFile) return "Cutout raster review";
-      return "Original raster review";
-    }
-    if (bedPreviewTarget === "thresholdPreview") {
-      return `Threshold preview${effectiveThreshold !== null ? ` • ${effectiveThreshold}` : ""}`;
-    }
-    switch (bedPreviewTarget) {
-      case "colorPreview":
-        return "Color map";
-      case "textPreview":
-        return "Text branch";
-      case "arcTextPreview":
-        return "Arc text";
-      case "scriptTextPreview":
-        return "Script text";
-      case "shapePreview":
-        return "Shape branch";
-      case "contourPreview":
-        return "Contour branch";
-      default:
-        return "Branch review";
-    }
-  }, [backgroundStrategy, bedPreviewTarget, effectiveThreshold, hybridFile, workingFile]);
-
-  React.useEffect(() => {
-    if (!onPreviewChange) return;
-    if (!open || (!activeFile && !cleanedSvgText)) {
-      onPreviewChange(null);
-      return;
-    }
-
-    onPreviewChange({
-      sourceFileName: activeFile?.name ?? sourceFile?.name ?? null,
-      previewSvgText: cleanedSvgText,
-      previewFile: activeFile,
-      status: traceStatus,
-      previewImageUrl: bedPreviewImageUrl,
-      previewLabel: bedPreviewLabel,
-      previewBackground,
-      previewTarget: bedPreviewTarget,
-    });
-  }, [
-    activeFile,
-    bedPreviewLabel,
-    bedPreviewImageUrl,
-    bedPreviewTarget,
-    onPreviewChange,
-    open,
-    previewBackground,
-    sourceFile,
-    cleanedSvgText,
-    traceStatus,
-  ]);
-
-  React.useEffect(() => {
-    return () => onPreviewChange?.(null);
-  }, [onPreviewChange]);
+  const clearPersistedSession = React.useCallback(() => {
+    if (!persistSessionKey || typeof window === "undefined") return;
+    clearImageToSvgSession(persistSessionKey, window.sessionStorage);
+  }, [persistSessionKey]);
 
   const resetTrace = React.useCallback(() => {
     setSvgText(null);
@@ -1218,6 +1374,11 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
     setBackgroundStrategy("original");
     setBedPreviewTarget("source");
     setBgStatus("idle");
+    setCleanupStatus("idle");
+    setAssistStatus("idle");
+    setAssistNote(null);
+    setCleanupEngine(null);
+    setDiagnostics(createTemplatePipelineDiagnostics());
     resetTrace();
   }, [resetTrace]);
 
@@ -1228,8 +1389,15 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
     setBackgroundStrategy("original");
     setBedPreviewTarget("result");
     setBgStatus("idle");
+    setCleanupStatus("idle");
+    setAssistStatus("idle");
+    setAssistNote(null);
+    setCleanupEngine(null);
+    setBgEngine(null);
+    setDiagnostics(null);
+    clearPersistedSession();
     resetTrace();
-  }, [resetTrace]);
+  }, [clearPersistedSession, resetTrace]);
 
   const handleResetRaster = React.useCallback(() => {
     setBackgroundStrategy("original");
@@ -1242,29 +1410,17 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
     setBgStatus("running");
     setTraceError(null);
     try {
-      let cutoutBlob: Blob | null = null;
-      let engineLabel = "AI Cutout";
-
-      const formData = new FormData();
-      formData.set("image", sourceFile);
-      const remoteResponse = await fetch("/api/admin/image/remove-bg", {
-        method: "POST",
-        body: formData,
+      const result = await removeBackgroundWithFallback({
+        file: sourceFile,
+        preferServer: true,
       });
-
-      if (remoteResponse.ok) {
-        const payload = (await remoteResponse.json()) as { dataUrl?: string; model?: string };
-        if (typeof payload.dataUrl === "string" && payload.dataUrl.length > 0) {
-          cutoutBlob = await dataUrlToBlob(payload.dataUrl);
-          engineLabel = payload.model ?? "BiRefNet";
-        }
-      }
-
-      if (!cutoutBlob) {
-        const { removeBackground } = await import("@imgly/background-removal");
-        cutoutBlob = await removeBackground(sourceFile);
-        engineLabel = "Local AI Cutout";
-      }
+      const cutoutBlob = await dataUrlToBlob(result.dataUrl);
+      const engineLabel =
+        result.method === "replicate"
+          ? (result.model ?? "BiRefNet")
+          : result.method === "imgly"
+          ? "Local AI Cutout"
+          : "Original image";
 
       const repairedBlob = await repairCutoutWithSource(sourceFile, cutoutBlob);
       const cleanedBlob = await cleanCutoutBlob(repairedBlob);
@@ -1280,6 +1436,78 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
       setTraceError(error instanceof Error ? error.message : "Background removal failed");
     }
   }, [sourceFile, resetTrace]);
+
+  const handleAiCleanup = React.useCallback(async () => {
+    if (!sourceFile) return;
+    setCleanupStatus("running");
+    setTraceError(null);
+    try {
+      const result = await cleanupImageForTracing(sourceFile);
+      const cleanupBlob = await dataUrlToBlob(result.dataUrl);
+      const cleanupFile = new File(
+        [cleanupBlob],
+        `${basename(sourceFile.name)}-cleanup.png`,
+        { type: "image/png" },
+      );
+      setWorkingFile(cleanupFile);
+      setBackgroundStrategy("cutout");
+      setBedPreviewTarget("source");
+      setCleanupStatus("done");
+      setCleanupEngine(result.model ?? (result.cleaned ? "OpenAI cleanup" : "Original image"));
+      setAssistNote(
+        result.cleaned
+          ? "OpenAI cleanup generated a tracing-friendly raster. Review it before running the trace."
+          : "OpenAI cleanup returned the original image.",
+      );
+      resetTrace();
+    } catch (error) {
+      setCleanupStatus("error");
+      setTraceError(error instanceof Error ? error.message : "AI cleanup failed");
+    }
+  }, [sourceFile, resetTrace]);
+
+  const applyVisionRecommendation = React.useCallback((recommendation: TraceSettingsAssistResponse) => {
+    setTraceMode(recommendation.traceMode);
+    setTraceRecipe(recommendation.traceRecipe);
+    setThresholdMode(recommendation.thresholdMode);
+    setThreshold(recommendation.threshold);
+    setInvert(recommendation.invert);
+    setTurdSize(recommendation.turdSize);
+    setAlphaMax(recommendation.alphaMax);
+    setOptTolerance(recommendation.optTolerance);
+    setPosterizeSteps(recommendation.posterizeSteps);
+    setPreserveText(recommendation.preserveText);
+    setBackgroundStrategy((current) => {
+      if (
+        (recommendation.backgroundStrategy === "cutout" || recommendation.backgroundStrategy === "hybrid") &&
+        !workingFile
+      ) {
+        return current;
+      }
+      return recommendation.backgroundStrategy;
+    });
+    setAssistNote(recommendation.rationale);
+  }, [workingFile]);
+
+  const handleVisionAssist = React.useCallback(async () => {
+    if (!sourceFile) return;
+    setAssistStatus("running");
+    setTraceError(null);
+    try {
+      const recommendation = await recommendTraceSettingsAssist(sourceFile);
+      applyVisionRecommendation(recommendation);
+      setAssistStatus("done");
+      if (
+        (recommendation.backgroundStrategy === "cutout" || recommendation.backgroundStrategy === "hybrid") &&
+        !workingFile
+      ) {
+        setAssistNote(`${recommendation.rationale} Run AI Cutout to apply the recommended background cleanup.`);
+      }
+    } catch (error) {
+      setAssistStatus("error");
+      setTraceError(error instanceof Error ? error.message : "Vision assist failed");
+    }
+  }, [applyVisionRecommendation, sourceFile, workingFile]);
 
   const handleVectorize = React.useCallback(async () => {
     if (!activeFile) return;
@@ -1305,6 +1533,9 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
       formData.set("recipe", traceRecipe);
       formData.set("backgroundStrategy", backgroundStrategy);
       formData.set("maxDimension", "6144");
+      if (shouldForceLocalSilhouetteTrace) {
+        formData.set("preferLocal", "true");
+      }
 
       const response = await fetch("/api/admin/image/vectorize", {
         method: "POST",
@@ -1328,6 +1559,14 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
       setBranchPreviews(payload.branchPreviews ?? null);
       setHiddenSvgColors([]);
       setTraceStatus("done");
+      setDiagnostics((current) => {
+        const base = current ?? createTemplatePipelineDiagnostics();
+        const merged = mergeTemplatePipelineDiagnostics(base, payload.diagnostics ?? null);
+        const next = updateTemplatePipelineInputFingerprints(merged, {
+          svg: payload.svg ? fingerprintText(payload.svg) : null,
+        });
+        return templatePipelineDiagnosticsEqual(base, next) ? current ?? base : next;
+      });
       if (bedPreviewTarget === "result" || bedPreviewTarget === "source") {
         setBedPreviewTarget("result");
       }
@@ -1341,6 +1580,17 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
           ? error.message
           : "Vectorization failed",
       );
+      commitDiagnostics((current) => upsertTemplatePipelineStage(current, {
+        id: "vectorize",
+        status: "error",
+        authority: "client-build",
+        warnings: [],
+        errors: [error instanceof Error ? error.message : "Vectorization failed"],
+        artifacts: {
+          mode: traceMode,
+          recipe: traceRecipe,
+        },
+      }));
     }
   }, [
     activeFile,
@@ -1359,13 +1609,19 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
     traceRecipe,
     trimWhitespace,
     turdSize,
+    shouldForceLocalSilhouetteTrace,
+    commitDiagnostics,
   ]);
 
-  const handleAddSvg = React.useCallback(() => {
+  const handleAddSvg = React.useCallback(async () => {
     if (!cleanedSvgText || !sourceFile) return;
     const filteredSuffix = traceMode === "posterize" && hiddenSvgColors.length > 0 ? "-filtered" : "";
     const fileName = `${basename(sourceFile.name)}-${traceMode}${filteredSuffix}.svg`;
-    onAddAsset(cleanedSvgText, fileName);
+    try {
+      await onAddAsset(cleanedSvgText, fileName);
+    } catch (error) {
+      setTraceError(error instanceof Error ? error.message : "Could not save SVG to the library");
+    }
   }, [cleanedSvgText, hiddenSvgColors.length, sourceFile, traceMode, onAddAsset]);
 
   const toggleSvgColor = React.useCallback((color: string) => {
@@ -1487,10 +1743,14 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
     if (traceMode === "trace") {
       return {
         key: "thresholdPreview" as RasterBedPreviewTarget,
-        label: `Threshold Preview${effectiveThreshold !== null ? ` • ${effectiveThreshold}` : ""}`,
+        label: cutoutSilhouetteModeActive
+          ? "Silhouette Preview • alpha"
+          : `Threshold Preview${effectiveThreshold !== null ? ` • ${effectiveThreshold}` : ""}`,
         src: thresholdPreviewUrl,
-        alt: "Threshold preview",
-        placeholder: "Upload an image to generate a threshold preview.",
+        alt: cutoutSilhouetteModeActive ? "Silhouette preview" : "Threshold preview",
+        placeholder: cutoutSilhouetteModeActive
+          ? "Run AI Cutout to preview the alpha silhouette that will drive the SVG trace."
+          : "Upload an image to generate a threshold preview.",
         disabled: !thresholdPreviewUrl,
       };
     }
@@ -1503,31 +1763,334 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
       placeholder: "Run the trace to preview the color map used for posterized output.",
       disabled: !branchPreviews?.colorPreview,
     };
-  }, [branchPreviews?.colorPreview, effectiveThreshold, thresholdPreviewUrl, traceMode]);
+  }, [branchPreviews?.colorPreview, cutoutSilhouetteModeActive, effectiveThreshold, thresholdPreviewUrl, traceMode]);
+
+  const workflowSummary = React.useMemo(() => {
+    if (!sourceFile) return "Upload a raster to start the tracing session.";
+    if (activityState) return activityState.title;
+    if (cleanedSvgText) {
+      return `SVG ready from ${sourceFile.name}`;
+    }
+    if (workingFile && backgroundStrategy === "hybrid") {
+      return `Hybrid cleanup ready for ${sourceFile.name}`;
+    }
+    if (workingFile && backgroundStrategy === "cutout") {
+      return `Cutout ready for ${sourceFile.name}`;
+    }
+    if (workingFile) {
+      return `Cleaned raster loaded for ${sourceFile.name}`;
+    }
+    return `${sourceFile.name} is loaded and ready for review.`;
+  }, [activityState, backgroundStrategy, cleanedSvgText, sourceFile, workingFile]);
+
+  const workflowDetail = React.useMemo(() => {
+    if (!sourceFile) {
+      return "Drag in a product photo or logo, then use the recipe and build controls below. The session autosaves in this browser until you clear it.";
+    }
+    if (cleanedSvgText) {
+      return "Review the previews, then save to the shared SVG library or keep tuning the settings.";
+    }
+    if (activityState) {
+      return activityState.detail;
+    }
+    if (cutoutSilhouetteModeActive) {
+      return "Cutout silhouette mode is active. Smart B/W will trace the alpha edge instead of the internal color texture.";
+    }
+    if (workingFile) {
+      return "Cleanup is ready. Adjust the trace settings or jump straight to Build SVG.";
+    }
+    return "Use AI Cutout for product photos, Vision Assist for tuning, or build directly from the original raster.";
+  }, [activityState, cleanedSvgText, cutoutSilhouetteModeActive, sourceFile, workingFile]);
+
+  React.useEffect(() => {
+    if (!persistSessionKey || typeof window === "undefined" || hydratedSessionRef.current) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      const restored = readImageToSvgSession(persistSessionKey, window.sessionStorage);
+      hydratedSessionRef.current = true;
+      if (!restored) return;
+
+      try {
+        const [restoredSourceFile, restoredWorkingFile] = await Promise.all([
+          persistedFileToFile(restored.sourceFile),
+          persistedFileToFile(restored.workingFile),
+        ]);
+
+        if (cancelled) return;
+
+        const normalized = normalizeImageToSvgSession(restored);
+        const hasWorkingFile = Boolean(restoredWorkingFile);
+        const hasSvg = Boolean(normalized.svgText);
+
+        setSourceFile(restoredSourceFile);
+        setWorkingFile(restoredWorkingFile);
+        setHybridFile(null);
+        setTraceMode(normalized.traceMode);
+        setTraceRecipe(normalized.traceRecipe);
+        setThresholdMode(normalized.thresholdMode);
+        setThreshold(normalized.threshold);
+        setInvert(normalized.invert);
+        setTrimWhitespace(normalized.trimWhitespace);
+        setNormalizeLevels(normalized.normalizeLevels);
+        setTurdSize(normalized.turdSize);
+        setAlphaMax(normalized.alphaMax);
+        setOptTolerance(normalized.optTolerance);
+        setPosterizeSteps(normalized.posterizeSteps);
+        setPreserveText(normalized.preserveText);
+        setBackgroundStrategy(hasWorkingFile ? normalized.backgroundStrategy : "original");
+        setOutputColor(normalized.outputColor);
+        setPreviewBackground(normalized.previewBackground);
+        setBedPreviewTarget(normalized.bedPreviewTarget);
+        setAssistNote(normalized.assistNote);
+        setSvgText(normalized.svgText);
+        setStats(normalized.stats);
+        setTraceEngine(normalized.traceEngine);
+        setBranchPreviews(normalized.branchPreviews);
+        setHiddenSvgColors(normalized.hiddenSvgColors);
+        setBgEngine(normalized.bgEngine);
+        setCleanupEngine(normalized.cleanupEngine);
+        setDespeckleLevel(normalized.despeckleLevel);
+        setDiagnostics(normalized.diagnostics ?? null);
+        setBgStatus(hasWorkingFile ? "done" : "idle");
+        setCleanupStatus(normalized.cleanupEngine ? "done" : "idle");
+        setTraceStatus(hasSvg ? "done" : "idle");
+        setAssistStatus(normalized.assistNote ? "done" : "idle");
+        setTraceError(null);
+        if (variant === "panel") {
+          setPanelOpen(true);
+        }
+      } catch {
+        clearPersistedSession();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clearPersistedSession, persistSessionKey, variant]);
+
+  React.useEffect(() => {
+    if (!persistSessionKey || typeof window === "undefined" || !hydratedSessionRef.current) {
+      return;
+    }
+
+    const sourceReady = !sourceFile || Boolean(sourceSessionDataUrl);
+    const workingReady = !workingFile || Boolean(workingSessionDataUrl);
+    if (!sourceReady || !workingReady) return;
+
+    if (!sourceFile || !sourceSessionDataUrl) {
+      clearPersistedSession();
+      return;
+    }
+
+    const snapshot: ImageToSvgSessionSnapshot = {
+      ...DEFAULT_IMAGE_TO_SVG_SESSION,
+      sourceFile: {
+        name: sourceFile.name,
+        type: sourceFile.type || "image/png",
+        dataUrl: sourceSessionDataUrl,
+      },
+      workingFile:
+        workingFile && workingSessionDataUrl
+          ? {
+              name: workingFile.name,
+              type: workingFile.type || "image/png",
+              dataUrl: workingSessionDataUrl,
+            }
+          : null,
+      traceMode,
+      traceRecipe,
+      thresholdMode,
+      threshold,
+      invert,
+      trimWhitespace,
+      normalizeLevels,
+      turdSize,
+      alphaMax,
+      optTolerance,
+      posterizeSteps,
+      preserveText,
+      backgroundStrategy,
+      outputColor,
+      previewBackground,
+      bedPreviewTarget,
+      assistNote,
+      svgText,
+      stats,
+      traceEngine,
+      branchPreviews,
+      hiddenSvgColors,
+      bgEngine,
+      cleanupEngine,
+      despeckleLevel,
+      diagnostics,
+    };
+
+    writeImageToSvgSession(persistSessionKey, snapshot, window.sessionStorage);
+  }, [
+    alphaMax,
+    assistNote,
+    backgroundStrategy,
+    bedPreviewTarget,
+    bgEngine,
+    branchPreviews,
+    cleanupEngine,
+    clearPersistedSession,
+    despeckleLevel,
+    hiddenSvgColors,
+    invert,
+    normalizeLevels,
+    optTolerance,
+    outputColor,
+    persistSessionKey,
+    posterizeSteps,
+    preserveText,
+    previewBackground,
+    sourceFile,
+    sourceSessionDataUrl,
+    stats,
+    svgText,
+    diagnostics,
+    threshold,
+    thresholdMode,
+    traceEngine,
+    traceMode,
+    traceRecipe,
+    trimWhitespace,
+    turdSize,
+    workingFile,
+    workingSessionDataUrl,
+  ]);
+
+  React.useEffect(() => {
+    if (resetSignal == null) return;
+    if (lastResetSignalRef.current === resetSignal) return;
+    lastResetSignalRef.current = resetSignal;
+    handleClear();
+  }, [handleClear, resetSignal]);
+
+  React.useEffect(() => {
+    if (variant === "panel" && openSignal != null) {
+      setPanelOpen(true);
+    }
+  }, [openSignal, variant]);
+
+  React.useEffect(() => {
+    if (!onPreviewChange) return;
+
+    const previewImageUrl = (() => {
+      switch (bedPreviewTarget) {
+        case "source":
+          return activeRasterPreviewSrc ?? null;
+        case "result":
+          return svgPreviewUrl ?? null;
+        case "thresholdPreview":
+          return thresholdPreviewUrl ?? null;
+        case "colorPreview":
+          return branchPreviews?.colorPreview ?? null;
+        case "textPreview":
+          return branchPreviews?.textPreview ?? null;
+        case "arcTextPreview":
+          return branchPreviews?.arcTextPreview ?? null;
+        case "scriptTextPreview":
+          return branchPreviews?.scriptTextPreview ?? null;
+        case "shapePreview":
+          return branchPreviews?.shapePreview ?? null;
+        case "contourPreview":
+          return branchPreviews?.contourPreview ?? null;
+        default:
+          return null;
+      }
+    })();
+
+    const previewLabel = (() => {
+      if (bedPreviewTarget === "source") return activeRasterLabel;
+      if (bedPreviewTarget === "result") {
+        return traceMode === "posterize" && hiddenSvgColors.length > 0 ? "Filtered SVG Preview" : "SVG Preview";
+      }
+      if (bedPreviewTarget === previewFocusCard.key) return previewFocusCard.label;
+      return branchPreviewCards.find((card) => card.key === bedPreviewTarget)?.label ?? "Raster Review";
+    })();
+
+    onPreviewChange({
+      status: traceStatus,
+      previewTarget: bedPreviewTarget,
+      previewLabel,
+      previewImageUrl,
+      previewSvgText: bedPreviewTarget === "result" ? cleanedSvgText : null,
+      sourceFileName: sourceFile?.name ?? null,
+    });
+
+    return () => {
+      onPreviewChange(null);
+    };
+  }, [
+    activeRasterLabel,
+    activeRasterPreviewSrc,
+    bedPreviewTarget,
+    branchPreviewCards,
+    branchPreviews?.arcTextPreview,
+    branchPreviews?.colorPreview,
+    branchPreviews?.contourPreview,
+    branchPreviews?.scriptTextPreview,
+    branchPreviews?.shapePreview,
+    branchPreviews?.textPreview,
+    cleanedSvgText,
+    hiddenSvgColors.length,
+    onPreviewChange,
+    previewFocusCard.key,
+    previewFocusCard.label,
+    sourceFile?.name,
+    svgPreviewUrl,
+    thresholdPreviewUrl,
+    traceMode,
+    traceStatus,
+  ]);
 
   return (
-    <div className={styles.panel}>
-      <button className={styles.toggle} onClick={() => setOpen((value) => !value)}>
-        <span className={styles.toggleLabel}>Premium Raster to SVG</span>
-        <span className={styles.chevron}>{open ? "▾" : "▸"}</span>
-      </button>
+    <div
+      className={`${styles.panel} ${variant === "page" ? styles.panelPage : ""}`}
+      data-testid={variant === "page" ? "image-to-svg-workflow" : undefined}
+    >
+      {variant === "panel" ? (
+        <button className={styles.toggle} onClick={() => setPanelOpen((value) => !value)}>
+          <span className={styles.toggleLabel}>Image to SVG</span>
+          <span className={styles.chevron}>{isOpen ? "▾" : "▸"}</span>
+        </button>
+      ) : null}
 
-      {open && (
-        <div className={styles.body}>
-          <p className={styles.note}>
-            High-quality PNG/JPEG tracing for logos, line art, and cleaned product graphics. Best results come from clean images or a quick cutout first.
-          </p>
-          <p className={styles.note}>
-            Small text will not survive a low-resolution trace cleanly. If lettering matters, start from the original vector or a much higher-resolution raster.
-          </p>
-          <p className={styles.note}>
-            Detail controls are manual. Adjust the settings, then click the build button to rerun the smart asset pipeline.
-          </p>
-          <p className={styles.note}>
-            {traceMode === "trace"
-              ? "Use the threshold preview to inspect the black/white raster before vector conversion. It is a fast approximation for tuning, not the final branch-separated SVG result."
-              : "Posterized mode does not use the binary threshold preview as its main output. Use the color map and branch previews to judge whether the separation is working."}
-          </p>
+      {isOpen && (
+        <div className={`${styles.body} ${variant === "page" ? styles.bodyPage : ""}`}>
+          {variant === "page" ? (
+            <>
+              <div className={styles.quickChipRow}>
+                <span className={styles.quickChip}>Session autosaves in this browser</span>
+                <span className={styles.quickChip}>Shared library sync is active</span>
+                <span className={styles.quickChip}>Best for product photos and raster logos</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className={styles.note}>
+                High-quality PNG/JPEG tracing for logos, line art, and cleaned product graphics. Best results come from clean images or a quick cutout first.
+              </p>
+              <p className={styles.note}>
+                Small text will not survive a low-resolution trace cleanly. If lettering matters, start from the original vector or a much higher-resolution raster.
+              </p>
+              <p className={styles.note}>
+                Detail controls are manual. Adjust the settings, then click the build button to rerun the smart asset pipeline.
+              </p>
+              <p className={styles.note}>
+                {traceMode === "trace"
+                  ? "Use the threshold preview to inspect the black/white raster before vector conversion. It is a fast approximation for tuning, not the final branch-separated SVG result."
+                  : "Posterized mode does not use the binary threshold preview as its main output. Use the color map and branch previews to judge whether the separation is working."}
+              </p>
+            </>
+          )}
 
           <div className={styles.dropWrap}>
             <FileDropZone
@@ -1544,7 +2107,7 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
                   <span className={styles.fileName}>{sourceFile.name}</span>
                   <span className={styles.fileHint}>
                     {activeFile
-                      ? `Tracing ${activeFile.name}${backgroundStrategy !== "original" ? ` • ${backgroundStrategy}` : ""}${bgEngine ? ` • ${bgEngine}` : ""}`
+                      ? `Tracing ${activeFile.name}${backgroundStrategy !== "original" ? ` • ${backgroundStrategy}` : ""}${cleanupEngine ?? bgEngine ? ` • ${cleanupEngine ?? bgEngine}` : ""}`
                       : "Tracing original raster"}
                   </span>
                 </div>
@@ -1553,14 +2116,85 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
             )}
           </div>
 
+          {variant === "page" ? (
+            <div className={styles.workflowDock} data-testid="image-to-svg-command-bar">
+              <div className={styles.workflowCopy}>
+                <div className={styles.workflowEyebrow}>Current Session</div>
+                <div className={styles.workflowTitle}>{workflowSummary}</div>
+                <p className={styles.workflowDetail}>{workflowDetail}</p>
+              </div>
+              <div className={styles.workflowActions}>
+                <button type="button" className={styles.secondaryBtn} onClick={handleClear} disabled={!sourceFile}>
+                  Clear Session
+                </button>
+                <button
+                  type="button"
+                  className={styles.primaryBtn}
+                  onClick={() => void handleVectorize()}
+                  disabled={!activeFile || traceStatus === "running"}
+                >
+                  {traceStatus === "running"
+                    ? "Tracing…"
+                    : traceMode === "trace"
+                      ? "Build SVG"
+                      : "Build Posterized SVG"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.dockAddBtn}
+                  onClick={() => void handleAddSvg()}
+                  disabled={!cleanedSvgText}
+                >
+                  Save SVG
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {variant === "page" ? (
+            <div className={styles.section}>
+              <div className={styles.sectionTitle}>Quick Tips</div>
+              <div className={styles.tipList}>
+                <p className={styles.tipItem}>Use AI Cutout first for product photos with busy backgrounds.</p>
+                <p className={styles.tipItem}>Vision Assist is for recipe tuning, not final cleanup.</p>
+                <p className={styles.tipItem}>
+                  {traceMode === "trace"
+                    ? "Threshold preview is a tuning pass. The final SVG comes from the trace build."
+                    : "Posterized mode is judged by the color map and branch previews, not the threshold preview."}
+                </p>
+              </div>
+            </div>
+          ) : null}
+
           <div className={styles.buttonRow}>
             <button type="button" className={styles.secondaryBtn} onClick={handleRemoveBackground} disabled={!sourceFile || bgStatus === "running"}>
               {bgStatus === "running" ? "Removing BG…" : workingFile ? "Re-run Cutout" : "AI Cutout"}
             </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              onClick={() => void handleAiCleanup()}
+              disabled={!sourceFile || cleanupStatus === "running"}
+            >
+              {cleanupStatus === "running" ? "Cleaning…" : "AI Cleanup"}
+            </button>
             <button type="button" className={styles.secondaryBtn} onClick={handleResetRaster} disabled={!workingFile}>
               Use Original
             </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              onClick={() => void handleVisionAssist()}
+              disabled={!sourceFile || assistStatus === "running"}
+            >
+              {assistStatus === "running" ? "Vision Assist…" : "Vision Assist"}
+            </button>
           </div>
+          {assistNote && (
+            <p className={styles.helperText}>
+              {assistNote}
+            </p>
+          )}
 
           <div className={styles.section}>
             <div className={styles.sectionTitle}>Trace Recipe</div>
@@ -1639,9 +2273,16 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
               <div className={styles.field}>
                 <div className={styles.labelRow}>
                   <span className={styles.label}>Threshold</span>
-                  <span className={styles.value}>{thresholdMode === "auto" ? "Auto" : threshold}</span>
+                  <span className={styles.value}>
+                    {cutoutSilhouetteModeActive ? "Alpha mask" : thresholdMode === "auto" ? "Auto" : threshold}
+                  </span>
                 </div>
-                <select className={styles.select} value={thresholdMode} onChange={(e) => setThresholdMode(e.target.value as ThresholdMode)}>
+                <select
+                  className={styles.select}
+                  value={thresholdMode}
+                  onChange={(e) => setThresholdMode(e.target.value as ThresholdMode)}
+                  disabled={cutoutSilhouetteModeActive}
+                >
                   <option value="auto">Auto threshold</option>
                   <option value="manual">Manual threshold</option>
                 </select>
@@ -1671,7 +2312,7 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
                 />
               </div>
 
-              {thresholdMode === "manual" && (
+              {thresholdMode === "manual" && !cutoutSilhouetteModeActive && (
                 <div className={`${styles.field} ${styles.fieldWide}`}>
                   <div className={styles.labelRow}>
                     <span className={styles.label}>Manual threshold</span>
@@ -1718,7 +2359,7 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
 
             <div className={styles.checkboxRow}>
               <label className={styles.checkboxLabel}>
-                <input type="checkbox" checked={invert} onChange={(e) => setInvert(e.target.checked)} />
+                <input type="checkbox" checked={invert} onChange={(e) => setInvert(e.target.checked)} disabled={cutoutSilhouetteModeActive} />
                 Invert trace
               </label>
               <label className={styles.checkboxLabel}>
@@ -1726,18 +2367,25 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
                 Trim whitespace
               </label>
               <label className={styles.checkboxLabel}>
-                <input type="checkbox" checked={normalizeLevels} onChange={(e) => setNormalizeLevels(e.target.checked)} />
+                <input type="checkbox" checked={normalizeLevels} onChange={(e) => setNormalizeLevels(e.target.checked)} disabled={cutoutSilhouetteModeActive} />
                 Normalize contrast
               </label>
               <label className={styles.checkboxLabel}>
-                <input type="checkbox" checked={preserveText} onChange={(e) => setPreserveText(e.target.checked)} />
+                <input type="checkbox" checked={preserveText} onChange={(e) => setPreserveText(e.target.checked)} disabled={cutoutSilhouetteModeActive} />
                 Preserve text
               </label>
             </div>
+            {cutoutSilhouetteModeActive && (
+              <p className={styles.helperText}>
+                Cutout silhouette mode is active. Build SVG will follow the cutout alpha mask, so threshold, contrast, and invert controls are paused until you switch back to Original or Text + Cutout.
+              </p>
+            )}
 
-            <button type="button" className={styles.primaryBtn} onClick={() => void handleVectorize()} disabled={!activeFile || traceStatus === "running"}>
-              {traceStatus === "running" ? "Tracing…" : traceMode === "trace" ? "Build Smart B/W SVG" : "Trace to SVG"}
-            </button>
+            {variant === "panel" ? (
+              <button type="button" className={styles.primaryBtn} onClick={() => void handleVectorize()} disabled={!activeFile || traceStatus === "running"}>
+                {traceStatus === "running" ? "Tracing…" : traceMode === "trace" ? "Build Smart B/W SVG" : "Trace to SVG"}
+              </button>
+            ) : null}
 
             {activityState && (
               <div className={styles.activityPanel} role="status" aria-live="polite">
@@ -1869,7 +2517,7 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
                 onClick={() => setBedPreviewTarget(previewFocusCard.key)}
                 disabled={previewFocusCard.disabled}
               >
-                {traceMode === "trace" ? "Threshold" : "Color Map"}
+                {traceMode === "trace" ? (cutoutSilhouetteModeActive ? "Silhouette" : "Threshold") : "Color Map"}
               </button>
             </div>
             <div className={styles.segmentedTriple}>
@@ -1922,9 +2570,11 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
           <div className={styles.statusRow}>
             <span className={traceStatus === "done" ? styles.statusSuccess : traceStatus === "error" ? styles.statusError : undefined}>
               {traceStatus === "done"
-                ? `Ready${traceEngine === "asset-pipeline" ? " • Smart trace" : ""}${stats ? ` • ${stats.pathCount} paths • ${Math.round(stats.width)}×${Math.round(stats.height)}` : ""}${cleanedSvgResult && cleanedSvgResult.removedPathCount > 0 ? ` • ${cleanedSvgResult.removedPathCount} specks removed` : ""}`
+                ? `Ready${traceEngine === "asset-pipeline" ? " • Smart trace" : cutoutSilhouetteModeActive ? " • Silhouette trace" : ""}${stats ? ` • ${stats.pathCount} paths • ${Math.round(stats.width)}×${Math.round(stats.height)}` : ""}${cleanedSvgResult && cleanedSvgResult.removedPathCount > 0 ? ` • ${cleanedSvgResult.removedPathCount} specks removed` : ""}`
                 : traceStatus === "running"
                   ? "Vectorizing…"
+                  : cutoutSilhouetteModeActive
+                    ? `Cutout silhouette active${bgEngine ? ` • ${bgEngine}` : ""}`
                   : backgroundStrategy === "hybrid" && hybridFile
                     ? `Hybrid source active${bgEngine ? ` • ${bgEngine}` : ""}`
                     : backgroundStrategy === "cutout" && workingFile
@@ -1933,9 +2583,15 @@ export function RasterToSvgPanel({ onAddAsset, openSignal = 0, onPreviewChange }
                         ? `Using original • cutout ready${bgEngine ? ` • ${bgEngine}` : ""}`
                     : "Awaiting trace"}
             </span>
-            <button type="button" className={styles.addBtn} onClick={handleAddSvg} disabled={!cleanedSvgText}>
-              Add SVG to Library
-            </button>
+            {variant === "panel" ? (
+              <button type="button" className={styles.addBtn} onClick={() => void handleAddSvg()} disabled={!cleanedSvgText}>
+                Add SVG to Library
+              </button>
+            ) : (
+              <span className={styles.statusHint}>
+                {cleanedSvgText ? "Save SVG stays pinned at the top while you scroll." : "Build the SVG to unlock saving."}
+              </span>
+            )}
           </div>
 
           {traceError && <p className={styles.errorText}>{traceError}</p>}

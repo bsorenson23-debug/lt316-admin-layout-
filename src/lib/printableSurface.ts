@@ -142,6 +142,12 @@ export function buildPrintableSurfaceResolution(
   const detectedRingBottomMm = isFiniteNumber(args.silverBandBottomFromOverallMm)
     ? args.silverBandBottomFromOverallMm ?? null
     : (isFiniteNumber(args.detection?.rimRingBottomFromOverallMm) ? args.detection?.rimRingBottomFromOverallMm ?? null : null);
+  const explicitRingBottomMm = isFiniteNumber(args.silverBandBottomFromOverallMm)
+    ? args.silverBandBottomFromOverallMm ?? null
+    : null;
+  const detectedRingBottomFromPhotoMm = isFiniteNumber(args.detection?.rimRingBottomFromOverallMm)
+    ? args.detection?.rimRingBottomFromOverallMm ?? null
+    : null;
   const detectedLidSeamMm = isFiniteNumber(args.lidSeamFromOverallMm)
     ? args.lidSeamFromOverallMm ?? null
     : (isFiniteNumber(args.detection?.lidSeamFromOverallMm) ? args.detection?.lidSeamFromOverallMm ?? null : null);
@@ -171,11 +177,24 @@ export function buildPrintableSurfaceResolution(
     : isFiniteNumber(args.baseBandStartMm)
       ? "base-band"
       : "body-bottom-fallback";
+  const corroboratedByExplicitRing =
+    explicitRingBottomMm != null &&
+    detectedRingBottomFromPhotoMm != null &&
+    Math.abs(explicitRingBottomMm - detectedRingBottomFromPhotoMm) <= Math.max(1.5, bodyHeightMm * 0.015);
   const topConfidence = round2(
     hasManualTopOverride
       ? 1
       : detectedRingBottomMm != null
-        ? Math.max(0.42, detectionConfidence || 0.72)
+        ? explicitRingBottomMm != null
+          ? Math.max(
+            corroboratedByExplicitRing
+              ? 0.82
+              : 0.72,
+            detectionConfidence || 0.72,
+          )
+          : corroboratedByExplicitRing
+          ? Math.max(0.72, detectionConfidence || 0.72)
+          : Math.max(0.42, detectionConfidence || 0.72)
         : 0.32,
   );
   const bottomConfidence = round2(

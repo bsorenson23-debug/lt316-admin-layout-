@@ -45,8 +45,13 @@ next-env.d.ts
 .localhost3000.out.log
 dev-server.err.log
 dev-server.out.log
+.tmp-next-*.err.log
+.tmp-next-*.out.log
 .next-dev.pid
+codex-bodyref-dev*.log
 .playwright-browsers/
+/test-results/
+/\.codex-temp/
 
 # editor
 .vscode/
@@ -58,6 +63,7 @@ dev-server.out.log
 /inkscape-extract/
 /inkscape-*.log
 /tmp-export-latest.svg
+tmp-smart-lookup*.json
 /.tmp-diag.ts
 /-
 /dummy
@@ -68,3 +74,4 @@ dev-server.out.log
 /storage/pipeline-jobs/*
 !/storage/pipeline-jobs/.gitkeep
 /storage/svg-library/
+/storage/smart-template-lookup-cache/

@@ -35,6 +35,7 @@ import { generateOverlayCanvas } from "@/lib/overlayGenerator";
 import { generateTumblerSchematic } from "@/lib/generateTumblerSchematic";
 import { renderCurvedItems } from "@/utils/curvedItemsRenderer";
 import { getTumblerWrapLayout, getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
+import type { RasterToSvgPreviewState } from "./RasterToSvgPanel";
 import styles from "./LaserBedWorkspace.module.css";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -155,17 +156,8 @@ interface Props {
   placedItems: PlacedItem[];
   selectedItemId: string | null;
   placementAsset: SvgAsset | null;
-  svgDoctorPreview?: {
-    sourceFileName: string | null;
-    previewSvgText: string | null;
-    previewFile: File | null;
-    status: "idle" | "running" | "done" | "error";
-    previewImageUrl?: string | null;
-    previewLabel?: string | null;
-    previewBackground?: "light" | "dark" | "checker";
-    previewTarget?: string | null;
-  } | null;
   isPlacementArmed: boolean;
+  svgDoctorPreview?: RasterToSvgPreviewState | null;
   framePreview?: FramePreviewProp | null;
   onWorkspaceModeChange?: (mode: WorkspaceMode) => void;
   tumblerViewMode?: "grid" | "3d-placement";
@@ -381,23 +373,6 @@ function useLoadOverlayImage(src: string | null | undefined): HTMLImageElement |
   return processed;
 }
 
-function createCheckerCanvas(): HTMLCanvasElement | null {
-  if (typeof document === "undefined") return null;
-  const canvas = document.createElement("canvas");
-  canvas.width = 24;
-  canvas.height = 24;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-
-  context.fillStyle = "#f3f4f6";
-  context.fillRect(0, 0, 24, 24);
-  context.fillStyle = "#d9dde3";
-  context.fillRect(0, 0, 12, 12);
-  context.fillRect(12, 12, 12, 12);
-  return canvas;
-}
-
-
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function LaserBedWorkspace({
@@ -405,8 +380,8 @@ export function LaserBedWorkspace({
   placedItems,
   selectedItemId,
   placementAsset,
-  svgDoctorPreview = null,
   isPlacementArmed,
+  svgDoctorPreview,
   framePreview,
   onWorkspaceModeChange,
   tumblerViewMode = "grid",
@@ -463,7 +438,6 @@ export function LaserBedWorkspace({
   // Image caches
   const [imageCache, setImageCache] = useState<Map<string, HTMLImageElement>>(new Map());
   const mockupImg = useLoadImage(mockupConfig?.src ?? null);
-  const [svgDoctorRasterSrc, setSvgDoctorRasterSrc] = useState<string | null>(null);
 
   // Template product overlay — auto-strips dark backgrounds (photo mode only)
   const templatePhotoImg = useLoadOverlayImage(overlayMode === "photo" ? (templateOverlayUrl ?? null) : null);
@@ -559,27 +533,6 @@ export function LaserBedWorkspace({
     return svgToDataUrl(buildFlatBedItemSvg(flatBedItemOverlay, bedPxW, bedPxH, basePxPerMm));
   }, [flatBedItemOverlay, bedPxW, bedPxH, basePxPerMm]);
   const flatBedImg = useLoadImage(flatBedSvgSrc);
-  const svgDoctorVectorSrc = useMemo(
-    () => (svgDoctorPreview?.previewSvgText ? svgToDataUrl(svgDoctorPreview.previewSvgText) : null),
-    [svgDoctorPreview],
-  );
-  const svgDoctorExternalPreviewImg = useLoadImage(svgDoctorPreview?.previewImageUrl ?? null);
-  const svgDoctorVectorImg = useLoadImage(svgDoctorVectorSrc);
-  const svgDoctorRasterImg = useLoadImage(svgDoctorRasterSrc);
-  const svgDoctorCheckerCanvas = useMemo(() => createCheckerCanvas(), []);
-
-  useEffect(() => {
-    if (!svgDoctorPreview?.previewFile) {
-      const frameId = window.requestAnimationFrame(() => setSvgDoctorRasterSrc(null));
-      return () => window.cancelAnimationFrame(frameId);
-    }
-    const url = URL.createObjectURL(svgDoctorPreview.previewFile);
-    const frameId = window.requestAnimationFrame(() => setSvgDoctorRasterSrc(url));
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      URL.revokeObjectURL(url);
-    };
-  }, [svgDoctorPreview]);
 
   // ── ResizeObserver ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1202,25 +1155,7 @@ export function LaserBedWorkspace({
   const selectedItem = placedItems.find(i => i.id === selectedItemId) ?? null;
 
   // ── Empty bed placeholder text ────────────────────────────────────────────
-  const svgDoctorPreviewImg = svgDoctorExternalPreviewImg ?? svgDoctorVectorImg ?? svgDoctorRasterImg;
-  const svgDoctorPreviewLayout = useMemo(() => {
-    if (!svgDoctorPreviewImg) return null;
-    const maxW = bedPxW * 0.62;
-    const maxH = bedPxH * 0.62;
-    const naturalW = Math.max(1, svgDoctorPreviewImg.naturalWidth || svgDoctorPreviewImg.width || 1);
-    const naturalH = Math.max(1, svgDoctorPreviewImg.naturalHeight || svgDoctorPreviewImg.height || 1);
-    const scale = Math.min(maxW / naturalW, maxH / naturalH);
-    const width = naturalW * scale;
-    const height = naturalH * scale;
-    return {
-      x: (bedPxW - width) / 2,
-      y: (bedPxH - height) / 2,
-      width,
-      height,
-    };
-  }, [bedPxH, bedPxW, svgDoctorPreviewImg]);
-
-  const showPlaceholder = placedItems.length === 0 && !flatBedItemOverlay && !mockupConfig && !svgDoctorPreviewLayout;
+  const showPlaceholder = placedItems.length === 0 && !flatBedItemOverlay && !mockupConfig;
 
   // ── Zoom reset ────────────────────────────────────────────────────────────
   const resetView = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, []);
@@ -1451,97 +1386,6 @@ export function LaserBedWorkspace({
               />
             )}
 
-            {svgDoctorPreviewLayout && svgDoctorPreviewImg && (
-              <Group listening={false}>
-                <Rect
-                  x={svgDoctorPreviewLayout.x - 16}
-                  y={svgDoctorPreviewLayout.y - 34}
-                  width={svgDoctorPreviewLayout.width + 32}
-                  height={svgDoctorPreviewLayout.height + 52}
-                  cornerRadius={10}
-                  fill="rgba(10, 14, 18, 0.72)"
-                  stroke="rgba(255, 255, 255, 0.22)"
-                  strokeWidth={1}
-                />
-                <Rect
-                  x={svgDoctorPreviewLayout.x}
-                  y={svgDoctorPreviewLayout.y}
-                  width={svgDoctorPreviewLayout.width}
-                  height={svgDoctorPreviewLayout.height}
-                  cornerRadius={6}
-                  fill={
-                    svgDoctorPreview?.previewBackground === "dark"
-                      ? "rgba(24, 28, 33, 0.96)"
-                      : svgDoctorPreview?.previewBackground === "checker"
-                        ? "rgba(255, 255, 255, 0.94)"
-                        : "rgba(248, 250, 252, 0.96)"
-                  }
-                  stroke="rgba(255, 255, 255, 0.34)"
-                  strokeWidth={1}
-                />
-                <Rect
-                  x={svgDoctorPreviewLayout.x + 10}
-                  y={svgDoctorPreviewLayout.y + 10}
-                  width={svgDoctorPreviewLayout.width - 20}
-                  height={svgDoctorPreviewLayout.height - 20}
-                  cornerRadius={4}
-                  fill={
-                    svgDoctorPreview?.previewBackground === "dark"
-                      ? "rgba(12, 16, 20, 0.9)"
-                      : svgDoctorPreview?.previewBackground === "checker"
-                        ? "rgba(255, 255, 255, 0)"
-                        : "rgba(229, 231, 235, 0.65)"
-                  }
-                />
-                {svgDoctorPreview?.previewBackground === "checker" && svgDoctorCheckerCanvas ? (
-                  <KonvaImage
-                    image={svgDoctorCheckerCanvas}
-                    x={svgDoctorPreviewLayout.x + 10}
-                    y={svgDoctorPreviewLayout.y + 10}
-                    width={svgDoctorPreviewLayout.width - 20}
-                    height={svgDoctorPreviewLayout.height - 20}
-                    opacity={0.98}
-                  />
-                ) : null}
-                <Text
-                  x={svgDoctorPreviewLayout.x}
-                  y={svgDoctorPreviewLayout.y - 22}
-                  width={svgDoctorPreviewLayout.width}
-                  align="center"
-                  text={
-                    `${svgDoctorPreview?.previewLabel ?? (svgDoctorPreview?.previewSvgText ? "SVG Doctor Preview" : "Raster Review")} • ${svgDoctorPreview?.sourceFileName ?? "trace"}`
-                  }
-                  fontSize={11}
-                  fontStyle="bold"
-                  fontFamily="system-ui, sans-serif"
-                  fill="rgba(255,255,255,0.78)"
-                />
-                <KonvaImage
-                  image={svgDoctorPreviewImg}
-                  x={svgDoctorPreviewLayout.x}
-                  y={svgDoctorPreviewLayout.y}
-                  width={svgDoctorPreviewLayout.width}
-                  height={svgDoctorPreviewLayout.height}
-                  opacity={1}
-                />
-                <Text
-                  x={svgDoctorPreviewLayout.x}
-                  y={svgDoctorPreviewLayout.y + svgDoctorPreviewLayout.height + 8}
-                  width={svgDoctorPreviewLayout.width}
-                  align="center"
-                  text={
-                    svgDoctorPreview?.status === "running"
-                      ? "Tracing in progress"
-                      : svgDoctorPreview?.previewTarget === "result"
-                        ? "Trace complete • review directly on the bed"
-                        : "Inspecting the selected source or branch on the bed"
-                  }
-                  fontSize={10}
-                  fontFamily="system-ui, sans-serif"
-                  fill="rgba(255,255,255,0.58)"
-                />
-              </Group>
-            )}
 
             {/* Grid */}
             {gridLines}

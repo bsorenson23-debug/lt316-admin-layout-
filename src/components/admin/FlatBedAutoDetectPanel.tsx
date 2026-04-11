@@ -8,6 +8,7 @@ import {
   type FlatBedItem,
   type FlatBedCategory,
 } from "@/data/flatBedItems";
+import { removeBackgroundWithFallback } from "@/lib/removeBg";
 import type { FlatBedAutoDetectResponse, FlatBedConfidenceLevel } from "@/server/flatbed/runFlatBedAutoDetect";
 import type { BedMockupConfig } from "./LaserBedWorkspace";
 import { FileDropZone } from "./shared/FileDropZone";
@@ -141,12 +142,11 @@ export function FlatBedAutoDetectPanel({ onApplyItem, onSetMockup, onClearItemOv
     setBiRefNetStatus("running");
     setBiRefNetError(null);
     try {
-      const fd = new FormData();
-      fd.set("image", selectedImage);
-      const res = await fetch("/api/admin/image/remove-bg", { method: "POST", body: fd });
-      const data = await res.json() as { dataUrl?: string; error?: string };
-      if (!res.ok || !data.dataUrl) throw new Error(data.error ?? "BiRefNet failed");
-      setBgRemovedSrc(data.dataUrl);
+      const result = await removeBackgroundWithFallback({
+        file: selectedImage,
+        preferServer: true,
+      });
+      setBgRemovedSrc(result.dataUrl);
       setBiRefNetStatus("done");
       setBgRemovalStatus("done"); // share the same result slot
     } catch (err) {

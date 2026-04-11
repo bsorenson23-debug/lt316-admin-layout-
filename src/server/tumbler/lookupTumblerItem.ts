@@ -213,11 +213,20 @@ function inferModel(text: string, brand: string | null, capacityOz: number | nul
   const normalized = normalizeText(text);
   if (brand === "Stanley") {
     if (
+      normalized.includes("quencher") ||
+      normalized.includes("flowstate") ||
+      normalized.includes("h2 0") ||
+      normalized.includes("h2o") ||
+      normalized.includes("h2.0")
+    ) {
+      return capacityOz ? `Quencher H2.0 ${capacityOz}oz` : "Quencher H2.0";
+    }
+    if (
       normalized.includes("protour") ||
       normalized.includes("pro tour") ||
       (
         normalized.includes("travel tumbler") &&
-        (normalized.includes("quencher") || normalized.includes("flip straw"))
+        normalized.includes("flip straw")
       )
     ) {
       return capacityOz ? `ProTour Travel Tumbler ${capacityOz}oz` : "ProTour Travel Tumbler";
@@ -225,14 +234,42 @@ function inferModel(text: string, brand: string | null, capacityOz: number | nul
     if (normalized.includes("iceflow")) {
       return capacityOz ? `IceFlow Flip Straw ${capacityOz}oz` : "IceFlow Flip Straw";
     }
-    if (normalized.includes("quencher")) {
-      return capacityOz ? `Quencher H2.0 ${capacityOz}oz` : "Quencher H2.0";
-    }
   }
   if (brand === "YETI" && normalized.includes("rambler")) {
     return capacityOz ? `Rambler ${capacityOz}oz` : "Rambler";
   }
   return null;
+}
+
+function inferStanleyFamilySignal(args: {
+  lookupText: string;
+  analyses: ProductImageCandidateAnalysis[];
+}): "quencher" | "protour" | "iceflow" | null {
+  const normalized = normalizeText(
+    [args.lookupText, ...args.analyses.map((analysis) => analysis.url)].join(" ")
+  );
+  if (/(quencher|flowstate|h2 0|h2o|h2\.0)/.test(normalized)) return "quencher";
+  if (/(protour|pro tour)/.test(normalized)) return "protour";
+  if (/iceflow/.test(normalized)) return "iceflow";
+  return null;
+}
+
+function resolveStanleyProfileFromSignal(args: {
+  family: "quencher" | "protour" | "iceflow";
+  capacityOz: number | null;
+}) {
+  if (args.family === "protour") {
+    return getTumblerProfileById("stanley-protour-40");
+  }
+
+  if (args.family === "iceflow") {
+    return null;
+  }
+
+  if (args.capacityOz === 20) return getTumblerProfileById("stanley-quencher-20");
+  if (args.capacityOz === 30) return getTumblerProfileById("stanley-quencher-30");
+  if (args.capacityOz === 64) return getTumblerProfileById("stanley-quencher-64");
+  return getTumblerProfileById("stanley-quencher-40");
 }
 
 function extractMetaContent(html: string, metaName: string): string | null {
@@ -1088,17 +1125,29 @@ function buildProductReferenceSet(args: {
   if (args.analyses.length === 0) return null;
 
   const images = args.analyses.map(toProductReferenceImage);
+  const scoreFrontReferenceCandidate = (candidate: ProductImageCandidateAnalysis): number => {
+    let score = candidate.confidence;
+    if (candidate.logoDetected) score += 1.8;
+    if (candidate.viewClass === "front-3q") score += 2.4;
+    else if (candidate.viewClass === "front") score += 1.6;
+    else if (candidate.viewClass === "handle-side") score += 0.4;
+
+    if (candidate.handleVisible && candidate.handleSide === "right") score += 2.2;
+    else if (candidate.handleVisible && candidate.handleSide === "left") score -= 0.8;
+
+    if (candidate.approxAzimuthDeg === 45) score += 0.5;
+    else if (candidate.approxAzimuthDeg === 0) score += 0.2;
+
+    return score;
+  };
   const canonicalFront = [...args.analyses]
     .filter((candidate) => candidate.viewClass !== "detail" && candidate.viewClass !== "lifestyle")
-    .sort((left, right) => (
-      ((right.logoDetected ? 2 : 0) + (right.viewClass === "front" ? 1.4 : right.viewClass === "front-3q" ? 1.2 : 0) + right.confidence)
-      -
-      ((left.logoDetected ? 2 : 0) + (left.viewClass === "front" ? 1.4 : left.viewClass === "front-3q" ? 1.2 : 0) + left.confidence)
-    ))
+    .sort((left, right) => scoreFrontReferenceCandidate(right) - scoreFrontReferenceCandidate(left))
     .find((candidate) => (
-      candidate.logoDetected ||
+      (candidate.handleVisible && candidate.handleSide === "right") ||
       candidate.viewClass === "front" ||
-      candidate.viewClass === "front-3q"
+      candidate.viewClass === "front-3q" ||
+      candidate.logoDetected
     )) ?? args.analyses[0];
 
   const rankedBackCandidates = [...args.analyses]
@@ -1411,6 +1460,12 @@ async function isUsableTumblerGlb(glbPath: string): Promise<boolean> {
     return false;
   }
 
+  // Older generated tumbler traces can still carry flat-item node names.
+  // Prefer the model path intent for drinkware-family generated assets.
+  if (/models\/generated\/.*(?:tumbler|quencher|iceflow|protour)/i.test(glbPath)) {
+    return true;
+  }
+
   const normalized = glbPath.replace(/^\/+/, "").replace(/\//g, path.sep);
   const absolute = path.join(process.cwd(), "public", normalized);
 
@@ -1668,9 +1723,25 @@ export async function lookupTumblerItem(args: {
     }
   }
 
-  const matchedProfile = matchProfileFromText(lookupText);
+  let matchedProfile = matchProfileFromText(lookupText);
   const capacityOz = parseCapacityOz(lookupText) ?? matchedProfile?.capacityOz ?? null;
   const brand = inferBrand(lookupText) ?? matchedProfile?.brand ?? null;
+  if (brand === "Stanley") {
+    const stanleyFamilySignal = inferStanleyFamilySignal({
+      lookupText,
+      analyses: selectedImageAnalyses,
+    });
+    if (stanleyFamilySignal) {
+      const familyProfile = resolveStanleyProfileFromSignal({
+        family: stanleyFamilySignal,
+        capacityOz,
+      });
+      if (familyProfile && familyProfile.id !== matchedProfile?.id) {
+        matchedProfile = familyProfile;
+        notes.push(`Adjusted Stanley family match to ${familyProfile.label} from product-page signals.`);
+      }
+    }
+  }
   const model = inferModel(lookupText, brand, capacityOz) ?? matchedProfile?.model ?? title;
   const productReferenceSet = buildProductReferenceSet({
     lookupText,

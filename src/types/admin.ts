@@ -76,6 +76,40 @@ export function computeTumblerWrapWidthMm(diameterMm: number): number {
   return Math.PI * diameterMm;
 }
 
+export function resolveTumblerWorkspaceHeightMm(config: Pick<
+  BedConfig,
+  "tumblerPrintableHeightMm" | "tumblerUsableHeightMm" | "tumblerOverallHeightMm" | "tumblerTemplateHeightMm"
+>): number {
+  if (Number.isFinite(config.tumblerPrintableHeightMm) && (config.tumblerPrintableHeightMm ?? 0) > 0) {
+    return config.tumblerPrintableHeightMm ?? 0;
+  }
+  if (Number.isFinite(config.tumblerUsableHeightMm) && (config.tumblerUsableHeightMm ?? 0) > 0) {
+    return config.tumblerUsableHeightMm ?? 0;
+  }
+  if (Number.isFinite(config.tumblerOverallHeightMm) && (config.tumblerOverallHeightMm ?? 0) > 0) {
+    return config.tumblerOverallHeightMm ?? 0;
+  }
+  if (Number.isFinite(config.tumblerTemplateHeightMm) && (config.tumblerTemplateHeightMm ?? 0) > 0) {
+    return config.tumblerTemplateHeightMm ?? 0;
+  }
+  return DEFAULT_BED_CONFIG.tumblerPrintableHeightMm;
+}
+
+export function resolveTumblerUsableHeightMm(config: Pick<
+  BedConfig,
+  "tumblerUsableHeightMm" | "tumblerPrintableHeightMm" | "tumblerOverallHeightMm" | "tumblerTemplateHeightMm"
+>): number {
+  if (Number.isFinite(config.tumblerUsableHeightMm) && (config.tumblerUsableHeightMm ?? 0) > 0) {
+    return config.tumblerUsableHeightMm ?? 0;
+  }
+  return resolveTumblerWorkspaceHeightMm({
+    tumblerPrintableHeightMm: config.tumblerPrintableHeightMm,
+    tumblerUsableHeightMm: config.tumblerUsableHeightMm,
+    tumblerOverallHeightMm: config.tumblerOverallHeightMm,
+    tumblerTemplateHeightMm: config.tumblerTemplateHeightMm,
+  });
+}
+
 export function normalizeBedConfig(config: BedConfig): BedConfig {
   const isTumbler = config.workspaceMode === "tumbler-wrap";
   let width = config.flatWidth;
@@ -110,17 +144,12 @@ export function normalizeBedConfig(config: BedConfig): BedConfig {
     }
 
     // Height should represent active printable workspace height.
-    if (Number.isFinite(config.tumblerPrintableHeightMm) && config.tumblerPrintableHeightMm > 0) {
-      height = config.tumblerPrintableHeightMm;
-    } else if (Number.isFinite(config.tumblerUsableHeightMm)) {
-      height = config.tumblerUsableHeightMm ?? config.tumblerPrintableHeightMm;
-    } else if (Number.isFinite(config.tumblerOverallHeightMm)) {
-      height = config.tumblerOverallHeightMm ?? config.tumblerPrintableHeightMm;
-    } else if (templateHeight > 0) {
-      height = templateHeight;
-    } else {
-      height = DEFAULT_BED_CONFIG.tumblerPrintableHeightMm;
-    }
+    height = resolveTumblerWorkspaceHeightMm({
+      tumblerPrintableHeightMm: config.tumblerPrintableHeightMm,
+      tumblerUsableHeightMm: config.tumblerUsableHeightMm,
+      tumblerOverallHeightMm: config.tumblerOverallHeightMm,
+      tumblerTemplateHeightMm: templateHeight,
+    });
   }
 
   return {

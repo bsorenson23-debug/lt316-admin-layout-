@@ -3,6 +3,13 @@
   background: var(--bg-panel);
 }
 
+.panelPage {
+  border: 1px solid var(--border-normal);
+  border-bottom: none;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
 .toggle {
   width: 100%;
   display: flex;
@@ -38,6 +45,82 @@
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px 14px;
+}
+
+.bodyPage {
+  gap: 14px;
+  padding: 20px;
+}
+
+.quickChipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quickChip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-normal);
+  border-radius: 999px;
+  background: var(--bg-input);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.workflowDock {
+  position: sticky;
+  top: 16px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-panel) 92%, var(--bg-base));
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--bg-base) 78%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.workflowCopy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workflowEyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.workflowTitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.workflowDetail {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.workflowActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .note {
@@ -84,7 +167,8 @@
 .clearBtn,
 .secondaryBtn,
 .primaryBtn,
-.addBtn {
+.addBtn,
+.dockAddBtn {
   border-radius: var(--radius);
   font-family: inherit;
   cursor: pointer;
@@ -116,7 +200,8 @@
 }
 
 .primaryBtn,
-.addBtn {
+.addBtn,
+.dockAddBtn {
   border: 1px solid var(--accent-dark);
   background: var(--accent);
   color: var(--text-primary);
@@ -133,14 +218,21 @@
   padding: 9px 12px;
 }
 
+.dockAddBtn {
+  min-width: 138px;
+  padding: 8px 14px;
+}
+
 .primaryBtn:hover:not(:disabled),
-.addBtn:hover:not(:disabled) {
+.addBtn:hover:not(:disabled),
+.dockAddBtn:hover:not(:disabled) {
   background: var(--accent-hover);
 }
 
 .primaryBtn:disabled,
 .secondaryBtn:disabled,
 .addBtn:disabled,
+.dockAddBtn:disabled,
 .clearBtn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -148,8 +240,25 @@
 
 .buttonRow {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+}
+
+.tipList {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tipItem {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 
 .section {
@@ -516,8 +625,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+.statusHint {
+  font-size: 10px;
+  color: var(--text-dim);
 }
 
 .statusSuccess {
@@ -544,14 +659,46 @@
   }
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 980px) {
   .previewGrid,
   .colorToggleGrid,
   .branchGrid,
   .fieldGrid,
   .buttonRow,
   .recipeGrid,
-  .segmentedTriple {
+  .segmentedTriple,
+  .tipList {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 1201px) {
+  .bodyPage .previewGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .bodyPage .branchGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .bodyPage .recipeGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .workflowDock {
+    position: static;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .workflowActions {
+    justify-content: stretch;
+  }
+
+  .workflowActions > * {
+    flex: 1 1 100%;
   }
 }

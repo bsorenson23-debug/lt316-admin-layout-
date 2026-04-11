@@ -56,6 +56,56 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.readinessBadgeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.readinessList {
+  display: grid;
+  gap: 10px;
+}
+
+.readinessItem {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.readinessItemHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.readinessItemLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.readinessItemDetail {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.readinessBlocker {
+  padding: 10px 12px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 /* ── Field rows ────────────────────────────────────────────────── */
 .fieldRow {
   display: flex;
@@ -146,9 +196,14 @@
   width: 80px;
   height: 80px;
   border-radius: var(--radius-sm);
-  object-fit: cover;
+  object-fit: contain;
   border: 1px solid var(--border-normal);
-  background: var(--bg-base);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, white 96%, var(--accent) 4%) 0%,
+      color-mix(in srgb, white 92%, var(--accent) 8%) 100%
+    );
 }
 
 .thumbRow {
@@ -205,6 +260,23 @@
   font-size: 10px;
   color: var(--text-dim);
   line-height: 1.45;
+}
+
+.externalToolNotice {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.externalToolLink {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.externalToolLink:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
 }
 
 .lookupResetBtn {
@@ -658,6 +730,86 @@
   background: var(--warning-bg);
   border: 1px solid var(--warning-border);
   font-size: 12px;
+  line-height: 1.45;
+  color: var(--warning);
+}
+
+.bodyReferenceSourceCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  border: 1px solid var(--border-normal);
+}
+
+.bodyReferenceSourceHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bodyReferenceSourceTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.bodyReferenceSourceHint {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.bodyReferenceSourceToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 4px;
+  border: 1px solid var(--border-normal);
+  border-radius: 999px;
+  background: var(--bg-input);
+}
+
+.bodyReferenceSourceButton {
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.bodyReferenceSourceButton:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.bodyReferenceSourceButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.bodyReferenceSourceButtonActive {
+  background: var(--accent-dark);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.bodyReferenceSourceNote {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.bodyReferenceSourceWarning {
+  font-size: 10px;
   line-height: 1.45;
   color: var(--warning);
 }

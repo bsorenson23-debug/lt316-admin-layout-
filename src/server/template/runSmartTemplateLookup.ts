@@ -6,8 +6,26 @@ import {
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
 import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
 import { deriveEngravableZoneFromFitDebug } from "@/lib/engravableDimensions";
+import {
+  createTemplatePipelineDiagnostics,
+  fingerprintBytes,
+  fingerprintJson,
+  fingerprintText,
+  mergeTemplatePipelineDiagnostics,
+  upsertTemplatePipelineStage,
+  updateTemplatePipelineInputFingerprints,
+} from "@/lib/templatePipelineDiagnostics";
 import { lookupFlatItem } from "@/server/flatbed/lookupFlatItem";
 import { runFlatBedAutoDetect } from "@/server/flatbed/runFlatBedAutoDetect";
+import {
+  SMART_TEMPLATE_LOOKUP_CACHE_VERSION,
+  buildSmartTemplateLookupImageCacheKey,
+  buildSmartTemplateLookupResultCacheKey,
+  buildSmartTemplateLookupTextCacheKey,
+  localPublicAssetExists,
+  readSmartTemplateLookupCache,
+  writeSmartTemplateLookupCache,
+} from "@/server/template/smartTemplateLookupCache";
 import { ensureGeneratedTumblerGlb } from "@/server/tumbler/generateTumblerModel";
 import { lookupTumblerItem } from "@/server/tumbler/lookupTumblerItem";
 import { runTumblerAutoSize } from "@/server/tumbler/runTumblerAutoSize";
@@ -28,6 +46,16 @@ export interface RunSmartTemplateLookupInput {
   fileName?: string;
   laserTypeOverride?: ProductTemplate["laserType"] | null;
   finishTypeOverride?: TumblerFinish | null;
+}
+
+interface SmartTemplateLookupTextCachePayload {
+  tumblerLookup: Awaited<ReturnType<typeof lookupTumblerItem>> | null;
+  flatLookup: Awaited<ReturnType<typeof lookupFlatItem>> | null;
+}
+
+interface SmartTemplateLookupImageCachePayload {
+  tumblerAuto: TumblerAutoSizeResponse | null;
+  flatAuto: FlatBedAutoDetectResponse | null;
 }
 
 function round2(value: number): number {
@@ -364,6 +392,25 @@ function uniqueList(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === "string" && value.trim().length > 0))];
 }
 
+async function canUseCachedLookupResponse(result: SmartTemplateLookupResponse): Promise<boolean> {
+  const glbPath = result.templateDraft.glbPath ?? null;
+  if (!glbPath || !glbPath.startsWith("/models/")) return true;
+  return localPublicAssetExists(glbPath);
+}
+
+function withLocalCacheNote(result: SmartTemplateLookupResponse): SmartTemplateLookupResponse {
+  return {
+    ...result,
+    notes: uniqueList(["Loaded from local smart lookup cache.", ...result.notes]),
+  };
+}
+
+function smartLookupStatus(result: SmartTemplateLookupResponse): "ready" | "warning" | "action" {
+  if (result.category === "unknown") return "action";
+  if (result.reviewRequired || result.warnings.length > 0) return "warning";
+  return "ready";
+}
+
 function chooseCategory(args: {
   lookupInput: string;
   tumblerLookup: Awaited<ReturnType<typeof lookupTumblerItem>> | null;
@@ -472,6 +519,16 @@ function inferTumblerBackPhotoLabel(result: Awaited<ReturnType<typeof lookupTumb
   return source.replace("product photo", "opposite-side photo");
 }
 
+function resolveCanonicalFrontPhotoUrl(result: Awaited<ReturnType<typeof lookupTumblerItem>> | null): string | null {
+  const canonicalFrontImageId =
+    result?.productReferenceSet?.canonicalViewSelection?.canonicalFrontImageId ??
+    result?.productReferenceSet?.canonicalFrontImageId;
+  if (!canonicalFrontImageId) return result?.imageUrl ?? null;
+  const canonicalFront =
+    result?.productReferenceSet?.images.find((image) => image.id === canonicalFrontImageId) ?? null;
+  return canonicalFront?.url ?? result?.imageUrl ?? null;
+}
+
 function resolveStrictBackPhotoUrl(result: Awaited<ReturnType<typeof lookupTumblerItem>> | null): string | null {
   const selection = result?.productReferenceSet?.canonicalViewSelection;
   if (!result?.backImageUrl) return null;
@@ -556,6 +613,7 @@ function hasResolvedDrinkwareDimensions(args: {
 export async function runSmartTemplateLookup(
   input: RunSmartTemplateLookupInput,
 ): Promise<SmartTemplateLookupResponse> {
+  const startedAtMs = Date.now();
   const trimmedLookupInput = input.lookupInput?.trim() ?? "";
   const hasLookupInput = trimmedLookupInput.length > 0;
   const hasImage = Boolean(input.imageBytes && input.mimeType && input.fileName);
@@ -564,24 +622,170 @@ export async function runSmartTemplateLookup(
     throw new Error("Provide a product URL, search text, or an image.");
   }
 
-  let tumblerLookup = hasLookupInput ? await lookupTumblerItem({ lookupInput: trimmedLookupInput }) : null;
-  let flatLookup = hasLookupInput ? await lookupFlatItem({ lookupInput: trimmedLookupInput }) : null;
+  let diagnostics = updateTemplatePipelineInputFingerprints(
+    createTemplatePipelineDiagnostics({
+      contractVersions: {
+        smartLookupCache: SMART_TEMPLATE_LOOKUP_CACHE_VERSION,
+      },
+    }),
+    {
+      sourceImage: hasImage ? fingerprintBytes(input.imageBytes) : null,
+      smartLookupInput: hasLookupInput ? fingerprintText(trimmedLookupInput) : null,
+    },
+  );
+  diagnostics = upsertTemplatePipelineStage(diagnostics, {
+    id: "source-image",
+    status: hasImage ? "ready" : "skip",
+    authority: hasImage ? "uploaded-image" : "text-only-lookup",
+    warnings: [],
+    errors: [],
+    artifacts: hasImage
+      ? {
+          fileName: input.fileName ?? null,
+          mimeType: input.mimeType ?? null,
+          byteLength: input.imageBytes?.byteLength ?? 0,
+        }
+      : {
+          reason: "No analysis image was supplied.",
+        },
+  });
 
+  const resultCacheKey = buildSmartTemplateLookupResultCacheKey({
+    lookupInput: trimmedLookupInput,
+    imageBytes: input.imageBytes,
+    mimeType: input.mimeType,
+    fileName: input.fileName,
+    laserTypeOverride: input.laserTypeOverride ?? null,
+    finishTypeOverride: input.finishTypeOverride ?? null,
+  });
+  const cachedResult = await readSmartTemplateLookupCache<SmartTemplateLookupResponse>("results", resultCacheKey);
+  if (cachedResult && await canUseCachedLookupResponse(cachedResult)) {
+    let cachedDiagnostics = mergeTemplatePipelineDiagnostics(diagnostics, cachedResult.diagnostics);
+    cachedDiagnostics = upsertTemplatePipelineStage(cachedDiagnostics, {
+      id: "smart-lookup",
+      status: smartLookupStatus(cachedResult),
+      authority: "cached-result",
+      timingMs: Date.now() - startedAtMs,
+      cache: {
+        hit: true,
+        key: resultCacheKey,
+        scope: "result",
+      },
+      warnings: cachedResult.warnings,
+      errors: [],
+      artifacts: {
+        sourceType: cachedResult.sourceType,
+        category: cachedResult.category,
+        matchedProfileId: cachedResult.matchedProfileId,
+        matchedFlatItemId: cachedResult.matchedFlatItemId,
+        glbPath: cachedResult.templateDraft.glbPath ?? null,
+      },
+    });
+    cachedDiagnostics = updateTemplatePipelineInputFingerprints(cachedDiagnostics, {
+      smartLookupResult: fingerprintJson({
+        category: cachedResult.category,
+        matchedProfileId: cachedResult.matchedProfileId,
+        matchedFlatItemId: cachedResult.matchedFlatItemId,
+        name: cachedResult.templateDraft.name ?? null,
+      }),
+    });
+    return withLocalCacheNote({
+      ...cachedResult,
+      diagnostics: cachedDiagnostics,
+    });
+  }
+
+  const finalizeResponse = async (
+    response: SmartTemplateLookupResponse,
+    stage: Partial<Pick<SmartTemplateLookupResponse, never>> & {
+      authority: string;
+      cacheScope: string;
+      cacheHit: boolean;
+      artifacts?: Record<string, unknown>;
+    },
+  ): Promise<SmartTemplateLookupResponse> => {
+    let nextDiagnostics = mergeTemplatePipelineDiagnostics(diagnostics, response.diagnostics);
+    nextDiagnostics = updateTemplatePipelineInputFingerprints(nextDiagnostics, {
+      smartLookupResult: fingerprintJson({
+        category: response.category,
+        matchedProfileId: response.matchedProfileId,
+        matchedFlatItemId: response.matchedFlatItemId,
+        name: response.templateDraft.name ?? null,
+        glbPath: response.templateDraft.glbPath ?? null,
+      }),
+    });
+    nextDiagnostics = upsertTemplatePipelineStage(nextDiagnostics, {
+      id: "smart-lookup",
+      status: smartLookupStatus(response),
+      authority: stage.authority,
+      timingMs: Date.now() - startedAtMs,
+      cache: {
+        hit: stage.cacheHit,
+        key: resultCacheKey,
+        scope: stage.cacheScope,
+      },
+      warnings: response.warnings,
+      errors: [],
+      artifacts: {
+        sourceType: response.sourceType,
+        category: response.category,
+        matchedProfileId: response.matchedProfileId,
+        matchedFlatItemId: response.matchedFlatItemId,
+        glbPath: response.templateDraft.glbPath ?? null,
+        materialProfileId: response.templateDraft.materialProfileId ?? null,
+        ...stage.artifacts,
+      },
+    });
+    const persistedResponse: SmartTemplateLookupResponse = {
+      ...response,
+      diagnostics: nextDiagnostics,
+    };
+    await writeSmartTemplateLookupCache("results", resultCacheKey, persistedResponse);
+    return persistedResponse;
+  };
+
+  const textCacheKey = hasLookupInput ? buildSmartTemplateLookupTextCacheKey(trimmedLookupInput) : null;
+  const cachedTextLookups = textCacheKey
+    ? await readSmartTemplateLookupCache<SmartTemplateLookupTextCachePayload>("text", textCacheKey)
+    : null;
+
+  let tumblerLookup = cachedTextLookups?.tumblerLookup ?? (hasLookupInput ? await lookupTumblerItem({ lookupInput: trimmedLookupInput }) : null);
+  let flatLookup = cachedTextLookups?.flatLookup ?? (hasLookupInput ? await lookupFlatItem({ lookupInput: trimmedLookupInput }) : null);
+
+  const imageCacheKey = hasImage
+    ? buildSmartTemplateLookupImageCacheKey({
+        imageBytes: input.imageBytes,
+        mimeType: input.mimeType,
+        fileName: input.fileName,
+      })
+    : null;
+  const cachedImageAnalysis = imageCacheKey
+    ? await readSmartTemplateLookupCache<SmartTemplateLookupImageCachePayload>("image", imageCacheKey)
+    : null;
   const [tumblerAuto, flatAuto] = hasImage
-    ? await Promise.all([
-        runTumblerAutoSize({
-          fileName: input.fileName!,
-          mimeType: input.mimeType!,
-          byteLength: input.imageBytes!.byteLength,
-          imageBytes: input.imageBytes!,
-        }),
-        runFlatBedAutoDetect({
-          fileName: input.fileName!,
-          mimeType: input.mimeType!,
-          imageBytes: input.imageBytes!,
-        }),
-      ])
+    ? cachedImageAnalysis
+      ? [cachedImageAnalysis.tumblerAuto, cachedImageAnalysis.flatAuto]
+      : await Promise.all([
+          runTumblerAutoSize({
+            fileName: input.fileName!,
+            mimeType: input.mimeType!,
+            byteLength: input.imageBytes!.byteLength,
+            imageBytes: input.imageBytes!,
+          }),
+          runFlatBedAutoDetect({
+            fileName: input.fileName!,
+            mimeType: input.mimeType!,
+            imageBytes: input.imageBytes!,
+          }),
+        ])
     : [null, null];
+
+  if (hasImage && imageCacheKey && !cachedImageAnalysis) {
+    await writeSmartTemplateLookupCache<SmartTemplateLookupImageCachePayload>("image", imageCacheKey, {
+      tumblerAuto,
+      flatAuto,
+    });
+  }
 
   if (!tumblerLookup && tumblerAuto?.suggestion.confidence && tumblerAuto.suggestion.confidence >= 0.38) {
     const seed = buildDrinkwareName({
@@ -610,6 +814,13 @@ export async function runSmartTemplateLookup(
     }
   }
 
+  if (hasLookupInput && textCacheKey && !cachedTextLookups) {
+    await writeSmartTemplateLookupCache<SmartTemplateLookupTextCachePayload>("text", textCacheKey, {
+      tumblerLookup,
+      flatLookup,
+    });
+  }
+
   const categoryChoice = chooseCategory({
     lookupInput: trimmedLookupInput,
     tumblerLookup,
@@ -627,10 +838,12 @@ export async function runSmartTemplateLookup(
         : "text";
 
   const warnings: string[] = [];
-  const notes = uniqueList([
+  const drinkwareNotes = uniqueList([
     ...(tumblerLookup?.notes ?? []),
-    ...(flatLookup?.notes ?? []),
     ...(tumblerAuto?.suggestion.notes ?? []),
+  ]);
+  const flatNotes = uniqueList([
+    ...(flatLookup?.notes ?? []),
     ...(flatAuto?.vision.notes ?? []),
   ]);
 
@@ -680,7 +893,7 @@ export async function runSmartTemplateLookup(
       warnings.push("Material was inferred, but no default material preset matched this laser and finish. Review laser settings before saving.");
     }
 
-    return {
+    return finalizeResponse({
       sourceType,
       category: "flat",
       confidence: categoryChoice.confidence,
@@ -725,10 +938,29 @@ export async function runSmartTemplateLookup(
         ...warnings,
         flatLookup?.requiresReview ? "The resolved flat item still needs review before saving." : null,
       ]),
-      notes,
+      notes: flatNotes,
       flatLookupResult: flatLookup,
       tumblerLookupResult: tumblerLookup,
-    };
+    }, {
+      authority: matchedItem?.id
+        ? "matched-flat-item"
+        : (flatAuto?.matchedItem ? "vision-flat-match" : "lookup-fallback"),
+      cacheScope: cachedTextLookups || cachedImageAnalysis ? "text+image" : "runtime",
+      cacheHit: Boolean(cachedTextLookups || cachedImageAnalysis),
+      artifacts: {
+        lookupMode: "flat",
+        branchChosen: "flat",
+        glbSource: glbPath ? (flatLookup?.modelStrategy ?? "flat-lookup") : "missing",
+        materialAuthority: materialSetup.materialProfileId
+          ? "material-profile-inference"
+          : (materialSetup.materialSlug ? "material-inference" : "none"),
+        dimensionsAuthority: flatLookup?.matchedItemId
+          ? "flat-lookup"
+          : (flatAuto?.matchedItem ? "flat-vision" : "none"),
+        textCacheHit: Boolean(cachedTextLookups),
+        imageCacheHit: Boolean(cachedImageAnalysis),
+      },
+    });
   }
 
   const matchedProfileId =
@@ -878,6 +1110,7 @@ export async function runSmartTemplateLookup(
         : tumblerLookup?.modelSourceLabel ?? null;
   const resolvedBodyColorHex = generatedPreview?.bodyColorHex ?? tumblerLookup?.bodyColorHex ?? null;
   const resolvedRimColorHex = generatedPreview?.rimColorHex ?? tumblerLookup?.rimColorHex ?? null;
+  const canonicalFrontPhotoUrl = resolveCanonicalFrontPhotoUrl(tumblerLookup);
   const strictBackPhotoUrl = resolveStrictBackPhotoUrl(tumblerLookup);
   const autoZone = deriveEngravableZoneFromFitDebug({
     overallHeightMm,
@@ -889,7 +1122,7 @@ export async function runSmartTemplateLookup(
     printHeightMm = autoZone.printHeightMm;
   }
 
-  return {
+  return finalizeResponse({
     sourceType,
     category: categoryChoice.category === "unknown" ? drinkwareCategory : categoryChoice.category,
     confidence: categoryChoice.confidence,
@@ -911,7 +1144,7 @@ export async function runSmartTemplateLookup(
       materialFinishType: materialSetup.materialFinishType,
       materialProfileId: materialSetup.materialProfileId,
       materialProfileLabel: materialSetup.materialProfileLabel,
-      productPhotoUrl: tumblerLookup?.imageUrl ?? null,
+      productPhotoUrl: canonicalFrontPhotoUrl,
       productPhotoLabel: inferTumblerPhotoLabel(tumblerLookup),
       backPhotoUrl: strictBackPhotoUrl,
       backPhotoLabel: inferTumblerBackPhotoLabel(tumblerLookup),
@@ -962,8 +1195,31 @@ export async function runSmartTemplateLookup(
       flatLookup,
     }),
     warnings: uniqueList(warnings),
-    notes,
+    notes: drinkwareNotes,
     flatLookupResult: flatLookup,
     tumblerLookupResult: tumblerLookup,
-  };
+  }, {
+    authority: matchedProfileId
+      ? "matched-profile"
+      : (tumblerAuto ? "vision-auto-size" : "lookup-fallback"),
+    cacheScope: cachedTextLookups || cachedImageAnalysis ? "text+image" : "runtime",
+    cacheHit: Boolean(cachedTextLookups || cachedImageAnalysis),
+    artifacts: {
+      lookupMode: tumblerLookup?.mode ?? null,
+      branchChosen: "drinkware",
+      glbSource: resolvedGlbSourceLabel ?? null,
+      materialAuthority: materialSetup.materialProfileId
+        ? "material-profile-inference"
+        : (materialSetup.materialSlug ? "material-inference" : "none"),
+      dimensionsAuthority: matchedProfileId
+        ? "matched-profile"
+        : (tumblerLookup?.dimensions.outsideDiameterMm || tumblerLookup?.dimensions.usableHeightMm
+          ? "lookup-dimensions"
+          : (tumblerAuto ? "vision-auto-size" : "none")),
+      textCacheHit: Boolean(cachedTextLookups),
+      imageCacheHit: Boolean(cachedImageAnalysis),
+      generatedGlb: Boolean(generatedPreview?.glbPath),
+      matchedProfileId: matchedProfileId ?? null,
+    },
+  });
 }

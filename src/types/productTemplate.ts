@@ -1,4 +1,5 @@
 import type { AxialSurfaceBand, PrintableSurfaceContract } from "./printableSurface";
+import type { TemplatePipelineProvenance } from "./templatePipelineDiagnostics";
 
 export type EditableOutlinePointType = "corner" | "smooth";
 export type ReferenceLayerKey = "bodyOutline" | "lidProfile" | "silverProfile";
@@ -394,10 +395,12 @@ export interface ManufacturerLogoStamp {
   /** Canonical orientation landmarks associated with the source image / reference set. */
   orientationLandmarks: OrientationLandmarks;
   /** Where the logo extraction came from. */
-  source: "lookup-photo" | "front-photo";
+  source: "lookup-photo" | "front-photo" | "back-photo";
   /** Brand name associated with the extracted logo, when known. */
   brand?: string;
 }
+
+export type BodyReferenceViewSide = "front" | "back";
 
 export interface ProductTemplateColorOption {
   /** Stable variant key from the source catalog. */
@@ -493,12 +496,16 @@ export interface ProductTemplate {
   frontPhotoDataUrl?: string;
   /** Straight-on photo of the back face — base64 data URL */
   backPhotoDataUrl?: string;
+  /** Selected BODY REFERENCE side used by the editor and later placement assistance. */
+  bodyReferenceViewSide?: BodyReferenceViewSide;
   /** Manufacturer logo extracted from the clean product photo and stamped onto the 3D preview. */
   manufacturerLogoStamp?: ManufacturerLogoStamp;
   /** Available catalog colors for this style; used for style-level selection without duplicating templates per color. */
   availableColors?: ProductTemplateColorOption[];
   /** Multi-image product references captured during lookup for later orientation and logo workflows. */
   productReferenceSet?: ProductReferenceSet;
+  /** Compact persisted provenance for the image -> svg -> template diagnostic chain. */
+  pipelineProvenance?: TemplatePipelineProvenance;
 }
 
 export interface ProductTemplateStore {

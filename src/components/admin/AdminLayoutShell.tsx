@@ -9,6 +9,8 @@ import {
   PlacedItem,
   SvgAsset,
   normalizeBedConfig,
+  resolveTumblerUsableHeightMm,
+  resolveTumblerWorkspaceHeightMm,
 } from "@/types/admin";
 import {
   createSvgLibraryAsset,
@@ -38,7 +40,6 @@ import { LightBurnPathSettingsPanel } from "./LightBurnPathSettingsPanel";
 import { TextPersonalizationPanel } from "./TextPersonalizationPanel";
 import { CameraOverlayPanel } from "./CameraOverlayPanel";
 import { TextToolPanel } from "./TextToolPanel";
-import { RasterToSvgPanel, type RasterToSvgPreviewState } from "./RasterToSvgPanel";
 import { TestGridPanel } from "./TestGridPanel";
 import { GridSettingsPanel } from "./GridSettingsPanel";
 import { FlatBedItemPanel } from "./FlatBedItemPanel";
@@ -77,6 +78,7 @@ import { useAssetWorkflow } from "./hooks/useAssetWorkflow";
 import { useTemplateModalState } from "./hooks/useTemplateModalState";
 import { ModalDialog } from "./shared/ModalDialog";
 import { getRotaryPresets } from "@/utils/adminCalibrationState";
+import { isSvgLibrarySyncStorageKey } from "@/lib/svgLibrarySync";
 import styles from "./AdminLayoutShell.module.css";
 
 function buildActiveMaterialSettings(profileId: string): ActiveMaterialSettings | null {
@@ -147,7 +149,7 @@ function inferTopSafeOffsetMm(
     return delta > 0 ? Number(delta.toFixed(2)) : 0;
   }
   const overallHeightMm = bedConfig.tumblerOverallHeightMm;
-  const usableHeightMm = bedConfig.tumblerUsableHeightMm;
+  const usableHeightMm = resolveTumblerUsableHeightMm(bedConfig);
   if (!Number.isFinite(overallHeightMm) || !Number.isFinite(usableHeightMm)) {
     return undefined;
   }
@@ -213,6 +215,7 @@ async function saveCurrentJobFile(args: {
 
 export function AdminLayoutShell() {
   const router = useRouter();
+  const handledAdminQueryRef = useRef<string | null>(null);
 
   // -- Bed config -----------------------------------------------------------
   const [bedConfig, setBedConfig] = useState<BedConfig>(DEFAULT_BED_CONFIG);
@@ -309,6 +312,22 @@ export function AdminLayoutShell() {
     setLaserLayers(prev => prev.map(l => l.id === layer.id ? layer : l));
   }, []);
 
+  const syncSvgLibraryAssets = useCallback(async () => {
+    try {
+      const result = await fetchSvgLibraryAssets();
+      setSvgAssets(result.assets);
+      setSelectedAssetId((prev) => {
+        if (prev && result.assets.some((asset) => asset.id === prev)) {
+          return prev;
+        }
+        return result.assets[0]?.id ?? null;
+      });
+      setUploadError(null);
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "Failed to load SVG library");
+    }
+  }, []);
+
   const { didRestorePersistedState } = useAdminWorkspacePersistence({
     bedConfig,
     setBedConfig,
@@ -325,30 +344,28 @@ export function AdminLayoutShell() {
 
   useEffect(() => {
     if (!didRestorePersistedState) return;
+    void syncSvgLibraryAssets();
+  }, [didRestorePersistedState, syncSvgLibraryAssets]);
 
-    let cancelled = false;
-    void (async () => {
-      try {
-        const result = await fetchSvgLibraryAssets();
-        if (cancelled) return;
-        setSvgAssets(result.assets);
-        setSelectedAssetId((prev) => {
-          if (prev && result.assets.some((asset) => asset.id === prev)) {
-            return prev;
-          }
-          return result.assets[0]?.id ?? null;
-        });
-        setUploadError(null);
-      } catch (error) {
-        if (cancelled) return;
-        setUploadError(error instanceof Error ? error.message : "Failed to load SVG library");
-      }
-    })();
+  useEffect(() => {
+    if (!didRestorePersistedState) return;
 
-    return () => {
-      cancelled = true;
+    const handleSvgLibraryStorage = (event: StorageEvent) => {
+      if (!isSvgLibrarySyncStorageKey(event.key)) return;
+      void syncSvgLibraryAssets();
     };
-  }, [didRestorePersistedState]);
+
+    const handleWindowFocus = () => {
+      void syncSvgLibraryAssets();
+    };
+
+    window.addEventListener("storage", handleSvgLibraryStorage);
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      window.removeEventListener("storage", handleSvgLibraryStorage);
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [didRestorePersistedState, syncSvgLibraryAssets]);
 
   useEffect(() => {
     const syncActiveLaserSetup = () => setActiveLaserSetup(readActiveLaserSetup());
@@ -392,8 +409,8 @@ export function AdminLayoutShell() {
       bedConfig.height;
     const printableHeightMm =
       templateEngravableDims?.printableHeightMm ??
-      bedConfig.tumblerUsableHeightMm ??
-      bedConfig.tumblerPrintableHeightMm ??
+      resolveTumblerUsableHeightMm(bedConfig) ??
+      resolveTumblerWorkspaceHeightMm(bedConfig) ??
       bedConfig.height;
     const printableTopOffsetMm =
       templateEngravableDims?.printableSurfaceContract?.printableTopMm ??
@@ -647,9 +664,7 @@ export function AdminLayoutShell() {
 
   // Right panel tab + accordion
   const [rightTab, setRightTab] = useState<"workflow" | "tools" | "setup">("workflow");
-  const [svgDoctorOpenSignal, setSvgDoctorOpenSignal] = useState(0);
   const [showSvgLibraryModal, setShowSvgLibraryModal] = useState(false);
-  const [svgDoctorPreview, setSvgDoctorPreview] = useState<RasterToSvgPreviewState | null>(null);
   const [openSection, setOpenSection] = useState<string | null>(null);
   const [showOrders, setShowOrders] = useState(true);
   const [showJobRunnerOverlay, setShowJobRunnerOverlay] = useState(false);
@@ -705,10 +720,16 @@ export function AdminLayoutShell() {
     focusAndPulseElement(targetIdByNav[target]);
   }, [focusAndPulseElement, router]);
 
-  const handleOpenSvgDoctor = useCallback(() => {
-    setRightTab("tools");
-    setSvgDoctorOpenSignal((prev) => prev + 1);
-  }, []);
+  const handleOpenImageToSvg = useCallback(() => {
+    if (typeof window !== "undefined") {
+      const child = window.open("/admin/image-to-svg", "_blank", "noopener,noreferrer");
+      if (child) {
+        child.opener = null;
+        return;
+      }
+    }
+    router.push("/admin/image-to-svg");
+  }, [router]);
 
   const handleOpenSvgLibrary = useCallback(() => {
     setShowSvgLibraryModal(true);
@@ -717,6 +738,37 @@ export function AdminLayoutShell() {
   const handleCloseSvgLibrary = useCallback(() => {
     setShowSvgLibraryModal(false);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const currentSearch = window.location.search;
+    const requestedTab = new URLSearchParams(currentSearch).get("tab");
+    const shouldOpenLibrary = new URLSearchParams(currentSearch).get("library") === "1";
+    if (requestedTab !== "tools" && !shouldOpenLibrary) {
+      handledAdminQueryRef.current = null;
+      return;
+    }
+
+    const querySignature = currentSearch;
+    if (handledAdminQueryRef.current === querySignature) {
+      return;
+    }
+    handledAdminQueryRef.current = querySignature;
+
+    if (requestedTab === "tools") {
+      setRightTab("tools");
+    }
+    if (shouldOpenLibrary) {
+      setShowSvgLibraryModal(true);
+    }
+
+    const nextParams = new URLSearchParams(currentSearch);
+    nextParams.delete("tab");
+    nextParams.delete("library");
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `/admin?${nextQuery}` : "/admin", { scroll: false });
+  }, [router]);
 
   const handleWorkflowSectionNav = useCallback((sectionId: string, focusId: string) => {
     setRightTab("workflow");
@@ -789,7 +841,7 @@ export function AdminLayoutShell() {
       null;
     const placementProfile = {
       overallHeightMm: snapshot.tumblerOverallHeightMm ?? snapshot.height,
-      usableHeightMm: snapshot.tumblerUsableHeightMm ?? snapshot.height,
+      usableHeightMm: resolveTumblerUsableHeightMm(snapshot) ?? resolveTumblerWorkspaceHeightMm(snapshot) ?? snapshot.height,
       topToSafeZoneStartMm: inferTopSafeOffsetMm(snapshot, printableSurfaceContract, bodyTopMm),
       bottomMarginMm: undefined,
       topAnchorMode: "physical-top" as const,
@@ -1935,9 +1987,9 @@ export function AdminLayoutShell() {
                   <button
                     type="button"
                     className={styles.artworkDoctorBtn}
-                    onClick={handleOpenSvgDoctor}
+                    onClick={handleOpenImageToSvg}
                   >
-                    SVG Doctor
+                    Image to SVG
                   </button>
                   <button
                     type="button"
@@ -2176,9 +2228,9 @@ export function AdminLayoutShell() {
                   <button
                     type="button"
                     className={styles.artworkDoctorBtn}
-                    onClick={handleOpenSvgDoctor}
+                    onClick={handleOpenImageToSvg}
                   >
-                    SVG Doctor
+                    Image to SVG
                   </button>
                   <button
                     type="button"
@@ -2189,7 +2241,7 @@ export function AdminLayoutShell() {
                   </button>
                 </div>
                 <span className={styles.artworkUploadHint}>
-                  Drop an SVG file, or open SVG Doctor for raster cleanup and tracing
+                  Drop an SVG file, or open Image to SVG in a new tab for raster cleanup and tracing
                 </span>
               </div>
             </>
@@ -2427,9 +2479,9 @@ export function AdminLayoutShell() {
                   <button
                     type="button"
                     className={styles.artworkDoctorBtn}
-                    onClick={handleOpenSvgDoctor}
+                    onClick={handleOpenImageToSvg}
                   >
-                    SVG Doctor
+                    Image to SVG
                   </button>
                   <button
                     type="button"
@@ -2503,7 +2555,6 @@ export function AdminLayoutShell() {
             placedItems={placedItems}
             selectedItemId={selectedItemId}
             placementAsset={placementAsset}
-            svgDoctorPreview={svgDoctorPreview}
             isPlacementArmed={isPlacementArmed}
             framePreview={framePreview}
             showTwoSidedCrosshairs={isTumblerMode}
@@ -2795,11 +2846,6 @@ export function AdminLayoutShell() {
               selectedAsset={selectedAsset}
               onReplaceSelectedAsset={handleReplaceSelectedSvgAsset}
             />
-              <RasterToSvgPanel
-                onAddAsset={handleAddGeneratedSvgAsset}
-                openSignal={svgDoctorOpenSignal}
-                onPreviewChange={setSvgDoctorPreview}
-              />
             <TextPersonalizationPanel />
             <CameraOverlayPanel onCaptureOverlay={handleCameraCapture} />
             <TestGridPanel bedWidthMm={bedConfig.width} bedHeightMm={bedConfig.height} />
@@ -2878,11 +2924,7 @@ export function AdminLayoutShell() {
           <TemplateCreateForm
             editingTemplate={editingTemplate ?? undefined}
             onSave={(t) => {
-              if (editingTemplate && selectedTemplate?.id === t.id) {
-                handleTemplateSelect(t);
-              } else if (!editingTemplate) {
-                handleTemplateSelect(t);
-              }
+              handleTemplateSelect(t);
               cancelCreateTemplate();
               if (editingTemplate) {
                 showToast("Template updated");

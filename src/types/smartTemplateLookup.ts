@@ -12,6 +12,7 @@ import type {
   ReferencePaths,
 } from "./productTemplate";
 import type { AxialSurfaceBand, PrintableSurfaceContract } from "./printableSurface";
+import type { TemplatePipelineDiagnostics } from "./templatePipelineDiagnostics";
 import type { TumblerItemLookupResponse } from "./tumblerItemLookup";
 
 export type SmartTemplateLookupSourceType = "image" | "url" | "text" | "mixed";
@@ -121,6 +122,7 @@ export interface SmartTemplateLookupResponse {
   notes: string[];
   flatLookupResult?: FlatItemLookupResponse | null;
   tumblerLookupResult?: TumblerItemLookupResponse | null;
+  diagnostics?: TemplatePipelineDiagnostics;
 }
 
 export interface SmartTemplateLookupError {

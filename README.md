@@ -29,6 +29,8 @@ If you want to run the Next.js app without containers:
 npm run dev
 ```
 
+Optional AI env vars live in `.env.example`. `OPENAI_API_KEY` enables image-assist features for front-logo detection, trace-setting recommendations, and optional raster cleanup for tracing. `ANTHROPIC_API_KEY` and `REPLICATE_API_TOKEN` continue to power the existing vision and cutout flows.
+
 ## Repo hygiene
 
 Clean local-only runtime artifacts without touching source files:

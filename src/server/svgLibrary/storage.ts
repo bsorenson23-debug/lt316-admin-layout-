@@ -43,6 +43,10 @@ interface LegacySvgLibraryEntry {
 
 const SVG_DOCUMENT_PATTERN =
   /^\s*(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!doctype\s+svg[^>]*>\s*)?<svg[\s>]/i;
+const INVALID_SVG_LIST_LOG_COOLDOWN_MS = 5 * 60 * 1000;
+
+let lastInvalidSvgListSignature: string | null = null;
+let lastInvalidSvgListLoggedAt = 0;
 
 function resolveSvgLibraryRoot() {
   return process.env.LT316_SVG_LIBRARY_DIR
@@ -400,12 +404,13 @@ async function migrateLegacyEntries(layout: SvgLibraryLayout) {
 export async function listSvgLibraryEntries(): Promise<SvgLibraryEntry[]> {
   const layout = await ensureSvgLibraryDir();
   const records = await listStoredRecords(layout);
+  const invalidEntries: Array<{ id: string; name: string; error: string }> = [];
   const hydratedEntries = await Promise.all(
     records.map(async (record) => {
       try {
         return await hydrateEntry(layout, record);
       } catch (error) {
-        console.warn("[svg-library:list] skipping invalid entry", {
+        invalidEntries.push({
           id: record.id,
           name: record.name,
           error: error instanceof Error ? error.message : "Invalid SVG content",
@@ -414,6 +419,32 @@ export async function listSvgLibraryEntries(): Promise<SvgLibraryEntry[]> {
       }
     }),
   );
+
+  if (invalidEntries.length > 0) {
+    const sortedInvalidEntries = [...invalidEntries].sort((left, right) =>
+      left.id.localeCompare(right.id) || left.name.localeCompare(right.name) || left.error.localeCompare(right.error),
+    );
+    const preview = sortedInvalidEntries
+      .slice(0, 5)
+      .map((entry) => `${entry.name} (${entry.error})`)
+      .join("; ");
+    const signature = JSON.stringify(
+      sortedInvalidEntries
+        .slice(0, 20)
+        .map((entry) => [entry.id, entry.error]),
+    );
+    const now = Date.now();
+    if (
+      lastInvalidSvgListSignature == null ||
+      now - lastInvalidSvgListLoggedAt > INVALID_SVG_LIST_LOG_COOLDOWN_MS
+    ) {
+      console.warn(
+        `[svg-library:list] skipped ${invalidEntries.length} invalid entr${invalidEntries.length === 1 ? "y" : "ies"}${preview ? `: ${preview}` : ""}`,
+      );
+      lastInvalidSvgListLoggedAt = now;
+    }
+    lastInvalidSvgListSignature = signature;
+  }
 
   return hydratedEntries.filter((entry): entry is SvgLibraryEntry => entry !== null);
 }

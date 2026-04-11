@@ -1,4 +1,10 @@
-import type { BedConfig, PlacedItem, WorkspaceMode } from "../types/admin";
+import {
+  resolveTumblerUsableHeightMm,
+  resolveTumblerWorkspaceHeightMm,
+  type BedConfig,
+  type PlacedItem,
+  type WorkspaceMode,
+} from "../types/admin.ts";
 import type {
   LightBurnAlignmentGuideLine,
   LightBurnAlignmentLogoRegion,
@@ -486,14 +492,15 @@ function inferBottomDiameterMm(
 
 function inferOverallHeightMm(config: BedConfig): number | undefined {
   if (isFiniteNumber(config.tumblerOverallHeightMm)) return config.tumblerOverallHeightMm;
-  if (isFiniteNumber(config.tumblerPrintableHeightMm)) return config.tumblerPrintableHeightMm;
+  const workspaceHeightMm = resolveTumblerWorkspaceHeightMm(config);
+  if (isFiniteNumber(workspaceHeightMm)) return workspaceHeightMm;
   if (isFiniteNumber(config.height)) return config.height;
   return undefined;
 }
 
 function inferUsableHeightMm(config: BedConfig): number | undefined {
-  if (isFiniteNumber(config.tumblerUsableHeightMm)) return config.tumblerUsableHeightMm;
-  if (isFiniteNumber(config.tumblerPrintableHeightMm)) return config.tumblerPrintableHeightMm;
+  const usableHeightMm = resolveTumblerUsableHeightMm(config);
+  if (isFiniteNumber(usableHeightMm)) return usableHeightMm;
   if (isFiniteNumber(config.height)) return config.height;
   return undefined;
 }

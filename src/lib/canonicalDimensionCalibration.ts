@@ -1,17 +1,18 @@
-import { getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
+import { getWrapFrontCenter } from "../utils/tumblerWrapLayout.ts";
 import {
   buildContourSvgPath,
+  normalizeMeasurementContour,
   sortEditableOutlinePoints,
-} from "@/lib/editableBodyOutline";
+} from "./editableBodyOutline.ts";
 import type {
   CanonicalBodyProfile,
   CanonicalBodyProfileSample,
   CanonicalDimensionCalibration,
   EditableBodyOutline,
   CanonicalHandleProfile,
-} from "@/types/productTemplate";
-import type { AxialSurfaceBand, PrintableSurfaceContract } from "@/types/printableSurface";
-import type { TumblerItemLookupFitDebug } from "@/types/tumblerItemLookup";
+} from "../types/productTemplate.ts";
+import type { AxialSurfaceBand, PrintableSurfaceContract } from "../types/printableSurface.ts";
+import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -147,125 +148,240 @@ function findAuthoritativeHalfWidthPxAtRow(
     : Math.max(0, right - axisX);
 }
 
-export function buildCanonicalBodyProfile(args: {
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2
+    : (sorted[middle] ?? 0);
+}
+
+function measurementToleranceMm(radiusMm: number): number {
+  return Math.max(2, Math.abs(radiusMm) * 0.08);
+}
+
+function resolveCanonicalSampleRadiusMm(args: {
+  outlineRadiusMm: number;
+  measuredRadiusMm: number | null;
+}): number {
+  const outlineRadiusMm = round2(Math.max(0, args.outlineRadiusMm));
+  const measuredRadiusMm = args.measuredRadiusMm != null && Number.isFinite(args.measuredRadiusMm)
+    ? round2(Math.max(0, args.measuredRadiusMm))
+    : null;
+  if (!(outlineRadiusMm > 0)) {
+    return measuredRadiusMm ?? 0;
+  }
+  if (!(measuredRadiusMm != null && measuredRadiusMm > 0)) {
+    return outlineRadiusMm;
+  }
+
+  const minRatio = 0.82;
+  const maxRatio = 1.18;
+  if (
+    measuredRadiusMm < outlineRadiusMm * minRatio ||
+    measuredRadiusMm > outlineRadiusMm * maxRatio
+  ) {
+    return outlineRadiusMm;
+  }
+
+  return round2((outlineRadiusMm * 0.78) + (measuredRadiusMm * 0.22));
+}
+
+export interface CanonicalBodyContractQA {
+  pass: boolean;
+  severity: "ready" | "review" | "action";
+  shellAuthority: "outline-profile" | "dimensional-seed";
+  scaleAuthority: "validated-midband-ratio" | "outline-ratio-fallback" | "none";
+  acceptedRowCount: number;
+  rejectedRowCount: number;
+  fallbackMode: "none" | "outline-only" | "missing-measurement-contour";
+  issues: string[];
+}
+
+export interface CanonicalBodyContractResult {
+  canonicalBodyProfile: CanonicalBodyProfile;
+  canonicalDimensionCalibration: CanonicalDimensionCalibration;
+  qa: CanonicalBodyContractQA;
+}
+
+type CanonicalMeasurementRow = {
+  index: number;
+  sNorm: number;
+  yMm: number;
+  yPx: number;
+  xLeft: number;
+  radiusPx: number;
+  outlineRadiusMm: number;
+};
+
+function dedupeIssues(issues: string[]): string[] {
+  return [...new Set(issues.filter((issue) => issue.trim().length > 0))];
+}
+
+function buildOutlineOnlySamples(rows: CanonicalMeasurementRow[]): CanonicalBodyProfileSample[] {
+  return rows.map((row) => ({
+    sNorm: round4(row.sNorm),
+    yMm: round2(row.yMm),
+    yPx: round2(row.yPx),
+    xLeft: round2(row.xLeft),
+    radiusPx: round2(row.radiusPx),
+    radiusMm: round2(row.outlineRadiusMm),
+  }));
+}
+
+function deriveCanonicalSamples(args: {
   outline: EditableBodyOutline | null | undefined;
   overallHeightMm: number;
   bodyTopFromOverallMm: number;
   bodyBottomFromOverallMm: number;
   bodyDiameterMm?: number;
-  handleSide?: "left" | "right" | null;
-  fitDebug?: TumblerItemLookupFitDebug | null;
-}): CanonicalBodyProfile | null {
-  const outline = args.outline;
-  if (!outline || outline.points.length < 2) return null;
-  const bodyTopMm = round2(args.bodyTopFromOverallMm);
-  const bodyBottomMm = round2(args.bodyBottomFromOverallMm);
-  const bodyHeightMm = Math.max(1, bodyBottomMm - bodyTopMm);
-  const sourceContour = outline.sourceContour ?? outline.directContour ?? [];
-  const sourceBounds = getContourBounds(sourceContour);
-  const axisX = sourceContour.length >= 3
-    ? estimateAxisXFromContour(sourceContour)
-    : (outline.sourceContourBounds ? (outline.sourceContourBounds.minX + outline.sourceContourBounds.maxX) / 2 : 0);
-  const axisYTop = args.fitDebug?.bodyTopPx ?? sourceBounds?.minY ?? 0;
-  const axisYBottom = args.fitDebug?.bodyBottomPx ?? sourceBounds?.maxY ?? axisYTop + 1;
-  const axisHeightPx = Math.max(1, axisYBottom - axisYTop);
-  const symmetrySource: "left" | "right" =
-    args.handleSide === "left"
-      ? "right"
-      : "left";
-  const sampleCount = Math.max(96, Math.min(240, Math.round(bodyHeightMm * 1.1)));
-  const sourceRadiusSamplesPx: number[] = [];
-  if (sourceContour.length >= 3) {
-    for (let index = 0; index < sampleCount; index += 1) {
-      const sNorm = sampleCount === 1 ? 0 : index / (sampleCount - 1);
-      if (sNorm < 0.12 || sNorm > 0.46) continue;
-      const yPx = axisYTop + (axisHeightPx * sNorm);
-      const radiusPx = findAuthoritativeHalfWidthPxAtRow(sourceContour, axisX, yPx, symmetrySource);
-      if (radiusPx > 0) sourceRadiusSamplesPx.push(radiusPx);
-    }
-  }
-  sourceRadiusSamplesPx.sort((a, b) => a - b);
-  const medianSourceRadiusPx = sourceRadiusSamplesPx.length > 0
-    ? sourceRadiusSamplesPx[Math.floor(sourceRadiusSamplesPx.length / 2)] ?? 0
-    : 0;
-  const sourceMmPerPx = args.bodyDiameterMm && args.bodyDiameterMm > 0 && medianSourceRadiusPx > 0
-    ? (args.bodyDiameterMm / 2) / medianSourceRadiusPx
-    : 0;
-  const samples: CanonicalBodyProfileSample[] = [];
-
-  for (let index = 0; index < sampleCount; index += 1) {
-    const sNorm = sampleCount === 1 ? 0 : index / (sampleCount - 1);
-    const yMm = round2(bodyTopMm + (bodyHeightMm * sNorm));
-    const yPx = axisYTop + (axisHeightPx * sNorm);
-    const radiusPx = sourceContour.length >= 3
-      ? round2(findAuthoritativeHalfWidthPxAtRow(sourceContour, axisX, yPx, symmetrySource))
-      : 0;
-    const interpolatedRadiusMm = round2(interpolateRadiusMm(outline, yMm));
-    const radiusMm = round2(
-      radiusPx > 0 && sourceMmPerPx > 0
-        ? radiusPx * sourceMmPerPx
-        : interpolatedRadiusMm,
-    );
-    samples.push({
-      sNorm: round4(sNorm),
-      yMm,
-      yPx: round2(yPx),
-      xLeft: round2(axisX - radiusPx),
-      radiusPx,
-      radiusMm,
-    });
-  }
-
-  const leftPoints = samples.map((sample) => ({ x: -sample.radiusMm, y: sample.yMm }));
-  const rightPoints = [...samples].reverse().map((sample) => ({ x: sample.radiusMm, y: sample.yMm }));
-  const svgPath = buildContourSvgPath([...leftPoints, ...rightPoints]) ?? "";
-
-  return {
-    symmetrySource,
-    mirroredFromSymmetrySource: true,
-    mirroredRightFromLeft: symmetrySource === "left",
-    axis: {
-      xTop: round2(axisX),
-      yTop: round2(axisYTop),
-      xBottom: round2(axisX),
-      yBottom: round2(axisYBottom),
-    },
-    samples,
-    svgPath,
-  };
-}
-
-export function buildCanonicalDimensionCalibration(args: {
-  outline: EditableBodyOutline | null | undefined;
-  overallHeightMm: number;
-  bodyTopFromOverallMm: number;
-  bodyBottomFromOverallMm: number;
-  wrapDiameterMm: number;
+  wrapDiameterMm?: number;
   baseDiameterMm?: number | null;
   handleArcDeg?: number;
   handleSide?: "left" | "right" | null;
   axialSurfaceBands?: AxialSurfaceBand[] | null;
   printableSurfaceContract?: PrintableSurfaceContract | null;
   fitDebug?: TumblerItemLookupFitDebug | null;
-}): CanonicalDimensionCalibration | null {
-  const canonicalBodyProfile = buildCanonicalBodyProfile({
-    outline: args.outline,
+}): CanonicalBodyContractResult | null {
+  const outline = args.outline;
+  if (!outline || outline.points.length < 2) return null;
+  const bodyTopMm = round2(args.bodyTopFromOverallMm);
+  const bodyBottomMm = round2(args.bodyBottomFromOverallMm);
+  const bodyHeightMm = Math.max(1, bodyBottomMm - bodyTopMm);
+  const normalizedMeasurementContour = normalizeMeasurementContour({
+    outline,
     overallHeightMm: args.overallHeightMm,
     bodyTopFromOverallMm: args.bodyTopFromOverallMm,
     bodyBottomFromOverallMm: args.bodyBottomFromOverallMm,
-    bodyDiameterMm: args.wrapDiameterMm,
-    handleSide: args.handleSide,
-    fitDebug: args.fitDebug,
   });
-  if (!canonicalBodyProfile || canonicalBodyProfile.samples.length < 2) {
-    return null;
+  const sourceContour = normalizedMeasurementContour?.contour ?? [];
+  const sourceBounds = normalizedMeasurementContour?.bounds ?? getContourBounds(sourceContour);
+  const hasSourceContour = sourceContour.length >= 3 && sourceBounds != null;
+  const axisX = hasSourceContour ? estimateAxisXFromContour(sourceContour) : 0;
+  const axisYTop = hasSourceContour ? (sourceBounds?.minY ?? 0) : bodyTopMm;
+  const axisYBottom = hasSourceContour ? (sourceBounds?.maxY ?? axisYTop + 1) : bodyBottomMm;
+  const axisHeightPx = Math.max(1, axisYBottom - axisYTop);
+  const symmetrySource: "left" | "right" =
+    args.handleSide === "left"
+      ? "right"
+      : "left";
+  const sampleCount = Math.max(96, Math.min(240, Math.round(bodyHeightMm * 1.1)));
+  const rows: CanonicalMeasurementRow[] = [];
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sNorm = sampleCount === 1 ? 0 : index / (sampleCount - 1);
+    const yMm = round2(bodyTopMm + (bodyHeightMm * sNorm));
+    const yPx = axisYTop + (axisHeightPx * sNorm);
+    const radiusPx = hasSourceContour
+      ? round2(findAuthoritativeHalfWidthPxAtRow(sourceContour, axisX, yPx, symmetrySource))
+      : 0;
+    const outlineRadiusMm = round2(interpolateRadiusMm(outline, yMm));
+    rows.push({
+      index,
+      sNorm,
+      yMm,
+      yPx,
+      xLeft: axisX - radiusPx,
+      radiusPx,
+      outlineRadiusMm,
+    });
   }
 
-  const bodyHeightMm = round2(Math.max(0, args.bodyBottomFromOverallMm - args.bodyTopFromOverallMm));
-  const frontVisibleWidthMm = round2(
-    canonicalBodyProfile.samples.reduce((max, sample) => Math.max(max, sample.radiusMm * 2), 0),
+  const candidateRows = rows.filter((row) =>
+    row.sNorm >= 0.12 &&
+    row.sNorm <= 0.68 &&
+    row.radiusPx > 0.1 &&
+    row.outlineRadiusMm > 0.1 &&
+    !(row.radiusPx < 15 && row.outlineRadiusMm > 12)
   );
-  const wrapWidthMm = round2(Math.PI * Math.max(args.wrapDiameterMm, 0));
+  const ratioCandidates = candidateRows
+    .map((row) => row.outlineRadiusMm / row.radiusPx)
+    .filter((ratio) => Number.isFinite(ratio) && ratio > 0);
+  const rawRatio = ratioCandidates.length > 0 ? median(ratioCandidates) : 0;
+  const acceptedRatioRows = rawRatio > 0
+    ? candidateRows.filter((row) => {
+        const measuredRadiusMm = row.radiusPx * rawRatio;
+        return Math.abs(measuredRadiusMm - row.outlineRadiusMm) <= measurementToleranceMm(row.outlineRadiusMm);
+      })
+    : [];
+  const acceptedRatios = acceptedRatioRows
+    .map((row) => row.outlineRadiusMm / Math.max(row.radiusPx, 0.0001))
+    .filter((ratio) => Number.isFinite(ratio) && ratio > 0);
+  const acceptedRowTarget = Math.max(12, Math.round(sampleCount * 0.12));
+  const hasValidatedRatio = acceptedRatios.length >= acceptedRowTarget;
+  const sourceMmPerPx = hasValidatedRatio
+    ? median(acceptedRatios)
+    : (ratioCandidates.length > 0 ? median(ratioCandidates) : 0);
+  const acceptedRowIndexes = new Set(acceptedRatioRows.map((row) => row.index));
+  const measurementIssues: string[] = [];
+  if (!hasSourceContour) {
+    measurementIssues.push("Measurement contour missing; falling back to outline-only shell calibration.");
+  } else if (!hasValidatedRatio) {
+    measurementIssues.push("Measurement contour did not produce enough stable mid-band rows; falling back to outline-only shell calibration.");
+  }
+
+  let samples: CanonicalBodyProfileSample[] = rows.map((row) => {
+    const measuredRadiusMm = row.radiusPx > 0 && sourceMmPerPx > 0
+      ? round2(row.radiusPx * sourceMmPerPx)
+      : null;
+    const canBlendMeasured =
+      hasValidatedRatio &&
+      acceptedRowIndexes.has(row.index) &&
+      !(row.radiusPx < 15 && (measuredRadiusMm ?? 0) > 12 && Math.abs((measuredRadiusMm ?? 0) - row.outlineRadiusMm) > 1);
+    const radiusMm = canBlendMeasured
+      ? resolveCanonicalSampleRadiusMm({
+          outlineRadiusMm: row.outlineRadiusMm,
+          measuredRadiusMm,
+        })
+      : row.outlineRadiusMm;
+    return {
+      sNorm: round4(row.sNorm),
+      yMm: round2(row.yMm),
+      yPx: round2(row.yPx),
+      xLeft: round2(row.xLeft),
+      radiusPx: round2(row.radiusPx),
+      radiusMm: round2(radiusMm),
+    };
+  });
+
+  let frontVisibleWidthMm = round2(
+    samples.reduce((max, sample) => Math.max(max, sample.radiusMm * 2), 0),
+  );
+  let fallbackMode: CanonicalBodyContractQA["fallbackMode"] =
+    !hasSourceContour
+      ? "missing-measurement-contour"
+      : (hasValidatedRatio ? "none" : "outline-only");
+  const invariantIssues: string[] = [];
+  const monotonicYmm = samples.every((sample, index) => index === 0 || sample.yMm > (samples[index - 1]?.yMm ?? Number.NEGATIVE_INFINITY));
+  const monotonicYpx = samples.every((sample, index) => index === 0 || sample.yPx > (samples[index - 1]?.yPx ?? Number.NEGATIVE_INFINITY));
+  if (!monotonicYmm) invariantIssues.push("Canonical body sample rows are not strictly increasing in mm space.");
+  if (!monotonicYpx) invariantIssues.push("Canonical body sample rows are not strictly increasing in source-contour space.");
+  if (hasValidatedRatio && sourceMmPerPx > 0) {
+    const violatingRow = samples.find((sample, index) =>
+      acceptedRowIndexes.has(index) &&
+      Math.abs((sample.radiusPx * sourceMmPerPx) - sample.radiusMm) > measurementToleranceMm(sample.radiusMm)
+    );
+    if (violatingRow) {
+      invariantIssues.push("Accepted measurement rows drift outside the radius consistency tolerance.");
+    }
+  }
+  if (args.bodyDiameterMm && args.bodyDiameterMm > 0 && Math.abs(frontVisibleWidthMm - args.bodyDiameterMm) > 0.75) {
+    invariantIssues.push(`Front visible width differs from body diameter by ${round2(Math.abs(frontVisibleWidthMm - args.bodyDiameterMm))} mm.`);
+  }
+
+  if (invariantIssues.length > 0 && hasSourceContour) {
+    samples = buildOutlineOnlySamples(rows);
+    frontVisibleWidthMm = round2(
+      samples.reduce((max, sample) => Math.max(max, sample.radiusMm * 2), 0),
+    );
+    fallbackMode = "outline-only";
+  }
+
+  const leftPoints = samples.map((sample) => ({ x: -sample.radiusMm, y: sample.yMm }));
+  const rightPoints = [...samples].reverse().map((sample) => ({ x: sample.radiusMm, y: sample.yMm }));
+  const svgPath = buildContourSvgPath([...leftPoints, ...rightPoints]) ?? "";
+  const wrapWidthMm = round2(Math.PI * Math.max(args.wrapDiameterMm ?? args.bodyDiameterMm ?? frontVisibleWidthMm, 0));
   const frontMeridianMm = round2(getWrapFrontCenter(wrapWidthMm, args.handleArcDeg));
   const backMeridianMm = round2((frontMeridianMm + (wrapWidthMm / 2)) % Math.max(wrapWidthMm, 1));
   const leftQuarterMm = round2((frontMeridianMm + (wrapWidthMm * 0.75)) % Math.max(wrapWidthMm, 1));
@@ -282,30 +398,48 @@ export function buildCanonicalDimensionCalibration(args: {
   const handleKeepOutEndMm = handleMeridianMm != null && handleKeepOutWidthMm != null
     ? round2(wrapMm(handleMeridianMm + (handleKeepOutWidthMm / 2), Math.max(wrapWidthMm, 1)))
     : undefined;
-
-  const axis = canonicalBodyProfile.axis;
-  const sourceContour = args.outline?.sourceContour ?? args.outline?.directContour ?? [];
-  const sourceHalfWidthPx = sourceContour.length >= 3
-    ? round2(
-        sourceContour.reduce((max, point) => Math.max(max, Math.abs(point.x - axis.xTop)), 0),
-      )
-    : round2(frontVisibleWidthMm / 2);
-  const sx = sourceHalfWidthPx > 0 ? round4((frontVisibleWidthMm / 2) / sourceHalfWidthPx) : 1;
-  const sy = (axis.yBottom - axis.yTop) !== 0 ? round4(bodyHeightMm / (axis.yBottom - axis.yTop)) : 1;
-  const tx = round4(-axis.xTop * sx);
-  const ty = round4(args.bodyTopFromOverallMm - (axis.yTop * sy));
-
-  return {
+  const sx = sourceMmPerPx > 0 ? round4(sourceMmPerPx) : 1;
+  const sy = hasSourceContour && axisHeightPx !== 0 ? round4(bodyHeightMm / axisHeightPx) : 1;
+  const tx = hasSourceContour ? round4(-axisX * sx) : 0;
+  const ty = hasSourceContour ? round4(args.bodyTopFromOverallMm - (axisYTop * sy)) : 0;
+  const qaIssues = dedupeIssues([...measurementIssues, ...invariantIssues]);
+  const shellAuthority: CanonicalBodyContractQA["shellAuthority"] =
+    outline.sourceContour?.length || outline.directContour?.length
+      ? "outline-profile"
+      : "dimensional-seed";
+  const scaleAuthority: CanonicalBodyContractQA["scaleAuthority"] =
+    hasValidatedRatio
+      ? "validated-midband-ratio"
+      : (sourceMmPerPx > 0 ? "outline-ratio-fallback" : "none");
+  const qaPass = invariantIssues.length === 0 || fallbackMode === "outline-only" || fallbackMode === "missing-measurement-contour";
+  const qaSeverity: CanonicalBodyContractQA["severity"] =
+    !qaPass
+      ? "action"
+      : (qaIssues.length > 0 ? "review" : "ready");
+  const canonicalBodyProfile: CanonicalBodyProfile = {
+    symmetrySource,
+    mirroredFromSymmetrySource: true,
+    mirroredRightFromLeft: symmetrySource === "left",
+    axis: {
+      xTop: round2(axisX),
+      yTop: round2(axisYTop),
+      xBottom: round2(axisX),
+      yBottom: round2(axisYBottom),
+    },
+    samples,
+    svgPath,
+  };
+  const canonicalDimensionCalibration: CanonicalDimensionCalibration = {
     units: "mm",
     totalHeightMm: round2(args.overallHeightMm),
     bodyHeightMm,
     lidBodyLineMm: round2(args.bodyTopFromOverallMm),
     bodyBottomMm: round2(args.bodyBottomFromOverallMm),
-    wrapDiameterMm: round2(args.wrapDiameterMm),
+    wrapDiameterMm: round2(Math.max(args.wrapDiameterMm ?? args.bodyDiameterMm ?? frontVisibleWidthMm, 0)),
     baseDiameterMm: round2(Math.max(0, args.baseDiameterMm ?? 0)),
     wrapWidthMm,
     frontVisibleWidthMm,
-    frontAxisPx: axis,
+    frontAxisPx: canonicalBodyProfile.axis,
     photoToFrontTransform: {
       type: "affine",
       matrix: [sx, 0, tx, 0, sy, ty],
@@ -333,6 +467,87 @@ export function buildCanonicalDimensionCalibration(args: {
       unitsPerMm: 1,
     },
   };
+  return {
+    canonicalBodyProfile,
+    canonicalDimensionCalibration,
+    qa: {
+      pass: qaPass,
+      severity: qaSeverity,
+      shellAuthority,
+      scaleAuthority,
+      acceptedRowCount: acceptedRatioRows.length,
+      rejectedRowCount: Math.max(0, candidateRows.length - acceptedRatioRows.length),
+      fallbackMode,
+      issues: qaIssues,
+    },
+  };
+}
+
+export function deriveCanonicalBodyContract(args: {
+  outline: EditableBodyOutline | null | undefined;
+  overallHeightMm: number;
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+  wrapDiameterMm: number;
+  baseDiameterMm?: number | null;
+  handleArcDeg?: number;
+  handleSide?: "left" | "right" | null;
+  axialSurfaceBands?: AxialSurfaceBand[] | null;
+  printableSurfaceContract?: PrintableSurfaceContract | null;
+  fitDebug?: TumblerItemLookupFitDebug | null;
+}): CanonicalBodyContractResult | null {
+  return deriveCanonicalSamples({
+    outline: args.outline,
+    overallHeightMm: args.overallHeightMm,
+    bodyTopFromOverallMm: args.bodyTopFromOverallMm,
+    bodyBottomFromOverallMm: args.bodyBottomFromOverallMm,
+    bodyDiameterMm: args.wrapDiameterMm,
+    wrapDiameterMm: args.wrapDiameterMm,
+    baseDiameterMm: args.baseDiameterMm,
+    handleArcDeg: args.handleArcDeg,
+    handleSide: args.handleSide,
+    axialSurfaceBands: args.axialSurfaceBands,
+    printableSurfaceContract: args.printableSurfaceContract,
+    fitDebug: args.fitDebug,
+  });
+}
+
+export function buildCanonicalBodyProfile(args: {
+  outline: EditableBodyOutline | null | undefined;
+  overallHeightMm: number;
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+  bodyDiameterMm?: number;
+  handleSide?: "left" | "right" | null;
+  fitDebug?: TumblerItemLookupFitDebug | null;
+}): CanonicalBodyProfile | null {
+  const contract = deriveCanonicalSamples({
+    outline: args.outline,
+    overallHeightMm: args.overallHeightMm,
+    bodyTopFromOverallMm: args.bodyTopFromOverallMm,
+    bodyBottomFromOverallMm: args.bodyBottomFromOverallMm,
+    bodyDiameterMm: args.bodyDiameterMm,
+    handleSide: args.handleSide,
+    fitDebug: args.fitDebug,
+  });
+  return contract?.canonicalBodyProfile ?? null;
+}
+
+export function buildCanonicalDimensionCalibration(args: {
+  outline: EditableBodyOutline | null | undefined;
+  overallHeightMm: number;
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+  wrapDiameterMm: number;
+  baseDiameterMm?: number | null;
+  handleArcDeg?: number;
+  handleSide?: "left" | "right" | null;
+  axialSurfaceBands?: AxialSurfaceBand[] | null;
+  printableSurfaceContract?: PrintableSurfaceContract | null;
+  fitDebug?: TumblerItemLookupFitDebug | null;
+}): CanonicalDimensionCalibration | null {
+  const contract = deriveCanonicalBodyContract(args);
+  return contract?.canonicalDimensionCalibration ?? null;
 }
 
 export interface CanonicalSilhouetteMismatchSummary {

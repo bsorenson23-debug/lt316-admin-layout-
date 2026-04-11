@@ -44,7 +44,13 @@ import type {
   CanonicalDimensionCalibration,
   CanonicalHandleProfile,
 } from "@/types/productTemplate";
+import type { TemplatePipelineStageRecord } from "@/types/templatePipelineDiagnostics";
 import { resolveCanonicalHandleRenderMode } from "@/lib/canonicalDimensionCalibration";
+import {
+  solveEditableHandlePreviewGeometry,
+  type EditableHandlePreview,
+} from "@/lib/editableHandleGeometry";
+import type { LidAssemblyPreset } from "@/lib/lidPresets";
 
 // ---------------------------------------------------------------------------
 // Suppress noisy Three.js deprecation warnings
@@ -80,29 +86,10 @@ export interface TumblerDimensions {
   printableHeightMm: number;
   /** Distance from mesh top to printable zone top in mm */
   printableTopOffsetMm?: number;
-  /** Lid/body seam measured from the overall top in mm */
+  /** Top edge of the silver ring / lid seam measured from the overall top in mm */
   lidSeamFromOverallMm?: number;
   /** Bottom edge of the top silver ring measured from the overall top in mm */
   silverBandBottomFromOverallMm?: number;
-}
-
-export interface EditableHandlePreview {
-  side: "left" | "right";
-  topFromOverallMm: number;
-  bottomFromOverallMm: number;
-  outerTopFromOverallMm: number;
-  outerBottomFromOverallMm: number;
-  reachMm: number;
-  outerOffsetMm: number;
-  upperCornerFromOverallMm: number;
-  lowerCornerFromOverallMm: number;
-  upperCornerReachMm: number;
-  lowerCornerReachMm: number;
-  upperTransitionFromOverallMm: number;
-  lowerTransitionFromOverallMm: number;
-  upperTransitionReachMm: number;
-  lowerTransitionReachMm: number;
-  tubeDiameterMm?: number;
 }
 
 /** Per-item rasterized texture for 3D Decal projection */
@@ -137,8 +124,11 @@ export interface ModelViewerProps {
   manufacturerLogoStamp?: import("@/types/productTemplate").ManufacturerLogoStamp;
   /** Body tint hex color (e.g. "#b0b8c4" for stainless, "#1a1a2e" for matte black) */
   bodyTintColor?: string;
+  /** Lid cap tint hex color */
+  lidTintColor?: string;
   /** Rim / engraved artwork tint */
   rimTintColor?: string;
+  lidAssemblyPreset?: LidAssemblyPreset | null;
   /** Template preview only: render tumbler surface zones */
   showTemplateSurfaceZones?: boolean;
   /** Shared front-view and wrap calibration used by template preview consumers. */
@@ -147,6 +137,7 @@ export interface ModelViewerProps {
   canonicalHandleProfile?: CanonicalHandleProfile | null;
   editableHandlePreview?: EditableHandlePreview | null;
   previewModelMode?: "alignment-model" | "full-model" | "source-traced";
+  onPipelineStage?: (stage: TemplatePipelineStageRecord) => void;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -183,6 +174,25 @@ interface ModelTransform {
   scale: number;
   rotation: [number, number, number];
   position: [number, number, number];
+}
+
+function cloneOpaqueMaterial(
+  material: THREE.Material | THREE.Material[] | null | undefined,
+): THREE.Material | THREE.Material[] | null | undefined {
+  const normalize = (candidate: THREE.Material): THREE.Material => {
+    const next = candidate.clone();
+    if ("transparent" in next) next.transparent = false;
+    if ("opacity" in next) next.opacity = 1;
+    if ("alphaTest" in next) next.alphaTest = 0;
+    if ("depthWrite" in next) next.depthWrite = true;
+    if ("premultipliedAlpha" in next) next.premultipliedAlpha = false;
+    if ("transmission" in next) next.transmission = 0;
+    next.needsUpdate = true;
+    return next;
+  };
+
+  if (!material) return material;
+  return Array.isArray(material) ? material.map(normalize) : normalize(material);
 }
 
 /**
@@ -315,11 +325,11 @@ function AutoFit({ url }: { url: string }) {
 function StudioLights() {
   return (
     <>
-      <hemisphereLight args={["#ffe8cc", "#2a3a50", 0.7]} />
-      <directionalLight position={[5, 9, 4]} intensity={1.8} castShadow
+      <hemisphereLight args={["#fff3de", "#31445f", 0.95]} />
+      <directionalLight position={[5, 9, 4]} intensity={2.25} castShadow
         shadow-mapSize={[2048, 2048]} shadow-bias={-0.0001} color="#fff8f0" />
-      <directionalLight position={[-5, 3, -2]} intensity={0.5} color="#c8d8ff" />
-      <directionalLight position={[0, 4, -9]} intensity={0.35} color="#ffffff" />
+      <directionalLight position={[-5, 3, -2]} intensity={0.8} color="#d4e3ff" />
+      <directionalLight position={[0, 4, -9]} intensity={0.55} color="#ffffff" />
     </>
   );
 }
@@ -401,16 +411,22 @@ function AlignmentOrthoCamera({
 
   useEffect(() => {
     if (!enabled || !cameraRef.current) return;
+    const modelCenter = modelBounds?.getCenter(new THREE.Vector3()) ?? null;
+    const modelSize = modelBounds?.getSize(new THREE.Vector3()) ?? null;
     const center = viewBoxMm
       ? new THREE.Vector3(
           viewBoxMm.x + (viewBoxMm.width / 2),
           (viewBoxMm.height / 2) - (viewBoxMm.y + (viewBoxMm.height / 2)),
-          0,
+          modelCenter?.z ?? 0,
         )
-      : modelBounds?.getCenter(new THREE.Vector3()) ?? null;
+      : modelCenter;
     const boundsSize = viewBoxMm
-      ? new THREE.Vector3(viewBoxMm.width, viewBoxMm.height, 1)
-      : modelBounds?.getSize(new THREE.Vector3()) ?? null;
+      ? new THREE.Vector3(
+          Math.max(viewBoxMm.width, modelSize?.x ?? 0),
+          Math.max(viewBoxMm.height, modelSize?.y ?? 0),
+          Math.max(1, modelSize?.z ?? 0),
+        )
+      : modelSize;
     if (!center || !boundsSize) return;
     const aspect = size.width > 0 && size.height > 0 ? size.width / size.height : 1;
     const worldHeight = Math.max(boundsSize.y * 1.08, (boundsSize.x / Math.max(aspect, 0.1)) * 1.08, 1);
@@ -429,30 +445,74 @@ function AlignmentOrthoCamera({
 function PreviewPerspectiveCamera({
   enabled,
   modelBounds,
+  focusCenter,
+  previewMode,
 }: {
   enabled: boolean;
   modelBounds: THREE.Box3 | null;
+  focusCenter?: THREE.Vector3 | null;
+  previewMode?: "alignment-model" | "full-model" | "source-traced";
 }) {
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
+  const viewport = useThree((state) => state.size);
+  const controls = useThree((state) => state.controls as unknown as { target: THREE.Vector3; update?: () => void } | undefined);
 
   useEffect(() => {
     if (!enabled || !cameraRef.current || !modelBounds) return;
-    const center = modelBounds.getCenter(new THREE.Vector3());
+    const center = focusCenter?.clone() ?? modelBounds.getCenter(new THREE.Vector3());
     const size = modelBounds.getSize(new THREE.Vector3());
     const fov = THREE.MathUtils.degToRad(cameraRef.current.fov);
-    const fitHeight = size.y / Math.max(0.1, 2 * Math.tan(fov / 2));
-    const fitWidth = size.x / Math.max(0.1, 2 * Math.tan(fov / 2));
-    const distance = Math.max(fitHeight, fitWidth, size.z + 40) * 1.2;
-    cameraRef.current.position.set(
-      center.x + size.x * 0.18,
-      center.y + size.y * 0.08,
-      center.z + distance,
+    const aspect = viewport.width > 0 && viewport.height > 0
+      ? viewport.width / viewport.height
+      : 1;
+    const isFullPreview = previewMode === "full-model";
+    const tanHalfFov = Math.max(0.1, Math.tan(fov / 2));
+    const fitDistanceHeight = (size.y / 2) / tanHalfFov;
+    const fitDistanceWidth = (size.x / 2) / Math.max(0.1, tanHalfFov * aspect);
+    const fitDistance = Math.max(
+      fitDistanceHeight,
+      fitDistanceWidth,
+      1,
     );
-    cameraRef.current.lookAt(center);
+    const fitMargin = isFullPreview ? 0.62 : 1.02;
+    const depthPadding = Math.max(
+      size.z * (isFullPreview ? 0.006 : 0.18),
+      size.y * (isFullPreview ? 0.01 : 0.035),
+      isFullPreview ? 1.2 : 8,
+    );
+    const distance = Math.max(
+      (fitDistance * fitMargin) + depthPadding,
+      (size.z / 2) + (isFullPreview ? 0.9 : 12),
+    );
+    const compositionCenter = new THREE.Vector3(
+      center.x,
+      center.y - size.y * (isFullPreview ? 0.012 : -0.016),
+      center.z,
+    );
+    cameraRef.current.position.set(
+      compositionCenter.x,
+      compositionCenter.y,
+      compositionCenter.z + distance,
+    );
+    cameraRef.current.lookAt(compositionCenter);
     cameraRef.current.near = 0.1;
     cameraRef.current.far = 8000;
     cameraRef.current.updateProjectionMatrix();
-  }, [enabled, modelBounds]);
+    if (controls) {
+      controls.target.copy(compositionCenter);
+      controls.update?.();
+    }
+  }, [
+    controls,
+    enabled,
+    focusCenter?.x,
+    focusCenter?.y,
+    focusCenter?.z,
+    modelBounds,
+    previewMode,
+    viewport.height,
+    viewport.width,
+  ]);
 
   if (!enabled) return null;
   return <PerspectiveCamera ref={cameraRef} makeDefault fov={35} near={0.1} far={8000} />;
@@ -591,7 +651,33 @@ function TemplateSurfaceZones({
   );
 }
 
-function buildCanonicalBodyGeometry(bodyProfile: CanonicalBodyProfile, totalHeightMm: number): THREE.LatheGeometry | null {
+function buildSolidLatheCupGeometry(
+  outerProfilePoints: THREE.Vector2[],
+  options?: {
+    wallThicknessMm?: number;
+    bottomThicknessMm?: number;
+    rimDropMm?: number;
+    segments?: number;
+  },
+): THREE.BufferGeometry | null {
+  if (outerProfilePoints.length < 4) return null;
+  const topPoint = outerProfilePoints[0]!;
+  const bottomPoint = outerProfilePoints[outerProfilePoints.length - 1]!;
+  const closedProfile = [
+    new THREE.Vector2(0.01, topPoint.y),
+    ...outerProfilePoints,
+    new THREE.Vector2(0.01, bottomPoint.y),
+  ];
+
+  const geometry = new THREE.LatheGeometry(closedProfile, options?.segments ?? 96);
+  geometry.rotateY(Math.PI);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+function buildCanonicalBodyGeometry(bodyProfile: CanonicalBodyProfile, totalHeightMm: number): THREE.BufferGeometry | null {
   if (bodyProfile.samples.length < 4) return null;
   const profilePoints = bodyProfile.samples.map(
     (sample) => new THREE.Vector2(
@@ -599,10 +685,12 @@ function buildCanonicalBodyGeometry(bodyProfile: CanonicalBodyProfile, totalHeig
       (totalHeightMm / 2) - sample.yMm,
     ),
   );
-  const geometry = new THREE.LatheGeometry(profilePoints, 72);
-  geometry.rotateY(Math.PI);
-  geometry.computeVertexNormals();
-  return geometry;
+  return buildSolidLatheCupGeometry(profilePoints, {
+    wallThicknessMm: Math.max(2, Math.min(3.4, totalHeightMm * 0.0105)),
+    bottomThicknessMm: Math.max(3.2, Math.min(5.4, totalHeightMm * 0.018)),
+    rimDropMm: 1.6,
+    segments: 96,
+  });
 }
 
 function interpolateBodyRadiusMm(bodyProfile: CanonicalBodyProfile, yMm: number): number {
@@ -669,6 +757,49 @@ function computeRegistrationShellBounds(viewBoxMm: CanonicalDimensionCalibration
   return new THREE.Box3(
     new THREE.Vector3(minX, minY, -1),
     new THREE.Vector3(maxX, maxY, 1),
+  );
+}
+
+function computePreviewFitBounds(root: THREE.Object3D): THREE.Box3 {
+  root.updateWorldMatrix(true, true);
+  const fitBounds = new THREE.Box3();
+  const childBounds = new THREE.Box3();
+  let hasIncludedGeometry = false;
+
+  root.traverse((child) => {
+    let current: THREE.Object3D | null = child;
+    while (current) {
+      if (current.userData?.excludeFromPreviewFit) return;
+      current = current.parent;
+    }
+
+    const maybeMesh = child as THREE.Mesh;
+    const geometry = maybeMesh.geometry;
+    if (!geometry || typeof geometry.computeBoundingBox !== "function") return;
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    if (!geometry.boundingBox) return;
+
+    childBounds.copy(geometry.boundingBox).applyMatrix4(maybeMesh.matrixWorld);
+    fitBounds.union(childBounds);
+    hasIncludedGeometry = true;
+  });
+
+  if (!hasIncludedGeometry || fitBounds.isEmpty()) {
+    return new THREE.Box3().setFromObject(root);
+  }
+
+  return fitBounds;
+}
+
+function box3ApproximatelyEquals(a: THREE.Box3 | null, b: THREE.Box3, epsilon = 0.01): boolean {
+  if (!a) return false;
+  return (
+    Math.abs(a.min.x - b.min.x) <= epsilon &&
+    Math.abs(a.min.y - b.min.y) <= epsilon &&
+    Math.abs(a.min.z - b.min.z) <= epsilon &&
+    Math.abs(a.max.x - b.max.x) <= epsilon &&
+    Math.abs(a.max.y - b.max.y) <= epsilon &&
+    Math.abs(a.max.z - b.max.z) <= epsilon
   );
 }
 
@@ -910,7 +1041,6 @@ function buildEditableHandleGeometry(args: {
   const { bodyProfile, totalHeightMm, handle } = args;
   if (
     !(handle.bottomFromOverallMm > handle.topFromOverallMm) ||
-    !(handle.outerBottomFromOverallMm > handle.outerTopFromOverallMm) ||
     !(handle.reachMm > 0)
   ) {
     return null;
@@ -939,163 +1069,306 @@ function buildEditableHandleGeometry(args: {
     const radiusMm = interpolateBodyRadiusMm(bodyProfile, yMm);
     return sideSign * (radiusMm + Math.max(0, reachMm));
   };
-  const toFrontPoint = (yMm: number, reachMm: number) => new THREE.Vector2(
-    signedX(yMm, reachMm),
-    yToScene(yMm),
-  );
-  const toCenterlinePoint = (yMm: number, reachMm: number) => new THREE.Vector3(
-    signedX(yMm, reachMm),
-    yToScene(yMm),
-    0,
-  );
-  const sampleBodyBridge = (startY: number, endY: number) => {
-    const spanMm = Math.abs(endY - startY);
-    const steps = THREE.MathUtils.clamp(Math.ceil(spanMm / 6), 1, 14);
-    const points: THREE.Vector2[] = [];
-    for (let step = 1; step < steps; step += 1) {
-      const t = step / steps;
-      const yMm = THREE.MathUtils.lerp(startY, endY, t);
-      points.push(toFrontPoint(yMm, 0));
-    }
-    return points;
-  };
-  const outerTopClearMm = Math.max(2, handle.topFromOverallMm - handle.outerTopFromOverallMm);
-  const outerBottomClearMm = Math.max(2, handle.outerBottomFromOverallMm - handle.bottomFromOverallMm);
-  const outerUpperCornerMm = Math.min(
-    handle.upperCornerFromOverallMm - Math.max(2, outerTopClearMm * 0.82),
-    handle.outerTopFromOverallMm + Math.max(2, outerTopClearMm * 0.72),
-  );
-  const outerLowerCornerMm = Math.max(
-    handle.lowerCornerFromOverallMm + Math.max(2, outerBottomClearMm * 0.82),
-    handle.outerBottomFromOverallMm - Math.max(2, outerBottomClearMm * 0.72),
-  );
+  const toFrontPoint = (yMm: number, reachMm: number) => ({
+    x: signedX(yMm, reachMm),
+    y: yToScene(yMm),
+  });
   const innerUpperTransitionReach = clampReach(handle.upperTransitionReachMm, handle.reachMm * 0.55);
   const innerUpperCornerReach = clampReach(handle.upperCornerReachMm, handle.reachMm * 0.76);
   const innerLowerCornerReach = clampReach(handle.lowerCornerReachMm, handle.reachMm * 0.76);
   const innerLowerTransitionReach = clampReach(handle.lowerTransitionReachMm, handle.reachMm * 0.55);
-  const outerUpperTransitionReach = innerUpperTransitionReach + outerOffsetMm;
-  const outerUpperCornerReach = innerUpperCornerReach + outerOffsetMm;
-  const outerLowerCornerReach = innerLowerCornerReach + outerOffsetMm;
-  const outerLowerTransitionReach = innerLowerTransitionReach + outerOffsetMm;
-
-  const centerTopMm = (handle.outerTopFromOverallMm + handle.topFromOverallMm) / 2;
-  const centerBottomMm = (handle.outerBottomFromOverallMm + handle.bottomFromOverallMm) / 2;
-  const centerUpperTransitionMm = (handle.outerTopFromOverallMm + handle.upperTransitionFromOverallMm) / 2;
-  const centerLowerTransitionMm = (handle.outerBottomFromOverallMm + handle.lowerTransitionFromOverallMm) / 2;
-  const centerUpperCornerMm = (outerUpperCornerMm + handle.upperCornerFromOverallMm) / 2;
-  const centerLowerCornerMm = (outerLowerCornerMm + handle.lowerCornerFromOverallMm) / 2;
-  const centerUpperTransitionReach = (outerUpperTransitionReach + innerUpperTransitionReach) / 2;
-  const centerLowerTransitionReach = (outerLowerTransitionReach + innerLowerTransitionReach) / 2;
-  const centerUpperCornerReach = (outerUpperCornerReach + innerUpperCornerReach) / 2;
-  const centerLowerCornerReach = (outerLowerCornerReach + innerLowerCornerReach) / 2;
-
-  const centerlinePoints = [
-    toCenterlinePoint(centerTopMm, 0),
-    toCenterlinePoint(centerUpperTransitionMm, centerUpperTransitionReach),
-    toCenterlinePoint(centerUpperCornerMm, centerUpperCornerReach),
-    toCenterlinePoint(centerLowerCornerMm, centerLowerCornerReach),
-    toCenterlinePoint(centerLowerTransitionMm, centerLowerTransitionReach),
-    toCenterlinePoint(centerBottomMm, 0),
-  ].filter((point, index, all) => {
-    if (index === 0) return true;
-    return point.distanceTo(all[index - 1]!) > 0.35;
+  const solved = solveEditableHandlePreviewGeometry({
+    handle: {
+      ...handle,
+      outerOffsetMm,
+      upperTransitionReachMm: innerUpperTransitionReach,
+      upperCornerReachMm: innerUpperCornerReach,
+      lowerCornerReachMm: innerLowerCornerReach,
+      lowerTransitionReachMm: innerLowerTransitionReach,
+    },
+    toPoint: (fromOverallMm, reachMm) => toFrontPoint(fromOverallMm, reachMm),
   });
-
-  if (centerlinePoints.length >= 4) {
-    const curve = new THREE.CatmullRomCurve3(centerlinePoints, false, "centripetal", 0.35);
-    const tubularSegments = THREE.MathUtils.clamp(centerlinePoints.length * 18, 72, 220);
-    const radialSegments = 20;
-    const geometry = new THREE.TubeGeometry(
-      curve,
-      tubularSegments,
-      Math.max(1.6, tubeDiameterMm / 2),
-      radialSegments,
-      false,
-    );
-    geometry.computeVertexNormals();
-    geometry.computeBoundingBox();
-    geometry.computeBoundingSphere();
-    return {
-      geometry,
-      extrusionDepthMm: tubeDiameterMm,
-    };
-  }
-
-  const outerTopAttach = toFrontPoint(handle.outerTopFromOverallMm, 0);
-  const outerBottomAttach = toFrontPoint(handle.outerBottomFromOverallMm, 0);
-  const innerTopAttach = toFrontPoint(handle.topFromOverallMm, 0);
-  const innerBottomAttach = toFrontPoint(handle.bottomFromOverallMm, 0);
-
-  const outerUpperEntry = toFrontPoint(handle.outerTopFromOverallMm, outerUpperTransitionReach);
-  const outerUpperCorner = toFrontPoint(outerUpperCornerMm, outerUpperCornerReach);
-  const outerLowerCorner = toFrontPoint(outerLowerCornerMm, outerLowerCornerReach);
-  const outerLowerExit = toFrontPoint(handle.outerBottomFromOverallMm, outerLowerTransitionReach);
-
-  const innerUpperEntry = toFrontPoint(handle.upperTransitionFromOverallMm, innerUpperTransitionReach);
-  const innerUpperCorner = toFrontPoint(handle.upperCornerFromOverallMm, innerUpperCornerReach);
-  const innerLowerCorner = toFrontPoint(handle.lowerCornerFromOverallMm, innerLowerCornerReach);
-  const innerLowerExit = toFrontPoint(handle.lowerTransitionFromOverallMm, innerLowerTransitionReach);
 
   const shape = new THREE.Shape();
-  shape.moveTo(outerTopAttach.x, outerTopAttach.y);
-  shape.lineTo(outerUpperEntry.x, outerUpperEntry.y);
-  shape.quadraticCurveTo(outerUpperCorner.x, outerUpperEntry.y, outerUpperCorner.x, outerUpperCorner.y);
-  shape.lineTo(outerLowerCorner.x, outerLowerCorner.y);
-  shape.quadraticCurveTo(outerLowerCorner.x, outerLowerExit.y, outerLowerExit.x, outerLowerExit.y);
-  shape.lineTo(outerBottomAttach.x, outerBottomAttach.y);
-  sampleBodyBridge(handle.outerBottomFromOverallMm, handle.bottomFromOverallMm).forEach((point) => {
-    shape.lineTo(point.x, point.y);
-  });
-  shape.lineTo(innerBottomAttach.x, innerBottomAttach.y);
-  shape.lineTo(innerLowerExit.x, innerLowerExit.y);
-  shape.quadraticCurveTo(innerLowerCorner.x, innerLowerExit.y, innerLowerCorner.x, innerLowerCorner.y);
-  shape.lineTo(innerUpperCorner.x, innerUpperCorner.y);
-  shape.quadraticCurveTo(innerUpperCorner.x, innerUpperEntry.y, innerUpperEntry.x, innerUpperEntry.y);
-  shape.lineTo(innerTopAttach.x, innerTopAttach.y);
-  sampleBodyBridge(handle.topFromOverallMm, handle.outerTopFromOverallMm).forEach((point) => {
-    shape.lineTo(point.x, point.y);
-  });
-  shape.lineTo(outerTopAttach.x, outerTopAttach.y);
+  shape.moveTo(solved.outerPoints.attachTop.x, solved.outerPoints.attachTop.y);
+  shape.lineTo(solved.outerPoints.upperTransition.x, solved.outerPoints.upperTransition.y);
+  shape.quadraticCurveTo(
+    solved.outerPoints.upperCorner.x,
+    solved.outerPoints.upperTransition.y,
+    solved.outerPoints.upperCorner.x,
+    solved.outerPoints.upperCorner.y,
+  );
+  shape.lineTo(solved.outerPoints.lowerCorner.x, solved.outerPoints.lowerCorner.y);
+  shape.quadraticCurveTo(
+    solved.outerPoints.lowerCorner.x,
+    solved.outerPoints.lowerTransition.y,
+    solved.outerPoints.lowerTransition.x,
+    solved.outerPoints.lowerTransition.y,
+  );
+  shape.lineTo(solved.outerPoints.attachBottom.x, solved.outerPoints.attachBottom.y);
+  shape.lineTo(solved.innerPoints.attachBottom.x, solved.innerPoints.attachBottom.y);
+  shape.lineTo(solved.innerPoints.lowerTransition.x, solved.innerPoints.lowerTransition.y);
+  shape.quadraticCurveTo(
+    solved.innerPoints.lowerCorner.x,
+    solved.innerPoints.lowerTransition.y,
+    solved.innerPoints.lowerCorner.x,
+    solved.innerPoints.lowerCorner.y,
+  );
+  shape.lineTo(solved.innerPoints.upperCorner.x, solved.innerPoints.upperCorner.y);
+  shape.quadraticCurveTo(
+    solved.innerPoints.upperCorner.x,
+    solved.innerPoints.upperTransition.y,
+    solved.innerPoints.upperTransition.x,
+    solved.innerPoints.upperTransition.y,
+  );
+  shape.lineTo(solved.innerPoints.attachTop.x, solved.innerPoints.attachTop.y);
+  shape.lineTo(solved.outerPoints.attachTop.x, solved.outerPoints.attachTop.y);
 
+  const outlineDepthMm = THREE.MathUtils.clamp(
+    Math.max(tubeDiameterMm * 0.96, outerOffsetMm * 0.82),
+    5.5,
+    26,
+  );
   const geometry = new THREE.ExtrudeGeometry(shape, {
-    depth: tubeDiameterMm,
+    depth: outlineDepthMm,
     bevelEnabled: true,
-    bevelSegments: 2,
-    bevelSize: Math.min(0.8, tubeDiameterMm * 0.12),
-    bevelThickness: Math.min(0.6, tubeDiameterMm * 0.1),
-    curveSegments: 28,
+    steps: 8,
+    bevelSegments: 24,
+    bevelSize: THREE.MathUtils.clamp(outlineDepthMm * 0.32, 1.8, 6.2),
+    bevelThickness: THREE.MathUtils.clamp(outlineDepthMm * 0.4, 1.9, 6.4),
+    curveSegments: 96,
   });
-  geometry.translate(0, 0, -tubeDiameterMm / 2);
+  geometry.translate(0, 0, -outlineDepthMm / 2);
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return {
     geometry,
-    extrusionDepthMm: tubeDiameterMm,
+    extrusionDepthMm: outlineDepthMm,
+  };
+}
+
+function resolveTopAssemblyMeasurements(args: {
+  dims: TumblerDimensions;
+  totalHeightMm: number;
+}) {
+  const { dims, totalHeightMm } = args;
+  const topRadius = Math.max(1, (dims.topDiameterMm ?? dims.diameterMm) / 2);
+  const measuredBodyTopMm = Number.isFinite(dims.bodyTopOffsetMm)
+    ? Math.max(0, dims.bodyTopOffsetMm ?? 0)
+    : null;
+  const fallbackRingTopMm = clamp(topRadius * 0.105, 7, 13.5);
+  const measuredRingTopMm = clamp(
+    dims.lidSeamFromOverallMm ?? fallbackRingTopMm,
+    2.2,
+    measuredBodyTopMm != null ? Math.max(2.2, measuredBodyTopMm - 1.1) : totalHeightMm * 0.18,
+  );
+  const defaultSilverBandHeightMm = clamp(topRadius * 0.054, 3.8, 5.8);
+  const measuredRingBottomMm =
+    dims.silverBandBottomFromOverallMm != null && dims.silverBandBottomFromOverallMm > measuredRingTopMm
+      ? dims.silverBandBottomFromOverallMm
+      : (measuredRingTopMm + defaultSilverBandHeightMm);
+  const bodyTopMm = measuredBodyTopMm != null
+    ? measuredBodyTopMm
+    : measuredRingBottomMm;
+  const measuredVisibleBandHeightMm = Math.max(0.8, measuredRingBottomMm - measuredRingTopMm);
+  const silverBandHeightMm = clamp(
+    measuredVisibleBandHeightMm,
+    defaultSilverBandHeightMm * 0.92,
+    defaultSilverBandHeightMm,
+  );
+  const bandBottomGapMm = clamp(topRadius * 0.006, 0.04, 0.16);
+  const ringBottomMm = Math.max(measuredRingTopMm + silverBandHeightMm, bodyTopMm - bandBottomGapMm);
+  const ringTopMm = Math.max(2.2, ringBottomMm - silverBandHeightMm);
+  const lidHeightMm = Math.max(1.1, ringTopMm);
+  const gasketHeightMm = clamp(silverBandHeightMm * 0.032, 0.09, 0.2);
+  const gasketTopMm = Math.min(
+    ringBottomMm + 0.06,
+    bodyTopMm > ringBottomMm ? bodyTopMm - gasketHeightMm : ringBottomMm + 0.06,
+  );
+
+  return {
+    topRadius,
+    bodyTopMm,
+    ringTopMm,
+    ringBottomMm,
+    lidHeightMm,
+    silverBandHeightMm,
+    gasketHeightMm,
+    gasketTopMm,
   };
 }
 
 function SimplifiedRim({
   dims,
+  calibration,
   totalHeightMm,
+  bodyTintColor,
+  lidTintColor,
   rimTintColor,
+  lidAssemblyPreset,
 }: {
   dims: TumblerDimensions;
+  calibration?: CanonicalDimensionCalibration | null;
   totalHeightMm: number;
+  bodyTintColor?: string;
+  lidTintColor?: string;
   rimTintColor?: string;
+  lidAssemblyPreset?: LidAssemblyPreset | null;
 }) {
-  const topRadius = Math.max(dims.topDiameterMm ?? dims.diameterMm, dims.diameterMm) / 2;
-  const lidHeight = clamp(dims.bodyTopOffsetMm ?? dims.lidSeamFromOverallMm ?? 18, 10, totalHeightMm * 0.18);
-  const seamY = (totalHeightMm / 2) - lidHeight;
+  void calibration;
+  const {
+    topRadius,
+    bodyTopMm,
+    ringTopMm,
+    ringBottomMm,
+    lidHeightMm,
+    silverBandHeightMm,
+    gasketHeightMm,
+    gasketTopMm,
+  } = useMemo(
+    () => resolveTopAssemblyMeasurements({ dims, totalHeightMm }),
+    [dims, totalHeightMm],
+  );
+  const lidShellCenterY = (totalHeightMm / 2) - (lidHeightMm / 2);
+  const silverBandCenterY = (totalHeightMm / 2) - ((ringTopMm + ringBottomMm) / 2);
+  const gasketCenterY = (totalHeightMm / 2) - (gasketTopMm + (gasketHeightMm / 2));
+  const topInsetHeightMm = lidAssemblyPreset?.topInsetHeightMm ?? clamp(topRadius * 0.0068, 0.18, 0.34);
+  const topInsetCenterY = (totalHeightMm / 2) - (topInsetHeightMm / 2) - 0.06;
+  const topInsetRadius = topRadius * (lidAssemblyPreset?.topInsetRadiusScale ?? 0.57);
+  const lidShellRadius = topRadius * (lidAssemblyPreset?.lidShellRadiusScale ?? 1.004);
+  const lidLipHeightMm = lidAssemblyPreset?.lidLipHeightMm ?? clamp(topRadius * 0.0105, 0.26, 0.52);
+  const lidLipInsetMm = lidAssemblyPreset?.lidLipInsetMm ?? clamp(topRadius * 0.018, 0.52, 0.96);
+  const strawRadiusMm = clamp(topRadius * (lidAssemblyPreset?.strawRadiusScale ?? 0.053), 2.6, 4.1);
+  const strawHeightMm = lidAssemblyPreset?.strawHeightMm ?? clamp(totalHeightMm * 0.034, 5.8, 8.6);
+  const strawCenterY = (totalHeightMm / 2) + (strawHeightMm / 2) - 0.05;
+  const grommetRadius = topRadius * (lidAssemblyPreset?.grommetRadiusScale ?? 0.115);
+  const grommetHeightMm = lidAssemblyPreset?.grommetHeightMm ?? clamp(topRadius * 0.0045, 0.12, 0.2);
+  const strawGrommetY = (totalHeightMm / 2) - (grommetHeightMm / 2) - 0.04;
+  const strawX = 0;
+  const strawZ = 0;
+  const lidShellGeometry = useMemo(() => {
+    const halfHeight = lidHeightMm / 2;
+    const upperShoulderDrop = lidAssemblyPreset?.upperShoulderDropMm ?? clamp(lidHeightMm * 0.035, 0.22, 0.44);
+    const lowerShoulderRise = lidAssemblyPreset?.lowerShoulderRiseMm ?? clamp(lidHeightMm * 0.05, 0.24, 0.54);
+    const outerRadius = lidShellRadius;
+    const lowerRadius = topRadius * (lidAssemblyPreset?.lidLowerRadiusScale ?? 0.992);
+    const topPlateauRadius = outerRadius * (lidAssemblyPreset?.lidTopPlateauScale ?? 0.94);
+    const lipRadius = Math.max(topPlateauRadius - lidLipInsetMm, outerRadius * 0.84);
+    const points = [
+      new THREE.Vector2(0.01, halfHeight),
+      new THREE.Vector2(topPlateauRadius, halfHeight),
+      new THREE.Vector2(lipRadius, halfHeight - (lidLipHeightMm * 0.24)),
+      new THREE.Vector2(outerRadius * 0.982, halfHeight - lidLipHeightMm),
+      new THREE.Vector2(outerRadius * 0.992, halfHeight - upperShoulderDrop),
+      new THREE.Vector2(outerRadius, -halfHeight + lowerShoulderRise),
+      new THREE.Vector2(lowerRadius, -halfHeight),
+    ];
+    const geometry = new THREE.LatheGeometry(points, 112);
+    geometry.rotateY(Math.PI);
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    return geometry;
+  }, [lidAssemblyPreset, lidHeightMm, lidLipHeightMm, lidLipInsetMm, lidShellRadius, topRadius]);
+  useEffect(() => () => {
+    lidShellGeometry.dispose();
+  }, [lidShellGeometry]);
+  const lidBaseColor = lidTintColor ?? bodyTintColor ?? "#f1f3f5";
+  const lidInsetColor = (() => {
+    const base = new THREE.Color(lidBaseColor);
+    return `#${base.clone().offsetHSL(0, -0.02, -0.04).getHexString()}`;
+  })();
+  const lidShellColor = lidBaseColor;
+  const strawColor = (() => {
+    const base = new THREE.Color("#edf2f7");
+    return `#${base.clone().offsetHSL(0.01, -0.02, -0.01).getHexString()}`;
+  })();
+  const silverBandColor = (() => {
+    const base = new THREE.Color("#edf2f6");
+    return `#${base.getHexString()}`;
+  })();
+  const resolvedSilverBandHeightMm = lidAssemblyPreset?.silverBandHeightMm ?? silverBandHeightMm;
+  const resolvedGasketHeightMm = lidAssemblyPreset?.gasketHeightMm ?? gasketHeightMm;
+  const resolvedGasketTopMm = Math.min(
+    ringBottomMm + (lidAssemblyPreset?.gasketGapMm ?? 0.06),
+    Math.max(ringBottomMm, bodyTopMm - resolvedGasketHeightMm),
+  );
+  const resolvedGasketCenterY = (totalHeightMm / 2) - (resolvedGasketTopMm + (resolvedGasketHeightMm / 2));
+  const silverBandOuterRadius = topRadius * (lidAssemblyPreset?.silverBandRadiusScale ?? 1.0005);
   return (
     <group>
-      <mesh position={[0, (totalHeightMm / 2) - (lidHeight / 2), 0]}>
-        <cylinderGeometry args={[topRadius * 1.02, topRadius * 1.05, lidHeight, 64]} />
-        <meshStandardMaterial color={rimTintColor ?? "#d7dce3"} metalness={0.55} roughness={0.42} />
+      <mesh geometry={lidShellGeometry} position={[0, lidShellCenterY, 0]}>
+        <meshPhysicalMaterial
+          color={lidShellColor}
+          metalness={0.01}
+          roughness={0.32}
+          clearcoat={0.26}
+          clearcoatRoughness={0.18}
+          transparent={false}
+          opacity={1}
+        />
       </mesh>
-      <mesh position={[0, seamY, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[topRadius * 1.01, 0.85, 8, 64]} />
-        <meshStandardMaterial color={rimTintColor ?? "#b8bfc8"} metalness={0.72} roughness={0.28} />
+      <mesh position={[0, topInsetCenterY, 0]}>
+        <cylinderGeometry args={[topInsetRadius, topInsetRadius * 1.002, topInsetHeightMm, 112]} />
+        <meshPhysicalMaterial
+          color={lidInsetColor}
+          metalness={0.015}
+          roughness={0.42}
+          clearcoat={0.08}
+          clearcoatRoughness={0.24}
+          transparent={false}
+          opacity={1}
+        />
+      </mesh>
+      <mesh position={[0, resolvedGasketCenterY, 0]}>
+        <cylinderGeometry args={[topRadius * 0.998, topRadius * 1.001, resolvedGasketHeightMm, 112]} />
+        <meshPhysicalMaterial
+          color="#14191f"
+          metalness={0.02}
+          roughness={0.62}
+          clearcoat={0.02}
+          clearcoatRoughness={0.28}
+          transparent={false}
+          opacity={1}
+        />
+      </mesh>
+      <mesh position={[0, silverBandCenterY, 0]}>
+        <cylinderGeometry args={[silverBandOuterRadius * 1.012, silverBandOuterRadius * 1.015, resolvedSilverBandHeightMm, 144]} />
+        <meshStandardMaterial
+          color={silverBandColor}
+          metalness={0.56}
+          roughness={0.18}
+          emissive="#0f1318"
+          emissiveIntensity={0.08}
+          transparent={false}
+          opacity={1}
+        />
+      </mesh>
+      <mesh position={[strawX, strawCenterY, strawZ]} userData={{ excludeFromPreviewFit: true }}>
+        <cylinderGeometry args={[strawRadiusMm * 0.98, strawRadiusMm, strawHeightMm, 36]} />
+        <meshPhysicalMaterial
+          color={strawColor}
+          metalness={0.01}
+          roughness={0.42}
+          transmission={0.01}
+          clearcoat={0.18}
+          clearcoatRoughness={0.18}
+          transparent={false}
+          opacity={1}
+        />
+      </mesh>
+      <mesh position={[strawX, strawGrommetY, strawZ]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[grommetRadius, grommetHeightMm, 16, 64]} />
+        <meshPhysicalMaterial
+          color={lidInsetColor}
+          metalness={0.04}
+          roughness={0.36}
+          clearcoat={0.14}
+          clearcoatRoughness={0.2}
+          transparent={false}
+          opacity={1}
+        />
       </mesh>
     </group>
   );
@@ -1109,7 +1382,9 @@ export function CanonicalAlignmentTumbler({
   calibration,
   previewMode,
   bodyTintColor,
+  lidTintColor,
   rimTintColor,
+  lidAssemblyPreset,
   decalItems,
   wrapWidthMm,
   printHeightMm,
@@ -1125,7 +1400,9 @@ export function CanonicalAlignmentTumbler({
   calibration: CanonicalDimensionCalibration;
   previewMode: "alignment-model" | "full-model";
   bodyTintColor?: string;
+  lidTintColor?: string;
   rimTintColor?: string;
+  lidAssemblyPreset?: LidAssemblyPreset | null;
   decalItems?: DecalItem[];
   wrapWidthMm?: number;
   printHeightMm?: number;
@@ -1135,6 +1412,15 @@ export function CanonicalAlignmentTumbler({
   onReady?: OnReady;
 }) {
   const ref = useRef<THREE.Group>(null);
+  const resolvedBodyTint = useMemo(() => new THREE.Color(bodyTintColor ?? "#93aa9b"), [bodyTintColor]);
+  const fullBodyColor = useMemo(
+    () => `#${resolvedBodyTint.clone().offsetHSL(0, -0.01, 0.005).getHexString()}`,
+    [resolvedBodyTint],
+  );
+  const fullHandleColor = useMemo(
+    () => `#${resolvedBodyTint.clone().offsetHSL(0, -0.008, -0.018).getHexString()}`,
+    [resolvedBodyTint],
+  );
   const bodyGeometry = useMemo(
     () => (
       previewMode === "alignment-model"
@@ -1291,23 +1577,25 @@ export function CanonicalAlignmentTumbler({
     <group ref={ref}>
       <mesh geometry={bodyGeometry} castShadow receiveShadow>
         <meshPhysicalMaterial
-          color={bodyTintColor ?? "#93aa9b"}
-          metalness={previewMode === "alignment-model" ? 0.04 : 0.22}
+          color={previewMode === "full-model" ? fullBodyColor : (bodyTintColor ?? "#93aa9b")}
+          metalness={previewMode === "alignment-model" ? 0.04 : 0.05}
           roughness={previewMode === "alignment-model" ? 0.82 : 0.46}
-          clearcoat={previewMode === "alignment-model" ? 0 : 0.08}
-          clearcoatRoughness={previewMode === "alignment-model" ? 1 : 0.42}
+          clearcoat={previewMode === "alignment-model" ? 0 : 0.56}
+          clearcoatRoughness={previewMode === "alignment-model" ? 1 : 0.2}
+          transparent={false}
+          opacity={1}
         />
       </mesh>
       {handleGeometryData && (
         <mesh geometry={handleGeometryData.geometry} castShadow receiveShadow>
           <meshPhysicalMaterial
-            color={previewMode === "full-model" ? (bodyTintColor ?? "#93aa9b") : "#e4c4cc"}
-            metalness={0.16}
-            roughness={0.4}
-            clearcoat={0.1}
-            clearcoatRoughness={0.36}
-            transparent={previewMode === "alignment-model"}
-            opacity={previewMode === "alignment-model" ? 0.22 : 1}
+            color={previewMode === "full-model" ? fullHandleColor : "#e4c4cc"}
+            metalness={previewMode === "full-model" ? 0.03 : 0.16}
+            roughness={previewMode === "full-model" ? 0.42 : 0.4}
+            clearcoat={previewMode === "full-model" ? 0.46 : 0.1}
+            clearcoatRoughness={previewMode === "full-model" ? 0.18 : 0.36}
+            transparent={false}
+            opacity={1}
           />
         </mesh>
       )}
@@ -1327,7 +1615,15 @@ export function CanonicalAlignmentTumbler({
         </mesh>
       )}
       {previewMode !== "alignment-model" && (
-        <SimplifiedRim dims={dims} totalHeightMm={calibration.totalHeightMm} rimTintColor={rimTintColor} />
+        <SimplifiedRim
+          dims={dims}
+          calibration={calibration}
+          totalHeightMm={calibration.totalHeightMm}
+          bodyTintColor={bodyTintColor}
+          lidTintColor={lidTintColor}
+          rimTintColor={rimTintColor}
+          lidAssemblyPreset={lidAssemblyPreset}
+        />
       )}
     </group>
   );
@@ -1391,7 +1687,7 @@ function ObjMesh({
 
 
 function GltfMesh({
-  url, dims, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, rimTintColor, generatedTumblerTrace, onReady,
+  url, dims, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, lidTintColor, rimTintColor, generatedTumblerTrace, onReady,
 }: {
   url: string;
   dims?: TumblerDimensions | null;
@@ -1401,12 +1697,16 @@ function GltfMesh({
   bedHeightMm?: number;
   tumblerMapping?: import("@/types/productTemplate").TumblerMapping;
   bodyTintColor?: string;
+  lidTintColor?: string;
   rimTintColor?: string;
   generatedTumblerTrace?: boolean;
   onReady?: OnReady;
 }) {
+  void lidTintColor;
   const gltf = useLoader(GLTFLoader, url);
   void rimTintColor;
+  const ref = useRef<THREE.Group>(null);
+  const bodyRef = useRef<THREE.Mesh>(null);
 
   // ── Extract body mesh geometry + material from the GLB scene ──
   // We render the mesh explicitly (not via <primitive>) so Decals can be children.
@@ -1429,7 +1729,14 @@ function GltfMesh({
     // Collect non-body children for rendering separately
     gltf.scene.children.forEach((child) => {
       if (child === foundMesh) return;
-      otherObjects.push(child);
+      const clone = child.clone(true);
+      clone.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+        obj.material = cloneOpaqueMaterial(obj.material) ?? obj.material;
+      });
+      otherObjects.push(clone);
     });
 
     const bodyTransform = {
@@ -1452,7 +1759,7 @@ function GltfMesh({
 
     return {
       geometry: foundGeometry,
-      material: foundMaterial,
+      material: cloneOpaqueMaterial(foundMaterial),
       bodyMesh: foundMesh,
       bodyTransform,
       otherObjects,
@@ -1463,8 +1770,8 @@ function GltfMesh({
   const transform = useMemo(() => {
     gltf.scene.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(gltf.scene);
-    return computeModelTransform(box, dims, { flipVertical: generatedTumblerTrace });
-  }, [gltf.scene, dims, generatedTumblerTrace]);
+    return computeModelTransform(box, dims);
+  }, [gltf.scene, dims]);
 
   // ── Per-item Three.js textures (keyed by item ID) ──
   const threeTextures = useMemo(() => {
@@ -1525,7 +1832,6 @@ function GltfMesh({
       });
   }, [dims, placedItems, bedWidthMm, bedHeightMm, tumblerMapping?.frontFaceRotation, tumblerMapping?.handleArcDeg, transform.scale]);
 
-  const ref = useRef<THREE.Group>(null);
   useEffect(() => {
     if (ref.current) onReady?.(ref.current);
   }, [onReady, gltf.scene]);
@@ -1543,6 +1849,7 @@ function GltfMesh({
       {/* Body mesh rendered explicitly so Decals can be direct children */}
       {bodyMeshData.geometry && (
         <mesh
+          ref={bodyRef}
           geometry={bodyMeshData.geometry}
           material={!bodyTintColor ? (bodyMeshData.material ?? undefined) : undefined}
           position={bodyMeshData.bodyTransform.position}
@@ -1552,7 +1859,13 @@ function GltfMesh({
           receiveShadow
         >
           {bodyTintColor && (
-            <meshStandardMaterial color={bodyTintColor} metalness={0.35} roughness={0.55} />
+            <meshStandardMaterial
+              color={bodyTintColor}
+              metalness={0.35}
+              roughness={0.55}
+              transparent={false}
+              opacity={1}
+            />
           )}
           {decalConfigs.map((cfg) => {
             const tex = threeTextures.get(cfg.itemId);
@@ -2056,13 +2369,13 @@ const KNOWN_MODELS: { match: string; key: string }[] = [
 ];
 
 function ModelByExtension({
-  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, rimTintColor, previewModelMode, onReady,
+  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, lidTintColor, rimTintColor, lidAssemblyPreset, previewModelMode, onReady,
 }: {
   url: string; ext: string; dims?: TumblerDimensions | null; handleArcDeg?: number;
   placedItems?: PlacedItem[]; itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number; bedHeightMm?: number; glbPath?: string | null;
   sourceName?: string;
-  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; rimTintColor?: string; previewModelMode?: "alignment-model" | "full-model" | "source-traced"; onReady?: OnReady;
+  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; lidTintColor?: string; rimTintColor?: string; lidAssemblyPreset?: LidAssemblyPreset | null; previewModelMode?: "alignment-model" | "full-model" | "source-traced"; onReady?: OnReady;
 }) {
   if (ext === "stl") return <StlMesh url={url} dims={dims} onReady={onReady} />;
   if (ext === "obj") return <ObjMesh url={url} dims={dims} onReady={onReady} />;
@@ -2071,7 +2384,7 @@ function ModelByExtension({
     // Check if this is a known model with a dedicated component
     const modelHint = `${glbPath ?? ""} ${sourceName ?? ""}`.toLowerCase();
     const knownModel = KNOWN_MODELS.find((m) => modelHint.includes(m.match));
-    const generatedTumblerTrace = previewModelMode === "source-traced";
+    const generatedTumblerTrace = false;
 
     if (knownModel?.key === "yeti40oz" && dims) {
       const decalItems = buildDecalItems(placedItems, itemTextures);
@@ -2090,7 +2403,9 @@ function ModelByExtension({
             glbPath={glbPath ?? undefined}
             tumblerMapping={tumblerMapping}
             bodyTintColor={bodyTintColor}
+            lidTintColor={lidTintColor}
             rimTintColor={rimTintColor}
+            lidAssemblyPreset={lidAssemblyPreset}
             onReady={onReady}
           />
         </Suspense>
@@ -2105,6 +2420,7 @@ function ModelByExtension({
           bedWidthMm={bedWidthMm} bedHeightMm={bedHeightMm}
           tumblerMapping={tumblerMapping}
           bodyTintColor={bodyTintColor}
+          lidTintColor={lidTintColor}
           rimTintColor={rimTintColor}
           generatedTumblerTrace={generatedTumblerTrace}
           onReady={onReady} />
@@ -2157,15 +2473,23 @@ class CanvasErrorBoundary extends Component<
 // ---------------------------------------------------------------------------
 
 export default function ModelViewer({
-  file, modelUrl, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, manufacturerLogoStamp, bodyTintColor, rimTintColor, showTemplateSurfaceZones, dimensionCalibration, canonicalBodyProfile, canonicalHandleProfile, editableHandlePreview, previewModelMode,
+  file, modelUrl, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, manufacturerLogoStamp, bodyTintColor, lidTintColor, rimTintColor, showTemplateSurfaceZones, dimensionCalibration, canonicalBodyProfile, canonicalHandleProfile, editableHandlePreview, previewModelMode, onPipelineStage,
 }: ModelViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
+  const modelBoundsRef = useRef<THREE.Box3 | null>(null);
   const [manufacturerLogoCanvas, setManufacturerLogoCanvas] = useState<HTMLCanvasElement | null>(null);
 
   // Auto-rotate: on by default for tumblers; pause on user interaction, resume after 4s
   const [isAutoRotating, setIsAutoRotating] = useState(!!tumblerDims && !showTemplateSurfaceZones);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoRotateDefaultsRef = useRef({
+    hasTumbler: Boolean(tumblerDims),
+    showTemplateSurfaceZones,
+  });
+  const reportPipelineStage = useCallback((stage: TemplatePipelineStageRecord) => {
+    onPipelineStage?.(stage);
+  }, [onPipelineStage]);
 
   const handleOrbitStart = useCallback(() => {
     setIsAutoRotating(false);
@@ -2180,6 +2504,13 @@ export default function ModelViewer({
   useEffect(() => {
     return () => { if (idleTimerRef.current) clearTimeout(idleTimerRef.current); };
   }, []);
+
+  useEffect(() => {
+    autoRotateDefaultsRef.current = {
+      hasTumbler: Boolean(tumblerDims),
+      showTemplateSurfaceZones,
+    };
+  }, [showTemplateSurfaceZones, tumblerDims]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2208,34 +2539,88 @@ export default function ModelViewer({
 
   // Create blob URL inside useEffect — safe for React Strict Mode
   useEffect(() => {
+    const nextAutoRotate = Boolean(file)
+      && autoRotateDefaultsRef.current.hasTumbler
+      && !autoRotateDefaultsRef.current.showTemplateSurfaceZones;
     if (!file) {
       const frameId = window.requestAnimationFrame(() => {
-        setUrl(modelUrl ?? null);
-        setModelBounds(null);
-        setIsAutoRotating(false);
+        setUrl((current) => (current === (modelUrl ?? null) ? current : (modelUrl ?? null)));
+        modelBoundsRef.current = null;
+        setModelBounds((current) => (current === null ? current : null));
+        setIsAutoRotating((current) => (current === false ? current : false));
       });
       return () => window.cancelAnimationFrame(frameId);
     }
     const objectUrl = URL.createObjectURL(file);
     const frameId = window.requestAnimationFrame(() => {
       setUrl(objectUrl);
-      setModelBounds(null);
-      setIsAutoRotating(!!tumblerDims && !showTemplateSurfaceZones);
+      modelBoundsRef.current = null;
+      setModelBounds((current) => (current === null ? current : null));
+      setIsAutoRotating((current) => (current === nextAutoRotate ? current : nextAutoRotate));
     });
     return () => {
       window.cancelAnimationFrame(frameId);
       URL.revokeObjectURL(objectUrl);
     };
-  }, [file, modelUrl, showTemplateSurfaceZones, tumblerDims]);
+  }, [file, modelUrl]);
 
   const handleModelReady = useCallback((obj: THREE.Object3D) => {
-    const box = new THREE.Box3().setFromObject(obj);
-    if (!box.isEmpty()) setModelBounds(box);
-  }, []);
+    const box = computePreviewFitBounds(obj);
+    if (box.isEmpty()) {
+      reportPipelineStage({
+        id: "viewer-sync",
+        status: "skip",
+        authority: "model-viewer",
+        engine: "preview-bounds",
+        warnings: [],
+        errors: [],
+        artifacts: {
+          source: "model-bounds",
+          action: "empty-bounds",
+        },
+      });
+      return;
+    }
+    if (box3ApproximatelyEquals(modelBoundsRef.current, box)) {
+      reportPipelineStage({
+        id: "viewer-sync",
+        status: "skip",
+        authority: "model-viewer",
+        engine: "preview-bounds",
+        warnings: [],
+        errors: [],
+        artifacts: {
+          source: "model-bounds",
+          action: "skipped-no-change",
+          min: [box.min.x, box.min.y, box.min.z],
+          max: [box.max.x, box.max.y, box.max.z],
+        },
+      });
+      return;
+    }
+    const nextBounds = box.clone();
+    modelBoundsRef.current = nextBounds;
+    setModelBounds((current) => (box3ApproximatelyEquals(current, nextBounds) ? current : nextBounds));
+    reportPipelineStage({
+      id: "viewer-sync",
+      status: "ready",
+      authority: "model-viewer",
+      engine: "preview-bounds",
+      warnings: [],
+      errors: [],
+      artifacts: {
+        source: "model-bounds",
+        action: "applied",
+        min: [nextBounds.min.x, nextBounds.min.y, nextBounds.min.z],
+        max: [nextBounds.max.x, nextBounds.max.y, nextBounds.max.z],
+      },
+    });
+  }, [reportPipelineStage]);
 
   const ext = file?.name.split(".").pop()?.toLowerCase() ??
     modelUrl?.split("?")[0]?.split(".").pop()?.toLowerCase() ??
     "";
+  const autoRotate = isAutoRotating && !showTemplateSurfaceZones;
   const hasCanonicalPreviewContext = Boolean(
     tumblerDims &&
     canonicalBodyProfile &&
@@ -2255,10 +2640,46 @@ export default function ModelViewer({
       : null),
     [canonicalBodyProfile, dimensionCalibration, hasCanonicalPreviewContext, previewModelMode],
   );
+  const sourceCompareBounds = modelBounds;
+  const fullPreviewBounds = useMemo(() => {
+    if (previewModelMode !== "full-model") return modelBounds ?? canonicalBodyBounds;
+    if (!modelBounds && !canonicalBodyBounds) return null;
+    const next = (canonicalBodyBounds ?? modelBounds)?.clone() ?? null;
+    if (!next) return null;
+    if (canonicalBodyBounds && modelBounds) {
+      const canonicalSize = canonicalBodyBounds.getSize(new THREE.Vector3());
+      const maxHandleAllowance = Math.max(canonicalSize.x * 0.74, 38);
+      const maxLidAllowance = Math.max(canonicalSize.y * 0.14, 12);
+      const maxDepthAllowance = Math.max(canonicalSize.z * 0.36, 18);
+      next.min.x = Math.min(next.min.x, Math.max(modelBounds.min.x, canonicalBodyBounds.min.x - Math.max(canonicalSize.x * 0.12, 9)));
+      next.max.x = Math.max(next.max.x, Math.min(modelBounds.max.x, canonicalBodyBounds.max.x + maxHandleAllowance));
+      next.min.y = Math.min(next.min.y, Math.max(modelBounds.min.y, canonicalBodyBounds.min.y - Math.max(canonicalSize.y * 0.035, 4)));
+      next.max.y = Math.max(next.max.y, Math.min(modelBounds.max.y, canonicalBodyBounds.max.y + maxLidAllowance));
+      next.min.z = Math.min(next.min.z, Math.max(modelBounds.min.z, canonicalBodyBounds.min.z - Math.max(canonicalSize.z * 0.18, 8)));
+      next.max.z = Math.max(next.max.z, Math.min(modelBounds.max.z, canonicalBodyBounds.max.z + maxDepthAllowance));
+    }
+    const size = next.getSize(new THREE.Vector3());
+    const hasHandle = Boolean(editableHandlePreview || canonicalHandleProfile);
+    next.min.x -= Math.max(size.x * 0.01, 0.6);
+    next.max.x += hasHandle ? Math.max(size.x * 0.028, 2.2) : Math.max(size.x * 0.012, 0.9);
+    next.min.y -= Math.max(size.y * 0.006, 0.5);
+    next.max.y += Math.max(size.y * 0.012, 1.2);
+    next.min.z -= Math.max(size.z * 0.018, 0.8);
+    next.max.z += Math.max(size.z * 0.028, 1.3);
+    return next;
+  }, [canonicalBodyBounds, canonicalHandleProfile, editableHandlePreview, modelBounds, previewModelMode]);
+  const fullPreviewFocusCenter = useMemo(() => {
+    if (previewModelMode !== "full-model") return null;
+    const preferredBounds = canonicalBodyBounds ?? fullPreviewBounds ?? modelBounds;
+    if (!preferredBounds) return null;
+    return preferredBounds.getCenter(new THREE.Vector3());
+  }, [canonicalBodyBounds, fullPreviewBounds, modelBounds, previewModelMode]);
   const alignmentBounds = hasCanonicalPreviewContext
     ? (
-        previewModelMode === "source-traced"
-          ? (modelBounds ?? canonicalBodyBounds)
+        previewModelMode === "full-model"
+          ? (fullPreviewBounds ?? canonicalBodyBounds)
+          : previewModelMode === "source-traced"
+          ? (canonicalBodyBounds ?? sourceCompareBounds)
           : (canonicalBodyBounds ?? modelBounds)
       )
     : modelBounds;
@@ -2266,7 +2687,13 @@ export default function ModelViewer({
     showTemplateSurfaceZones
     && tumblerDims
     && dimensionCalibration
-    && (previewModelMode === "alignment-model" || previewModelMode === "source-traced"),
+    && previewModelMode === "alignment-model",
+  );
+  const useTemplatePreviewSurfaceZones = Boolean(
+    tumblerDims
+    && alignmentBounds
+    && showTemplateSurfaceZones
+    && previewModelMode === "alignment-model",
   );
   const viewKey = flatPreview
     ? `flat:${flatPreview.widthMm}:${flatPreview.heightMm}:${flatPreview.thicknessMm}:${flatPreview.familyKey ?? ""}:${flatPreview.label ?? ""}`
@@ -2325,6 +2752,13 @@ export default function ModelViewer({
     return next;
   }, [itemTextures, manufacturerLogoCanvas, manufacturerLogoPlacedItem]);
   const previewHasItems = !!previewPlacedItems?.length && !!previewItemTextures?.size;
+  const useEngravableZoneRing = Boolean(
+    tumblerDims
+    && alignmentBounds
+    && !previewHasItems
+    && previewModelMode === "alignment-model"
+    && !showTemplateSurfaceZones,
+  );
 
   if (!url && !flatPreview && !useCanonicalAlignmentModel) return null;
 
@@ -2370,6 +2804,7 @@ export default function ModelViewer({
                 calibration={dimensionCalibration}
                 previewMode={previewModelMode === "full-model" ? "full-model" : "alignment-model"}
                 bodyTintColor={bodyTintColor}
+                lidTintColor={lidTintColor}
                 rimTintColor={rimTintColor}
                 onReady={handleModelReady}
               />
@@ -2387,22 +2822,31 @@ export default function ModelViewer({
                 sourceName={file?.name}
                 tumblerMapping={tumblerMapping}
                 bodyTintColor={bodyTintColor}
+                lidTintColor={lidTintColor}
                 rimTintColor={rimTintColor}
                 previewModelMode={previewModelMode}
                 onReady={handleModelReady}
               />
             ) : null}
           </Suspense>
-          {!useAlignmentOrthoCamera && <AutoFit url={viewKey} />}
+          {!useAlignmentOrthoCamera && !tumblerDims && <AutoFit url={viewKey} />}
         </Bounds>
         <AlignmentOrthoCamera
           enabled={useAlignmentOrthoCamera}
-          modelBounds={previewModelMode === "source-traced" ? alignmentBounds : canonicalBodyBounds}
+          modelBounds={canonicalBodyBounds}
           viewBoxMm={dimensionCalibration?.svgFrontViewBoxMm ?? null}
         />
         <PreviewPerspectiveCamera
           enabled={!useAlignmentOrthoCamera}
-          modelBounds={alignmentBounds}
+          modelBounds={
+            previewModelMode === "alignment-model"
+              ? alignmentBounds
+              : previewModelMode === "full-model"
+                ? (fullPreviewBounds ?? alignmentBounds)
+                : (modelBounds ?? alignmentBounds)
+          }
+          focusCenter={previewModelMode === "full-model" ? fullPreviewFocusCenter : null}
+          previewMode={previewModelMode}
         />
         <CalibratedFrontView
           enabled={false}
@@ -2410,12 +2854,11 @@ export default function ModelViewer({
         />
 
         {/* Engravable zone highlight — shown when tumbler loaded, no items placed */}
-        {tumblerDims && alignmentBounds && (
-          showTemplateSurfaceZones ? (
-            <TemplateSurfaceZones dims={tumblerDims} modelBounds={alignmentBounds} />
-          ) : (!previewHasItems ? (
-            <EngravableZoneRing dims={tumblerDims} modelBounds={alignmentBounds} />
-          ) : null)
+        {useTemplatePreviewSurfaceZones && (
+          <TemplateSurfaceZones dims={tumblerDims!} modelBounds={alignmentBounds!} />
+        )}
+        {useEngravableZoneRing && (
+          <EngravableZoneRing dims={tumblerDims!} modelBounds={alignmentBounds!} />
         )}
 
         <ContactShadows
@@ -2444,7 +2887,7 @@ export default function ModelViewer({
           makeDefault
           enableDamping
           dampingFactor={0.05}
-          autoRotate={isAutoRotating}
+          autoRotate={autoRotate}
           autoRotateSpeed={0.7}
           minDistance={minDist}
           maxDistance={maxDist}

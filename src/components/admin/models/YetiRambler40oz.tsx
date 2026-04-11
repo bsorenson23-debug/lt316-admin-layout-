@@ -5,6 +5,7 @@ import type { GLTF } from "three-stdlib";
 import type { TumblerMapping } from "@/types/productTemplate";
 import { normalizeGeometry } from "@/lib/modelAxisCorrection";
 import { analyzeTumblerMesh } from "@/lib/analyzeTumblerMesh";
+import type { LidAssemblyPreset } from "@/lib/lidPresets";
 import { getTumblerWrapLayout } from "@/utils/tumblerWrapLayout";
 
 type GLTFResult = GLTF & {
@@ -33,6 +34,16 @@ function resolveBodyMesh(nodes: Record<string, THREE.Object3D>): THREE.Mesh {
 function resolveBaseMaterial(
   material: THREE.Material | THREE.Material[],
 ): THREE.MeshStandardMaterial {
+  const forceOpaque = <T extends THREE.Material>(candidate: T): T => {
+    if ("transparent" in candidate) candidate.transparent = false;
+    if ("opacity" in candidate) candidate.opacity = 1;
+    if ("alphaTest" in candidate) candidate.alphaTest = 0;
+    if ("depthWrite" in candidate) candidate.depthWrite = true;
+    if ("premultipliedAlpha" in candidate) candidate.premultipliedAlpha = false;
+    if ("transmission" in candidate) candidate.transmission = 0;
+    candidate.needsUpdate = true;
+    return candidate;
+  };
   const candidates = Array.isArray(material) ? material : [material];
   const standardCandidate = candidates.find(
     (candidate): candidate is THREE.MeshStandardMaterial =>
@@ -40,14 +51,14 @@ function resolveBaseMaterial(
   );
 
   if (standardCandidate) {
-    return standardCandidate.clone();
+    return forceOpaque(standardCandidate.clone());
   }
 
-  return new THREE.MeshStandardMaterial({
+  return forceOpaque(new THREE.MeshStandardMaterial({
     color: "#7b7b7b",
     metalness: 0.55,
     roughness: 0.42,
-  });
+  }));
 }
 
 export interface DecalItem {
@@ -73,7 +84,9 @@ interface Props {
   glbPath?: string;
   tumblerMapping?: TumblerMapping;
   bodyTintColor?: string;
+  lidTintColor?: string;
   rimTintColor?: string;
+  lidAssemblyPreset?: LidAssemblyPreset | null;
   orientToFrontFace?: boolean;
   preferProceduralShell?: boolean;
   onReady?: (obj: THREE.Object3D) => void;
@@ -207,7 +220,7 @@ function buildProceduralTumblerBodyGeometry(args: {
   bottomDiameterMm?: number;
   overallHeightMm: number;
 }): {
-  geometry: THREE.LatheGeometry;
+  geometry: THREE.BufferGeometry;
   topY: number;
   bodyRadius: number;
 } {
@@ -234,10 +247,18 @@ function buildProceduralTumblerBodyGeometry(args: {
     new THREE.Vector2(Math.max(2, bottomRadius * 0.96), -halfHeight),
   ];
 
-  const geometry = new THREE.LatheGeometry(profilePoints, 72);
+  const geometry = new THREE.LatheGeometry(
+    [
+      new THREE.Vector2(0.01, halfHeight),
+      ...profilePoints,
+      new THREE.Vector2(0.01, -halfHeight),
+    ],
+    96,
+  );
   geometry.rotateY(Math.PI);
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
 
   return {
     geometry,
@@ -289,11 +310,14 @@ export function YetiRambler40oz({
   glbPath = DEFAULT_GLB_PATH,
   tumblerMapping,
   bodyTintColor = "#1f2322",
+  lidTintColor,
   rimTintColor = "#cfd2d0",
+  lidAssemblyPreset: _lidAssemblyPreset,
   orientToFrontFace = false,
   preferProceduralShell = false,
   onReady,
 }: Props) {
+  void lidTintColor;
   const shouldUseProceduralShell = preferProceduralShell || !glbPath;
   const effectiveHandleArcDeg = tumblerMapping?.handleArcDeg ?? _handleArcDeg ?? 0;
   const wrapLayout = useMemo(

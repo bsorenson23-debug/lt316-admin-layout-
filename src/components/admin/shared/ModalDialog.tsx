@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useId, useRef } from "react";
+import { createPortal } from "react-dom";
 import styles from "./ModalDialog.module.css";
 
 interface ModalDialogProps {
@@ -98,7 +99,9 @@ export function ModalDialog({
 
   if (!open) return null;
 
-  return (
+  if (typeof document === "undefined") return null;
+
+  return createPortal((
     <div className={styles.backdrop} onClick={onClose} role="presentation">
       <div
         ref={dialogRef}
@@ -125,5 +128,5 @@ export function ModalDialog({
         {footer ? <div className={styles.footer}>{footer}</div> : null}
       </div>
     </div>
-  );
+  ), document.body);
 }

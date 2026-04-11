@@ -31,6 +31,9 @@ jobs:
       - name: Run BODY REFERENCE contract tests
         run: npm run test:body-reference-contract
 
+      - name: Run template pipeline diagnostics tests
+        run: npm run test:template-pipeline-diagnostics
+
       - name: Install Playwright Chromium
         run: |
           npx playwright install --with-deps chromium

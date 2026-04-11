@@ -2,7 +2,12 @@
 
 import React from "react";
 import JSZip from "jszip";
-import type { BedConfig, PlacedItem } from "@/types/admin";
+import {
+  resolveTumblerUsableHeightMm,
+  resolveTumblerWorkspaceHeightMm,
+  type BedConfig,
+  type PlacedItem,
+} from "@/types/admin";
 import type {
   LightBurnExportPayload,
   RotaryPlacementPreset,
@@ -85,7 +90,7 @@ function inferTopSafeOffsetMm(
     return delta > 0 ? Number(delta.toFixed(2)) : 0;
   }
   const overall = bedConfig.tumblerOverallHeightMm;
-  const usable  = bedConfig.tumblerUsableHeightMm;
+  const usable  = resolveTumblerUsableHeightMm(bedConfig);
   if (!Number.isFinite(overall) || !Number.isFinite(usable)) return undefined;
   const delta = ((overall ?? 0) - (usable ?? 0)) / 2;
   return delta > 0 ? Number(delta.toFixed(2)) : 0;
@@ -99,7 +104,7 @@ function buildPlacementProfile(
 ): TumblerPlacementProfile {
   return {
     overallHeightMm: bedConfig.tumblerOverallHeightMm ?? bedConfig.height,
-    usableHeightMm:  bedConfig.tumblerUsableHeightMm  ?? bedConfig.height,
+    usableHeightMm:  resolveTumblerUsableHeightMm(bedConfig) ?? resolveTumblerWorkspaceHeightMm(bedConfig) ?? bedConfig.height,
     topToSafeZoneStartMm: manualTopOffsetMm ?? inferTopSafeOffsetMm(bedConfig, calibration) ?? undefined,
     bottomMarginMm: undefined,
     topAnchorMode: anchorMode,

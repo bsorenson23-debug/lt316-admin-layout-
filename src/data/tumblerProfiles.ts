@@ -37,6 +37,10 @@ export interface TumblerProfile {
   chuckRecommended: boolean;
   /** Visual groove/safe-zone guide overlaid on the bed canvas */
   guideBand?: TumblerGuideBand;
+  /** Top edge of the silver ring / lid seam measured from overall top (mm). */
+  lidSeamFromOverallMm?: number;
+  /** Bottom edge of the top silver ring measured from overall top (mm). */
+  silverBandBottomFromOverallMm?: number;
   /** Optional calibration notes shown to the user */
   notes?: string;
 }
@@ -203,6 +207,8 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
       upperGrooveYmm: 30,
       lowerGrooveYmm: 214,
     },
+    lidSeamFromOverallMm: 18,
+    silverBandBottomFromOverallMm: 30,
     notes: "Official ProTour 40oz family seed. Wrap/body math stays body-only; handle span is metadata only and printable height should be refined from BODY REFERENCE analysis.",
   },
 
@@ -213,10 +219,13 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     model: "Quencher H2.0 40oz",
     capacityOz: 40,
     shapeType: "tapered",
-    topDiameterMm: 110,             // 4.33"
-    bottomDiameterMm: 75,           // 2.95"
-    overallHeightMm: 297,           // 11.69"
-    usableHeightMm: 240,            // ~9.45"
+    outsideDiameterMm: 99.8,        // verified wrap/body diameter seed
+    topDiameterMm: 99.8,            // body-only upper diameter seed
+    bottomDiameterMm: 78.7,         // cup-holder/base diameter seed
+    overallHeightMm: 273.8,         // verified tumbler+lidshell height (straw excluded)
+    usableHeightMm: 216,            // fallback printable height; refined by BODY REFERENCE when available
+    wrapWidthMm: 313.6,             // verified wrap width seed
+    handleSpanMm: 147.8,            // verified overall handle span metadata
     hasHandle: true,
     handleArcDeg: 90,
     chuckRecommended: true,
@@ -224,9 +233,11 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
       id: "stanley-quencher-40-main-band",
       label: "Main Print Band",
       upperGrooveYmm: 28,
-      lowerGrooveYmm: 212,
+      lowerGrooveYmm: 244,
     },
-    notes: "Chuck required — pronounced taper + handle. Most popular SKU; verify groove positions before production run.",
+    lidSeamFromOverallMm: 17.5,
+    silverBandBottomFromOverallMm: 28,
+    notes: "Verified Stanley Quencher FlowState 40oz seed. Body diameter/wrap width are production-authoritative; BODY REFERENCE can refine printable height further.",
   },
 
   {
@@ -557,6 +568,39 @@ export function findTumblerProfileIdForBrandModel(args: {
   });
 
   if (candidates.length === 0) return null;
+
+  if (model && model !== "unknown") {
+    const normalizeWords = (value: string) =>
+      normalize(value)
+        .split(/[^a-z0-9]+/g)
+        .filter((token) => token && !/^\d+(?:oz)?$/.test(token));
+    const modelTokens = normalizeWords(model);
+    const genericTokens = new Set(["tumbler", "travel", "cup", "mug", "bottle", "h2", "h2o"]);
+    const discriminatingTokens = modelTokens.filter((token) => !genericTokens.has(token));
+
+    const scored = candidates
+      .map((profile) => {
+        const profileModel = normalize(profile.model);
+        const profileTokens = new Set(normalizeWords(profile.model));
+        let score = 0;
+
+        if (profileModel === model) score += 12;
+        if (profileModel.includes(model) || model.includes(profileModel)) score += 8;
+        for (const token of discriminatingTokens) {
+          if (profileTokens.has(token)) score += 3;
+        }
+        if (args.capacityOz && args.capacityOz > 0 && profile.capacityOz === args.capacityOz) {
+          score += 4;
+        }
+
+        return { profile, score };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    if ((scored[0]?.score ?? 0) > 0) {
+      return scored[0]!.profile.id;
+    }
+  }
 
   // Prefer exact capacity match when available
   if (args.capacityOz && args.capacityOz > 0) {

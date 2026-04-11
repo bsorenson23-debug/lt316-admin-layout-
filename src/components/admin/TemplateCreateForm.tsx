@@ -4,6 +4,7 @@ import React from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
+  type BodyReferenceViewSide,
   type CanonicalBodyProfile,
   type CanonicalDimensionCalibration,
   type CanonicalHandleProfile,
@@ -24,6 +25,10 @@ import type { TumblerFinish } from "@/types/materials";
 import type { TraceSettingsAssistResponse } from "@/types/imageAssist";
 import type { RasterVectorizeResponse } from "@/types/rasterVectorize";
 import type { SmartTemplateLookupResponse } from "@/types/smartTemplateLookup";
+import type {
+  TemplatePipelineDiagnostics,
+  TemplatePipelineStageRecord,
+} from "@/types/templatePipelineDiagnostics";
 import type { TumblerItemLookupFitDebug, TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
 import type { CatalogBatchImportSummary } from "@/lib/catalogBatchImport";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
@@ -75,6 +80,23 @@ import {
   deriveBodyReferencePipeline,
   type BodyReferencePipelineResult,
 } from "@/lib/bodyReferencePipeline";
+import {
+  buildTemplatePipelineProvenance,
+  buildTemplateReloadVerificationStage,
+  createTemplatePipelineDiagnostics,
+  createTemplatePipelineRunId,
+  fingerprintJson,
+  fingerprintText,
+  mergeTemplatePipelineDiagnostics,
+  setTemplatePipelineBlockingIssues,
+  setTemplatePipelineWarnings,
+  upsertTemplatePipelineStage,
+  updateTemplatePipelineInputFingerprints,
+} from "@/lib/templatePipelineDiagnostics";
+import {
+  isOrthographicBodyReferenceImage,
+  resolveBodyReferenceViewSource,
+} from "@/lib/bodyReferenceViewSource";
 import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -268,6 +290,70 @@ function buildSourceContourSignature(outline: EditableBodyOutline | null | undef
   const contour = outline?.sourceContour;
   if (!contour?.length) return "";
   return contour.map((point) => `${round2(point.x)}:${round2(point.y)}`).join("|");
+}
+
+function editableOutlineGeometrySignature(outline: EditableBodyOutline | null | undefined): string {
+  if (!outline) return "__none__";
+  return JSON.stringify({
+    closed: outline.closed,
+    version: outline.version ?? 1,
+    points: outline.points.map((point) => ({
+      x: round2(point.x),
+      y: round2(point.y),
+      role: point.role ?? null,
+      pointType: point.pointType ?? null,
+      inHandle: point.inHandle
+        ? { x: round2(point.inHandle.x), y: round2(point.inHandle.y) }
+        : null,
+      outHandle: point.outHandle
+        ? { x: round2(point.outHandle.x), y: round2(point.outHandle.y) }
+        : null,
+    })),
+    directContour: outline.directContour?.map((point) => ({
+      x: round2(point.x),
+      y: round2(point.y),
+    })) ?? null,
+    sourceContour: outline.sourceContour?.map((point) => ({
+      x: round2(point.x),
+      y: round2(point.y),
+    })) ?? null,
+    sourceContourBounds: outline.sourceContourBounds
+      ? {
+          minX: round2(outline.sourceContourBounds.minX),
+          minY: round2(outline.sourceContourBounds.minY),
+          maxX: round2(outline.sourceContourBounds.maxX),
+          maxY: round2(outline.sourceContourBounds.maxY),
+          width: round2(outline.sourceContourBounds.width),
+          height: round2(outline.sourceContourBounds.height),
+        }
+      : null,
+    sourceContourViewport: outline.sourceContourViewport
+      ? {
+          minX: round2(outline.sourceContourViewport.minX),
+          minY: round2(outline.sourceContourViewport.minY),
+          width: round2(outline.sourceContourViewport.width),
+          height: round2(outline.sourceContourViewport.height),
+        }
+      : null,
+  });
+}
+
+function referencePathsGeometrySignature(paths: ReferencePaths | null | undefined): string {
+  if (!paths) return "__none__";
+  return JSON.stringify({
+    bodyOutline: editableOutlineGeometrySignature(paths.bodyOutline),
+    lidProfile: editableOutlineGeometrySignature(paths.lidProfile),
+    silverProfile: editableOutlineGeometrySignature(paths.silverProfile),
+  });
+}
+
+function referenceLayerStateGeometrySignature(state: ReferenceLayerState | null | undefined): string {
+  if (!state) return "__none__";
+  return JSON.stringify({
+    visibility: state.visibility,
+    locked: state.locked,
+    activeLayer: state.activeLayer ?? null,
+  });
 }
 
 function deriveMeasuredEditableHandlePreview(args: {
@@ -1336,6 +1422,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [lookupResult, setLookupResult] = React.useState<TumblerItemLookupResponse | null>(null);
   const [flatLookupResult, setFlatLookupResult] = React.useState<FlatItemLookupResponse | null>(null);
   const [flatLookupMatch, setFlatLookupMatch] = React.useState<FlatBedItem | null>(null);
+  const [smartLookupDiagnostics, setSmartLookupDiagnostics] = React.useState<TemplatePipelineDiagnostics | null>(null);
+  const [viewerSyncStageMap, setViewerSyncStageMap] = React.useState<Record<string, TemplatePipelineStageRecord>>({});
   const [lookupError, setLookupError] = React.useState<string | null>(null);
   const [lookupDebugImageUrl, setLookupDebugImageUrl] = React.useState("");
   const [batchImportUrl, setBatchImportUrl] = React.useState("");
@@ -1359,6 +1447,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setLookupResult(null);
     setFlatLookupResult(null);
     setFlatLookupMatch(null);
+    setSmartLookupDiagnostics(null);
+    setViewerSyncStageMap({});
     setLookupError(null);
     setLookupDebugImageUrl("");
     if (options?.clearFamilyKey) {
@@ -1367,6 +1457,20 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     if (!options?.keepInput) {
       setLookupInput("");
     }
+  }, []);
+  const pipelineRunIdRef = React.useRef<string>(editingTemplate?.pipelineProvenance?.runId ?? createTemplatePipelineRunId());
+  const pipelineStartedAtRef = React.useRef<string>(new Date().toISOString());
+  const viewerSyncStageFingerprintsRef = React.useRef<Record<string, string>>({});
+  const handleViewerSyncStage = React.useCallback((source: string, stage: TemplatePipelineStageRecord) => {
+    const nextFingerprint = fingerprintJson(stage);
+    if (viewerSyncStageFingerprintsRef.current[source] === nextFingerprint) {
+      return;
+    }
+    viewerSyncStageFingerprintsRef.current[source] = nextFingerprint;
+    setViewerSyncStageMap((current) => {
+      const next = { ...current, [source]: stage };
+      return fingerprintJson(current) === fingerprintJson(next) ? current : next;
+    });
   }, []);
 
   // ── Dimensions ───────────────────────────────────────────────────
@@ -1593,6 +1697,27 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [referencePhotoCenterMode, setReferencePhotoCenterMode] = React.useState<"body" | "photo">(
     editingTemplate?.dimensions.referencePhotoCenterMode ?? "body",
   );
+  const commitBodyOutlineProfile = React.useCallback((nextProfile: EditableBodyOutline | undefined) => {
+    setBodyOutlineProfile((current) => (
+      editableOutlineGeometrySignature(current) === editableOutlineGeometrySignature(nextProfile)
+        ? current
+        : nextProfile
+    ));
+  }, []);
+  const commitReferencePaths = React.useCallback((nextPaths: ReferencePaths) => {
+    setReferencePaths((current) => (
+      referencePathsGeometrySignature(current) === referencePathsGeometrySignature(nextPaths)
+        ? current
+        : nextPaths
+    ));
+  }, []);
+  const commitReferenceLayerState = React.useCallback((nextState: ReferenceLayerState) => {
+    setReferenceLayerState((current) => (
+      referenceLayerStateGeometrySignature(current) === referenceLayerStateGeometrySignature(nextState)
+        ? current
+        : nextState
+    ));
+  }, []);
   const [bodyColorHex, setBodyColorHex] = React.useState(
     editingTemplate?.dimensions.bodyColorHex ?? "#b0b8c4",
   );
@@ -1643,12 +1768,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
   }, [derivedCylinderDiameterMm, diameterMm, lockedProductionGeometry, productType, wrapWidthInputMm]);
   React.useEffect(() => {
-    setReferencePaths((current) => createReferencePaths({
-      bodyOutline: bodyOutlineProfile ?? current.bodyOutline,
-      lidProfile: current.lidProfile,
-      silverProfile: current.silverProfile,
+    commitReferencePaths(createReferencePaths({
+      bodyOutline: bodyOutlineProfile ?? referencePaths.bodyOutline,
+      lidProfile: referencePaths.lidProfile,
+      silverProfile: referencePaths.silverProfile,
     }));
-  }, [bodyOutlineProfile]);
+  }, [bodyOutlineProfile, commitReferencePaths, referencePaths.bodyOutline, referencePaths.lidProfile, referencePaths.silverProfile]);
   const preferGeneratedFlatPreview =
     productType === "flat" &&
     Boolean(glbPath.trim()) &&
@@ -1852,6 +1977,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [frontCleanUrl, setFrontCleanUrl] = React.useState("");
   const [backCleanUrl, setBackCleanUrl] = React.useState("");
   const [bodyReferencePhotoDataUrl, setBodyReferencePhotoDataUrl] = React.useState("");
+  const [bodyReferenceViewSide, setBodyReferenceViewSide] = React.useState<BodyReferenceViewSide>(
+    editingTemplate?.bodyReferenceViewSide === "back" ? "back" : "front",
+  );
+  const [resolvedCanonicalBackReferencePhotoDataUrl, setResolvedCanonicalBackReferencePhotoDataUrl] = React.useState("");
+  const [frontPhotoOrigin, setFrontPhotoOrigin] = React.useState<"manual" | "lookup" | null>(
+    editingTemplate?.frontPhotoDataUrl ? "manual" : null,
+  );
   const [productReferenceSet, setProductReferenceSet] = React.useState<ProductReferenceSet | undefined>(
     editingTemplate?.productReferenceSet,
   );
@@ -1878,6 +2010,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const canonicalFrontReferenceImage = referenceSelection?.canonicalFrontImageId
     ? (referenceImagesById.get(referenceSelection.canonicalFrontImageId) ?? null)
     : null;
+  const canonicalBackReferenceImage = referenceSelection?.canonicalBackImageId
+    ? (referenceImagesById.get(referenceSelection.canonicalBackImageId) ?? null)
+    : null;
+  const auxiliaryBackReferenceImage = referenceSelection?.bestAuxBack3qImageId
+    ? (referenceImagesById.get(referenceSelection.bestAuxBack3qImageId) ?? null)
+    : null;
+  const hasStrictCanonicalBack = referenceSelection?.canonicalBackStatus === "true-back" && Boolean(canonicalBackReferenceImage);
+  const hasAuxiliaryBack3q = referenceSelection?.canonicalBackStatus === "only-back-3q-found" && Boolean(auxiliaryBackReferenceImage);
   const traceDebugReferenceImage = React.useMemo(() => {
     const identity = normalizeImageIdentity(flatLookupResult?.traceDebug?.sourceImageUrl);
     if (!identity) return null;
@@ -1888,16 +2028,69 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
     return null;
   }, [flatLookupResult?.traceDebug?.sourceImageUrl, referenceImagesById]);
-  const preferredBodyReferenceImage =
+  const preferredBodyReferenceImageCandidate =
     !lookupResult?.fitDebug &&
     flatLookupResult?.traceDebug?.accepted &&
     traceDebugReferenceImage
       ? traceDebugReferenceImage
       : canonicalFrontReferenceImage;
+  const preferredBodyReferenceImage = isOrthographicBodyReferenceImage(preferredBodyReferenceImageCandidate)
+    ? preferredBodyReferenceImageCandidate
+    : null;
+  const canAutoUseLookupPhotoForBodyReference = Boolean(
+    lookupResult?.fitDebug || isOrthographicBodyReferenceImage(preferredBodyReferenceImageCandidate),
+  );
+  const canAutoSyncFrontPhotoToBodyReference = frontPhotoOrigin === "manual" || canAutoUseLookupPhotoForBodyReference;
+  const {
+    hasRealBackTraceSource,
+    activeBodyReferenceViewSide,
+    bodyReferenceBackUnavailableReason,
+    frontDisplayReferencePhotoDataUrl,
+    frontReferencePhotoDataUrl,
+    backDisplayReferencePhotoDataUrl,
+    activeDisplayReferencePhotoDataUrl,
+    activeReferencePhotoDataUrl,
+  } = React.useMemo(() => resolveBodyReferenceViewSource({
+    requestedViewSide: bodyReferenceViewSide,
+    canAutoSyncFrontPhotoToBodyReference,
+    bodyReferencePhotoDataUrl,
+    frontCleanUrl,
+    frontPhotoDataUrl,
+    productPhotoFullUrl,
+    backCleanUrl,
+    backPhotoDataUrl,
+    resolvedCanonicalBackReferencePhotoDataUrl,
+    hasStrictCanonicalBack,
+    hasAuxiliaryBack3q,
+    mirrorForBack,
+    backConfidence: referenceSelection?.backConfidence,
+  }), [
+    backCleanUrl,
+    backPhotoDataUrl,
+    bodyReferencePhotoDataUrl,
+    bodyReferenceViewSide,
+    canAutoSyncFrontPhotoToBodyReference,
+    frontCleanUrl,
+    frontPhotoDataUrl,
+    hasAuxiliaryBack3q,
+    hasStrictCanonicalBack,
+    mirrorForBack,
+    productPhotoFullUrl,
+    referenceSelection?.backConfidence,
+    resolvedCanonicalBackReferencePhotoDataUrl,
+  ]);
+  const requiresOrthographicBodyReferencePhoto = Boolean(
+    productType &&
+    productType !== "flat" &&
+    activeBodyReferenceViewSide === "front" &&
+    frontPhotoOrigin === "lookup" &&
+    !canAutoUseLookupPhotoForBodyReference &&
+    preferredBodyReferenceImageCandidate,
+  );
   const resolvedCalibrationHandleSide = React.useMemo<"left" | "right" | null>(() => {
     const candidates = [
       lookupResult?.fitDebug?.handleSide,
-      preferredBodyReferenceImage?.handleSide,
+      preferredBodyReferenceImageCandidate?.handleSide,
       canonicalFrontReferenceImage?.handleSide,
       canonicalHandleProfile?.side,
     ];
@@ -1909,7 +2102,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     canonicalFrontReferenceImage?.handleSide,
     canonicalHandleProfile?.side,
     lookupResult?.fitDebug?.handleSide,
-    preferredBodyReferenceImage?.handleSide,
+    preferredBodyReferenceImageCandidate?.handleSide,
   ]);
   const normalizedCanonicalHandleProfile = React.useMemo<CanonicalHandleProfile | undefined>(() => {
     if (!canonicalHandleProfile) return undefined;
@@ -1921,15 +2114,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       side: resolvedCalibrationHandleSide,
     };
   }, [canonicalHandleProfile, resolvedCalibrationHandleSide]);
-  const activeReferencePhotoDataUrl = React.useMemo(
-    () => bodyReferencePhotoDataUrl || frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl || "",
-    [bodyReferencePhotoDataUrl, frontCleanUrl, frontPhotoDataUrl, productPhotoFullUrl],
-  );
   React.useEffect(() => {
-    if (productType === "flat" || !activeReferencePhotoDataUrl) {
+    if (productType === "flat" || !activeDisplayReferencePhotoDataUrl) {
       setPrintableSurfaceDetection(null);
     }
-  }, [activeReferencePhotoDataUrl, productType]);
+  }, [activeDisplayReferencePhotoDataUrl, productType]);
   const activeBodyReferenceOutline = React.useMemo(
     () => referencePaths.bodyOutline ?? bodyOutlineProfile ?? null,
     [bodyOutlineProfile, referencePaths.bodyOutline],
@@ -2727,16 +2916,49 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     [normalizedCanonicalHandleProfile, previewModelMode],
   );
   const usingEditableHandlePreview = previewModelMode === "full-model" && Boolean(editableHandlePreview);
-  const canonicalBackReferenceImage = referenceSelection?.canonicalBackImageId
-    ? (referenceImagesById.get(referenceSelection.canonicalBackImageId) ?? null)
-    : null;
-  const auxiliaryBackReferenceImage = referenceSelection?.bestAuxBack3qImageId
-    ? (referenceImagesById.get(referenceSelection.bestAuxBack3qImageId) ?? null)
-    : null;
-  const hasStrictCanonicalBack = referenceSelection?.canonicalBackStatus === "true-back" && Boolean(canonicalBackReferenceImage);
-  const hasAuxiliaryBack3q = referenceSelection?.canonicalBackStatus === "only-back-3q-found" && Boolean(auxiliaryBackReferenceImage);
+  React.useEffect(() => {
+    if (productType === "flat" || !hasStrictCanonicalBack || !canonicalBackReferenceImage?.url || backPhotoDataUrl || backCleanUrl) {
+      setResolvedCanonicalBackReferencePhotoDataUrl("");
+      return;
+    }
+
+    let cancelled = false;
+    fetchImageUrlAsDataUrl(canonicalBackReferenceImage.url)
+      .then((dataUrl) => {
+        if (!cancelled) {
+          setResolvedCanonicalBackReferencePhotoDataUrl(dataUrl);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setResolvedCanonicalBackReferencePhotoDataUrl("");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    backCleanUrl,
+    backPhotoDataUrl,
+    canonicalBackReferenceImage?.url,
+    hasStrictCanonicalBack,
+    productType,
+  ]);
 
   React.useEffect(() => {
+    if (bodyReferenceViewSide === "back" && !hasRealBackTraceSource) {
+      setBodyReferenceViewSide("front");
+    }
+  }, [bodyReferenceViewSide, hasRealBackTraceSource]);
+
+  React.useEffect(() => {
+    if (!canAutoSyncFrontPhotoToBodyReference) {
+      if (!frontPhotoDataUrl && !frontCleanUrl && !productPhotoFullUrl) {
+        setBodyReferencePhotoDataUrl("");
+      }
+      return;
+    }
     if (frontPhotoDataUrl) {
       setBodyReferencePhotoDataUrl(frontPhotoDataUrl);
       return;
@@ -2747,7 +2969,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
     if (productPhotoFullUrl) return;
     setBodyReferencePhotoDataUrl("");
-  }, [frontCleanUrl, frontPhotoDataUrl, productPhotoFullUrl]);
+  }, [canAutoSyncFrontPhotoToBodyReference, frontCleanUrl, frontPhotoDataUrl, productPhotoFullUrl]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -2822,26 +3044,31 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     const referenceImagesById = new Map(
       (productReferenceSet?.images ?? []).map((image) => [image.id, image] as const),
     );
-    const canonicalFrontReferenceUrl =
+    const canonicalFrontReferenceImage =
       productReferenceSet?.canonicalViewSelection?.canonicalFrontImageId
-        ? referenceImagesById.get(productReferenceSet.canonicalViewSelection.canonicalFrontImageId)?.url ?? null
+        ? referenceImagesById.get(productReferenceSet.canonicalViewSelection.canonicalFrontImageId) ?? null
         : productReferenceSet?.canonicalFrontImageId
-          ? referenceImagesById.get(productReferenceSet.canonicalFrontImageId)?.url ?? null
+          ? referenceImagesById.get(productReferenceSet.canonicalFrontImageId) ?? null
           : null;
+    const orthographicBodyReferenceUrl = isOrthographicBodyReferenceImage(canonicalFrontReferenceImage)
+      ? canonicalFrontReferenceImage?.url ?? null
+      : null;
     // If the canonical hero asset has no fit-debug, use the accepted traced front
     // image as the BODY REFERENCE owner so the photo and shell share one source.
     const preferredBodyReferenceUrl =
       !fitDebug &&
       traceDebug?.accepted &&
       (traceDebug.outlinePointsPx.length ?? 0) > 20 &&
-      traceDebug.sourceImageUrl
+      orthographicBodyReferenceUrl &&
+      normalizeImageIdentity(traceDebug.sourceImageUrl) === normalizeImageIdentity(orthographicBodyReferenceUrl)
         ? traceDebug.sourceImageUrl
-        : canonicalFrontReferenceUrl;
+        : orthographicBodyReferenceUrl;
     const traceMatchesReferenceImage = (() => {
       const traceIdentity = normalizeImageIdentity(traceDebug?.sourceImageUrl);
       const referenceIdentity = normalizeImageIdentity(preferredBodyReferenceUrl);
-      if (!traceIdentity) return false;
-      if (!referenceIdentity) return true;
+      // Never let a flat-item silhouette trace seed BODY REFERENCE unless
+      // it can be tied to a real orthographic reference image.
+      if (!traceIdentity || !referenceIdentity) return false;
       return traceIdentity === referenceIdentity;
     })();
     const canSeedFromFitDebug = Boolean(fitDebug && fitDebug.profilePoints.length > 1);
@@ -2904,11 +3131,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             diameterMm: effectiveCylinderDiameterMm,
             topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
           });
-      setBodyOutlineProfile(outline);
-      setReferencePaths((current) => createReferencePaths({
+      commitBodyOutlineProfile(outline);
+      commitReferencePaths(createReferencePaths({
         bodyOutline: outline,
-        lidProfile: current.lidProfile,
-        silverProfile: current.silverProfile,
+        lidProfile: referencePaths.lidProfile,
+        silverProfile: referencePaths.silverProfile,
       }));
       return true;
     };
@@ -2945,19 +3172,31 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     taperLowerDiameterMm,
     taperUpperDiameterMm,
     topOuterDiameterMm,
+    commitBodyOutlineProfile,
+    commitReferencePaths,
+    referencePaths.lidProfile,
+    referencePaths.silverProfile,
   ]);
 
   const resolveManufacturerLogoStamp = React.useCallback(async (options?: { useOpenAiAssist?: boolean }) => {
     if (productType === "flat") {
       return undefined;
     }
-    const primaryPhotoUrl = bodyReferencePhotoDataUrl || frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl;
-    const rawPhotoUrl = frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl;
+    const selectedCanonicalReferenceImage = activeBodyReferenceViewSide === "back"
+      ? (hasStrictCanonicalBack ? canonicalBackReferenceImage : null)
+      : canonicalFrontReferenceImage;
+    const primaryPhotoUrl = activeReferencePhotoDataUrl || activeDisplayReferencePhotoDataUrl;
+    const rawPhotoUrl = activeBodyReferenceViewSide === "back"
+      ? (backCleanUrl || backPhotoDataUrl || resolvedCanonicalBackReferencePhotoDataUrl || "")
+      : (frontCleanUrl || frontPhotoDataUrl || productPhotoFullUrl || "");
     if (!primaryPhotoUrl || overallHeightMm <= 0) {
       return undefined;
     }
 
-    const stampSource = lookupResult?.imageUrl || productPhotoFullUrl ? "lookup-photo" : "front-photo";
+    const stampSource: ManufacturerLogoStamp["source"] =
+      activeBodyReferenceViewSide === "back"
+        ? (selectedCanonicalReferenceImage ? "lookup-photo" : "back-photo")
+        : (lookupResult?.imageUrl || productPhotoFullUrl ? "lookup-photo" : "front-photo");
     const attemptExtraction = async (
       photoDataUrl: string,
       options?: {
@@ -2997,6 +3236,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         productReferenceSet: productReferenceSet ?? null,
         sourceImageId: options?.sourceImageId,
         preferredLogoBox: assistedLogoBox,
+        preferredViewSide: activeBodyReferenceViewSide,
         source: options?.sourceImageId ? "lookup-photo" : stampSource,
       });
     };
@@ -3004,20 +3244,26 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     const directStamp = await attemptExtraction(primaryPhotoUrl);
     if (directStamp) return directStamp;
 
-    if (!bodyReferencePhotoDataUrl && rawPhotoUrl) {
+    if ((activeBodyReferenceViewSide === "front" ? !bodyReferencePhotoDataUrl : !(backCleanUrl || backPhotoDataUrl)) && rawPhotoUrl) {
       try {
         const cleanDataUrl = await removeBackgroundForOutlineSeed(rawPhotoUrl, "manufacturer-logo-stamp.png");
-        setBodyReferencePhotoDataUrl(cleanDataUrl);
+        if (activeBodyReferenceViewSide === "back") {
+          setBackCleanUrl(cleanDataUrl);
+          setBackPhotoDataUrl(cleanDataUrl);
+          setBackBgStatus("done");
+        } else {
+          setBodyReferencePhotoDataUrl(cleanDataUrl);
+        }
         const cutoutStamp = await attemptExtraction(cleanDataUrl);
         if (cutoutStamp) return cutoutStamp;
       } catch {
-        // Fall through to the canonical front reference image fallback.
+        // Fall through to the selected-side canonical reference image fallback.
       }
     }
 
-    const fallbackImageUrl = canonicalFrontReferenceImage?.url ||
-      lookupResult?.fitDebug?.sourceImageUrl ||
-      lookupResult?.imageUrl;
+    const fallbackImageUrl = selectedCanonicalReferenceImage?.url ||
+      (activeBodyReferenceViewSide === "front" ? lookupResult?.fitDebug?.sourceImageUrl : undefined) ||
+      (activeBodyReferenceViewSide === "front" ? lookupResult?.imageUrl : undefined);
     if (!fallbackImageUrl) return undefined;
 
     try {
@@ -3031,8 +3277,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         fitDebug: null,
         outline: null,
         productReferenceSet: productReferenceSet ?? null,
-        sourceImageId: canonicalFrontReferenceImage?.id,
-        preferredLogoBox: canonicalFrontReferenceImage?.logoBox ?? null,
+        sourceImageId: selectedCanonicalReferenceImage?.id,
+        preferredLogoBox: selectedCanonicalReferenceImage?.logoBox ?? null,
+        preferredViewSide: activeBodyReferenceViewSide,
         source: "lookup-photo",
       }) ?? undefined;
     } catch {
@@ -3040,12 +3287,19 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
   }, [
     activeBodyReferenceOutline,
+    activeBodyReferenceViewSide,
+    activeDisplayReferencePhotoDataUrl,
+    activeReferencePhotoDataUrl,
+    backCleanUrl,
+    backPhotoDataUrl,
+    canonicalBackReferenceImage,
     bodyReferencePhotoDataUrl,
     brand,
     bottomMarginMm,
     canonicalFrontReferenceImage,
     frontCleanUrl,
     frontPhotoDataUrl,
+    hasStrictCanonicalBack,
     lookupResult?.brand,
     lookupResult?.fitDebug,
     lookupResult?.imageUrl,
@@ -3053,6 +3307,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     productReferenceSet,
     productPhotoFullUrl,
     productType,
+    resolvedCanonicalBackReferencePhotoDataUrl,
     topMarginMm,
   ]);
 
@@ -3070,10 +3325,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const runAiOutlineAssist = React.useCallback(async () => {
     if (productType === "flat") return;
 
-    const seedPhotoDataUrl = frontPhotoDataUrl || productPhotoFullUrl || "";
+    const seedPhotoDataUrl = activeReferencePhotoDataUrl || activeDisplayReferencePhotoDataUrl || "";
     if (!seedPhotoDataUrl || overallHeightMm <= 0 || effectiveCylinderDiameterMm <= 0) {
       setOutlineAssistStatus("failed");
-      setOutlineAssistNote("A front/reference photo and valid body dimensions are required before running AI outline prep.");
+      setOutlineAssistNote("A selected Front or Back trace image and valid body dimensions are required before running AI outline prep.");
       return;
     }
 
@@ -3097,18 +3352,24 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         side: resolvedCalibrationHandleSide === "left" ? "right" : "left",
       });
 
-      setBodyReferencePhotoDataUrl(preparedSeed.cleanedDataUrl);
-      setBodyOutlineProfile(outline);
-      setReferencePaths((current) => createReferencePaths({
+      if (activeBodyReferenceViewSide === "back") {
+        setBackCleanUrl(preparedSeed.cleanedDataUrl);
+        setBackPhotoDataUrl(preparedSeed.cleanedDataUrl);
+        setBackBgStatus("done");
+      } else {
+        setBodyReferencePhotoDataUrl(preparedSeed.cleanedDataUrl);
+      }
+      commitBodyOutlineProfile(outline);
+      commitReferencePaths(createReferencePaths({
         bodyOutline: outline,
-        lidProfile: current.lidProfile,
-        silverProfile: current.silverProfile,
+        lidProfile: referencePaths.lidProfile,
+        silverProfile: referencePaths.silverProfile,
       }));
       setOutlineAssistStatus("done");
       setOutlineAssistNote(
         preparedSeed.cleanupApplied
-          ? "AI outline prep applied. BODY REFERENCE is now using the prepared outline seed."
-          : "AI trace guidance applied. BODY REFERENCE kept the original image where possible.",
+          ? `AI outline prep applied. BODY REFERENCE is now using the prepared ${activeBodyReferenceViewSide} outline seed.`
+          : `AI trace guidance applied. BODY REFERENCE kept the selected ${activeBodyReferenceViewSide} image where possible.`,
       );
     } catch (error) {
       setOutlineAssistStatus("failed");
@@ -3118,12 +3379,18 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
     effectiveCylinderDiameterMm,
-    frontPhotoDataUrl,
+    activeBodyReferenceViewSide,
+    activeDisplayReferencePhotoDataUrl,
+    activeReferencePhotoDataUrl,
+    backPhotoDataUrl,
     overallHeightMm,
-    productPhotoFullUrl,
     productType,
     resolvedCalibrationHandleSide,
     topOuterDiameterMm,
+    commitBodyOutlineProfile,
+    commitReferencePaths,
+    referencePaths.lidProfile,
+    referencePaths.silverProfile,
   ]);
 
   const runLogoPlacementAssist = React.useCallback(async () => {
@@ -3334,13 +3601,17 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           },
           {
             label: "Background removed",
-            value: frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl) ? "yes" : "no",
-            source: "front photo background-removal state",
+            value: activeBodyReferenceViewSide === "back"
+              ? (backBgStatus === "done" || Boolean(backCleanUrl || backPhotoDataUrl) ? "yes" : "no")
+              : (frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl) ? "yes" : "no"),
+            source: `${activeBodyReferenceViewSide} photo background-removal state`,
           },
           {
             label: "Alpha mask present",
-            value: frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl) ? "yes" : "no",
-            source: "transparent cutout availability",
+            value: activeBodyReferenceViewSide === "back"
+              ? (backBgStatus === "done" || Boolean(backCleanUrl || backPhotoDataUrl) ? "yes" : "no")
+              : (frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl) ? "yes" : "no"),
+            source: `transparent ${activeBodyReferenceViewSide} cutout availability`,
           },
           {
             label: "Clean side chosen",
@@ -3577,8 +3848,6 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     productType,
     templateWidthMm,
   ]);
-
-  const pipelineDebugWarnings = bodyReferenceWarnings;
   /*
     const warnings: string[] = [];
     const printableContract = activePrintableSurfaceResolution?.printableSurfaceContract ?? activeCanonicalDimensionCalibration?.printableSurfaceContract ?? null;
@@ -3662,7 +3931,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     ],
   );
 
-  const saveBlockingIssues = React.useMemo(() => {
+  const computedBlockingIssues = React.useMemo(() => {
     const issues: string[] = [];
     if (!name.trim()) issues.push("Product name is required.");
     if (!productType) issues.push("Product type is required.");
@@ -3684,19 +3953,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     if (productType && productType !== "flat" && bodyReferenceQa?.severity === "action") {
       issues.push(...bodyReferenceWarnings);
     }
-    if (productType && productType !== "flat" && glbPath.trim() && !tumblerMapping?.isMapped) {
-      issues.push("Map tumbler orientation before saving a 3D-backed drinkware template.");
-    }
     if (hasBlockingGeometryMismatch) {
       issues.push(`Cylinder diameter override is inconsistent with wrap width by ${derivedDiameterMismatchMm.toFixed(2)} mm. Recompute derived fields from wrap width or relock production geometry.`);
     }
     if (printHeightMm <= 0) issues.push("Print height must be > 0.");
-    if (productType && productType !== "flat" && printableHeightLooksLikeOverallHeight) {
-      issues.push("Printable height still matches overall assembled height. Re-run body analysis or set printable boundaries before saving.");
-    }
-    if (productType && productType !== "flat" && handleSpanContaminatesBodyWidth) {
-      issues.push("Overall handle span is matching the body diameter. Handle span metadata must not be used as body width or wrap math.");
-    }
     if (
       productType &&
       productType !== "flat" &&
@@ -3721,15 +3981,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     flatWidthMm,
     glbPath,
     glbUploadError,
-    handleSpanContaminatesBodyWidth,
     hasBlockingGeometryMismatch,
     name,
     overallHeightMm,
     printHeightMm,
-    printableHeightLooksLikeOverallHeight,
     productType,
     templateWidthMm,
-    tumblerMapping?.isMapped,
   ]);
 
   const templateReadinessItems = React.useMemo(
@@ -3744,10 +4001,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         label: "Reference photos",
         status: productType === "flat"
           ? "review"
-          : (activeReferencePhotoDataUrl || productPhotoFullUrl ? "ready" : "review"),
+          : (activeDisplayReferencePhotoDataUrl || productPhotoFullUrl ? "ready" : "review"),
         detail: productType === "flat"
           ? "Not required for flat items."
-          : (activeReferencePhotoDataUrl || productPhotoFullUrl
+          : (activeDisplayReferencePhotoDataUrl || productPhotoFullUrl
             ? "Front/reference imagery is attached for visual QA."
             : "Add a front/reference photo so BODY REFERENCE can be reviewed against a real image."),
       });
@@ -3797,7 +4054,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     [
       activeCanonicalBodyProfile,
       activeCanonicalDimensionCalibration,
-      activeReferencePhotoDataUrl,
+      activeDisplayReferencePhotoDataUrl,
       bodyReferenceQa?.severity,
       bodyReferenceWarnings,
       glbPath,
@@ -3810,6 +4067,182 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     ],
   );
 
+  const bodyReferenceSignature = React.useMemo(
+    () => (
+      productType === "flat" || !activeCanonicalBodyProfile || !activeCanonicalDimensionCalibration
+        ? null
+        : fingerprintJson({
+            canonicalBodyProfile: activeCanonicalBodyProfile,
+            canonicalDimensionCalibration: activeCanonicalDimensionCalibration,
+            bodyReferenceQA: bodyReferenceQa,
+          })
+    ),
+    [
+      activeCanonicalBodyProfile,
+      activeCanonicalDimensionCalibration,
+      bodyReferenceQa,
+      productType,
+    ],
+  );
+  const templateGeometrySignature = React.useMemo(
+    () => fingerprintJson({
+      productType,
+      templateWidthMm,
+      effectiveCylinderDiameterMm,
+      printHeightMm,
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      glbPath,
+    }),
+    [
+      bodyBottomFromOverallMm,
+      bodyTopFromOverallMm,
+      effectiveCylinderDiameterMm,
+      glbPath,
+      overallHeightMm,
+      printHeightMm,
+      productType,
+      templateWidthMm,
+    ],
+  );
+  const viewerSyncAggregateStage = React.useMemo<TemplatePipelineStageRecord | null>(() => {
+    const syncEntries = Object.entries(viewerSyncStageMap);
+    if (syncEntries.length === 0) return null;
+
+    const statusRank: Record<TemplatePipelineStageRecord["status"], number> = {
+      error: 4,
+      action: 3,
+      warning: 2,
+      ready: 1,
+      skip: 0,
+    };
+    const dedupe = (values: string[]) => [...new Set(values.filter((value) => value.trim().length > 0))];
+    const representative = syncEntries
+      .map(([, stage]) => stage)
+      .sort((left, right) => statusRank[right.status] - statusRank[left.status])[0];
+
+    return {
+      id: "viewer-sync",
+      status: representative?.status ?? "skip",
+      authority: dedupe(syncEntries.map(([, stage]) => stage.authority ?? "")).join(" + ") || "viewer-sync",
+      engine: dedupe(syncEntries.map(([, stage]) => stage.engine ?? "")).join(" + ") || null,
+      timingMs: syncEntries.reduce((total, [, stage]) => total + (stage.timingMs ?? 0), 0) || undefined,
+      fallback: {
+        used: syncEntries.some(([, stage]) => Boolean(stage.fallback?.used)),
+        from: dedupe(syncEntries.map(([, stage]) => stage.fallback?.from ?? "")).join(" + ") || null,
+        reason: dedupe(syncEntries.map(([, stage]) => stage.fallback?.reason ?? "")).join(" | ") || null,
+      },
+      cache: null,
+      warnings: dedupe(syncEntries.flatMap(([, stage]) => stage.warnings)),
+      errors: dedupe(syncEntries.flatMap(([, stage]) => stage.errors)),
+      artifacts: {
+        sources: syncEntries.map(([source, stage]) => ({
+          source,
+          status: stage.status,
+          authority: stage.authority ?? null,
+          engine: stage.engine ?? null,
+          fallbackUsed: Boolean(stage.fallback?.used),
+          warnings: stage.warnings,
+          errors: stage.errors,
+          artifacts: stage.artifacts ?? null,
+        })),
+      },
+    };
+  }, [viewerSyncStageMap]);
+  const pipelineDiagnostics = React.useMemo<TemplatePipelineDiagnostics>(() => {
+    let next = createTemplatePipelineDiagnostics({
+      runId: smartLookupDiagnostics?.runId ?? pipelineRunIdRef.current,
+      startedAt: smartLookupDiagnostics?.startedAt ?? pipelineStartedAtRef.current,
+      contractVersions: {
+        ...(smartLookupDiagnostics?.contractVersions ?? {}),
+        bodyReference: bodyReferenceContractVersion,
+      },
+    });
+
+    next = updateTemplatePipelineInputFingerprints(next, {
+      sourceImage: fingerprintText(activeDisplayReferencePhotoDataUrl || productPhotoFullUrl || bodyReferencePhotoDataUrl || null),
+      smartLookupInput: fingerprintText(lookupInput),
+      bodyReference: bodyReferenceSignature,
+      templateGeometry: templateGeometrySignature,
+    });
+    next = mergeTemplatePipelineDiagnostics(next, smartLookupDiagnostics);
+    next = upsertTemplatePipelineStage(next, {
+      id: "source-image",
+      status: activeDisplayReferencePhotoDataUrl || productPhotoFullUrl || bodyReferencePhotoDataUrl ? "ready" : "skip",
+      authority: activeDisplayReferencePhotoDataUrl || productPhotoFullUrl || bodyReferencePhotoDataUrl ? "template-reference-photo" : "none",
+      warnings: [],
+      errors: [],
+      artifacts: {
+        hasReferencePhoto: Boolean(activeDisplayReferencePhotoDataUrl || productPhotoFullUrl || bodyReferencePhotoDataUrl),
+        frontPhotoPresent: Boolean(frontPhotoDataUrl),
+        backPhotoPresent: Boolean(backPhotoDataUrl),
+        lookupPhotoPresent: Boolean(productPhotoFullUrl),
+        selectedViewSide: activeBodyReferenceViewSide,
+      },
+    });
+    if (productType !== "flat" && activeBodyReferencePipeline) {
+      next = upsertTemplatePipelineStage(next, {
+        id: "body-reference",
+        status:
+          bodyReferenceQa?.severity === "action"
+            ? "action"
+            : bodyReferenceWarnings.length > 0
+              ? "warning"
+              : "ready",
+        authority: bodyReferenceQa?.shellAuthority ?? "outline-profile",
+        engine: bodyReferenceQa?.scaleAuthority ?? null,
+        fallback: {
+          used: bodyReferenceQa?.fallbackMode != null && bodyReferenceQa.fallbackMode !== "none",
+          from: "deriveBodyReferencePipeline",
+          reason: bodyReferenceQa?.fallbackMode ?? null,
+        },
+        warnings: bodyReferenceWarnings,
+        errors: [],
+        artifacts: {
+          acceptedRowCount: bodyReferenceQa?.acceptedRowCount ?? null,
+          rejectedRowCount: bodyReferenceQa?.rejectedRowCount ?? null,
+          printableTopMm: activePrintableSurfaceResolution?.printableSurfaceContract.printableTopMm ?? null,
+          printableBottomMm: activePrintableSurfaceResolution?.printableSurfaceContract.printableBottomMm ?? null,
+        },
+      });
+    }
+    if (viewerSyncAggregateStage) {
+      next = upsertTemplatePipelineStage(next, viewerSyncAggregateStage);
+    }
+    next = upsertTemplatePipelineStage(next, buildTemplateReloadVerificationStage({
+      provenance: editingTemplate?.pipelineProvenance,
+      currentDiagnostics: next,
+    }));
+    next = setTemplatePipelineWarnings(next, [
+      ...bodyReferenceWarnings,
+      ...(smartLookupDiagnostics?.warnings ?? []),
+      ...(viewerSyncAggregateStage?.warnings ?? []),
+      ...(viewerSyncAggregateStage?.errors ?? []),
+      ...(editingTemplate?.pipelineProvenance ? [] : ["No saved pipeline provenance is attached yet."]),
+    ]);
+    return setTemplatePipelineBlockingIssues(next, computedBlockingIssues);
+  }, [
+    activeBodyReferencePipeline,
+    activePrintableSurfaceResolution?.printableSurfaceContract.printableBottomMm,
+    activePrintableSurfaceResolution?.printableSurfaceContract.printableTopMm,
+    activeDisplayReferencePhotoDataUrl,
+    bodyReferenceContractVersion,
+    bodyReferencePhotoDataUrl,
+    bodyReferenceQa,
+    bodyReferenceSignature,
+    bodyReferenceWarnings,
+    computedBlockingIssues,
+    editingTemplate?.pipelineProvenance,
+    frontPhotoDataUrl,
+    lookupInput,
+    productPhotoFullUrl,
+    productType,
+    smartLookupDiagnostics,
+    templateGeometrySignature,
+    viewerSyncAggregateStage,
+  ]);
+  const saveBlockingIssues = pipelineDiagnostics.blockingIssues;
   const saveDisabledReason = saveBlockingIssues[0] ?? null;
 
   const pipelineDebugRawObjects = React.useMemo<PipelineDebugRawObject[]>(() => ([
@@ -3819,6 +4252,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     { id: "body-reference-qa", label: "bodyReferenceQA", value: bodyReferenceQa },
     { id: "body-reference-contract-version", label: "bodyReferenceContractVersion", value: bodyReferenceContractVersion },
     { id: "canonical-handle-profile", label: "canonicalHandleProfile", value: canonicalHandleProfile ?? null },
+    { id: "template-pipeline-diagnostics", label: "templatePipelineDiagnostics", value: pipelineDiagnostics },
     { id: "logo-placement", label: "logoPlacement", value: manufacturerLogoStamp?.logoPlacement ?? null },
   ]), [
     activeCanonicalBodyProfile,
@@ -3828,7 +4262,26 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyReferenceQa,
     canonicalHandleProfile,
     manufacturerLogoStamp?.logoPlacement,
+    pipelineDiagnostics,
   ]);
+  const pipelineDebugWarnings = pipelineDiagnostics.warnings;
+  const pipelineStageSections = React.useMemo<PipelineDebugSection[]>(
+    () => pipelineDiagnostics.stages.map((stage) => ({
+      id: `stage-${stage.id}`,
+      title: `Stage: ${stage.id}`,
+      defaultOpen: stage.id === "smart-lookup" || stage.id === "body-reference" || stage.id === "viewer-sync",
+      fields: [
+        { label: "Status", value: stage.status, source: stage.authority ?? undefined },
+        { label: "Authority", value: stage.authority ?? "n/a", source: "template-pipeline diagnostics" },
+        { label: "Engine", value: stage.engine ?? "n/a" },
+        { label: "Fallback", value: stage.fallback?.used ? "yes" : "no", warning: stage.fallback?.reason ?? undefined },
+        { label: "Cache", value: stage.cache ? (stage.cache.hit ? "hit" : "miss") : "n/a", source: stage.cache?.scope ?? undefined },
+        { label: "Timing", value: stage.timingMs != null ? `${stage.timingMs} ms` : "n/a" },
+      ],
+      note: stage.artifacts ? JSON.stringify(stage.artifacts) : undefined,
+    })),
+    [pipelineDiagnostics.stages],
+  );
 
   const pipelineDebugFormulas = React.useMemo(
     () => [
@@ -3858,8 +4311,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               heightPx: lookupResult.fitDebug.imageHeightPx,
             }
           : null,
-        backgroundRemoved: frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl),
-        alphaMaskPresent: frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl),
+        backgroundRemoved: activeBodyReferenceViewSide === "back"
+          ? (backBgStatus === "done" || Boolean(backCleanUrl || backPhotoDataUrl))
+          : (frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl)),
+        alphaMaskPresent: activeBodyReferenceViewSide === "back"
+          ? (backBgStatus === "done" || Boolean(backCleanUrl || backPhotoDataUrl))
+          : (frontBgStatus === "done" || Boolean(frontCleanUrl || bodyReferencePhotoDataUrl)),
+        selectedViewSide: activeBodyReferenceViewSide,
       },
       canonicalBodyProfile: activeCanonicalBodyProfile,
       canonicalDimensionCalibration: activeCanonicalDimensionCalibration,
@@ -3873,6 +4331,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         defaultPreviewModelMode,
         lockedProductionGeometry,
       },
+      diagnostics: pipelineDiagnostics,
+      persistedProvenance: editingTemplate?.pipelineProvenance ?? null,
       warnings: pipelineDebugWarnings,
     }),
     [
@@ -3894,6 +4354,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       lookupResult?.mode,
       manufacturerLogoStamp?.logoPlacement,
       canonicalHandleProfile,
+      editingTemplate?.pipelineProvenance,
+      pipelineDiagnostics,
       pipelineDebugWarnings,
       previewModelMode,
     ],
@@ -3990,11 +4452,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const applyFacePhotoFile = React.useCallback(async (
     file: File,
     side: "front" | "back",
+    origin: "manual" | "lookup" = "manual",
   ) => {
     const original = await fileToFacePhotoDataUrl(file);
     if (!original) return;
 
     if (side === "front") {
+      setFrontPhotoOrigin(origin);
       setFrontOriginalUrl(original);
       setFrontCleanUrl("");
       setFrontPhotoDataUrl(original);
@@ -4199,6 +4663,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setDetectResult(null);
     setLookupError(null);
     setSmartLookupApplied(true);
+    setSmartLookupDiagnostics(result.diagnostics ?? null);
     setLookupResult(result.tumblerLookupResult ?? null);
     setFlatLookupResult(result.flatLookupResult ?? null);
     setProductReferenceSet(resolvedProductReferenceSet);
@@ -4211,18 +4676,19 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     // Smart lookup should not carry forward a stale auto-seeded BODY REFERENCE
     // shell from a previous lookup. Let the current lookup/photo reseed it.
     if (!editingTemplate) {
-      setBodyOutlineProfile(undefined);
-      setReferencePaths(createReferencePaths({
+      commitBodyOutlineProfile(undefined);
+      commitReferencePaths(createReferencePaths({
         bodyOutline: null,
         lidProfile: null,
         silverProfile: null,
       }));
-      setReferenceLayerState(cloneReferenceLayerState(null));
+      commitReferenceLayerState(cloneReferenceLayerState(null));
     }
 
     // When lookup owns the face photos, clear any prior in-memory render state first
     // so rerunning lookup in the same open modal cannot keep a stale image alive.
     if (!files.frontPhotoFile) {
+      setFrontPhotoOrigin(null);
       setFrontOriginalUrl("");
       setFrontPhotoDataUrl("");
       setFrontCleanUrl("");
@@ -4280,9 +4746,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
 
     if (files.frontPhotoFile) {
-      await applyFacePhotoFile(files.frontPhotoFile, "front");
+      await applyFacePhotoFile(files.frontPhotoFile, "front", "manual");
     } else if (resolvedLookupPhotoFile && draft.productType && draft.productType !== "flat") {
-      await applyFacePhotoFile(resolvedLookupPhotoFile, "front");
+      await applyFacePhotoFile(resolvedLookupPhotoFile, "front", "lookup");
     }
     if (files.backPhotoFile) {
       setMirrorForBack(false);
@@ -4378,18 +4844,18 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       setHandleOuterBottomFromOverallMm(undefined);
       setHandleTubeDiameterMm(editingTemplate ? (draftDims?.handleTubeDiameterMm ?? undefined) : undefined);
       setHandleSpanMm(draftDims?.handleSpanMm ?? undefined);
-      setCanonicalHandleProfile(draftDims?.canonicalHandleProfile ?? undefined);
+      commitCanonicalHandleProfile(draftDims?.canonicalHandleProfile ?? undefined);
       setShoulderDiameterMm(draftDims?.shoulderDiameterMm ?? undefined);
       setTaperUpperDiameterMm(draftDims?.taperUpperDiameterMm ?? undefined);
       setTaperLowerDiameterMm(draftDims?.taperLowerDiameterMm ?? undefined);
       setBevelDiameterMm(draftDims?.bevelDiameterMm ?? undefined);
-      setBodyOutlineProfile(draftDims?.referencePaths?.bodyOutline ?? draftDims?.bodyOutlineProfile ?? undefined);
-      setReferencePaths(createReferencePaths({
+      commitBodyOutlineProfile(draftDims?.referencePaths?.bodyOutline ?? draftDims?.bodyOutlineProfile ?? undefined);
+      commitReferencePaths(createReferencePaths({
         bodyOutline: draftDims?.referencePaths?.bodyOutline ?? draftDims?.bodyOutlineProfile ?? null,
         lidProfile: draftDims?.referencePaths?.lidProfile ?? null,
         silverProfile: draftDims?.referencePaths?.silverProfile ?? null,
       }));
-      setReferenceLayerState(cloneReferenceLayerState(draftDims?.referenceLayerState ?? null));
+      commitReferenceLayerState(cloneReferenceLayerState(draftDims?.referenceLayerState ?? null));
       setTopMarginMm(draftDims?.topMarginMm ?? 0);
       setBottomMarginMm(draftDims?.bottomMarginMm ?? 0);
 
@@ -4547,7 +5013,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       } else {
         setHandleSpanMm(undefined);
       }
-      setCanonicalHandleProfile(draftDims?.canonicalHandleProfile ?? undefined);
+      commitCanonicalHandleProfile(draftDims?.canonicalHandleProfile ?? undefined);
       if (typeof draftDims?.shoulderDiameterMm === "number") {
         setShoulderDiameterMm(round2(draftDims.shoulderDiameterMm));
       } else {
@@ -4568,13 +5034,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       } else {
         setBevelDiameterMm(undefined);
       }
-      setBodyOutlineProfile(draftDims?.referencePaths?.bodyOutline ?? draftDims?.bodyOutlineProfile ?? undefined);
-      setReferencePaths(createReferencePaths({
+      commitBodyOutlineProfile(draftDims?.referencePaths?.bodyOutline ?? draftDims?.bodyOutlineProfile ?? undefined);
+      commitReferencePaths(createReferencePaths({
         bodyOutline: draftDims?.referencePaths?.bodyOutline ?? draftDims?.bodyOutlineProfile ?? null,
         lidProfile: draftDims?.referencePaths?.lidProfile ?? null,
         silverProfile: draftDims?.referencePaths?.silverProfile ?? null,
       }));
-      setReferenceLayerState(cloneReferenceLayerState(draftDims?.referenceLayerState ?? null));
+      commitReferenceLayerState(cloneReferenceLayerState(draftDims?.referenceLayerState ?? null));
       if (typeof draftDims?.topMarginMm === "number") {
         setTopMarginMm(round2(draftDims.topMarginMm));
       }
@@ -4788,6 +5254,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             if (full) {
               setLookupDebugImageUrl(full);
               setProductPhotoFullUrl(full);
+              setFrontPhotoOrigin("lookup");
               setFrontOriginalUrl(full);
               setFrontPhotoDataUrl((prev) => prev || full);
             }
@@ -4954,6 +5421,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       if (productImageFile && !frontPhotoDataUrl) {
         const original = await fileToFacePhotoDataUrl(productImageFile);
         if (original) {
+          setFrontPhotoOrigin("lookup");
           setFrontOriginalUrl(original);
           setFrontPhotoDataUrl(original);
           // Auto-trigger background removal
@@ -5023,6 +5491,22 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       return;
     }
     setErrors([]);
+    const diagnosticsForSave = setTemplatePipelineBlockingIssues(
+      upsertTemplatePipelineStage(pipelineDiagnostics, {
+        id: "template-save",
+        status: "ready",
+        authority: "template-create-form",
+        warnings: [],
+        errors: [],
+        artifacts: {
+          isEdit,
+          productType,
+          hasGlb: Boolean(glbPath.trim()),
+          hasCanonicalBodyContract: Boolean(activeCanonicalBodyProfile && activeCanonicalDimensionCalibration),
+        },
+      }),
+      errs,
+    );
 
     const resolvedManufacturerLogoStamp = productType === "flat"
       ? undefined
@@ -5227,8 +5711,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       tumblerMapping: productType === "flat" ? undefined : tumblerMapping,
       frontPhotoDataUrl: frontPhotoDataUrl || undefined,
       backPhotoDataUrl: backPhotoDataUrl || undefined,
+      bodyReferenceViewSide: productType === "flat" ? undefined : activeBodyReferenceViewSide,
       manufacturerLogoStamp: productType === "flat" ? undefined : resolvedManufacturerLogoStamp,
       productReferenceSet: productType === "flat" ? undefined : productReferenceSet,
+      pipelineProvenance: buildTemplatePipelineProvenance(diagnosticsForSave),
     };
 
     if (isEdit) {
@@ -5239,6 +5725,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     onSave(template);
   }, [
     backPhotoDataUrl,
+    activeBodyReferenceViewSide,
     bodyColorHex,
     lidColorHex,
     bodyBottomFromOverallMm,
@@ -5321,6 +5808,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     handleUpperTransitionFromOverallMm,
     handleUpperTransitionReachMm,
     printableHeightLooksLikeOverallHeight,
+    pipelineDiagnostics,
     speed,
     taperCorrection,
     templateWidthMm,
@@ -5846,6 +6334,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                   onFileSelected={async (f) => {
                     const original = await fileToFacePhotoDataUrl(f);
                     if (!original) return;
+                    setFrontPhotoOrigin("manual");
                     setFrontOriginalUrl(original);
                     setFrontCleanUrl("");
                     setFrontPhotoDataUrl(original);
@@ -5860,6 +6349,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                     setLogoAssistNote(null);
                   }}
                   onClear={() => {
+                    setFrontPhotoOrigin(null);
                     setFrontPhotoDataUrl("");
                     setFrontOriginalUrl("");
                     setFrontCleanUrl("");
@@ -6005,6 +6495,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                     ? `Back: unavailable. Best auxiliary reference is back-3q (${Math.round((referenceSelection.backConfidence ?? 0) * 100)}%). Enable mirror only if you want to reuse the front photo.`
                     : "Back: unknown. Add a real back photo or enable mirror manually."}
               </div>
+              <div className={styles.frontCapturedHint}>
+                Reference set ({productReferenceSet?.images.length ?? 0}) is the lookup image count only. BODY REFERENCE traces one selected image at a time: currently {activeBodyReferenceViewSide}.
+              </div>
+            </div>
+          )}
+          {requiresOrthographicBodyReferencePhoto && (
+            <div className={styles.detectErrorBanner}>
+              BODY REFERENCE is not using the lookup photo because the selected reference is angled
+              {preferredBodyReferenceImageCandidate?.viewClass ? ` (${preferredBodyReferenceImageCandidate.viewClass})` : ""}.
+              Upload a straight-on front photo if you want the shell overlay to line up with the image.
             </div>
           )}
 
@@ -6325,6 +6825,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       canonicalHandleProfile={productType === "flat" ? undefined : normalizedCanonicalHandleProfile}
                       editableHandlePreview={productType === "flat" ? undefined : editableHandlePreview}
                       previewModelMode={previewModelMode}
+                      onPipelineStage={(stage) => handleViewerSyncStage("model-viewer", stage)}
                     />
                     {productType !== "flat" && previewModelMode === "alignment-model" && activeCanonicalBodyProfile && activeCanonicalDimensionCalibration && (
                       <svg
@@ -6632,7 +7133,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           <PipelineDebugDrawer
             title="Pipeline Debug"
             subtitle="Read-only canonical workflow state, formulas, confidence, and warnings."
-            sections={pipelineDebugSections}
+            sections={[...pipelineStageSections, ...pipelineDebugSections]}
             warnings={pipelineDebugWarnings}
             rawObjects={pipelineDebugRawObjects}
             formulas={pipelineDebugFormulas}
@@ -6938,7 +7439,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       </div>
 
       {/* ── Engravable zone editor ──────────────────────────────── */}
-      {productType && productType !== "flat" && activeReferencePhotoDataUrl && (overallHeightMm <= 0 || effectiveCylinderDiameterMm <= 0) && (
+      {productType && productType !== "flat" && activeDisplayReferencePhotoDataUrl && (overallHeightMm <= 0 || effectiveCylinderDiameterMm <= 0) && (
         <div className={styles.section}>
           <div className={styles.sectionTitle}>Body reference</div>
           <div className={styles.bodyReferenceLockedNotice}>
@@ -6948,9 +7449,45 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           </div>
         </div>
       )}
-      {productType && productType !== "flat" && activeReferencePhotoDataUrl && overallHeightMm > 0 && effectiveCylinderDiameterMm > 0 && (
+      {productType && productType !== "flat" && activeDisplayReferencePhotoDataUrl && overallHeightMm > 0 && effectiveCylinderDiameterMm > 0 && (
         <div className={styles.section}>
           <div className={styles.sectionTitle}>Body reference</div>
+          <div className={styles.bodyReferenceSourceCard}>
+            <div className={styles.bodyReferenceSourceHeader}>
+              <div className={styles.bodyReferenceSourceTitle}>Trace source</div>
+              <div className={styles.bodyReferenceSourceHint}>
+                Reference set ({productReferenceSet?.images.length ?? 0}) counts lookup candidates only. BODY REFERENCE uses the selected Front or Back image, never all references.
+              </div>
+            </div>
+            <div className={styles.bodyReferenceSourceToggle}>
+              <button
+                type="button"
+                className={`${styles.bodyReferenceSourceButton} ${activeBodyReferenceViewSide === "front" ? styles.bodyReferenceSourceButtonActive : ""}`}
+                onClick={() => setBodyReferenceViewSide("front")}
+              >
+                Front
+              </button>
+              <button
+                type="button"
+                className={`${styles.bodyReferenceSourceButton} ${activeBodyReferenceViewSide === "back" ? styles.bodyReferenceSourceButtonActive : ""}`}
+                onClick={() => setBodyReferenceViewSide("back")}
+                disabled={!hasRealBackTraceSource}
+                title={!hasRealBackTraceSource ? (bodyReferenceBackUnavailableReason ?? undefined) : undefined}
+              >
+                Back
+              </button>
+            </div>
+            <div className={styles.bodyReferenceSourceNote}>
+              {activeBodyReferenceViewSide === "back"
+                ? "Back tracing is using the selected true-back/manual back source only."
+                : "Front tracing is using the selected front/body-reference source only."}
+            </div>
+            {!hasRealBackTraceSource && bodyReferenceBackUnavailableReason && (
+              <div className={styles.bodyReferenceSourceWarning}>
+                Back unavailable: {bodyReferenceBackUnavailableReason}
+              </div>
+            )}
+          </div>
           {activePrintableSurfaceResolution && (
             <div className={styles.surfaceContractSummary}>
               <div className={styles.surfaceContractSummaryGrid}>
@@ -7002,7 +7539,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             </div>
           )}
           <EngravableZoneEditor
-            photoDataUrl={activeReferencePhotoDataUrl}
+            photoDataUrl={activeDisplayReferencePhotoDataUrl}
             overallHeightMm={activeCanonicalDimensionCalibration?.totalHeightMm ?? overallHeightMm}
             bodyTopFromOverallMm={activeCanonicalDimensionCalibration?.lidBodyLineMm ?? bodyTopFromOverallMm}
             bodyBottomFromOverallMm={activeCanonicalDimensionCalibration?.bodyBottomMm ?? bodyBottomFromOverallMm}
@@ -7029,6 +7566,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             referenceLayerState={referenceLayerState}
             dimensionCalibration={activeCanonicalDimensionCalibration ?? undefined}
             printableSurfaceContract={activePrintableSurfaceResolution?.printableSurfaceContract ?? null}
+            printableTopBoundarySource={activePrintableSurfaceResolution?.topBoundarySource ?? null}
+            printableTopBoundaryConfidence={activePrintableSurfaceResolution?.topConfidence ?? null}
+            printableTopBoundaryWeak={activePrintableSurfaceResolution?.automaticDetectionWeak ?? false}
             printableTopOverrideMm={printableTopOverrideMm}
             printableBottomOverrideMm={printableBottomOverrideMm}
             onChange={(bodyTop, bodyBottom) => {
@@ -7114,7 +7654,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               setBaseDiameterMm(round2(nextDiameter));
             }}
             onOutlineProfileChange={(nextProfile) => {
-              setBodyOutlineProfile(nextProfile);
+              commitBodyOutlineProfile(nextProfile);
               const derived = deriveDimensionsFromEditableBodyOutline(nextProfile);
               if (typeof derived.bodyTopFromOverallMm === "number") {
                 setBodyTopFromOverallMm(round2(derived.bodyTopFromOverallMm));
@@ -7147,10 +7687,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               }
             }}
             onReferencePathsChange={(nextPaths) => {
-              setReferencePaths(nextPaths);
-              setBodyOutlineProfile(nextPaths.bodyOutline ?? undefined);
+              commitReferencePaths(nextPaths);
+              commitBodyOutlineProfile(nextPaths.bodyOutline ?? undefined);
             }}
-            onReferenceLayerStateChange={setReferenceLayerState}
+            onReferenceLayerStateChange={commitReferenceLayerState}
+            onPipelineStage={(stage) => handleViewerSyncStage("engravable-zone-editor", stage)}
           />
         </div>
       )}

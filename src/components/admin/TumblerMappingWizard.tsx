@@ -711,7 +711,7 @@ export function TumblerMappingWizard(props: Props) {
       open
       title="Tumbler Mapping"
       onClose={onCancel}
-      size="wide"
+      size="fullscreen"
       footer={(
         <button
           type="button"

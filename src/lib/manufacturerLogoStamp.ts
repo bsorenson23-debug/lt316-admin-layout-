@@ -1,4 +1,5 @@
 import type {
+  BodyReferenceViewSide,
   EditableBodyOutline,
   ManufacturerLogoStamp,
   OrientationLandmarks,
@@ -8,7 +9,7 @@ import type {
 } from "@/types/productTemplate";
 import type { TumblerItemLookupFitDebug } from "@/types/tumblerItemLookup";
 
-export const MANUFACTURER_LOGO_STAMP_ALGO_VERSION = "canonical-logo-v1";
+export const MANUFACTURER_LOGO_STAMP_ALGO_VERSION = "canonical-logo-v2-openai-assist";
 
 type BodyRow = {
   y: number;
@@ -37,6 +38,7 @@ export interface ExtractManufacturerLogoStampArgs {
   productReferenceSet?: ProductReferenceSet | null;
   sourceImageId?: string;
   preferredLogoBox?: ProductReferenceLogoBox | null;
+  preferredViewSide?: BodyReferenceViewSide;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -637,6 +639,7 @@ function buildOrientationLandmarks(args: {
   productReferenceSet?: ProductReferenceSet | null;
   sourceImageId?: string;
   sourceImage?: ProductReferenceImage | null;
+  preferredViewSide?: BodyReferenceViewSide;
 }): OrientationLandmarks {
   const selection = args.productReferenceSet?.canonicalViewSelection;
   const handleReferenceId = args.productReferenceSet?.canonicalHandleSideImageId;
@@ -646,15 +649,28 @@ function buildOrientationLandmarks(args: {
   const thetaHandle = handleImage?.handleVisible
     ? (handleImage.handleSide === "left" ? -Math.PI / 2 : handleImage.handleSide === "right" ? Math.PI / 2 : undefined)
     : undefined;
+  const preferredViewSide = args.preferredViewSide === "back" ? "back" : "front";
+  const canonicalSourceImageId =
+    preferredViewSide === "back"
+      ? (selection?.canonicalBackImageId ?? args.productReferenceSet?.canonicalBackImageId)
+      : (selection?.canonicalFrontImageId ?? args.productReferenceSet?.canonicalFrontImageId);
+  const orientationConfidence =
+    preferredViewSide === "back"
+      ? (selection?.backConfidence ?? args.productReferenceSet?.orientationConfidence ?? 0.56)
+      : (selection?.frontConfidence ?? args.productReferenceSet?.orientationConfidence ?? 0.56);
   return {
     thetaFront: 0,
     thetaBack: Math.PI,
     thetaHandle,
-    sourceImageId: args.sourceImageId ?? selection?.canonicalFrontImageId ?? args.sourceImage?.id,
+    sourceImageId: args.sourceImageId ?? canonicalSourceImageId ?? args.sourceImage?.id,
     confidence: round3(
       clamp(
-        (selection?.frontConfidence ?? args.productReferenceSet?.orientationConfidence ?? 0.56) *
-          (args.sourceImage?.viewClass === "front" ? 1 : 0.92),
+        orientationConfidence *
+          (
+            preferredViewSide === "back"
+              ? (args.sourceImage?.viewClass === "back" ? 1 : 0.92)
+              : (args.sourceImage?.viewClass === "front" ? 1 : 0.92)
+          ),
         0,
         1,
       ),
@@ -682,7 +698,10 @@ function inferThetaSpan(args: {
   return round3(Math.max(0.08, Math.asin(spanRatio) * 2));
 }
 
-function chooseReferenceFallback(productReferenceSet?: ProductReferenceSet | null): {
+function chooseReferenceFallback(
+  productReferenceSet?: ProductReferenceSet | null,
+  preferredViewSide: BodyReferenceViewSide = "front",
+): {
   image: ProductReferenceImage | null;
   box: ProductReferenceLogoBox | null;
 } {
@@ -690,15 +709,28 @@ function chooseReferenceFallback(productReferenceSet?: ProductReferenceSet | nul
     return { image: null, box: null };
   }
   const selection = productReferenceSet.canonicalViewSelection;
-  const frontId = selection?.canonicalFrontImageId ?? productReferenceSet.canonicalFrontImageId;
-  const frontCandidate = frontId
-    ? productReferenceSet.images.find((image) => image.id === frontId && image.logoDetected && image.logoBox) ?? null
+  const canonicalImageId =
+    preferredViewSide === "back"
+      ? (
+          selection?.canonicalBackStatus === "true-back"
+            ? (selection?.canonicalBackImageId ?? productReferenceSet.canonicalBackImageId)
+            : undefined
+        )
+      : (selection?.canonicalFrontImageId ?? productReferenceSet.canonicalFrontImageId);
+  const canonicalCandidate = canonicalImageId
+    ? productReferenceSet.images.find((image) => image.id === canonicalImageId && image.logoDetected && image.logoBox) ?? null
     : null;
-  if (frontCandidate?.logoBox) {
-    return { image: frontCandidate, box: frontCandidate.logoBox };
+  if (canonicalCandidate?.logoBox) {
+    return { image: canonicalCandidate, box: canonicalCandidate.logoBox };
   }
   const best = productReferenceSet.images
-    .filter((image) => image.logoDetected && image.logoBox)
+    .filter((image) => {
+      if (!image.logoDetected || !image.logoBox) return false;
+      if (preferredViewSide === "back") {
+        return image.viewClass === "back";
+      }
+      return true;
+    })
     .sort((a, b) => b.confidence - a.confidence)[0] ?? null;
   return { image: best, box: best?.logoBox ?? null };
 }
@@ -736,7 +768,8 @@ export async function extractManufacturerLogoStamp(
   const axis = estimateAxis(rows);
   if (!axis) return null;
 
-  const referenceFallback = chooseReferenceFallback(args.productReferenceSet);
+  const preferredViewSide = args.preferredViewSide === "back" ? "back" : "front";
+  const referenceFallback = chooseReferenceFallback(args.productReferenceSet, preferredViewSide);
   const normalizedPreferredBox =
     !args.preferredLogoBox &&
     referenceFallback.image?.width &&
@@ -803,6 +836,7 @@ export async function extractManufacturerLogoStamp(
     productReferenceSet: args.productReferenceSet,
     sourceImageId: args.sourceImageId,
     sourceImage,
+    preferredViewSide,
   });
 
   return {

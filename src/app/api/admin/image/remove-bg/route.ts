@@ -53,14 +53,15 @@ async function replicateOutputToDataUrl(output: unknown, mimeType = "image/png")
   throw new Error("Unexpected Replicate output format");
 }
 
+function fileToDataUrl(file: File): Promise<string> {
+  return file.arrayBuffer().then((buffer) => {
+    const mimeType = file.type || "image/jpeg";
+    return `data:${mimeType};base64,${Buffer.from(buffer).toString("base64")}`;
+  });
+}
+
 export async function POST(req: NextRequest) {
   const token = process.env.REPLICATE_API_TOKEN;
-  if (!token || token === "your_replicate_token_here") {
-    return NextResponse.json(
-      { error: "REPLICATE_API_TOKEN not configured in .env.local" },
-      { status: 503 }
-    );
-  }
 
   let formData: FormData;
   try {
@@ -79,10 +80,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Image too large (max 10 MB)" }, { status: 413 });
   }
 
+  if (!token || token === "your_replicate_token_here") {
+    return NextResponse.json({
+      dataUrl: await fileToDataUrl(imageFile),
+      bgRemoved: false,
+      method: "original",
+      model: "Original image (Replicate unavailable)",
+      warning: "REPLICATE_API_TOKEN not configured; returning original image.",
+    });
+  }
+
   // Convert to base64 data URL for Replicate
-  const buffer   = Buffer.from(await imageFile.arrayBuffer());
-  const mimeType = imageFile.type || "image/jpeg";
-  const dataUrl  = `data:${mimeType};base64,${buffer.toString("base64")}`;
+  const dataUrl = await fileToDataUrl(imageFile);
 
   try {
     const replicate = new Replicate({ auth: token });
@@ -107,11 +116,19 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       dataUrl: resultDataUrl,
+      bgRemoved: true,
+      method: "replicate",
       model: "BiRefNet (Replicate)",
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Replicate call failed";
     console.error("[remove-bg] error:", msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({
+      dataUrl,
+      bgRemoved: false,
+      method: "original",
+      model: "Original image (Replicate failed)",
+      warning: msg,
+    });
   }
 }
