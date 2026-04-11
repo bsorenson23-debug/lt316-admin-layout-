@@ -302,6 +302,7 @@ export function EngravableZoneEditor({
     : (CANVAS_HEIGHT - targetPhotoHeightPx) / 2;
   const photoTopPx = Math.round(basePhotoTopPx + (clampedPhotoOffsetYPct / 100) * CANVAS_HEIGHT);
   const bodyLeftPx = Math.round((containerWidthPx - bodyWidthPx) / 2);
+  const bodyCenterLineX = bodyLeftPx + bodyWidthPx / 2;
 
   const handlePointerDown = useCallback(
     (line: "top" | "bottom") => (e: React.PointerEvent) => {
@@ -418,6 +419,11 @@ export function EngravableZoneEditor({
           <div
             className={styles.bodyFrame}
             style={{ left: bodyLeftPx, width: bodyWidthPx, height: CANVAS_HEIGHT }}
+          />
+          <div
+            className={styles.centerReferenceLine}
+            style={{ left: bodyCenterLineX }}
+            aria-hidden
           />
 
           {/* Product photo */}
