@@ -38,6 +38,17 @@
   pointer-events: none;
 }
 
+.centerReferenceLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed color-mix(in srgb, var(--accent) 62%, transparent);
+  opacity: 0.9;
+  z-index: 3;
+  pointer-events: none;
+}
+
 .productPhoto {
   display: block;
   object-fit: contain;
