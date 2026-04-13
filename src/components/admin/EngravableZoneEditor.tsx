@@ -23,6 +23,7 @@ import {
   createReferencePaths,
   deriveDimensionsFromEditableBodyOutline,
   insertEditableOutlinePoint,
+  normalizeMeasurementContour,
   removeEditableOutlinePoint,
   sortEditableOutlinePoints,
 } from "@/lib/editableBodyOutline";
@@ -117,7 +118,10 @@ interface Props {
   rimColorHex: string;
   /** Traced profile details from the lookup image, when available */
   fitDebug?: TumblerItemLookupFitDebug | null;
+  /** Whether lookup fitDebug crop math is valid for the currently displayed photo */
+  allowFitDebugPhotoCrop?: boolean;
   canonicalHandleProfile?: CanonicalHandleProfile | null;
+  canonicalBodySvgPath?: string | null;
   editableHandlePreview?: EditableHandlePreview | null;
   outlineProfile?: EditableBodyOutline;
   referencePaths?: ReferencePaths;
@@ -160,13 +164,19 @@ interface Props {
   onPhotoOffsetXChange: (offsetPct: number) => void;
   onPhotoAnchorYChange: (anchor: "center" | "bottom") => void;
   onPhotoCenterModeChange: (mode: "body" | "photo") => void;
-  onColorsChange: (bodyColorHex: string, lidColorHex: string, rimColorHex: string) => void;
+  colorResampleRequestKey?: number;
+  onColorsChange: (sample: {
+    bodyColorHex?: string | null;
+    lidColorHex?: string | null;
+    rimColorHex?: string | null;
+  }) => void;
   onBaseDiameterDerived?: (diameterMm: number) => void;
   onDiameterChange?: (diameterMm: number) => void;
   onTopOuterDiameterChange?: (diameterMm: number) => void;
   onBaseDiameterChange?: (diameterMm: number) => void;
   onOutlineProfileChange?: (outline: EditableBodyOutline | undefined) => void;
   onReferencePathsChange?: (paths: ReferencePaths) => void;
+  onOutlineSeedModeChange?: (mode: "fresh-image-trace" | "saved-outline" | "fit-debug-fallback") => void;
   onReferenceLayerStateChange?: (state: ReferenceLayerState) => void;
   onPipelineStage?: (stage: TemplatePipelineStageRecord) => void;
 }
@@ -342,6 +352,7 @@ function editableOutlineSignature(outline: EditableBodyOutline | null | undefine
           height: round1(outline.sourceContourBounds.height),
         }
       : null,
+    sourceContourMode: outline.sourceContourMode ?? null,
   });
 }
 
@@ -369,7 +380,9 @@ function rgbToHex(r: number, g: number, b: number): string {
 }
 
 function sampleRegionColor(
-  ctx: CanvasRenderingContext2D,
+  imageData: Uint8ClampedArray,
+  canvasWidth: number,
+  canvasHeight: number,
   x: number,
   y: number,
   width: number,
@@ -378,19 +391,22 @@ function sampleRegionColor(
 ): string | null {
   const sx = Math.max(0, Math.floor(x));
   const sy = Math.max(0, Math.floor(y));
-  const sw = Math.max(1, Math.floor(width));
-  const sh = Math.max(1, Math.floor(height));
-  const imageData = ctx.getImageData(sx, sy, sw, sh).data;
+  const sw = Math.max(1, Math.min(Math.floor(width), Math.max(1, canvasWidth - sx)));
+  const sh = Math.max(1, Math.min(Math.floor(height), Math.max(1, canvasHeight - sy)));
   const samples: Array<{ r: number; g: number; b: number; l: number }> = [];
 
-  for (let i = 0; i < imageData.length; i += 4) {
-    const alpha = imageData[i + 3];
-    if (alpha <= 20) continue;
-    const r = imageData[i];
-    const g = imageData[i + 1];
-    const b = imageData[i + 2];
-    const l = r * 0.2126 + g * 0.7152 + b * 0.0722;
-    samples.push({ r, g, b, l });
+  for (let row = 0; row < sh; row += 1) {
+    const rowOffset = ((sy + row) * canvasWidth + sx) * 4;
+    for (let col = 0; col < sw; col += 1) {
+      const index = rowOffset + (col * 4);
+      const alpha = imageData[index + 3];
+      if (alpha <= 20) continue;
+      const r = imageData[index];
+      const g = imageData[index + 1];
+      const b = imageData[index + 2];
+      const l = r * 0.2126 + g * 0.7152 + b * 0.0722;
+      samples.push({ r, g, b, l });
+    }
   }
 
   if (samples.length === 0) return null;
@@ -851,6 +867,78 @@ function buildOpenPath(points: Array<{ x: number; y: number }>): string | null {
     .join(" ")}`;
 }
 
+function parseLinearPathPoints(path: string | null): {
+  points: Array<{ x: number; y: number }>;
+  closed: boolean;
+} | null {
+  if (!path) return null;
+  const tokens = path.trim().split(/\s+/);
+  const points: Array<{ x: number; y: number }> = [];
+  let closed = false;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (!token) continue;
+    if (token === "M" || token === "L") {
+      const x = Number(tokens[index + 1]);
+      const y = Number(tokens[index + 2]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      points.push({ x, y });
+      index += 2;
+      continue;
+    }
+    if (token === "Z") {
+      closed = true;
+      continue;
+    }
+    const x = Number(token);
+    const y = Number(tokens[index + 1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    points.push({ x, y });
+    index += 1;
+  }
+  return points.length >= 2 ? { points, closed } : null;
+}
+
+function smoothDisplayOutlinePath(path: string | null): string | null {
+  const parsed = parseLinearPathPoints(path);
+  if (!parsed || !parsed.closed || parsed.points.length < 12) return path;
+
+  const { points } = parsed;
+  const minY = points.reduce((min, point) => Math.min(min, point.y), Number.POSITIVE_INFINITY);
+  const maxY = points.reduce((max, point) => Math.max(max, point.y), Number.NEGATIVE_INFINITY);
+  const preserveBandPx = clamp((maxY - minY) * 0.025, 3, 10);
+  const preserved = points.map((point) => (
+    Math.abs(point.y - minY) <= preserveBandPx ||
+    Math.abs(point.y - maxY) <= preserveBandPx
+  ));
+  let smoothed = points.map((point) => ({ x: point.x, y: point.y }));
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    smoothed = smoothed.map((point, index) => {
+      if (preserved[index]) {
+        return { x: round1(points[index].x), y: round1(points[index].y) };
+      }
+
+      let weightedX = 0;
+      let totalWeight = 0;
+      for (let offset = -3; offset <= 3; offset += 1) {
+        const sampleIndex = (index + offset + smoothed.length) % smoothed.length;
+        const sample = smoothed[sampleIndex];
+        const weight = 4 - Math.abs(offset);
+        weightedX += sample.x * weight;
+        totalWeight += weight;
+      }
+
+      return {
+        x: round1(weightedX / Math.max(1, totalWeight)),
+        y: round1(points[index].y),
+      };
+    });
+  }
+
+  return buildClosedPath(smoothed);
+}
+
 function translateLinearPath(path: string | null, dx: number, dy: number): string | null {
   if (!path) return null;
   const tokens = path.trim().split(/\s+/);
@@ -872,6 +960,67 @@ function translateLinearPath(path: string | null, dx: number, dy: number): strin
     index += 1;
   }
   return translated.join(" ");
+}
+
+function invertAffineLinearPath(path: string | null, matrix: readonly number[] | null | undefined): string | null {
+  if (!path || !matrix || matrix.length < 6) return null;
+  const [a = 1, b = 0, tx = 0, c = 0, d = 1, ty = 0] = matrix;
+  const determinant = (a * d) - (b * c);
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-6) return null;
+
+  const tokens = path.trim().split(/\s+/);
+  const transformed: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (!token) continue;
+    if (token === "M" || token === "L" || token === "Z") {
+      transformed.push(token);
+      continue;
+    }
+    const x = Number(token);
+    const y = Number(tokens[index + 1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      transformed.push(token);
+      continue;
+    }
+    const translatedX = x - tx;
+    const translatedY = y - ty;
+    const sourceX = ((d * translatedX) - (b * translatedY)) / determinant;
+    const sourceY = ((a * translatedY) - (c * translatedX)) / determinant;
+    transformed.push(`${round1(sourceX)}`, `${round1(sourceY)}`);
+    index += 1;
+  }
+  return transformed.join(" ");
+}
+
+function translateDisplayPhotoBounds(
+  bounds: DisplayPhotoBounds | null | undefined,
+  dx: number,
+  dy: number,
+): DisplayPhotoBounds | null {
+  if (!bounds) return null;
+  return {
+    minX: round1(bounds.minX + dx),
+    minY: round1(bounds.minY + dy),
+    maxX: round1(bounds.maxX + dx),
+    maxY: round1(bounds.maxY + dy),
+    width: round1(bounds.width),
+    height: round1(bounds.height),
+  };
+}
+
+function translateDisplayPhotoRect(
+  rect: DisplayPhotoRect | null | undefined,
+  dx: number,
+  dy: number,
+): DisplayPhotoRect | null {
+  if (!rect) return null;
+  return {
+    x: round1(rect.x + dx),
+    y: round1(rect.y + dy),
+    width: round1(rect.width),
+    height: round1(rect.height),
+  };
 }
 
 function buildAnchoredHandleGuidePath(args: {
@@ -2411,7 +2560,9 @@ export function EngravableZoneEditor({
   lidColorHex,
   rimColorHex,
   fitDebug,
+  allowFitDebugPhotoCrop = false,
   canonicalHandleProfile,
+  canonicalBodySvgPath,
   editableHandlePreview,
   outlineProfile,
   referencePaths,
@@ -2454,6 +2605,7 @@ export function EngravableZoneEditor({
   onPhotoOffsetXChange,
   onPhotoAnchorYChange,
   onPhotoCenterModeChange,
+  colorResampleRequestKey = 0,
   onColorsChange,
   onBaseDiameterDerived,
   onDiameterChange,
@@ -2461,11 +2613,13 @@ export function EngravableZoneEditor({
   onBaseDiameterChange,
   onOutlineProfileChange,
   onReferencePathsChange,
+  onOutlineSeedModeChange,
   onReferenceLayerStateChange,
   onPipelineStage,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgOutlineInputRef = useRef<HTMLInputElement>(null);
+  const lastColorSampleSignatureRef = useRef<string>("");
   const printableBandClipId = React.useId().replace(/:/g, "-");
   const [dragging, setDragging] = useState<
     | "top"
@@ -2570,7 +2724,7 @@ export function EngravableZoneEditor({
   const outlineTransformMode = profileEditMode && shapeWorkflowMode === "fit";
   const showBlueprintOverlay = false;
   const showGuideLabels = false;
-  const showHandleTrace = true;
+  const showHandleTrace = (canonicalHandleProfile?.confidence ?? 0) >= 0.6;
   const showReadOnlyGuides = false;
   const reportPipelineStage = React.useEffectEvent((stage: TemplatePipelineStageRecord) => {
     onPipelineStage?.(stage);
@@ -2587,9 +2741,21 @@ export function EngravableZoneEditor({
     let cancelled = false;
     const img = new Image();
     img.onload = async () => {
-      const sourceOutline = referencePaths?.bodyOutline ?? outlineProfile;
-      const sourceContour = sourceOutline?.sourceContour;
-      const sourceBounds = sourceOutline?.sourceContourBounds;
+      const sourceOutline = localReferencePaths.bodyOutline ?? referencePaths?.bodyOutline ?? outlineProfile;
+      const normalizedMeasurementContour = sourceOutline
+        ? normalizeMeasurementContour({
+            outline: sourceOutline,
+            overallHeightMm,
+            bodyTopFromOverallMm,
+            bodyBottomFromOverallMm,
+          })
+        : null;
+      const sourceContour = normalizedMeasurementContour?.contour
+        ?? sourceOutline?.sourceContour
+        ?? null;
+      const sourceBounds = normalizedMeasurementContour?.bounds
+        ?? sourceOutline?.sourceContourBounds
+        ?? null;
       const sourceViewport = sourceOutline?.sourceContourViewport;
       if (
         sourceContour &&
@@ -2607,14 +2773,18 @@ export function EngravableZoneEditor({
           x: round1((point.x - sourceViewport.minX) * scaleX),
           y: round1((point.y - sourceViewport.minY) * scaleY),
         }));
-        const scaledBounds = {
-          minX: round1((sourceBounds.minX - sourceViewport.minX) * scaleX),
-          minY: round1((sourceBounds.minY - sourceViewport.minY) * scaleY),
-          maxX: round1((sourceBounds.maxX - sourceViewport.minX) * scaleX),
-          maxY: round1((sourceBounds.maxY - sourceViewport.minY) * scaleY),
-          width: round1(sourceBounds.width * scaleX),
-          height: round1(sourceBounds.height * scaleY),
-        };
+        const scaledBounds =
+          getBoundsFromPoints(scaledSourceContour)
+          ?? {
+            minX: round1((sourceBounds.minX - sourceViewport.minX) * scaleX),
+            minY: round1((sourceBounds.minY - sourceViewport.minY) * scaleY),
+            maxX: round1((sourceBounds.maxX - sourceViewport.minX) * scaleX),
+            maxY: round1((sourceBounds.maxY - sourceViewport.minY) * scaleY),
+            width: round1(sourceBounds.width * scaleX),
+            height: round1(sourceBounds.height * scaleY),
+          };
+        const preferSourceContourBodyFit = sourceOutline?.sourceContourMode === "body-only";
+        const sourceBodyCenterX = (scaledBounds.minX + scaledBounds.maxX) / 2;
         const sourceBodyOutlinePath = buildContourSvgPath(scaledSourceContour);
         const sourceTopWidthPx = estimateContourWidth(scaledSourceContour, scaledBounds.minY + 4) ?? scaledBounds.width;
         const sourceBaseWidthPx = estimateContourWidth(scaledSourceContour, scaledBounds.maxY - 4) ?? scaledBounds.width;
@@ -2689,8 +2859,13 @@ export function EngravableZoneEditor({
         sourceCanvas.width = img.naturalWidth || img.width;
         sourceCanvas.height = img.naturalHeight || img.height;
         const sourceCtx = sourceCanvas.getContext("2d", { willReadFrequently: true });
+        const sourceImageData = (() => {
+          if (!sourceCtx) return null;
+          sourceCtx.drawImage(img, 0, 0);
+          return sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+        })();
         const sourceHandleTrace = (() => {
-          if (!sourceCtx) {
+          if (!sourceImageData) {
             return {
               outerPath: null,
               innerPath: null,
@@ -2699,10 +2874,8 @@ export function EngravableZoneEditor({
               handleSide: fitDebug?.handleSide ?? null,
             };
           }
-          sourceCtx.drawImage(img, 0, 0);
-          const sourceImage = sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
           return deriveHandleTraceFromImage({
-            imageData: sourceImage,
+            imageData: sourceImageData,
             bodyContour: scaledSourceContour,
             handleSideHint: canonicalHandleProfile?.side ?? fitDebug?.handleSide ?? null,
           });
@@ -2714,7 +2887,7 @@ export function EngravableZoneEditor({
             }
           : null;
         const sourceRimDetection = (() => {
-          if (!sourceCtx) {
+          if (!sourceImageData) {
             return {
               rimTopY: null,
               rimBottomY: null,
@@ -2722,9 +2895,8 @@ export function EngravableZoneEditor({
               rimDetectionConfidence: 0,
             };
           }
-          const sourceImage = sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
           return detectRimBandRows({
-            imageData: sourceImage.data,
+            imageData: sourceImageData.data,
             width: sourceCanvas.width,
             height: sourceCanvas.height,
             bodyCenterX: (scaledBounds.minX + scaledBounds.maxX) / 2,
@@ -2755,49 +2927,219 @@ export function EngravableZoneEditor({
               height: sourceHandleInnerBounds.height,
             }
           : null;
-        const tracedDisplayPhoto = cropBoundsFromFitDebug(img, fitDebug) ?? cropVisibleBounds(img, fitDebug);
+        const preferredSourceHandleOuterRect = pickTallestRect([
+          sourceHandleTrace.outerRect,
+          fitHandleOuterRect,
+          sourceHandleOuterRectCandidate,
+        ]);
+        const preferredSourceHandleInnerRect = pickTallestRect([
+          sourceHandleTrace.innerRect,
+          fitHandleInnerRect,
+          sourceHandleInnerRectCandidate,
+        ]);
+        if (preferSourceContourBodyFit) {
+          if (!cancelled) {
+            commitDisplayPhoto({
+              src: photoDataUrl,
+              w: img.naturalWidth || img.width,
+              h: img.naturalHeight || img.height,
+              bodyCenterX: sourceBodyCenterX,
+              referenceBodyWidthPx: scaledBounds.width,
+              referenceBandCenterY: detectedReferenceBandCenterY,
+              bodyTopY: scaledBounds.minY,
+              bodyBottomY: scaledBounds.maxY,
+              rimTopY: sourceRimDetection.rimTopY,
+              rimBottomY: sourceRimDetection.rimBottomY,
+              rimDetectionSource: sourceRimDetection.rimDetectionSource,
+              rimDetectionConfidence: sourceRimDetection.rimDetectionConfidence,
+              bodyOutlinePath: sourceBodyOutlinePath,
+              bodyOutlineBounds: scaledBounds,
+              tracedBodyOutlinePath: sourceBodyOutlinePath,
+              handleOuterPath: sourceHandleProfile?.svgPathOuter ?? sourceHandleTrace.outerPath ?? null,
+              handleInnerPath: sourceHandleProfile?.svgPathInner ?? sourceHandleTrace.innerPath ?? null,
+              handleSide: sourceHandleTrace.handleSide ?? sourceHandleProfile?.side ?? fitDebug?.handleSide ?? null,
+              handleOuterRect: preferredSourceHandleOuterRect,
+              handleInnerRect: preferredSourceHandleInnerRect,
+              topOuterWidthPx: sourceTopWidthPx,
+              baseWidthPx: sourceBaseWidthPx,
+            });
+          }
+          return;
+        }
+        const tracedDisplayPhoto =
+          (allowFitDebugPhotoCrop ? cropBoundsFromFitDebug(img, fitDebug) : null)
+          ?? cropVisibleBounds(img, fitDebug);
+        const translatedMeasuredBodyOutlinePath = translateLinearPath(
+          tracedDisplayPhoto.bodyOutlinePath,
+          tracedDisplayPhoto.offsetX,
+          tracedDisplayPhoto.offsetY,
+        );
         const translatedTracedBodyOutlinePath = translateLinearPath(
           tracedDisplayPhoto.tracedBodyOutlinePath,
           tracedDisplayPhoto.offsetX,
           tracedDisplayPhoto.offsetY,
         );
+        const translatedMeasuredBodyBounds = translateDisplayPhotoBounds(
+          tracedDisplayPhoto.bodyOutlineBounds,
+          tracedDisplayPhoto.offsetX,
+          tracedDisplayPhoto.offsetY,
+        );
+        const measuredBodyCenterX = tracedDisplayPhoto.bodyCenterX + tracedDisplayPhoto.offsetX;
+        const measuredBodyTopY = tracedDisplayPhoto.bodyTopY + tracedDisplayPhoto.offsetY;
+        const measuredBodyBottomY = tracedDisplayPhoto.bodyBottomY + tracedDisplayPhoto.offsetY;
+        const measuredReferenceBandCenterY = tracedDisplayPhoto.referenceBandCenterY + tracedDisplayPhoto.offsetY;
+        const translatedMeasuredRimTopY = tracedDisplayPhoto.rimTopY != null
+          ? tracedDisplayPhoto.rimTopY + tracedDisplayPhoto.offsetY
+          : null;
+        const translatedMeasuredRimBottomY = tracedDisplayPhoto.rimBottomY != null
+          ? tracedDisplayPhoto.rimBottomY + tracedDisplayPhoto.offsetY
+          : null;
+        const displayOffsetX = preferSourceContourBodyFit ? tracedDisplayPhoto.offsetX : 0;
+        const displayOffsetY = preferSourceContourBodyFit ? tracedDisplayPhoto.offsetY : 0;
+        const displayPhotoSrc = preferSourceContourBodyFit ? tracedDisplayPhoto.dataUrl : photoDataUrl;
+        const displayPhotoWidth = preferSourceContourBodyFit ? tracedDisplayPhoto.width : (img.naturalWidth || img.width);
+        const displayPhotoHeight = preferSourceContourBodyFit ? tracedDisplayPhoto.height : (img.naturalHeight || img.height);
+        const displaySourceBodyOutlinePath = preferSourceContourBodyFit
+          ? translateLinearPath(sourceBodyOutlinePath, -displayOffsetX, -displayOffsetY)
+          : sourceBodyOutlinePath;
+        const displaySourceBodyOutlineBounds = preferSourceContourBodyFit
+          ? translateDisplayPhotoBounds(scaledBounds, -displayOffsetX, -displayOffsetY)
+          : scaledBounds;
+        const displaySourceBodyCenterX = preferSourceContourBodyFit
+          ? sourceBodyCenterX - displayOffsetX
+          : sourceBodyCenterX;
+        const displaySourceReferenceBandCenterY = preferSourceContourBodyFit
+          ? detectedReferenceBandCenterY - displayOffsetY
+          : detectedReferenceBandCenterY;
+        const displaySourceRimTopY = sourceRimDetection.rimTopY != null
+          ? sourceRimDetection.rimTopY - displayOffsetY
+          : null;
+        const displaySourceRimBottomY = sourceRimDetection.rimBottomY != null
+          ? sourceRimDetection.rimBottomY - displayOffsetY
+          : null;
+        const displaySourceHandleOuterPath = preferSourceContourBodyFit
+          ? (
+            tracedDisplayPhoto.handleOuterPath ??
+            translateLinearPath(sourceHandleProfile?.svgPathOuter ?? sourceHandleTrace.outerPath ?? null, -displayOffsetX, -displayOffsetY)
+          )
+          : (sourceHandleProfile?.svgPathOuter ?? sourceHandleTrace.outerPath ?? null);
+        const displaySourceHandleInnerPath = preferSourceContourBodyFit
+          ? (
+            tracedDisplayPhoto.handleInnerPath ??
+            translateLinearPath(sourceHandleProfile?.svgPathInner ?? sourceHandleTrace.innerPath ?? null, -displayOffsetX, -displayOffsetY)
+          )
+          : (sourceHandleProfile?.svgPathInner ?? sourceHandleTrace.innerPath ?? null);
+        const displaySourceHandleOuterRect = preferSourceContourBodyFit
+          ? (
+            tracedDisplayPhoto.handleOuterRect ??
+            pickTallestRect([
+              translateDisplayPhotoRect(sourceHandleTrace.outerRect, -displayOffsetX, -displayOffsetY),
+              translateDisplayPhotoRect(fitHandleOuterRect, -displayOffsetX, -displayOffsetY),
+              translateDisplayPhotoRect(sourceHandleOuterRectCandidate, -displayOffsetX, -displayOffsetY),
+            ])
+          )
+          : pickTallestRect([
+            preferredSourceHandleOuterRect,
+          ]);
+        const displaySourceHandleInnerRect = preferSourceContourBodyFit
+          ? (
+            tracedDisplayPhoto.handleInnerRect ??
+            pickTallestRect([
+              translateDisplayPhotoRect(sourceHandleTrace.innerRect, -displayOffsetX, -displayOffsetY),
+              translateDisplayPhotoRect(fitHandleInnerRect, -displayOffsetX, -displayOffsetY),
+              translateDisplayPhotoRect(sourceHandleInnerRectCandidate, -displayOffsetX, -displayOffsetY),
+            ])
+          )
+          : pickTallestRect([
+            preferredSourceHandleInnerRect,
+          ]);
+        const effectiveBodyCenterX = preferSourceContourBodyFit
+          ? displaySourceBodyCenterX
+          : (
+            translatedMeasuredBodyBounds
+              ? measuredBodyCenterX
+              : displaySourceBodyCenterX
+          );
+        const effectiveReferenceBodyWidthPx = preferSourceContourBodyFit
+          ? (displaySourceBodyOutlineBounds?.width ?? scaledBounds.width)
+          : (
+            translatedMeasuredBodyBounds
+              ? tracedDisplayPhoto.referenceBodyWidthPx
+              : scaledBounds.width
+          );
+        const effectiveReferenceBandCenterY = preferSourceContourBodyFit
+          ? displaySourceReferenceBandCenterY
+          : (
+            translatedMeasuredBodyBounds
+              ? measuredReferenceBandCenterY
+              : detectedReferenceBandCenterY
+          );
+        const effectiveBodyTopY = preferSourceContourBodyFit
+          ? (displaySourceBodyOutlineBounds?.minY ?? scaledBounds.minY)
+          : (
+            translatedMeasuredBodyBounds
+              ? measuredBodyTopY
+              : scaledBounds.minY
+          );
+        const effectiveBodyBottomY = preferSourceContourBodyFit
+          ? (displaySourceBodyOutlineBounds?.maxY ?? scaledBounds.maxY)
+          : (
+            translatedMeasuredBodyBounds
+              ? measuredBodyBottomY
+              : scaledBounds.maxY
+          );
+        const effectiveRimTopY = preferSourceContourBodyFit
+          ? displaySourceRimTopY
+          : (translatedMeasuredRimTopY ?? sourceRimDetection.rimTopY);
+        const effectiveRimBottomY = preferSourceContourBodyFit
+          ? displaySourceRimBottomY
+          : (translatedMeasuredRimBottomY ?? sourceRimDetection.rimBottomY);
+        const effectiveBodyOutlinePath = preferSourceContourBodyFit
+          ? displaySourceBodyOutlinePath
+          : (translatedMeasuredBodyOutlinePath ?? displaySourceBodyOutlinePath);
+        const effectiveBodyOutlineBounds = preferSourceContourBodyFit
+          ? (displaySourceBodyOutlineBounds ?? scaledBounds)
+          : (translatedMeasuredBodyBounds ?? displaySourceBodyOutlineBounds ?? scaledBounds);
+        const effectiveTracedBodyOutlinePath = preferSourceContourBodyFit
+          ? displaySourceBodyOutlinePath
+          : (translatedTracedBodyOutlinePath ?? displaySourceBodyOutlinePath);
+        const effectiveTopOuterWidthPx = preferSourceContourBodyFit
+          ? sourceTopWidthPx
+          : (tracedDisplayPhoto.topOuterWidthPx ?? sourceTopWidthPx);
+        const effectiveBaseWidthPx = preferSourceContourBodyFit
+          ? sourceBaseWidthPx
+          : (tracedDisplayPhoto.baseWidthPx ?? sourceBaseWidthPx);
         if (!cancelled) {
           commitDisplayPhoto({
-            src: photoDataUrl,
-            w: img.naturalWidth || img.width,
-            h: img.naturalHeight || img.height,
-            bodyCenterX: (scaledBounds.minX + scaledBounds.maxX) / 2,
-            referenceBodyWidthPx: scaledBounds.width,
-            referenceBandCenterY: detectedReferenceBandCenterY,
-            bodyTopY: scaledBounds.minY,
-            bodyBottomY: scaledBounds.maxY,
-            rimTopY: sourceRimDetection.rimTopY,
-            rimBottomY: sourceRimDetection.rimBottomY,
+            src: displayPhotoSrc,
+            w: displayPhotoWidth,
+            h: displayPhotoHeight,
+            bodyCenterX: effectiveBodyCenterX,
+            referenceBodyWidthPx: effectiveReferenceBodyWidthPx,
+            referenceBandCenterY: effectiveReferenceBandCenterY,
+            bodyTopY: effectiveBodyTopY,
+            bodyBottomY: effectiveBodyBottomY,
+            rimTopY: effectiveRimTopY,
+            rimBottomY: effectiveRimBottomY,
             rimDetectionSource: sourceRimDetection.rimDetectionSource,
             rimDetectionConfidence: sourceRimDetection.rimDetectionConfidence,
-            bodyOutlinePath: sourceBodyOutlinePath,
-            bodyOutlineBounds: scaledBounds,
-            tracedBodyOutlinePath: translatedTracedBodyOutlinePath ?? sourceBodyOutlinePath,
-            handleOuterPath: sourceHandleProfile?.svgPathOuter ?? sourceHandleTrace.outerPath ?? null,
-            handleInnerPath: sourceHandleProfile?.svgPathInner ?? sourceHandleTrace.innerPath ?? null,
+            bodyOutlinePath: effectiveBodyOutlinePath,
+            bodyOutlineBounds: effectiveBodyOutlineBounds,
+            tracedBodyOutlinePath: effectiveTracedBodyOutlinePath,
+            handleOuterPath: displaySourceHandleOuterPath,
+            handleInnerPath: displaySourceHandleInnerPath,
             handleSide: sourceHandleTrace.handleSide ?? sourceHandleProfile?.side ?? fitDebug?.handleSide ?? null,
-            handleOuterRect: pickTallestRect([
-              sourceHandleTrace.outerRect,
-              fitHandleOuterRect,
-              sourceHandleOuterRectCandidate,
-            ]),
-            handleInnerRect: pickTallestRect([
-              sourceHandleTrace.innerRect,
-              fitHandleInnerRect,
-              sourceHandleInnerRectCandidate,
-            ]),
-            topOuterWidthPx: sourceTopWidthPx,
-            baseWidthPx: sourceBaseWidthPx,
+            handleOuterRect: displaySourceHandleOuterRect,
+            handleInnerRect: displaySourceHandleInnerRect,
+            topOuterWidthPx: effectiveTopOuterWidthPx,
+            baseWidthPx: effectiveBaseWidthPx,
           });
         }
         return;
       }
-      const cropped = cropBoundsFromFitDebug(img, fitDebug) ?? cropVisibleBounds(img, fitDebug);
+      const cropped =
+        (allowFitDebugPhotoCrop ? cropBoundsFromFitDebug(img, fitDebug) : null)
+        ?? cropVisibleBounds(img, fitDebug);
       if (!cancelled) {
         commitDisplayPhoto({
           src: cropped.dataUrl,
@@ -2835,7 +3177,19 @@ export function EngravableZoneEditor({
     return () => {
       cancelled = true;
     };
-  }, [canonicalHandleProfile, commitDisplayPhoto, fitDebug, outlineProfile, photoDataUrl, referencePaths?.bodyOutline]);
+  }, [
+    allowFitDebugPhotoCrop,
+    bodyBottomFromOverallMm,
+    bodyTopFromOverallMm,
+    canonicalHandleProfile,
+    commitDisplayPhoto,
+    fitDebug,
+    localReferencePaths.bodyOutline,
+    outlineProfile,
+    overallHeightMm,
+    photoDataUrl,
+    referencePaths?.bodyOutline,
+  ]);
 
   const syncedReferencePaths = React.useMemo(() => createReferencePaths({
     bodyOutline: referencePaths?.bodyOutline ?? outlineProfile ?? null,
@@ -2986,18 +3340,10 @@ export function EngravableZoneEditor({
     ),
     [generatedFallbackOutline, localReferencePaths.bodyOutline, outlineProfile, selectUsableOutline],
   );
-  const activeLayerPathSignature = React.useMemo(() => (
-    activeLayerPath
-      ? JSON.stringify(
-          activeLayerPath.points.map((point) => [
-            round1(point.x),
-            round1(point.y),
-            point.role ?? "",
-            point.pointType ?? "",
-          ]),
-        )
-      : "__none__"
-  ), [activeLayerPath]);
+  const activeLayerPathSignature = React.useMemo(
+    () => editableOutlineSignature(activeLayerPath),
+    [activeLayerPath],
+  );
   const activeLayerLocked = localReferenceLayerState.locked.bodyOutline;
   const activeLayerVisible = localReferenceLayerState.visibility.bodyOutline;
 
@@ -3084,8 +3430,10 @@ export function EngravableZoneEditor({
   ]);
 
   const derivedZoneGuides = React.useMemo(
-    () => deriveEngravableZoneFromFitDebug({ overallHeightMm, fitDebug }),
-    [fitDebug, overallHeightMm],
+    () => allowFitDebugPhotoCrop
+      ? deriveEngravableZoneFromFitDebug({ overallHeightMm, fitDebug })
+      : null,
+    [allowFitDebugPhotoCrop, fitDebug, overallHeightMm],
   );
 
   // Pixels per mm for this display
@@ -3132,11 +3480,33 @@ export function EngravableZoneEditor({
   );
   const editableOutline = outlineDraft;
   const previewOutline = editableOutline ?? generatedFallbackOutline;
+  const preferDirectContourPreview = Boolean(
+    previewOutline?.sourceContourMode === "body-only" &&
+    previewOutline.directContour &&
+    previewOutline.directContour.length >= 3,
+  );
   const editableContourBoundsMm = React.useMemo(() => {
-    const contour = previewOutline?.directContour;
-    if (!contour || contour.length < 3) return null;
-    return getBoundsFromPoints(contour.map((point) => ({ x: point.x, y: point.y })));
-  }, [previewOutline]);
+    if (!previewOutline) return null;
+    if (preferDirectContourPreview || outlineTransformMode) {
+      const contour = previewOutline.directContour;
+      if (contour && contour.length >= 3) {
+        return getBoundsFromPoints(contour.map((point) => ({ x: point.x, y: point.y })));
+      }
+    }
+    if (previewOutline.points.length === 0) return null;
+    const maxHalfWidth = previewOutline.points.reduce((max, point) => Math.max(max, Math.abs(point.x)), 0);
+    const minY = previewOutline.points.reduce((min, point) => Math.min(min, point.y), Number.POSITIVE_INFINITY);
+    const maxY = previewOutline.points.reduce((max, point) => Math.max(max, point.y), Number.NEGATIVE_INFINITY);
+    if (!Number.isFinite(maxHalfWidth) || !Number.isFinite(minY) || !Number.isFinite(maxY)) return null;
+    return {
+      minX: -maxHalfWidth,
+      minY,
+      maxX: maxHalfWidth,
+      maxY,
+      width: Math.max(1, maxHalfWidth * 2),
+      height: Math.max(1, maxY - minY),
+    };
+  }, [outlineTransformMode, preferDirectContourPreview, previewOutline]);
   const bodyZoneTopPx = bodyTopPx;
   const bodyZoneBottomPx = bodyBottomPx;
   const bodyZoneHeightPx = bodyZoneBottomPx - bodyZoneTopPx;
@@ -3199,6 +3569,7 @@ export function EngravableZoneEditor({
   const effectivePhotoOffsetXPct = profileEditMode ? clampedPhotoOffsetXPct : 0;
   const effectivePhotoAnchorY = profileEditMode ? photoAnchorY : "center";
   const effectivePhotoCenterMode = profileEditMode ? photoCenterMode : "body";
+  const preferBodyBottomPhotoAnchor = !profileEditMode && preferDirectContourPreview;
   const useContourAlignedPhotoFit = Boolean(
     activeDisplayPhoto?.bodyOutlineBounds &&
     editableContourBoundsMm &&
@@ -3366,7 +3737,7 @@ export function EngravableZoneEditor({
   const targetBodyCenterPx = (bodyZoneTopPx + bodyZoneBottomPx) / 2;
   const basePhotoTopPx = useContourAlignedPhotoFit && activeDisplayPhoto?.bodyOutlineBounds
     ? (
-      effectivePhotoAnchorY === "bottom"
+      effectivePhotoAnchorY === "bottom" || preferBodyBottomPhotoAnchor
         ? (
             contourMaxYPx != null
               ? contourMaxYPx - (activeDisplayPhoto.bodyOutlineBounds.maxY * photoScaleYPx)
@@ -4417,6 +4788,43 @@ export function EngravableZoneEditor({
   const editableOutlinePath = React.useMemo(
     () => {
       if (!previewOutline) return null;
+      if (outlineTransformMode) {
+        return buildDirectContourSvgPath({
+          outline: previewOutline,
+          centerXPx: bodyCenterLinePx,
+          pxPerMm,
+        }) || buildMirroredOutlineSvgPath({
+          outline: previewOutline,
+          centerXPx: bodyCenterLinePx,
+          pxPerMm,
+        });
+      }
+      if (preferDirectContourPreview) {
+        return buildDirectContourSvgPath({
+          outline: previewOutline,
+          centerXPx: bodyCenterLinePx,
+          pxPerMm,
+        }) || buildMirroredOutlineSvgPath({
+          outline: previewOutline,
+          centerXPx: bodyCenterLinePx,
+          pxPerMm,
+        });
+      }
+      return buildMirroredOutlineSvgPath({
+        outline: previewOutline,
+        centerXPx: bodyCenterLinePx,
+        pxPerMm,
+      }) || buildDirectContourSvgPath({
+        outline: previewOutline,
+        centerXPx: bodyCenterLinePx,
+        pxPerMm,
+      });
+    },
+    [bodyCenterLinePx, outlineTransformMode, preferDirectContourPreview, previewOutline, pxPerMm],
+  );
+  const mirroredPreviewOutlinePath = React.useMemo(
+    () => {
+      if (!previewOutline) return null;
       return buildMirroredOutlineSvgPath({
         outline: previewOutline,
         centerXPx: bodyCenterLinePx,
@@ -4441,33 +4849,75 @@ export function EngravableZoneEditor({
     }),
     [bodyCenterLinePx, generatedFallbackOutline, pxPerMm],
   );
+  const derivedSourceContourPreviewPath = React.useMemo(() => {
+    if (!activeDisplayPhoto || !editableOutline?.sourceContour || editableOutline.sourceContour.length < 3) {
+      return null;
+    }
+    const viewport = editableOutline.sourceContourViewport;
+    if (!viewport || viewport.width <= 0 || viewport.height <= 0) {
+      return null;
+    }
+    const scaleX = activeDisplayPhoto.w / viewport.width;
+    const scaleY = activeDisplayPhoto.h / viewport.height;
+    return buildContourSvgPath(
+      editableOutline.sourceContour.map((point) => ({
+        x: round1((point.x - viewport.minX) * scaleX),
+        y: round1((point.y - viewport.minY) * scaleY),
+      })),
+    );
+  }, [
+    activeDisplayPhoto,
+    editableOutline?.sourceContour,
+    editableOutline?.sourceContourViewport,
+  ]);
+  const calibratedCanonicalPhotoPath = React.useMemo(
+    () => invertAffineLinearPath(
+      canonicalBodySvgPath ?? null,
+      dimensionCalibration?.photoToFrontTransform.matrix,
+    ),
+    [canonicalBodySvgPath, dimensionCalibration?.photoToFrontTransform.matrix],
+  );
   const hasSourceContourPreview = Boolean(
-    activeDisplayPhoto?.bodyOutlinePath &&
+    (activeDisplayPhoto?.tracedBodyOutlinePath || activeDisplayPhoto?.bodyOutlinePath || derivedSourceContourPreviewPath) &&
     editableOutline?.sourceContour &&
     editableOutline.sourceContour.length >= 3,
   );
   const sourceContourPreviewPath = hasSourceContourPreview
-    ? (activeDisplayPhoto?.bodyOutlinePath ?? null)
+    ? (
+      activeDisplayPhoto?.tracedBodyOutlinePath ??
+      activeDisplayPhoto?.bodyOutlinePath ??
+      derivedSourceContourPreviewPath ??
+      null
+    )
     : null;
   const rawPhotoTracePreviewPath = activeDisplayPhoto?.tracedBodyOutlinePath
-    ?? sourceContourPreviewPath
+    ?? derivedSourceContourPreviewPath
+    ?? calibratedCanonicalPhotoPath
     ?? null;
   const preferredPhotoBackedOutlinePath = !profileEditMode
     ? (
-      activeDisplayPhoto?.bodyOutlinePath ??
       activeDisplayPhoto?.tracedBodyOutlinePath ??
+      activeDisplayPhoto?.bodyOutlinePath ??
+      calibratedCanonicalPhotoPath ??
+      mirroredPreviewOutlinePath ??
       correctedBodyOverlay?.outlinePath ??
       null
     )
     : null;
   const readOnlyPreviewOutlinePath = !profileEditMode
     ? (
+      sourceContourPreviewPath ??
+      calibratedCanonicalPhotoPath ??
       preferredPhotoBackedOutlinePath ??
       correctedBodyOverlay?.outlinePath ??
       generatedFallbackOutlinePath ??
       null
     )
     : null;
+  const smoothedReadOnlyPreviewOutlinePath = React.useMemo(
+    () => smoothDisplayOutlinePath(readOnlyPreviewOutlinePath),
+    [readOnlyPreviewOutlinePath],
+  );
   const usingMeasuredReadOnlyOverlay = !profileEditMode
     && Boolean(
       readOnlyPreviewOutlinePath &&
@@ -5136,6 +5586,34 @@ export function EngravableZoneEditor({
       setSelectedSegmentIndex(null);
       return;
     }
+    if (activeDisplayPhoto?.tracedBodyOutlinePath) {
+      try {
+        const svgText = [
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${round1(activeDisplayPhoto.w)} ${round1(activeDisplayPhoto.h)}" width="${round1(activeDisplayPhoto.w)}" height="${round1(activeDisplayPhoto.h)}">`,
+          `<path d="${activeDisplayPhoto.tracedBodyOutlinePath}" fill="none" stroke="#000" stroke-width="1" />`,
+          "</svg>",
+        ].join("");
+        const { outline } = createEditableBodyOutlineFromSeedSvgText({
+          svgText,
+          overallHeightMm,
+          bodyTopFromOverallMm: clampedBodyTopFromOverallMm,
+          bodyBottomFromOverallMm: clampedBodyBottomFromOverallMm,
+          diameterMm: effectiveTopOuterDiameterMm && effectiveTopOuterDiameterMm > 0 ? effectiveTopOuterDiameterMm : diameterMm,
+          topOuterDiameterMm: effectiveTopOuterDiameterMm,
+          side: "right",
+          sourceMode: "body-only",
+        });
+        commitOutlineChange(outline);
+        onOutlineSeedModeChange?.("fresh-image-trace");
+        setOutlineImportError(null);
+        setSelectedPointId(null);
+        setSelectedHandleType(null);
+        setSelectedSegmentIndex(null);
+        return;
+      } catch (error) {
+        setOutlineImportError(error instanceof Error ? error.message : "Unable to reset outline from the current photo trace.");
+      }
+    }
     const seeded = createEditableBodyOutline({
       overallHeightMm,
       bodyTopFromOverallMm: clampedBodyTopFromOverallMm,
@@ -5150,6 +5628,7 @@ export function EngravableZoneEditor({
       fitDebug,
     });
     commitOutlineChange(seeded);
+    onOutlineSeedModeChange?.("fit-debug-fallback");
     setSelectedPointId(null);
     setSelectedHandleType(null);
     setSelectedSegmentIndex(null);
@@ -5229,7 +5708,7 @@ export function EngravableZoneEditor({
       return;
     }
 
-    const pathData = activeDisplayPhoto.tracedBodyOutlinePath ?? activeDisplayPhoto.bodyOutlinePath;
+    const pathData = activeDisplayPhoto.tracedBodyOutlinePath;
     if (!pathData) {
       setOutlineImportError("No traced body contour is available from the current photo.");
       return;
@@ -5249,12 +5728,14 @@ export function EngravableZoneEditor({
         diameterMm: effectiveTopOuterDiameterMm && effectiveTopOuterDiameterMm > 0 ? effectiveTopOuterDiameterMm : diameterMm,
         topOuterDiameterMm: effectiveTopOuterDiameterMm,
         side: "right",
+        sourceMode: "body-only",
       });
       applySeedOutlineToActiveLayer({
         outline,
         source,
         enterFitMode: true,
       });
+      onOutlineSeedModeChange?.("fresh-image-trace");
       setOutlineImportError(null);
     } catch (error) {
       setOutlineImportError(error instanceof Error ? error.message : "Unable to rebuild outline from the current photo trace.");
@@ -5266,6 +5747,7 @@ export function EngravableZoneEditor({
     clampedBodyTopFromOverallMm,
     diameterMm,
     effectiveTopOuterDiameterMm,
+    onOutlineSeedModeChange,
     overallHeightMm,
   ]);
 
@@ -5553,6 +6035,7 @@ export function EngravableZoneEditor({
     img.onload = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, photoLeftPx, photoTopPx, photoWidthPx, targetPhotoHeightPx);
+      const sampledCanvasImageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
 
       const bodySampleX = bodyLeftPx + bodyWidthPx * 0.28;
       const bodySampleW = bodyWidthPx * 0.34;
@@ -5569,28 +6052,29 @@ export function EngravableZoneEditor({
       const lidSampleX = bodyLeftPx + bodyWidthPx * 0.22;
       const lidSampleW = bodyWidthPx * 0.42;
 
-      const sampledBody = sampleRegionColor(ctx, bodySampleX, bodySampleY, bodySampleW, bodySampleH, "average");
+      const sampledBody = sampleRegionColor(sampledCanvasImageData, canvas.width, canvas.height, bodySampleX, bodySampleY, bodySampleW, bodySampleH, "average");
       const sampledLid = lidSampleH > 0
-        ? sampleRegionColor(ctx, lidSampleX, lidSampleY, lidSampleW, lidSampleH, "average")
+        ? sampleRegionColor(sampledCanvasImageData, canvas.width, canvas.height, lidSampleX, lidSampleY, lidSampleW, lidSampleH, "average")
         : null;
-      const sampledRim = sampleRegionColor(ctx, rimSampleX, rimSampleY, rimSampleW, rimSampleH, "bright");
+      const sampledRim = sampleRegionColor(sampledCanvasImageData, canvas.width, canvas.height, rimSampleX, rimSampleY, rimSampleW, rimSampleH, "bright");
 
       if (!sampledBody && !sampledLid && !sampledRim) return;
 
-      const nextBody = sampledBody ?? bodyColorHex;
-      const nextLid = sampledLid ?? lidColorHex ?? nextBody;
-      const nextRim = sampledRim ?? rimColorHex;
-
-      if (nextBody !== bodyColorHex || nextLid !== lidColorHex || nextRim !== rimColorHex) {
-        onColorsChange(nextBody, nextLid, nextRim);
+      const nextSample = {
+        bodyColorHex: sampledBody ?? null,
+        lidColorHex: sampledLid ?? null,
+        rimColorHex: sampledRim ?? null,
+      };
+      const nextSampleSignature = JSON.stringify(nextSample);
+      if (nextSampleSignature !== lastColorSampleSignatureRef.current) {
+        lastColorSampleSignatureRef.current = nextSampleSignature;
+        onColorsChange(nextSample);
       }
     };
     img.src = activeDisplayPhoto.src;
   }, [
     activeDisplayPhoto,
-    bodyColorHex,
-    lidColorHex,
-    rimColorHex,
+    colorResampleRequestKey,
     onColorsChange,
     containerWidthPx,
     photoLeftPx,
@@ -5861,7 +6345,7 @@ export function EngravableZoneEditor({
               )}
               {!profileEditMode && !showMainEditableOutlinePreview && readOnlyPreviewOutlinePath && (
                 <path
-                  d={readOnlyPreviewOutlinePath ?? undefined}
+                  d={smoothedReadOnlyPreviewOutlinePath ?? readOnlyPreviewOutlinePath ?? undefined}
                   className={styles.traceBodyOutline}
                 />
               )}
@@ -6162,12 +6646,12 @@ export function EngravableZoneEditor({
                   type="button"
                   className={styles.editorToolBtn}
                   onClick={handleRebuildOutlineFromPhotoTrace}
-                  disabled={!activeDisplayPhoto?.bodyOutlinePath && !activeDisplayPhoto?.tracedBodyOutlinePath}
+                  disabled={!activeDisplayPhoto?.tracedBodyOutlinePath}
                 >
                   Rebuild from Photo Trace
                 </button>
                 <div className={styles.pathEditorHint}>
-                  Use a verified SVG or the current saved outline as the shape source. Preview match is the acceptance gate.
+                  Rebuild from Photo Trace replaces the BODY REFERENCE shell with a fresh trace-derived outline from the selected image. Reset outline only falls back to fit-debug when no trace is available.
                 </div>
                 <button
                   type="button"
@@ -6989,7 +7473,7 @@ export function EngravableZoneEditor({
                 onClick={handleApplyAutoDetectedBands}
               >
                 {autoDetectedBandValues
-                  ? (autoDetectedBandsCommitted ? "Re-apply auto" : "Apply auto-detect")
+                  ? (autoDetectedBandsCommitted ? "Re-apply detected split" : "Apply detected split")
                   : applyableBandValues
                     ? "Apply visual estimate"
                     : "No auto-detect"}

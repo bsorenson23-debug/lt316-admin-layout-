@@ -145,6 +145,25 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   });
 }
 
+export function mapOutlineContourToImageSpace(args: {
+  outline: EditableBodyOutline | null | undefined;
+  imageWidth: number;
+  imageHeight: number;
+}): Array<{ x: number; y: number }> {
+  const contour = args.outline?.sourceContour;
+  if (!contour || contour.length < 3) return [];
+  const viewport = args.outline?.sourceContourViewport;
+  if (!viewport || viewport.width <= 0 || viewport.height <= 0) {
+    return contour.map((point) => ({ x: point.x, y: point.y }));
+  }
+  const scaleX = args.imageWidth / Math.max(1, viewport.width);
+  const scaleY = args.imageHeight / Math.max(1, viewport.height);
+  return contour.map((point) => ({
+    x: round3((point.x - viewport.minX) * scaleX),
+    y: round3((point.y - viewport.minY) * scaleY),
+  }));
+}
+
 function createBodyMask(
   width: number,
   height: number,
@@ -153,7 +172,7 @@ function createBodyMask(
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return new Uint8Array(width * height);
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#ffffff";
@@ -421,14 +440,18 @@ export async function extractCanonicalHandleProfileFromCutout(args: {
   imageDataUrl: string;
   outline: EditableBodyOutline | null | undefined;
 }): Promise<CanonicalHandleProfile | null> {
-  const contour = args.outline?.sourceContour;
+  const image = await loadImage(args.imageDataUrl);
+  const contour = mapOutlineContourToImageSpace({
+    outline: args.outline,
+    imageWidth: image.naturalWidth,
+    imageHeight: image.naturalHeight,
+  });
   if (!contour || contour.length < 3) return null;
 
-  const image = await loadImage(args.imageDataUrl);
   const canvas = document.createElement("canvas");
   canvas.width = image.naturalWidth;
   canvas.height = image.naturalHeight;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return null;
   ctx.drawImage(image, 0, 0);
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);

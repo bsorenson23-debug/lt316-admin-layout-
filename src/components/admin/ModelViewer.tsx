@@ -51,6 +51,11 @@ import {
   type EditableHandlePreview,
 } from "@/lib/editableHandleGeometry";
 import type { LidAssemblyPreset } from "@/lib/lidPresets";
+import {
+  deriveTumblerPreviewModelState,
+  type TumblerPreviewBoundsSnapshot,
+  type TumblerPreviewModelState,
+} from "@/lib/tumblerPreviewModelState";
 
 // ---------------------------------------------------------------------------
 // Suppress noisy Three.js deprecation warnings
@@ -128,6 +133,7 @@ export interface ModelViewerProps {
   lidTintColor?: string;
   /** Rim / engraved artwork tint */
   rimTintColor?: string;
+  ringFinish?: import("@/types/productTemplate").ProductTemplateRingFinish;
   lidAssemblyPreset?: LidAssemblyPreset | null;
   /** Template preview only: render tumbler surface zones */
   showTemplateSurfaceZones?: boolean;
@@ -138,6 +144,7 @@ export interface ModelViewerProps {
   editableHandlePreview?: EditableHandlePreview | null;
   previewModelMode?: "alignment-model" | "full-model" | "source-traced";
   onPipelineStage?: (stage: TemplatePipelineStageRecord) => void;
+  onPreviewStateChange?: (state: TumblerPreviewModelState | null) => void;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -803,6 +810,16 @@ function box3ApproximatelyEquals(a: THREE.Box3 | null, b: THREE.Box3, epsilon = 
   );
 }
 
+function box3ToPreviewBoundsSnapshot(bounds: THREE.Box3 | null): TumblerPreviewBoundsSnapshot | null {
+  if (!bounds || bounds.isEmpty()) return null;
+  const size = bounds.getSize(new THREE.Vector3());
+  return {
+    widthMm: Math.max(size.x, 0),
+    heightMm: Math.max(size.y, 0),
+    depthMm: Math.max(size.z, 0),
+  };
+}
+
 function buildCanonicalHandleGeometry(args: {
   handleProfile: CanonicalHandleProfile;
   calibration: CanonicalDimensionCalibration;
@@ -1206,6 +1223,7 @@ function SimplifiedRim({
   bodyTintColor,
   lidTintColor,
   rimTintColor,
+  ringFinish,
   lidAssemblyPreset,
 }: {
   dims: TumblerDimensions;
@@ -1214,6 +1232,7 @@ function SimplifiedRim({
   bodyTintColor?: string;
   lidTintColor?: string;
   rimTintColor?: string;
+  ringFinish?: import("@/types/productTemplate").ProductTemplateRingFinish;
   lidAssemblyPreset?: LidAssemblyPreset | null;
 }) {
   void calibration;
@@ -1285,7 +1304,11 @@ function SimplifiedRim({
     return `#${base.clone().offsetHSL(0.01, -0.02, -0.01).getHexString()}`;
   })();
   const silverBandColor = (() => {
-    const base = new THREE.Color("#edf2f6");
+    const base = new THREE.Color(
+      ringFinish === "tinted"
+        ? (rimTintColor ?? "#edf2f6")
+        : "#edf2f6",
+    );
     return `#${base.getHexString()}`;
   })();
   const resolvedSilverBandHeightMm = lidAssemblyPreset?.silverBandHeightMm ?? silverBandHeightMm;
@@ -1384,6 +1407,7 @@ export function CanonicalAlignmentTumbler({
   bodyTintColor,
   lidTintColor,
   rimTintColor,
+  ringFinish,
   lidAssemblyPreset,
   decalItems,
   wrapWidthMm,
@@ -1402,6 +1426,7 @@ export function CanonicalAlignmentTumbler({
   bodyTintColor?: string;
   lidTintColor?: string;
   rimTintColor?: string;
+  ringFinish?: import("@/types/productTemplate").ProductTemplateRingFinish;
   lidAssemblyPreset?: LidAssemblyPreset | null;
   decalItems?: DecalItem[];
   wrapWidthMm?: number;
@@ -1589,7 +1614,7 @@ export function CanonicalAlignmentTumbler({
       {handleGeometryData && (
         <mesh geometry={handleGeometryData.geometry} castShadow receiveShadow>
           <meshPhysicalMaterial
-            color={previewMode === "full-model" ? fullHandleColor : "#e4c4cc"}
+            color={fullHandleColor}
             metalness={previewMode === "full-model" ? 0.03 : 0.16}
             roughness={previewMode === "full-model" ? 0.42 : 0.4}
             clearcoat={previewMode === "full-model" ? 0.46 : 0.1}
@@ -1614,17 +1639,16 @@ export function CanonicalAlignmentTumbler({
           />
         </mesh>
       )}
-      {previewMode !== "alignment-model" && (
-        <SimplifiedRim
-          dims={dims}
-          calibration={calibration}
-          totalHeightMm={calibration.totalHeightMm}
-          bodyTintColor={bodyTintColor}
-          lidTintColor={lidTintColor}
-          rimTintColor={rimTintColor}
-          lidAssemblyPreset={lidAssemblyPreset}
-        />
-      )}
+      <SimplifiedRim
+        dims={dims}
+        calibration={calibration}
+        totalHeightMm={calibration.totalHeightMm}
+        bodyTintColor={bodyTintColor}
+        lidTintColor={lidTintColor}
+        rimTintColor={rimTintColor}
+        ringFinish={ringFinish}
+        lidAssemblyPreset={lidAssemblyPreset}
+      />
     </group>
   );
 }
@@ -1687,7 +1711,7 @@ function ObjMesh({
 
 
 function GltfMesh({
-  url, dims, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, lidTintColor, rimTintColor, generatedTumblerTrace, onReady,
+  url, dims, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, lidTintColor, rimTintColor, generatedTumblerTrace, previewModelMode, onReady,
 }: {
   url: string;
   dims?: TumblerDimensions | null;
@@ -1700,6 +1724,7 @@ function GltfMesh({
   lidTintColor?: string;
   rimTintColor?: string;
   generatedTumblerTrace?: boolean;
+  previewModelMode?: "alignment-model" | "full-model" | "source-traced";
   onReady?: OnReady;
 }) {
   void lidTintColor;
@@ -1851,14 +1876,14 @@ function GltfMesh({
         <mesh
           ref={bodyRef}
           geometry={bodyMeshData.geometry}
-          material={!bodyTintColor ? (bodyMeshData.material ?? undefined) : undefined}
+          material={(!bodyTintColor || previewModelMode === "full-model") ? (bodyMeshData.material ?? undefined) : undefined}
           position={bodyMeshData.bodyTransform.position}
           quaternion={bodyMeshData.bodyTransform.quaternion}
           scale={bodyMeshData.bodyTransform.scale}
           castShadow
           receiveShadow
         >
-          {bodyTintColor && (
+          {bodyTintColor && previewModelMode !== "full-model" && (
             <meshStandardMaterial
               color={bodyTintColor}
               metalness={0.35}
@@ -2384,7 +2409,7 @@ function ModelByExtension({
     // Check if this is a known model with a dedicated component
     const modelHint = `${glbPath ?? ""} ${sourceName ?? ""}`.toLowerCase();
     const knownModel = KNOWN_MODELS.find((m) => modelHint.includes(m.match));
-    const generatedTumblerTrace = false;
+    const generatedTumblerTrace = modelHint.includes("/models/generated/") || modelHint.includes("trace");
 
     if (knownModel?.key === "yeti40oz" && dims) {
       const decalItems = buildDecalItems(placedItems, itemTextures);
@@ -2423,6 +2448,7 @@ function ModelByExtension({
           lidTintColor={lidTintColor}
           rimTintColor={rimTintColor}
           generatedTumblerTrace={generatedTumblerTrace}
+          previewModelMode={previewModelMode}
           onReady={onReady} />
       </Suspense>
     );
@@ -2473,7 +2499,7 @@ class CanvasErrorBoundary extends Component<
 // ---------------------------------------------------------------------------
 
 export default function ModelViewer({
-  file, modelUrl, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, manufacturerLogoStamp, bodyTintColor, lidTintColor, rimTintColor, showTemplateSurfaceZones, dimensionCalibration, canonicalBodyProfile, canonicalHandleProfile, editableHandlePreview, previewModelMode, onPipelineStage,
+  file, modelUrl, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, manufacturerLogoStamp, bodyTintColor, lidTintColor, rimTintColor, ringFinish, showTemplateSurfaceZones, dimensionCalibration, canonicalBodyProfile, canonicalHandleProfile, editableHandlePreview, previewModelMode, onPipelineStage, onPreviewStateChange,
 }: ModelViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
@@ -2626,23 +2652,56 @@ export default function ModelViewer({
     canonicalBodyProfile &&
     dimensionCalibration,
   );
-  const useCanonicalAlignmentModel = Boolean(
-    hasCanonicalPreviewContext &&
-    (previewModelMode === "alignment-model" || previewModelMode === "full-model"),
+  const canonicalReferenceBounds = useMemo(
+    () => (hasCanonicalPreviewContext && canonicalBodyProfile && dimensionCalibration
+      ? computeCanonicalBodyBounds(canonicalBodyProfile, dimensionCalibration.totalHeightMm)
+      : null),
+    [canonicalBodyProfile, dimensionCalibration, hasCanonicalPreviewContext],
   );
+  const previewModelState = useMemo(
+    () => deriveTumblerPreviewModelState({
+      requestedMode: previewModelMode ?? "source-traced",
+      hasCanonicalAlignmentModel: hasCanonicalPreviewContext,
+      hasSourceModel: Boolean(url),
+      sourceModelPath: glbPath ?? modelUrl ?? file?.name ?? null,
+      sourceBounds: box3ToPreviewBoundsSnapshot(modelBounds),
+      canonicalBounds: box3ToPreviewBoundsSnapshot(canonicalReferenceBounds),
+    }),
+    [
+      previewModelMode,
+      hasCanonicalPreviewContext,
+      url,
+      glbPath,
+      modelUrl,
+      file?.name,
+      modelBounds,
+      canonicalReferenceBounds,
+    ],
+  );
+  const effectivePreviewModelMode = previewModelState.effectiveMode;
   const canonicalBodyBounds = useMemo(
     () => (hasCanonicalPreviewContext && canonicalBodyProfile && dimensionCalibration
       ? (
-          previewModelMode === "alignment-model"
+          effectivePreviewModelMode === "alignment-model"
             ? computeRegistrationShellBounds(dimensionCalibration.svgFrontViewBoxMm)
             : computeCanonicalBodyBounds(canonicalBodyProfile, dimensionCalibration.totalHeightMm)
         )
       : null),
-    [canonicalBodyProfile, dimensionCalibration, hasCanonicalPreviewContext, previewModelMode],
+    [canonicalBodyProfile, dimensionCalibration, effectivePreviewModelMode, hasCanonicalPreviewContext],
+  );
+  useEffect(() => {
+    onPreviewStateChange?.(tumblerDims ? previewModelState : null);
+  }, [onPreviewStateChange, previewModelState, tumblerDims]);
+  const useCanonicalAlignmentModel = Boolean(
+    hasCanonicalPreviewContext &&
+    (
+      effectivePreviewModelMode === "alignment-model" ||
+      (!url && !flatPreview && effectivePreviewModelMode === "full-model")
+    ),
   );
   const sourceCompareBounds = modelBounds;
   const fullPreviewBounds = useMemo(() => {
-    if (previewModelMode !== "full-model") return modelBounds ?? canonicalBodyBounds;
+    if (effectivePreviewModelMode !== "full-model") return modelBounds ?? canonicalBodyBounds;
     if (!modelBounds && !canonicalBodyBounds) return null;
     const next = (canonicalBodyBounds ?? modelBounds)?.clone() ?? null;
     if (!next) return null;
@@ -2667,18 +2726,18 @@ export default function ModelViewer({
     next.min.z -= Math.max(size.z * 0.018, 0.8);
     next.max.z += Math.max(size.z * 0.028, 1.3);
     return next;
-  }, [canonicalBodyBounds, canonicalHandleProfile, editableHandlePreview, modelBounds, previewModelMode]);
+  }, [canonicalBodyBounds, canonicalHandleProfile, editableHandlePreview, effectivePreviewModelMode, modelBounds]);
   const fullPreviewFocusCenter = useMemo(() => {
-    if (previewModelMode !== "full-model") return null;
+    if (effectivePreviewModelMode !== "full-model") return null;
     const preferredBounds = canonicalBodyBounds ?? fullPreviewBounds ?? modelBounds;
     if (!preferredBounds) return null;
     return preferredBounds.getCenter(new THREE.Vector3());
-  }, [canonicalBodyBounds, fullPreviewBounds, modelBounds, previewModelMode]);
+  }, [canonicalBodyBounds, effectivePreviewModelMode, fullPreviewBounds, modelBounds]);
   const alignmentBounds = hasCanonicalPreviewContext
     ? (
-        previewModelMode === "full-model"
+        effectivePreviewModelMode === "full-model"
           ? (fullPreviewBounds ?? canonicalBodyBounds)
-          : previewModelMode === "source-traced"
+          : effectivePreviewModelMode === "source-traced"
           ? (canonicalBodyBounds ?? sourceCompareBounds)
           : (canonicalBodyBounds ?? modelBounds)
       )
@@ -2687,17 +2746,17 @@ export default function ModelViewer({
     showTemplateSurfaceZones
     && tumblerDims
     && dimensionCalibration
-    && previewModelMode === "alignment-model",
+    && effectivePreviewModelMode === "alignment-model",
   );
   const useTemplatePreviewSurfaceZones = Boolean(
     tumblerDims
     && alignmentBounds
     && showTemplateSurfaceZones
-    && previewModelMode === "alignment-model",
+    && effectivePreviewModelMode === "alignment-model",
   );
   const viewKey = flatPreview
     ? `flat:${flatPreview.widthMm}:${flatPreview.heightMm}:${flatPreview.thicknessMm}:${flatPreview.familyKey ?? ""}:${flatPreview.label ?? ""}`
-    : `${hasCanonicalPreviewContext ? previewModelMode : "source-traced"}:${url ?? ""}`;
+    : `${hasCanonicalPreviewContext ? effectivePreviewModelMode : "source-traced"}:${url ?? ""}`;
 
   // ── Adaptive scene scale based on physical dimensions ──────────────────────
   const H = tumblerDims?.overallHeightMm ?? 200;
@@ -2756,7 +2815,7 @@ export default function ModelViewer({
     tumblerDims
     && alignmentBounds
     && !previewHasItems
-    && previewModelMode === "alignment-model"
+    && effectivePreviewModelMode === "alignment-model"
     && !showTemplateSurfaceZones,
   );
 
@@ -2802,10 +2861,11 @@ export default function ModelViewer({
                 handleProfile={canonicalHandleProfile}
                 editableHandlePreview={editableHandlePreview}
                 calibration={dimensionCalibration}
-                previewMode={previewModelMode === "full-model" ? "full-model" : "alignment-model"}
+                previewMode={effectivePreviewModelMode === "full-model" ? "full-model" : "alignment-model"}
                 bodyTintColor={bodyTintColor}
                 lidTintColor={lidTintColor}
                 rimTintColor={rimTintColor}
+                ringFinish={ringFinish}
                 onReady={handleModelReady}
               />
             ) : url ? (
@@ -2824,7 +2884,7 @@ export default function ModelViewer({
                 bodyTintColor={bodyTintColor}
                 lidTintColor={lidTintColor}
                 rimTintColor={rimTintColor}
-                previewModelMode={previewModelMode}
+                previewModelMode={effectivePreviewModelMode}
                 onReady={handleModelReady}
               />
             ) : null}
@@ -2839,18 +2899,18 @@ export default function ModelViewer({
         <PreviewPerspectiveCamera
           enabled={!useAlignmentOrthoCamera}
           modelBounds={
-            previewModelMode === "alignment-model"
+            effectivePreviewModelMode === "alignment-model"
               ? alignmentBounds
-              : previewModelMode === "full-model"
+              : effectivePreviewModelMode === "full-model"
                 ? (fullPreviewBounds ?? alignmentBounds)
                 : (modelBounds ?? alignmentBounds)
           }
-          focusCenter={previewModelMode === "full-model" ? fullPreviewFocusCenter : null}
-          previewMode={previewModelMode}
+          focusCenter={effectivePreviewModelMode === "full-model" ? fullPreviewFocusCenter : null}
+          previewMode={effectivePreviewModelMode}
         />
         <CalibratedFrontView
           enabled={false}
-          modelBounds={previewModelMode === "alignment-model" ? canonicalBodyBounds : modelBounds}
+          modelBounds={effectivePreviewModelMode === "alignment-model" ? canonicalBodyBounds : modelBounds}
         />
 
         {/* Engravable zone highlight — shown when tumbler loaded, no items placed */}
@@ -2893,7 +2953,7 @@ export default function ModelViewer({
           maxDistance={maxDist}
           maxPolarAngle={Math.PI / 1.85}
           enablePan={false}
-          enableRotate={!showTemplateSurfaceZones || previewModelMode === "full-model" || previewModelMode === "source-traced"}
+          enableRotate={!showTemplateSurfaceZones || effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "source-traced"}
           onStart={handleOrbitStart}
           onEnd={handleOrbitEnd}
         />

@@ -17,6 +17,7 @@ import {
   getRecommendedRotaryDiameter,
   getRotaryExportOrigin,
   mapLogoPlacementToWrapRegion,
+  resolvePrintableTopOffsetForWorkspace,
 } from "./tumblerExportPlacement.ts";
 
 const PRESET: RotaryPlacementPreset = {
@@ -357,6 +358,97 @@ test("alignment guide payload uses canonical wrap mapping", () => {
   assert.equal(guidePayload?.wrapWidthAuthoritative, true);
 });
 
+test("alignment guide payload rebases printable boundaries into cropped printable-local workspace", () => {
+  const guidePayload = buildLightBurnAlignmentGuidePayload({
+    workspaceMode: "tumbler-wrap",
+    templateWidthMm: 345.58,
+    templateHeightMm: 210,
+    calibration: {
+      units: "mm",
+      totalHeightMm: 297,
+      bodyHeightMm: 240,
+      lidBodyLineMm: 30,
+      bodyBottomMm: 270,
+      wrapDiameterMm: 110,
+      baseDiameterMm: 78.7,
+      wrapWidthMm: 345.58,
+      frontVisibleWidthMm: 110,
+      frontAxisPx: { xTop: 120, yTop: 10, xBottom: 120, yBottom: 260 },
+      photoToFrontTransform: { type: "affine", matrix: [1, 0, 0, 0, 1, 0] },
+      svgFrontViewBoxMm: { x: -55, y: 0, width: 110, height: 297 },
+      wrapMappingMm: {
+        frontMeridianMm: 259.19,
+        backMeridianMm: 86.4,
+        leftQuarterMm: 172.79,
+        rightQuarterMm: 0,
+        handleMeridianMm: 86.4,
+        handleKeepOutArcDeg: 90,
+        handleKeepOutWidthMm: 86.4,
+        handleKeepOutStartMm: 43.2,
+        handleKeepOutEndMm: 129.6,
+      },
+      printableSurfaceContract: {
+        printableTopMm: 48,
+        printableBottomMm: 258,
+        printableHeightMm: 210,
+        axialExclusions: [
+          { kind: "lid", startMm: 0, endMm: 36 },
+          { kind: "rim-ring", startMm: 36, endMm: 48 },
+        ],
+        circumferentialExclusions: [
+          { kind: "handle", startMm: 43.2, endMm: 129.6, wraps: false },
+        ],
+      },
+      axialSurfaceBands: [],
+      glbScale: { unitsPerMm: 1 },
+    },
+    manufacturerLogoStamp: {
+      dataUrl: "data:image/png;base64,fixture",
+      placement: { offsetXMm: 0, centerYFromTopMm: 150, widthMm: 28, heightMm: 18 },
+      logoPlacement: {
+        source: "manual",
+        sCenter: 0.5,
+        sSpan: 0.1,
+        thetaCenter: 0,
+        thetaSpan: 0.1,
+        confidence: 1,
+      },
+      orientationLandmarks: {
+        thetaFront: 0,
+        thetaBack: Math.PI,
+        confidence: 1,
+      },
+      source: "front-photo",
+    },
+  });
+
+  assert.ok(guidePayload);
+  assert.equal(guidePayload?.lines.find((line) => line.kind === "printable-top")?.yMm, 0);
+  assert.equal(guidePayload?.lines.find((line) => line.kind === "printable-bottom")?.yMm, 210);
+  assert.equal(guidePayload?.lines.find((line) => line.kind === "lid-boundary")?.yMm, 0);
+  assert.equal(guidePayload?.lines.find((line) => line.kind === "rim-boundary")?.yMm, 0);
+  assert.equal(guidePayload?.logoRegion?.centerYMm, 102);
+});
+
+test("resolvePrintableTopOffsetForWorkspace returns zero when the workspace is already printable-local", () => {
+  assert.equal(
+    resolvePrintableTopOffsetForWorkspace({
+      workspaceHeightMm: 210,
+      printableHeightMm: 210,
+      printableTopOffsetMm: 18,
+    }),
+    0,
+  );
+  assert.equal(
+    resolvePrintableTopOffsetForWorkspace({
+      workspaceHeightMm: 240,
+      printableHeightMm: 210,
+      printableTopOffsetMm: 18,
+    }),
+    18,
+  );
+});
+
 test("logo placement maps from canonical theta/s into wrap coordinates", () => {
   const logoRegion = mapLogoPlacementToWrapRegion({
     templateWidthMm: 345.58,
@@ -527,6 +619,7 @@ test("locked production export warns when artwork crosses printable top or botto
   };
   const warnings = collectPrintableSurfaceWarnings({
     lockedProductionGeometry: true,
+    templateHeightMm: 240,
     items: [
       { id: "a", name: "Logo", y: 4, height: 24 },
       { id: "b", name: "Wrap", y: 200, height: 36 },
@@ -570,6 +663,7 @@ test("locked production export warns when logo region crosses printable top boun
   };
   const warnings = collectLogoPrintableSurfaceWarnings({
     lockedProductionGeometry: true,
+    templateHeightMm: 240,
     logoRegion: {
       label: "Front logo region",
       centerXMm: 120,

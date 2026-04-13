@@ -58,6 +58,7 @@ type ImportOutlineArgs = {
   heightScalePct?: number;
   offsetYMm?: number;
   side?: "left" | "right";
+  sourceMode?: "auto" | "body-only";
 };
 
 type TraceImportArgs = {
@@ -248,8 +249,9 @@ function buildProfilePointsFromContour(args: {
   contour: EditableBodyOutlineContourPoint[];
   bodyTopFromOverallMm: number;
   bodyBottomFromOverallMm: number;
+  topOuterHalfWidthMm?: number;
 }): EditableBodyOutlinePoint[] {
-  const { contour, bodyTopFromOverallMm, bodyBottomFromOverallMm } = args;
+  const { contour, bodyTopFromOverallMm, bodyBottomFromOverallMm, topOuterHalfWidthMm } = args;
   const bodyHeight = Math.max(10, bodyBottomFromOverallMm - bodyTopFromOverallMm);
   const anchors: Array<{ role: EditableBodyOutlinePoint["role"]; y: number }> = [
     { role: "topOuter", y: bodyTopFromOverallMm },
@@ -262,7 +264,10 @@ function buildProfilePointsFromContour(args: {
   ];
 
   return anchors.map(({ role, y }) => {
-    const x = nearestHalfWidthAtY(contour, y);
+    const tracedHalfWidth = nearestHalfWidthAtY(contour, y);
+    const x = role === "topOuter" && topOuterHalfWidthMm != null
+      ? round1(Math.max(tracedHalfWidth, topOuterHalfWidthMm))
+      : tracedHalfWidth;
     return {
       id: makeId(role ?? "point"),
       x,
@@ -604,6 +609,62 @@ function buildBodyOnlySourceContour(args: {
   return [...left, ...right];
 }
 
+function buildImportedBodySeedContour(
+  contour: EditableBodyOutlineContourPoint[],
+): EditableBodyOutlineContourPoint[] | null {
+  const bounds = getBounds(contour);
+  if (!bounds) return null;
+
+  const centerX = estimateBodyCenterX(contour);
+  const sampleCount = Math.max(56, Math.min(260, Math.round(bounds.height * 1.4)));
+  const rows: Array<{ y: number; leftX: number; rightX: number; width: number }> = [];
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const t = sampleCount === 1 ? 0 : index / (sampleCount - 1);
+    const y = round1(bounds.minY + (bounds.height * t));
+    const segments = getContourSegmentsAtY(contour, y);
+    if (segments.length === 0) continue;
+    const bodySegment = selectCenteredContourSegment(segments, centerX);
+    rows.push({
+      y,
+      leftX: bodySegment.leftX,
+      rightX: bodySegment.rightX,
+      width: bodySegment.width,
+    });
+  }
+
+  if (rows.length < 10) return null;
+
+  const stableUpperBandRows = rows.filter((row) =>
+    row.y >= bounds.minY + (bounds.height * 0.1)
+    && row.y <= bounds.minY + (bounds.height * 0.38)
+    && row.width > bounds.width * 0.2,
+  );
+  const stableUpperWidths = stableUpperBandRows.map((row) => row.width);
+  const stableUpperWidth = stableUpperWidths.length > 0
+    ? median(stableUpperWidths)
+    : percentile(rows.map((row) => row.width), 0.8);
+  const minimumBodyWidth = Math.max(bounds.width * 0.32, stableUpperWidth * 0.72);
+  const confirmationWindow = Math.max(4, Math.min(10, Math.round(rows.length * 0.035)));
+  let topIndex = 0;
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const window = rows.slice(index, Math.min(rows.length, index + confirmationWindow));
+    const qualifyingRows = window.filter((row) => row.width >= minimumBodyWidth).length;
+    if (qualifyingRows >= Math.max(3, Math.ceil(window.length * 0.65))) {
+      topIndex = index;
+      break;
+    }
+  }
+
+  const trimmedRows = rows.slice(topIndex);
+  if (trimmedRows.length < 8) return null;
+
+  const left = trimmedRows.map((row) => ({ x: round1(row.leftX), y: row.y }));
+  const right = [...trimmedRows].reverse().map((row) => ({ x: round1(row.rightX), y: row.y }));
+  return [...left, ...right];
+}
+
 function parsePathContour(path: SVGGeometryElement, sampleCount = 240): EditableBodyOutlineContourPoint[] {
   const totalLength = typeof path.getTotalLength === "function" ? path.getTotalLength() : 0;
   const count = Math.max(24, Math.min(600, Math.round(totalLength / 3) || sampleCount));
@@ -631,6 +692,36 @@ function splitPathSubpaths(pathData: string): string[] {
 
 function ensureSvgGeometryElement(element: Element): element is SVGGeometryElement {
   return typeof (element as SVGGeometryElement).getTotalLength === "function";
+}
+
+function scoreImportedOutlineBounds(
+  bbox: { x: number; y: number; width: number; height: number },
+  viewport: { minX: number; minY: number; width: number; height: number } | null,
+): number {
+  const area = bbox.width * bbox.height;
+  if (!viewport) return area;
+
+  const viewportMaxX = viewport.minX + viewport.width;
+  const viewportMaxY = viewport.minY + viewport.height;
+  const bboxMaxX = bbox.x + bbox.width;
+  const bboxMaxY = bbox.y + bbox.height;
+  const widthFill = bbox.width / Math.max(1, viewport.width);
+  const heightFill = bbox.height / Math.max(1, viewport.height);
+  const marginX = Math.max(4, viewport.width * 0.03);
+  const marginY = Math.max(4, viewport.height * 0.03);
+  const hugsViewport =
+    widthFill >= 0.92 &&
+    heightFill >= 0.92 &&
+    Math.abs(bbox.x - viewport.minX) <= marginX &&
+    Math.abs(bboxMaxX - viewportMaxX) <= marginX &&
+    Math.abs(bbox.y - viewport.minY) <= marginY &&
+    Math.abs(bboxMaxY - viewportMaxY) <= marginY;
+
+  if (hugsViewport) {
+    return area * 0.001;
+  }
+
+  return area;
 }
 
 function parseImportedSvg(svgText: string): ImportedEditableBodyOutlineSource {
@@ -704,13 +795,13 @@ function parseImportedSvg(svgText: string): ImportedEditableBodyOutlineSource {
     }
 
     let bestElement: SVGGeometryElement | null = null;
-    let bestArea = Number.NEGATIVE_INFINITY;
+    let bestScore = Number.NEGATIVE_INFINITY;
 
     for (const candidate of geometryCandidates) {
       const bbox = candidate.getBBox();
-      const area = bbox.width * bbox.height;
-      if (area > bestArea && bbox.width > 0 && bbox.height > 0) {
-        bestArea = area;
+      const score = scoreImportedOutlineBounds(bbox, viewportFromViewBox ?? viewportFromDimensions);
+      if (score > bestScore && bbox.width > 0 && bbox.height > 0) {
+        bestScore = score;
         bestElement = candidate;
       }
     }
@@ -730,7 +821,7 @@ function parseImportedSvg(svgText: string): ImportedEditableBodyOutlineSource {
       if (subpaths.length > 1) {
         let bestSubpathElement: SVGGeometryElement | null = null;
         let bestSubpathData = resolvedPathData;
-        let bestSubpathArea = Number.NEGATIVE_INFINITY;
+        let bestSubpathScore = Number.NEGATIVE_INFINITY;
         const tempPaths: SVGGeometryElement[] = [];
 
         for (const subpath of subpaths) {
@@ -739,9 +830,9 @@ function parseImportedSvg(svgText: string): ImportedEditableBodyOutlineSource {
           liveSvg.appendChild(candidate);
           tempPaths.push(candidate);
           const bbox = candidate.getBBox();
-          const area = bbox.width * bbox.height;
-          if (bbox.width > 0 && bbox.height > 0 && area > bestSubpathArea) {
-            bestSubpathArea = area;
+          const score = scoreImportedOutlineBounds(bbox, viewportFromViewBox ?? viewportFromDimensions);
+          if (bbox.width > 0 && bbox.height > 0 && score > bestSubpathScore) {
+            bestSubpathScore = score;
             bestSubpathElement = candidate;
             bestSubpathData = subpath;
           }
@@ -834,6 +925,7 @@ export function cloneEditableBodyOutline(
     directContour: outline.directContour?.map((point) => ({ ...point })),
     sourceContour: outline.sourceContour?.map((point) => ({ ...point })),
     sourceContourBounds: outline.sourceContourBounds ? { ...outline.sourceContourBounds } : undefined,
+    sourceContourMode: outline.sourceContourMode,
     sourceContourViewport: outline.sourceContourViewport ? { ...outline.sourceContourViewport } : undefined,
   };
 }
@@ -852,13 +944,20 @@ export function normalizeMeasurementContour(args: {
           : null);
   if (!baseContour || baseContour.length < 3) return null;
 
-  const mirroredContour = buildMirroredSourceContour(baseContour) ?? baseContour;
-  const bodyOnlyContour = buildBodyOnlySourceContour({
-    contour: mirroredContour,
-    overallHeightMm: args.overallHeightMm,
-    bodyTopFromOverallMm: args.bodyTopFromOverallMm,
-    bodyBottomFromOverallMm: args.bodyBottomFromOverallMm,
-  }) ?? mirroredContour;
+  const usesBodyOnlyContour = args.outline?.sourceContourMode === "body-only";
+  const mirroredContour = usesBodyOnlyContour
+    ? baseContour
+    : (buildMirroredSourceContour(baseContour) ?? baseContour);
+  const bodyOnlyContour = usesBodyOnlyContour
+    ? baseContour
+    : (
+      buildBodyOnlySourceContour({
+        contour: mirroredContour,
+        overallHeightMm: args.overallHeightMm,
+        bodyTopFromOverallMm: args.bodyTopFromOverallMm,
+        bodyBottomFromOverallMm: args.bodyBottomFromOverallMm,
+      }) ?? mirroredContour
+    );
   const bounds = getBounds(bodyOnlyContour) ?? getBounds(mirroredContour) ?? getBounds(baseContour);
   if (!bounds) return null;
 
@@ -1028,6 +1127,7 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
   const topOuterDiameter = round1(resolvedTopOuterDiameterMm);
   const centerX = estimateBodyCenterX(contour);
   const usesBodyOnlyContour = bodySourceContour.length > 0 && bodySourceContour !== mirroredContour;
+  const scaleY = Math.max(0.001, bodyHeightMm / Math.max(1, bounds.height));
   const resolveSourceY = (yMm: number) => (
     usesBodyOnlyContour
       ? bounds.minY + (clamp((yMm - bodyTopFromOverallMm) / Math.max(1, bodyHeightMm), 0, 1) * bounds.height)
@@ -1067,14 +1167,23 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
       role,
     };
   });
+  const rawDirectContour = contour.map((point) => ({
+    x: round1((point.x - centerX) * scaleX),
+    y: round1(bodyTopFromOverallMm + ((point.y - bounds.minY) * scaleY)),
+  }));
+  const directContour = rawDirectContour.filter((point) =>
+    point.y >= bodyTopFromOverallMm - 2 && point.y <= bodyBottomFromOverallMm + 2,
+  );
+  const normalizedDirectContour = directContour.length >= 8 ? directContour : rawDirectContour;
 
   return {
     closed: true,
     version: 1,
     points,
-    directContour: buildContourFromProfile(points),
+    directContour: normalizedDirectContour,
     sourceContour: contour,
     sourceContourBounds: bounds,
+    sourceContourMode: "body-only",
     sourceContourViewport: {
       minX: 0,
       minY: 0,
@@ -1087,6 +1196,7 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
 export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs): EditableBodyOutline {
   const {
     source,
+    overallHeightMm,
     bodyTopFromOverallMm,
     bodyBottomFromOverallMm,
     diameterMm,
@@ -1096,22 +1206,38 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
     heightScalePct = 100,
     offsetYMm = 0,
     side = "right",
+    sourceMode = "auto",
   } = args;
   const sourceContour = source.contour;
-  const mirroredSourceContour = buildMirroredSourceContour(sourceContour);
-  const bodySourceContour = mirroredSourceContour ?? sourceContour;
-  const bounds = getBounds(bodySourceContour) ?? getBounds(sourceContour) ?? source.bounds;
+  const normalizedSourceContour = sourceMode === "body-only"
+    ? sourceContour
+    : (buildMirroredSourceContour(sourceContour) ?? sourceContour);
+  const bodyOnlySourceContour = sourceMode === "body-only"
+    ? (buildImportedBodySeedContour(normalizedSourceContour) ?? normalizedSourceContour)
+    : (
+      buildBodyOnlySourceContour({
+        contour: normalizedSourceContour,
+        overallHeightMm,
+        bodyTopFromOverallMm,
+        bodyBottomFromOverallMm,
+      }) ?? normalizedSourceContour
+    );
+  const bounds =
+    getBounds(bodyOnlySourceContour)
+    ?? getBounds(normalizedSourceContour)
+    ?? getBounds(sourceContour)
+    ?? source.bounds;
   const referenceDiameterMm = round1(topOuterDiameterMm && topOuterDiameterMm > 0 ? topOuterDiameterMm : diameterMm);
   const targetBodyHeightMm = Math.max(10, bodyBottomFromOverallMm - bodyTopFromOverallMm);
   const scaleFactor = scalePct / 100;
-  const referenceSourceWidth = estimateReferenceWidth(bodySourceContour);
+  const referenceSourceWidth = estimateReferenceWidth(bodyOnlySourceContour);
   const scaleX = (referenceDiameterMm / Math.max(0.1, referenceSourceWidth)) * (widthScalePct / 100) * scaleFactor;
   const scaleY = (targetBodyHeightMm / Math.max(1, bounds.height)) * (heightScalePct / 100) * scaleFactor;
-  const centerX = estimateBodyCenterX(bodySourceContour);
+  const centerX = estimateBodyCenterX(bodyOnlySourceContour);
   const minY = bounds.minY;
   const sign = side === "left" ? -1 : 1;
 
-  const rawContour = bodySourceContour.map((point) => ({
+  const rawContour = bodyOnlySourceContour.map((point) => ({
     x: round1(((point.x - centerX) * scaleX) * sign),
     y: round1(bodyTopFromOverallMm + ((point.y - minY) * scaleY) + offsetYMm),
   }));
@@ -1125,15 +1251,17 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
     contour,
     bodyTopFromOverallMm: round1(bodyTopFromOverallMm + offsetYMm),
     bodyBottomFromOverallMm: round1(bodyBottomFromOverallMm + offsetYMm),
+    topOuterHalfWidthMm: referenceDiameterMm / 2,
   });
 
   return {
     closed: true,
     version: 1,
     points,
-    directContour: contour,
-    sourceContour,
+    directContour: contour.map((point) => ({ ...point })),
+    sourceContour: bodyOnlySourceContour.map((point) => ({ ...point })),
     sourceContourBounds: bounds,
+    sourceContourMode: "body-only",
     sourceContourViewport: source.viewport,
   };
 }
@@ -1146,6 +1274,7 @@ export function createEditableBodyOutlineFromSeedSvgText(args: {
   diameterMm: number;
   topOuterDiameterMm?: number | null;
   side?: "left" | "right";
+  sourceMode?: "auto" | "body-only";
 }): { source: ImportedEditableBodyOutlineSource; outline: EditableBodyOutline } {
   const source = parseImportedSvg(args.svgText);
   const outline = createEditableBodyOutlineFromImportedSvg({
@@ -1156,6 +1285,7 @@ export function createEditableBodyOutlineFromSeedSvgText(args: {
     diameterMm: args.diameterMm,
     topOuterDiameterMm: args.topOuterDiameterMm,
     side: args.side,
+    sourceMode: args.sourceMode,
   });
   return { source, outline };
 }

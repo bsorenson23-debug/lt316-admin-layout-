@@ -114,6 +114,23 @@
   flex-shrink: 0;
 }
 
+.overlayTruthChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 320px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-normal);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .shortcutHelpWrap {
   position: relative;
 }

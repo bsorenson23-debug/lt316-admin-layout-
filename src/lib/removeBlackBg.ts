@@ -11,7 +11,7 @@ export function hasDarkBackground(img: HTMLImageElement, threshold = 40): boolea
   const canvas = document.createElement("canvas");
   canvas.width = img.naturalWidth;
   canvas.height = img.naturalHeight;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return false;
   ctx.drawImage(img, 0, 0);
 
@@ -48,7 +48,7 @@ export function removeBlackBackground(
   const canvas = document.createElement("canvas");
   canvas.width = img.naturalWidth;
   canvas.height = img.naturalHeight;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return "";
   ctx.drawImage(img, 0, 0);
 

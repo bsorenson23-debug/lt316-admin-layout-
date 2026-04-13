@@ -322,15 +322,15 @@ export interface EngravableZone {
   width: number;
   /** Height in mm (printable height minus margins) */
   height: number;
-  /** Printable top boundary measured from the body-shell top (mm) */
+  /** Printable top boundary measured in the active workspace Y frame (mm). */
   printableTopY?: number | null;
-  /** Printable bottom boundary measured from the body-shell top (mm) */
+  /** Printable bottom boundary measured in the active workspace Y frame (mm). */
   printableBottomY?: number | null;
-  /** Printable center anchor measured from the body-shell top (mm) */
+  /** Printable center anchor measured in the active workspace Y frame (mm). */
   printableCenterY?: number | null;
-  /** Optional lid boundary guide measured from the body-shell top (mm) */
+  /** Optional lid boundary guide measured in the active workspace Y frame (mm). */
   lidBoundaryY?: number | null;
-  /** Optional rim/ring boundary guide measured from the body-shell top (mm) */
+  /** Optional rim/ring boundary guide measured in the active workspace Y frame (mm). */
   rimBoundaryY?: number | null;
   /** True when automatic printable band detection is weak. */
   printableDetectionWeak?: boolean;
@@ -352,7 +352,7 @@ export interface EngravableZone {
   handleKeepOutWraps?: boolean;
   /** Canonical front-logo center X in wrap space (mm) */
   logoCenterX?: number | null;
-  /** Canonical front-logo center Y in wrap space (mm) */
+  /** Canonical front-logo center Y in the active workspace Y frame (mm) */
   logoCenterY?: number | null;
   /** Canonical front-logo box width in wrap space (mm) */
   logoWidth?: number | null;

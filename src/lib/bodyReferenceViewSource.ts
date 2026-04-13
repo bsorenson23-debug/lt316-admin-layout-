@@ -1,4 +1,4 @@
-import type { BodyReferenceViewSide, ProductReferenceImage } from "@/types/productTemplate";
+import type { BodyReferenceViewSide, ProductReferenceImage, ProductReferenceSet } from "@/types/productTemplate";
 
 export interface ResolveBodyReferenceViewSourceArgs {
   requestedViewSide: BodyReferenceViewSide;
@@ -33,6 +33,68 @@ export function isOrthographicBodyReferenceImage(
   if (!image) return false;
   if (image.viewClass !== "front") return false;
   return image.approxAzimuthDeg == null || image.approxAzimuthDeg === 0;
+}
+
+export function isTraceableFrontBodyReferenceImage(
+  image: ProductReferenceImage | null | undefined,
+): boolean {
+  if (!image) return false;
+  return image.viewClass === "front" || image.viewClass === "front-3q";
+}
+
+function normalizeReferenceImageIdentity(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}${parsed.pathname}`.toLowerCase();
+  } catch {
+    return url.split("?")[0]?.trim().toLowerCase() || null;
+  }
+}
+
+function rankFrontTraceCandidate(image: ProductReferenceImage): number {
+  let score = image.confidence;
+  if (image.viewClass === "front") score += 2;
+  else if (image.viewClass === "front-3q") score += 1;
+  if (image.source === "official") score += 0.25;
+  else if (image.source === "retailer") score += 0.12;
+  return score;
+}
+
+export function resolvePreferredFrontBodyReferenceImage(args: {
+  productReferenceSet?: ProductReferenceSet | null;
+  traceDebugSourceUrl?: string | null;
+}): ProductReferenceImage | null {
+  const images = args.productReferenceSet?.images ?? [];
+  if (images.length === 0) return null;
+
+  const bestStrictFront = images
+    .filter((image) => isOrthographicBodyReferenceImage(image))
+    .sort((left, right) => rankFrontTraceCandidate(right) - rankFrontTraceCandidate(left))[0] ?? null;
+  if (bestStrictFront) return bestStrictFront;
+
+  const traceDebugIdentity = normalizeReferenceImageIdentity(args.traceDebugSourceUrl);
+  if (traceDebugIdentity) {
+    const traceMatchedImage = images.find((image) =>
+      isTraceableFrontBodyReferenceImage(image)
+      && normalizeReferenceImageIdentity(image.url) === traceDebugIdentity
+    ) ?? null;
+    if (traceMatchedImage) return traceMatchedImage;
+  }
+
+  const canonicalFrontImageId =
+    args.productReferenceSet?.canonicalViewSelection?.canonicalFrontImageId
+    ?? args.productReferenceSet?.canonicalFrontImageId;
+  const canonicalFrontImage = canonicalFrontImageId
+    ? images.find((image) => image.id === canonicalFrontImageId) ?? null
+    : null;
+  if (isTraceableFrontBodyReferenceImage(canonicalFrontImage)) {
+    return canonicalFrontImage;
+  }
+
+  return images
+    .filter((image) => isTraceableFrontBodyReferenceImage(image))
+    .sort((left, right) => rankFrontTraceCandidate(right) - rankFrontTraceCandidate(left))[0] ?? null;
 }
 
 export function resolveBodyReferenceViewSource(

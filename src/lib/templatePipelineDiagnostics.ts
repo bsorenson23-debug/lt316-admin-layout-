@@ -6,6 +6,11 @@ import type {
   TemplatePipelineStageId,
   TemplatePipelineStageRecord,
 } from "../types/templatePipelineDiagnostics";
+import {
+  parseTemplatePipelineDiagnostics,
+  parseTemplatePipelineProvenance,
+  parseTemplatePipelineStageRecord,
+} from "./templatePipelineDiagnostics.schema";
 
 const DEFAULT_CONTRACT_VERSION = "2026-04-10-v1";
 
@@ -64,6 +69,8 @@ export function fingerprintJson(value: unknown): string {
 
 export function createTemplatePipelineDiagnostics(args?: {
   runId?: string;
+  traceId?: string | null;
+  sectionId?: string | null;
   startedAt?: string;
   inputFingerprints?: TemplatePipelineInputFingerprints;
   contractVersions?: TemplatePipelineContractVersions;
@@ -73,6 +80,8 @@ export function createTemplatePipelineDiagnostics(args?: {
 }): TemplatePipelineDiagnostics {
   return normalizeTemplatePipelineDiagnostics({
     runId: args?.runId ?? createTemplatePipelineRunId(),
+    traceId: args?.traceId ?? null,
+    sectionId: args?.sectionId ?? null,
     startedAt: args?.startedAt ?? new Date().toISOString(),
     inputFingerprints: args?.inputFingerprints ?? {},
     stages: args?.stages ?? [],
@@ -85,6 +94,10 @@ export function createTemplatePipelineDiagnostics(args?: {
 }
 
 export function normalizeTemplatePipelineStageRecord(value: unknown): TemplatePipelineStageRecord | null {
+  const parsed = parseTemplatePipelineStageRecord(value);
+  if (parsed) {
+    return parsed;
+  }
   if (!value || typeof value !== "object") return null;
   const record = value as Partial<TemplatePipelineStageRecord>;
   if (typeof record.id !== "string") return null;
@@ -129,6 +142,10 @@ export function normalizeTemplatePipelineStageRecord(value: unknown): TemplatePi
 }
 
 export function normalizeTemplatePipelineDiagnostics(value: unknown): TemplatePipelineDiagnostics {
+  const parsed = parseTemplatePipelineDiagnostics(value);
+  if (parsed) {
+    return parsed;
+  }
   if (!value || typeof value !== "object") {
     return createTemplatePipelineDiagnostics();
   }
@@ -144,6 +161,12 @@ export function normalizeTemplatePipelineDiagnostics(value: unknown): TemplatePi
     runId: typeof record.runId === "string" && record.runId.trim().length > 0
       ? record.runId
       : createTemplatePipelineRunId(),
+    traceId: typeof record.traceId === "string" && record.traceId.trim().length > 0
+      ? record.traceId
+      : null,
+    sectionId: typeof record.sectionId === "string" && record.sectionId.trim().length > 0
+      ? record.sectionId
+      : null,
     startedAt: typeof record.startedAt === "string" && record.startedAt.trim().length > 0
       ? record.startedAt
       : new Date().toISOString(),
@@ -252,6 +275,13 @@ export function updateTemplatePipelineInputFingerprints(
 
 export function buildTemplatePipelineProvenance(
   diagnostics: TemplatePipelineDiagnostics,
+  details?: {
+    bodyReferenceViewSide?: TemplatePipelineProvenance["bodyReferenceViewSide"];
+    bodyReferenceSourceTrust?: TemplatePipelineProvenance["bodyReferenceSourceTrust"];
+    bodyReferenceOutlineSeedMode?: TemplatePipelineProvenance["bodyReferenceOutlineSeedMode"];
+    bodyReferenceSourceOrigin?: TemplatePipelineProvenance["bodyReferenceSourceOrigin"];
+    bodyReferenceSourceViewClass?: TemplatePipelineProvenance["bodyReferenceSourceViewClass"];
+  },
 ): TemplatePipelineProvenance {
   const stageAuthorities: TemplatePipelineProvenance["stageAuthorities"] = {};
   const fallbackFlags: TemplatePipelineProvenance["fallbackFlags"] = {};
@@ -265,12 +295,19 @@ export function buildTemplatePipelineProvenance(
 
   return {
     runId: diagnostics.runId,
+    traceId: diagnostics.traceId ?? null,
+    sectionId: diagnostics.sectionId ?? null,
     stageAuthorities,
     fallbackFlags,
     contractVersions: diagnostics.contractVersions,
     blockingIssues: [...diagnostics.blockingIssues],
     bodyReferenceSignature: diagnostics.inputFingerprints.bodyReference ?? null,
     templateGeometrySignature: diagnostics.inputFingerprints.templateGeometry ?? null,
+    bodyReferenceViewSide: details?.bodyReferenceViewSide ?? null,
+    bodyReferenceSourceTrust: details?.bodyReferenceSourceTrust ?? null,
+    bodyReferenceOutlineSeedMode: details?.bodyReferenceOutlineSeedMode ?? null,
+    bodyReferenceSourceOrigin: details?.bodyReferenceSourceOrigin ?? null,
+    bodyReferenceSourceViewClass: details?.bodyReferenceSourceViewClass ?? null,
   };
 }
 
@@ -279,7 +316,7 @@ export function buildTemplateReloadVerificationStage(args: {
   currentDiagnostics: TemplatePipelineDiagnostics;
 }): TemplatePipelineStageRecord {
   const issues: string[] = [];
-  const saved = args.provenance;
+  const saved = parseTemplatePipelineProvenance(args.provenance) ?? args.provenance;
   if (!saved) {
     return {
       id: "template-reload",
@@ -328,6 +365,18 @@ export function buildTemplateReloadVerificationStage(args: {
   ) {
     issues.push("Saved BODY REFERENCE fallback mode differs from the current recomputed fallback mode.");
   }
+  const currentTrust =
+    currentBodyStage?.artifacts &&
+    typeof currentBodyStage.artifacts["sourceTrust"] === "string"
+      ? currentBodyStage.artifacts["sourceTrust"]
+      : null;
+  if (
+    saved.bodyReferenceSourceTrust &&
+    currentTrust &&
+    saved.bodyReferenceSourceTrust !== currentTrust
+  ) {
+    issues.push("Saved BODY REFERENCE trust state differs from the current recomputed trust state.");
+  }
 
   return {
     id: "template-reload",
@@ -341,6 +390,8 @@ export function buildTemplateReloadVerificationStage(args: {
       currentBodyReferenceSignature: args.currentDiagnostics.inputFingerprints.bodyReference ?? null,
       savedTemplateGeometrySignature: saved.templateGeometrySignature ?? null,
       currentTemplateGeometrySignature: args.currentDiagnostics.inputFingerprints.templateGeometry ?? null,
+      savedBodyReferenceSourceTrust: saved.bodyReferenceSourceTrust ?? null,
+      currentBodyReferenceSourceTrust: currentTrust,
     },
   };
 }

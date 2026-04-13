@@ -115,7 +115,13 @@ test("synthetic Stanley replay keeps diagnostics, blockers, and provenance align
     },
   });
 
-  const provenance = buildTemplatePipelineProvenance(diagnostics);
+  const provenance = buildTemplatePipelineProvenance(diagnostics, {
+    bodyReferenceViewSide: "front",
+    bodyReferenceSourceTrust: "advisory-angled",
+    bodyReferenceOutlineSeedMode: "fresh-image-trace",
+    bodyReferenceSourceOrigin: "lookup",
+    bodyReferenceSourceViewClass: "front-3q",
+  });
 
   assert.equal(diagnostics.stages.find((stage) => stage.id === "vectorize")?.engine, "potrace");
   assert.equal(diagnostics.stages.find((stage) => stage.id === "vectorize")?.fallback?.used, true);
@@ -126,6 +132,8 @@ test("synthetic Stanley replay keeps diagnostics, blockers, and provenance align
   assert.equal(provenance.fallbackFlags["vectorize"], true);
   assert.equal(provenance.bodyReferenceSignature, "bodyref:stanley-v1");
   assert.equal(provenance.templateGeometrySignature, "geometry:stanley-v1");
+  assert.equal(provenance.bodyReferenceSourceTrust, "advisory-angled");
+  assert.equal(provenance.bodyReferenceOutlineSeedMode, "fresh-image-trace");
 });
 
 test("reload verification flags drift in authorities, fallback mode, and signatures", () => {
@@ -153,8 +161,17 @@ test("reload verification flags drift in authorities, fallback mode, and signatu
     },
     warnings: [],
     errors: [],
+    artifacts: {
+      sourceTrust: "trusted-front",
+    },
   });
-  const provenance = buildTemplatePipelineProvenance(savedDiagnostics);
+  const provenance = buildTemplatePipelineProvenance(savedDiagnostics, {
+    bodyReferenceViewSide: "front",
+    bodyReferenceSourceTrust: "trusted-front",
+    bodyReferenceOutlineSeedMode: "saved-outline",
+    bodyReferenceSourceOrigin: "manual",
+    bodyReferenceSourceViewClass: "front",
+  });
 
   let currentDiagnostics = createTemplatePipelineDiagnostics({
     runId: "tpl-current",
@@ -180,6 +197,9 @@ test("reload verification flags drift in authorities, fallback mode, and signatu
     },
     warnings: ["Fell back to outline seed after invariant failure."],
     errors: [],
+    artifacts: {
+      sourceTrust: "advisory-angled",
+    },
   });
 
   const reloadStage = buildTemplateReloadVerificationStage({
@@ -193,6 +213,7 @@ test("reload verification flags drift in authorities, fallback mode, and signatu
   assert.ok(reloadStage.warnings.some((warning) => warning.includes("signature drifted")));
   assert.ok(reloadStage.warnings.some((warning) => warning.includes("authority differs")));
   assert.ok(reloadStage.warnings.some((warning) => warning.includes("fallback mode differs")));
+  assert.ok(reloadStage.warnings.some((warning) => warning.includes("trust state differs")));
 });
 
 test("mergeTemplatePipelineDiagnostics keeps per-stage records and dedupes warnings", () => {

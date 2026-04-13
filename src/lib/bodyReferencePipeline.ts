@@ -3,9 +3,9 @@ import {
   type CanonicalBodyContractQA,
 } from "./canonicalDimensionCalibration.ts";
 import {
-  buildPrintableSurfaceResolution,
   type PrintableSurfaceDetection,
   type PrintableSurfaceResolution,
+  resolveAuthoritativePrintableSurfaceResolution,
 } from "./printableSurface.ts";
 import type {
   CanonicalBodyProfile,
@@ -52,6 +52,8 @@ export interface DeriveBodyReferencePipelineArgs {
   printableTopOverrideMm?: number | null;
   printableBottomOverrideMm?: number | null;
   baseBandStartMm?: number | null;
+  persistedPrintableSurfaceContract?: CanonicalDimensionCalibration["printableSurfaceContract"] | null;
+  persistedCanonicalPrintableSurfaceContract?: CanonicalDimensionCalibration["printableSurfaceContract"] | null;
   detection?: PrintableSurfaceDetection | null;
   fitDebug?: TumblerItemLookupFitDebug | null;
 }
@@ -150,10 +152,12 @@ export function deriveBodyReferencePipeline(
   });
   if (!canonicalContract) return null;
 
-  const printableSurfaceResolution = buildPrintableSurfaceResolution({
+  const printableSurfaceResolution = resolveAuthoritativePrintableSurfaceResolution({
     overallHeightMm: args.overallHeightMm,
     bodyTopFromOverallMm: args.bodyTopFromOverallMm,
     bodyBottomFromOverallMm: args.bodyBottomFromOverallMm,
+    topLevelContract: args.persistedPrintableSurfaceContract ?? null,
+    canonicalContract: args.persistedCanonicalPrintableSurfaceContract ?? null,
     lidSeamFromOverallMm: args.lidSeamFromOverallMm,
     silverBandBottomFromOverallMm: args.silverBandBottomFromOverallMm,
     printableTopOverrideMm: args.printableTopOverrideMm,

@@ -23,6 +23,7 @@ import { Stage, Layer, Rect, Line, Image as KonvaImage, Group, Text, Transformer
 import type Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { BedConfig, PlacedItem, PlacedItemPatch, SvgAsset, WorkspaceMode } from "@/types/admin";
+import type { CanonicalDimensionCalibration } from "@/types/productTemplate";
 import { calcBedScale, clamp } from "@/utils/geometry";
 import {
   getGrooveGuideOverlayMetrics,
@@ -33,6 +34,9 @@ import { svgToDataUrl } from "@/utils/svg";
 import { hasDarkBackground, removeBlackBackground } from "@/lib/removeBlackBg";
 import { generateOverlayCanvas } from "@/lib/overlayGenerator";
 import { generateTumblerSchematic } from "@/lib/generateTumblerSchematic";
+import { deriveTumblerWorkspacePhotoRegistration } from "@/lib/tumblerWorkspacePhotoRegistration";
+import { deriveTumblerWorkspaceTruthState } from "@/lib/tumblerWorkspaceTruth";
+import type { TumblerPrintableWorkspaceFrame } from "@/lib/tumblerPrintableWorkspace";
 import { renderCurvedItems } from "@/utils/curvedItemsRenderer";
 import { getTumblerWrapLayout, getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
 import type { RasterToSvgPreviewState } from "./RasterToSvgPanel";
@@ -174,6 +178,8 @@ interface Props {
   backOverlayUrl?: string | null;
   /** Physical tumbler height in mm for overlay scaling */
   tumblerOverallHeightMm?: number;
+  /** Canonical BODY REFERENCE calibration used for workspace photo registration */
+  dimensionCalibration?: CanonicalDimensionCalibration | null;
   /** Top non-printable margin in mm for overlay anchoring */
   tumblerTopMarginMm?: number;
   /** Bottom non-printable margin in mm for overlay anchoring */
@@ -194,6 +200,7 @@ interface Props {
   stageRefCallback?: (stage: Konva.Stage | null) => void;
   /** Engravable safe zone rectangle in mm — highlighted on the bed */
   engravableZone?: import("@/types/admin").EngravableZone | null;
+  workspaceFrame?: TumblerPrintableWorkspaceFrame | null;
   onPlaceAsset: (xMm: number, yMm: number) => void;
   onSelectItem: (id: string | null) => void;
   onUpdateItem: (id: string, patch: PlacedItemPatch) => void;
@@ -394,6 +401,7 @@ export function LaserBedWorkspace({
   templateOverlayUrl,
   backOverlayUrl,
   tumblerOverallHeightMm,
+  dimensionCalibration = null,
   tumblerTopMarginMm,
   tumblerBottomMarginMm,
   overlayMode = "off",
@@ -403,6 +411,7 @@ export function LaserBedWorkspace({
   twoSidedMode = false,
   stageRefCallback,
   engravableZone,
+  workspaceFrame,
   onPlaceAsset,
   onSelectItem,
   onUpdateItem,
@@ -455,6 +464,13 @@ export function LaserBedWorkspace({
     0,
     tumblerBottomMarginMm ?? Math.max(0, overlayMarginTotalMm - overlayTopMarginMm),
   );
+  const overlayDiameterMm = bedConfig.tumblerDiameterMm ?? (bedConfig.width / Math.PI);
+  const wrapLayout = useMemo(() => getTumblerWrapLayout(handleArcDeg), [handleArcDeg]);
+  const overlayFrontCenterMm =
+    engravableZone?.frontCenterX ?? (bedConfig.width * wrapLayout.frontCenterRatio);
+  const overlayBackCenterMm =
+    engravableZone?.backCenterX ??
+    (wrapLayout.backCenterRatio == null ? null : bedConfig.width * wrapLayout.backCenterRatio);
 
   // Rasterize placed items with cylindrical distortion for curved perspective preview
   const curvedItemsCanvas = useMemo(() => {
@@ -464,26 +480,127 @@ export function LaserBedWorkspace({
     return renderCurvedItems(placedItems, imageCache, bw, bh, basePxPerMm, handleArcDeg);
   }, [curvedOverlay, placedItems, imageCache, bedConfig.width, bedConfig.height, basePxPerMm, handleArcDeg]);
 
-  // Generate overlay canvas — schematic (dimension-based) or photo
-  const overlayCanvas = useMemo(() => {
-    if (overlayMode === "off") return null;
-    const diameterMm = bedConfig.tumblerDiameterMm ?? (bedConfig.width / Math.PI);
-
-    if (overlayMode === "schematic") {
-      return generateTumblerSchematic({
-        wrapWidthMm: bedConfig.width,
-        printHeightMm: bedConfig.height,
-        overallHeightMm: overlayOverallHeightMm,
-        topMarginMm: overlayTopMarginMm,
-        bottomMarginMm: overlayBottomMarginMm,
-        diameterMm,
-        handleArcDeg,
-        twoSided: twoSidedMode,
-      }, basePxPerMm);
+  const frontPhotoRegistration = useMemo(() => {
+    if (
+      overlayMode !== "photo" ||
+      bedConfig.workspaceMode !== "tumbler-wrap" ||
+      !templatePhotoImg
+    ) {
+      return null;
     }
+    return deriveTumblerWorkspacePhotoRegistration({
+      imageNaturalWidth: templatePhotoImg.naturalWidth,
+      imageNaturalHeight: templatePhotoImg.naturalHeight,
+      frontCenterMm: overlayFrontCenterMm,
+      backCenterMm: overlayBackCenterMm,
+      mirrorFrontToBack: Boolean(twoSidedMode && !backPhotoImg && overlayBackCenterMm != null),
+      workspaceHeightMm: bedConfig.height,
+      workspaceTopFromOverallMm: overlayTopMarginMm,
+      overallHeightMm: overlayOverallHeightMm,
+      topMarginMm: overlayTopMarginMm,
+      bottomMarginMm: overlayBottomMarginMm,
+      calibration: dimensionCalibration,
+    });
+  }, [
+    overlayMode,
+    bedConfig.workspaceMode,
+    templatePhotoImg,
+    overlayFrontCenterMm,
+    overlayBackCenterMm,
+    twoSidedMode,
+    backPhotoImg,
+    bedConfig.height,
+    overlayTopMarginMm,
+    overlayOverallHeightMm,
+    overlayBottomMarginMm,
+    dimensionCalibration,
+  ]);
+  const backPhotoRegistration = useMemo(() => {
+    if (
+      overlayMode !== "photo" ||
+      bedConfig.workspaceMode !== "tumbler-wrap" ||
+      !backPhotoImg ||
+      !twoSidedMode ||
+      frontPhotoRegistration?.mode !== "canonical-front" ||
+      overlayBackCenterMm == null
+    ) {
+      return null;
+    }
+    return deriveTumblerWorkspacePhotoRegistration({
+      imageNaturalWidth: backPhotoImg.naturalWidth,
+      imageNaturalHeight: backPhotoImg.naturalHeight,
+      frontCenterMm: overlayBackCenterMm,
+      mirrorFrontToBack: false,
+      workspaceHeightMm: bedConfig.height,
+      workspaceTopFromOverallMm: overlayTopMarginMm,
+      overallHeightMm: overlayOverallHeightMm,
+      topMarginMm: overlayTopMarginMm,
+      bottomMarginMm: overlayBottomMarginMm,
+      calibration: null,
+    });
+  }, [
+    overlayMode,
+    bedConfig.workspaceMode,
+    backPhotoImg,
+    twoSidedMode,
+    frontPhotoRegistration?.mode,
+    overlayBackCenterMm,
+    bedConfig.height,
+    overlayTopMarginMm,
+    overlayOverallHeightMm,
+    overlayBottomMarginMm,
+  ]);
+  const useCanonicalWorkspacePhoto =
+    overlayMode === "photo" && frontPhotoRegistration?.mode === "canonical-front";
+  const workspaceTruthState = useMemo(
+    () => deriveTumblerWorkspaceTruthState({
+      workspaceMode: bedConfig.workspaceMode,
+      workspaceFrame,
+      photoRegistrationMode: frontPhotoRegistration?.mode ?? null,
+      hasPhotoOverlay: overlayMode === "photo" && Boolean(templateOverlayUrl),
+    }),
+    [
+      bedConfig.workspaceMode,
+      frontPhotoRegistration?.mode,
+      overlayMode,
+      templateOverlayUrl,
+      workspaceFrame,
+    ],
+  );
 
-    // Photo mode — needs loaded images (always flat, no distortion)
-    if (!templatePhotoImg) return null;
+  const schematicOverlayCanvas = useMemo(() => {
+    if (overlayMode !== "schematic") return null;
+    return generateTumblerSchematic({
+      wrapWidthMm: bedConfig.width,
+      printHeightMm: bedConfig.height,
+      overallHeightMm: overlayOverallHeightMm,
+      topMarginMm: overlayTopMarginMm,
+      bottomMarginMm: overlayBottomMarginMm,
+      diameterMm: overlayDiameterMm,
+      handleArcDeg,
+      twoSided: twoSidedMode,
+    }, basePxPerMm);
+  }, [
+    overlayMode,
+    bedConfig.width,
+    bedConfig.height,
+    overlayOverallHeightMm,
+    overlayTopMarginMm,
+    overlayBottomMarginMm,
+    overlayDiameterMm,
+    handleArcDeg,
+    twoSidedMode,
+    basePxPerMm,
+  ]);
+
+  const legacyPhotoOverlayCanvas = useMemo(() => {
+    if (
+      overlayMode !== "photo" ||
+      !templatePhotoImg ||
+      useCanonicalWorkspacePhoto
+    ) {
+      return null;
+    }
     return generateOverlayCanvas({
       bedPxW: bedConfig.width * basePxPerMm,
       bedPxH: bedConfig.height * basePxPerMm,
@@ -491,13 +608,27 @@ export function LaserBedWorkspace({
       overallHeightMm: overlayOverallHeightMm,
       topMarginMm: overlayTopMarginMm,
       bottomMarginMm: overlayBottomMarginMm,
-      diameterMm,
+      diameterMm: overlayDiameterMm,
       frontImg: templatePhotoImg,
       backImg: backPhotoImg,
       handleArcDeg,
       twoSided: twoSidedMode,
     });
-  }, [overlayMode, templatePhotoImg, backPhotoImg, bedConfig.width, bedConfig.height, bedConfig.tumblerDiameterMm, basePxPerMm, handleArcDeg, twoSidedMode, overlayOverallHeightMm, overlayTopMarginMm, overlayBottomMarginMm]);
+  }, [
+    overlayMode,
+    templatePhotoImg,
+    useCanonicalWorkspacePhoto,
+    bedConfig.width,
+    bedConfig.height,
+    basePxPerMm,
+    overlayOverallHeightMm,
+    overlayTopMarginMm,
+    overlayBottomMarginMm,
+    overlayDiameterMm,
+    backPhotoImg,
+    handleArcDeg,
+    twoSidedMode,
+  ]);
 
   // Pan state refs
   const isPanningRef    = useRef(false);
@@ -507,23 +638,117 @@ export function LaserBedWorkspace({
   // ── Derived bed pixel dimensions ──────────────────────────────────────────
   const bedPxW = bedConfig.width  * basePxPerMm;
   const bedPxH = bedConfig.height * basePxPerMm;
+  const photoOverlayTopOverflowMm = useMemo(() => {
+    if (overlayMode !== "photo" || bedConfig.workspaceMode !== "tumbler-wrap") {
+      return 0;
+    }
+    if (!useCanonicalWorkspacePhoto) {
+      return overlayTopMarginMm;
+    }
+    return Math.max(
+      frontPhotoRegistration?.topOverflowMm ?? 0,
+      backPhotoRegistration?.topOverflowMm ?? 0,
+    );
+  }, [
+    overlayMode,
+    bedConfig.workspaceMode,
+    useCanonicalWorkspacePhoto,
+    overlayTopMarginMm,
+    frontPhotoRegistration?.topOverflowMm,
+    backPhotoRegistration?.topOverflowMm,
+  ]);
+  const photoOverlayBottomOverflowMm = useMemo(() => {
+    if (overlayMode !== "photo" || bedConfig.workspaceMode !== "tumbler-wrap") {
+      return 0;
+    }
+    if (!useCanonicalWorkspacePhoto) {
+      return overlayBottomMarginMm;
+    }
+    return Math.max(
+      frontPhotoRegistration?.bottomOverflowMm ?? 0,
+      backPhotoRegistration?.bottomOverflowMm ?? 0,
+    );
+  }, [
+    overlayMode,
+    bedConfig.workspaceMode,
+    useCanonicalWorkspacePhoto,
+    overlayBottomMarginMm,
+    frontPhotoRegistration?.bottomOverflowMm,
+    backPhotoRegistration?.bottomOverflowMm,
+  ]);
   const overlayTopOverflowPx =
     overlayMode !== "off" && bedConfig.workspaceMode === "tumbler-wrap"
-      ? overlayTopMarginMm * basePxPerMm
+      ? (overlayMode === "photo" ? photoOverlayTopOverflowMm : overlayTopMarginMm) * basePxPerMm
       : 0;
   const overlayBottomOverflowPx =
     overlayMode !== "off" && bedConfig.workspaceMode === "tumbler-wrap"
-      ? overlayBottomMarginMm * basePxPerMm
+      ? (overlayMode === "photo" ? photoOverlayBottomOverflowMm : overlayBottomMarginMm) * basePxPerMm
       : 0;
   const contentPxH = bedPxH + overlayTopOverflowPx + overlayBottomOverflowPx;
   const bedOffsetX = (containerSize.w - bedPxW) / 2;
   const bedOffsetY = Math.max(8, (containerSize.h - contentPxH) / 2 + overlayTopOverflowPx) - BED_VERTICAL_LIFT_PX;
-  const overlayImageProps = overlayCanvas
+  const schematicOverlayImageProps = schematicOverlayCanvas
     ? {
         x: 0,
         y: -overlayTopOverflowPx,
-        width: overlayCanvas.width,
-        height: overlayCanvas.height,
+        width: schematicOverlayCanvas.width,
+        height: schematicOverlayCanvas.height,
+      }
+    : null;
+  const legacyPhotoOverlayImageProps = legacyPhotoOverlayCanvas
+    ? {
+        x: 0,
+        y: -overlayTopOverflowPx,
+        width: legacyPhotoOverlayCanvas.width,
+        height: legacyPhotoOverlayCanvas.height,
+      }
+    : null;
+  const canonicalFrontOverlayImageProps = frontPhotoRegistration
+    ? {
+        x: frontPhotoRegistration.contextFrontRectMm.x * basePxPerMm,
+        y: frontPhotoRegistration.contextFrontRectMm.y * basePxPerMm,
+        width: frontPhotoRegistration.contextFrontRectMm.width * basePxPerMm,
+        height: frontPhotoRegistration.contextFrontRectMm.height * basePxPerMm,
+        crop: frontPhotoRegistration.cropRectPx
+          ? {
+              x: frontPhotoRegistration.cropRectPx.x,
+              y: frontPhotoRegistration.cropRectPx.y,
+              width: frontPhotoRegistration.cropRectPx.width,
+              height: frontPhotoRegistration.cropRectPx.height,
+            }
+          : undefined,
+      }
+    : null;
+  const canonicalBackOverlayImageProps = backPhotoRegistration
+    ? {
+        x: backPhotoRegistration.contextFrontRectMm.x * basePxPerMm,
+        y: backPhotoRegistration.contextFrontRectMm.y * basePxPerMm,
+        width: backPhotoRegistration.contextFrontRectMm.width * basePxPerMm,
+        height: backPhotoRegistration.contextFrontRectMm.height * basePxPerMm,
+        crop: backPhotoRegistration.cropRectPx
+          ? {
+              x: backPhotoRegistration.cropRectPx.x,
+              y: backPhotoRegistration.cropRectPx.y,
+              width: backPhotoRegistration.cropRectPx.width,
+              height: backPhotoRegistration.cropRectPx.height,
+            }
+          : undefined,
+      }
+    : null;
+  const canonicalMirroredBackOverlayImageProps = frontPhotoRegistration?.contextMirroredBackRectMm
+    ? {
+        x: frontPhotoRegistration.contextMirroredBackRectMm.x * basePxPerMm,
+        y: frontPhotoRegistration.contextMirroredBackRectMm.y * basePxPerMm,
+        width: frontPhotoRegistration.contextMirroredBackRectMm.width * basePxPerMm,
+        height: frontPhotoRegistration.contextMirroredBackRectMm.height * basePxPerMm,
+        crop: frontPhotoRegistration.cropRectPx
+          ? {
+              x: frontPhotoRegistration.cropRectPx.x,
+              y: frontPhotoRegistration.cropRectPx.y,
+              width: frontPhotoRegistration.cropRectPx.width,
+              height: frontPhotoRegistration.cropRectPx.height,
+            }
+          : undefined,
       }
     : null;
 
@@ -861,13 +1086,19 @@ export function LaserBedWorkspace({
     const printableBottomYPx = engravableZone?.printableBottomY != null ? engravableZone.printableBottomY * basePxPerMm : null;
     const lidBoundaryYPx = engravableZone?.lidBoundaryY != null ? engravableZone.lidBoundaryY * basePxPerMm : null;
     const rimBoundaryYPx = engravableZone?.rimBoundaryY != null ? engravableZone.rimBoundaryY * basePxPerMm : null;
+    const hasPrintableBand = Boolean(workspaceFrame?.hasPrintableBand);
+    const usesPrintableWorkspace = Boolean(workspaceFrame?.usesPrintableWorkspace);
+    const overallTopContextYPx =
+      hasPrintableBand && overlayTopOverflowPx > 0 ? -overlayTopOverflowPx : null;
+    const overallBottomContextYPx =
+      hasPrintableBand && overlayBottomOverflowPx > 0 ? bedPxH + overlayBottomOverflowPx : null;
 
     return (
       <Group listening={false}>
         <Text
           x={8}
           y={6}
-          text="Body-only wrap space"
+          text={hasPrintableBand ? "Printable wrap space" : "Body-only wrap space"}
           fontSize={9}
           fontFamily="system-ui, sans-serif"
           fill="rgba(200,220,255,0.5)"
@@ -1125,15 +1356,77 @@ export function LaserBedWorkspace({
           fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.2)" />
 
         {/* ── Tumbler height indicators along left edge ── */}
-        <Line points={[-6, 0, 12, 0]} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />
-        <Text x={-70} y={-2} text={"\u2190 Top rim"} fontSize={9}
-          fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.35)" width={64} align="right" />
-        <Line points={[-6, bedPxH, 12, bedPxH]} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />
-        <Text x={-70} y={bedPxH - 12} text={"\u2190 Bottom"} fontSize={9}
-          fontFamily="system-ui, sans-serif" fill="rgba(255,255,255,0.35)" width={64} align="right" />
+        {!hasPrintableBand && (
+          <>
+            <Line points={[-6, 0, 12, 0]} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />
+            <Text
+              x={-70}
+              y={-2}
+              text={"\u2190 Top rim"}
+              fontSize={9}
+              fontFamily="system-ui, sans-serif"
+              fill="rgba(255,255,255,0.35)"
+              width={64}
+              align="right"
+            />
+            <Line points={[-6, bedPxH, 12, bedPxH]} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />
+            <Text
+              x={-70}
+              y={bedPxH - 12}
+              text={"\u2190 Bottom"}
+              fontSize={9}
+              fontFamily="system-ui, sans-serif"
+              fill="rgba(255,255,255,0.35)"
+              width={64}
+              align="right"
+            />
+          </>
+        )}
+        {overallTopContextYPx != null && (
+          <>
+            <Line points={[-6, overallTopContextYPx, 12, overallTopContextYPx]} stroke="rgba(255,255,255,0.18)" strokeWidth={1} />
+            <Text
+              x={-92}
+              y={overallTopContextYPx - 2}
+              text={"\u2190 overall top"}
+              fontSize={9}
+              fontFamily="system-ui, sans-serif"
+              fill="rgba(255,255,255,0.3)"
+              width={86}
+              align="right"
+            />
+          </>
+        )}
+        {overallBottomContextYPx != null && (
+          <>
+            <Line points={[-6, overallBottomContextYPx, 12, overallBottomContextYPx]} stroke="rgba(255,255,255,0.18)" strokeWidth={1} />
+            <Text
+              x={-92}
+              y={overallBottomContextYPx - 12}
+              text={"\u2190 overall bottom"}
+              fontSize={9}
+              fontFamily="system-ui, sans-serif"
+              fill="rgba(255,255,255,0.3)"
+              width={86}
+              align="right"
+            />
+          </>
+        )}
       </Group>
     );
-  }, [showTwoSidedCrosshairs, bedConfig.width, bedPxW, bedPxH, basePxPerMm, handleArcDeg, engravableZone]);
+  }, [
+    showTwoSidedCrosshairs,
+    bedConfig.width,
+    bedPxW,
+    bedPxH,
+    basePxPerMm,
+    handleArcDeg,
+    engravableZone,
+    workspaceFrame?.hasPrintableBand,
+    workspaceFrame?.usesPrintableWorkspace,
+    overlayTopOverflowPx,
+    overlayBottomOverflowPx,
+  ]);
 
   // ── BedMockup position calc ───────────────────────────────────────────────
   const mockupImageProps = useMemo(() => {
@@ -1227,6 +1520,15 @@ export function LaserBedWorkspace({
 
         {/* RIGHT: Clear workspace */}
         <div className={styles.toolbarRight}>
+          {workspaceTruthState.workspaceTruthLabel && (
+            <span className={styles.overlayTruthChip}>{workspaceTruthState.workspaceTruthLabel}</span>
+          )}
+          {workspaceTruthState.previewTruthLabel && (
+            <span className={styles.overlayTruthChip}>{workspaceTruthState.previewTruthLabel}</span>
+          )}
+          {workspaceTruthState.photoTruthLabel && (
+            <span className={styles.overlayTruthChip}>{workspaceTruthState.photoTruthLabel}</span>
+          )}
           <div className={styles.shortcutHelpWrap}>
             <button
               className={styles.shortcutHelpBtn}
@@ -1350,19 +1652,75 @@ export function LaserBedWorkspace({
               onClick={handleBedClick}
             />
 
-            {/* ── Product overlay — schematic (full alpha, pre-tuned) or photo (user opacity) ── */}
-            {overlayCanvas && overlayImageProps && (
+            {/* ── Product overlay — schematic or legacy photo canvas ── */}
+            {schematicOverlayCanvas && schematicOverlayImageProps && (
               <KonvaImage
-                image={overlayCanvas}
-                x={overlayImageProps.x}
-                y={overlayImageProps.y}
-                width={overlayImageProps.width}
-                height={overlayImageProps.height}
-                opacity={overlayMode === "schematic" ? 1 : overlayOpacityPct / 100}
+                image={schematicOverlayCanvas}
+                x={schematicOverlayImageProps.x}
+                y={schematicOverlayImageProps.y}
+                width={schematicOverlayImageProps.width}
+                height={schematicOverlayImageProps.height}
+                opacity={1}
                 globalCompositeOperation={overlayBlend === "multiply" ? "multiply" : "source-over"}
                 listening={false}
               />
             )}
+            {legacyPhotoOverlayCanvas && legacyPhotoOverlayImageProps && (
+              <KonvaImage
+                image={legacyPhotoOverlayCanvas}
+                x={legacyPhotoOverlayImageProps.x}
+                y={legacyPhotoOverlayImageProps.y}
+                width={legacyPhotoOverlayImageProps.width}
+                height={legacyPhotoOverlayImageProps.height}
+                opacity={overlayOpacityPct / 100}
+                globalCompositeOperation={overlayBlend === "multiply" ? "multiply" : "source-over"}
+                listening={false}
+              />
+            )}
+            {useCanonicalWorkspacePhoto && templatePhotoImg && canonicalFrontOverlayImageProps && (
+              <KonvaImage
+                image={templatePhotoImg}
+                x={canonicalFrontOverlayImageProps.x}
+                y={canonicalFrontOverlayImageProps.y}
+                width={canonicalFrontOverlayImageProps.width}
+                height={canonicalFrontOverlayImageProps.height}
+                crop={canonicalFrontOverlayImageProps.crop}
+                opacity={overlayOpacityPct / 100}
+                globalCompositeOperation={overlayBlend === "multiply" ? "multiply" : "source-over"}
+                listening={false}
+              />
+            )}
+            {useCanonicalWorkspacePhoto && backPhotoImg && canonicalBackOverlayImageProps && (
+              <KonvaImage
+                image={backPhotoImg}
+                x={canonicalBackOverlayImageProps.x}
+                y={canonicalBackOverlayImageProps.y}
+                width={canonicalBackOverlayImageProps.width}
+                height={canonicalBackOverlayImageProps.height}
+                crop={canonicalBackOverlayImageProps.crop}
+                opacity={overlayOpacityPct / 100}
+                globalCompositeOperation={overlayBlend === "multiply" ? "multiply" : "source-over"}
+                listening={false}
+              />
+            )}
+            {useCanonicalWorkspacePhoto &&
+              !backPhotoImg &&
+              twoSidedMode &&
+              templatePhotoImg &&
+              canonicalMirroredBackOverlayImageProps && (
+                <KonvaImage
+                  image={templatePhotoImg}
+                  x={canonicalMirroredBackOverlayImageProps.x + canonicalMirroredBackOverlayImageProps.width}
+                  y={canonicalMirroredBackOverlayImageProps.y}
+                  width={canonicalMirroredBackOverlayImageProps.width}
+                  height={canonicalMirroredBackOverlayImageProps.height}
+                  crop={canonicalMirroredBackOverlayImageProps.crop}
+                  scaleX={-1}
+                  opacity={overlayOpacityPct / 100}
+                  globalCompositeOperation={overlayBlend === "multiply" ? "multiply" : "source-over"}
+                  listening={false}
+                />
+              )}
 
             {/* Mockup overlay */}
             {mockupImg && mockupImageProps && (

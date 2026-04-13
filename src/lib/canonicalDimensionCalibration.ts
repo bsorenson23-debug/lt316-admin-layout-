@@ -33,6 +33,12 @@ function wrapMm(value: number, wrapWidthMm: number): number {
 }
 
 type ContourPoint = { x: number; y: number };
+type ContourSegment = {
+  leftX: number;
+  rightX: number;
+  width: number;
+  centerX: number;
+};
 
 function getContourBounds(points: ContourPoint[]) {
   if (points.length === 0) return null;
@@ -80,6 +86,42 @@ function getContourIntersectionsAtY(contour: ContourPoint[], y: number): number[
   return xs.sort((a, b) => a - b);
 }
 
+function getContourSegmentsAtY(contour: ContourPoint[], y: number): ContourSegment[] {
+  const xs = getContourIntersectionsAtY(contour, y)
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  const segments: ContourSegment[] = [];
+  for (let index = 0; index + 1 < xs.length; index += 2) {
+    const leftX = xs[index]!;
+    const rightX = xs[index + 1]!;
+    const width = rightX - leftX;
+    if (!(width > 0.1)) continue;
+    segments.push({
+      leftX,
+      rightX,
+      width,
+      centerX: (leftX + rightX) / 2,
+    });
+  }
+  return segments;
+}
+
+function selectCenteredContourSegment(
+  segments: ContourSegment[],
+  centerX: number,
+): ContourSegment | null {
+  if (segments.length === 0) return null;
+  return segments.reduce((best, segment) => {
+    const bestDistance = Math.abs(best.centerX - centerX);
+    const segmentDistance = Math.abs(segment.centerX - centerX);
+    if (segmentDistance < bestDistance - 0.25) return segment;
+    if (bestDistance < segmentDistance - 0.25) return best;
+    if (segment.width > best.width + 0.25) return segment;
+    if (best.width > segment.width + 0.25) return best;
+    return segment;
+  });
+}
+
 function estimateAxisXFromContour(contour: ContourPoint[]): number {
   const bounds = getContourBounds(contour);
   if (!bounds) return 0;
@@ -104,6 +146,15 @@ function estimateAxisXFromContour(contour: ContourPoint[]): number {
 }
 
 function interpolateRadiusMm(outline: EditableBodyOutline, yMm: number): number {
+  const tracedContour = outline.sourceContourMode === "body-only" && outline.directContour && outline.directContour.length >= 3
+    ? outline.directContour
+    : null;
+  if (tracedContour) {
+    const tracedHalfWidthMm = findHalfWidthPxAtRow(tracedContour, 0, yMm);
+    if (tracedHalfWidthMm > 0) {
+      return round2(tracedHalfWidthMm);
+    }
+  }
   const sorted = sortEditableOutlinePoints(outline.points);
   if (sorted.length === 0) return 0;
   if (sorted.length === 1) return Math.max(0, sorted[0]?.x ?? 0);
@@ -146,6 +197,16 @@ function findAuthoritativeHalfWidthPxAtRow(
   return side === "left"
     ? Math.max(0, axisX - left)
     : Math.max(0, right - axisX);
+}
+
+function findCenteredBodySegmentAtRow(
+  contour: ContourPoint[],
+  axisX: number,
+  yPx: number,
+): ContourSegment | null {
+  const segments = getContourSegmentsAtY(contour, yPx);
+  if (segments.length === 0) return null;
+  return selectCenteredContourSegment(segments, axisX);
 }
 
 function median(values: number[]): number {
@@ -258,12 +319,15 @@ function deriveCanonicalSamples(args: {
   const sourceContour = normalizedMeasurementContour?.contour ?? [];
   const sourceBounds = normalizedMeasurementContour?.bounds ?? getContourBounds(sourceContour);
   const hasSourceContour = sourceContour.length >= 3 && sourceBounds != null;
-  const axisX = hasSourceContour ? estimateAxisXFromContour(sourceContour) : 0;
+  const useBodyOnlyTraceSampling = hasSourceContour && outline.sourceContourMode === "body-only";
+  let axisX = hasSourceContour ? estimateAxisXFromContour(sourceContour) : 0;
   const axisYTop = hasSourceContour ? (sourceBounds?.minY ?? 0) : bodyTopMm;
   const axisYBottom = hasSourceContour ? (sourceBounds?.maxY ?? axisYTop + 1) : bodyBottomMm;
   const axisHeightPx = Math.max(1, axisYBottom - axisYTop);
   const symmetrySource: "left" | "right" =
-    args.handleSide === "left"
+    useBodyOnlyTraceSampling
+      ? "left"
+      : args.handleSide === "left"
       ? "right"
       : "left";
   const sampleCount = Math.max(96, Math.min(240, Math.round(bodyHeightMm * 1.1)));
@@ -273,19 +337,33 @@ function deriveCanonicalSamples(args: {
     const sNorm = sampleCount === 1 ? 0 : index / (sampleCount - 1);
     const yMm = round2(bodyTopMm + (bodyHeightMm * sNorm));
     const yPx = axisYTop + (axisHeightPx * sNorm);
-    const radiusPx = hasSourceContour
-      ? round2(findAuthoritativeHalfWidthPxAtRow(sourceContour, axisX, yPx, symmetrySource))
-      : 0;
+    const centeredSegment = useBodyOnlyTraceSampling
+      ? findCenteredBodySegmentAtRow(sourceContour, axisX, yPx)
+      : null;
+    const radiusPx = centeredSegment
+      ? round2(centeredSegment.width / 2)
+      : (hasSourceContour
+        ? round2(findAuthoritativeHalfWidthPxAtRow(sourceContour, axisX, yPx, symmetrySource))
+        : 0);
     const outlineRadiusMm = round2(interpolateRadiusMm(outline, yMm));
     rows.push({
       index,
       sNorm,
       yMm,
       yPx,
-      xLeft: axisX - radiusPx,
+      xLeft: centeredSegment ? round2(centeredSegment.leftX) : round2(axisX - radiusPx),
       radiusPx,
       outlineRadiusMm,
     });
+  }
+
+  if (useBodyOnlyTraceSampling) {
+    const measuredCenters = rows
+      .filter((row) => row.radiusPx > 0)
+      .map((row) => row.xLeft + row.radiusPx);
+    if (measuredCenters.length > 0) {
+      axisX = round2(median(measuredCenters));
+    }
   }
 
   const candidateRows = rows.filter((row) =>
@@ -380,7 +458,10 @@ function deriveCanonicalSamples(args: {
 
   const leftPoints = samples.map((sample) => ({ x: -sample.radiusMm, y: sample.yMm }));
   const rightPoints = [...samples].reverse().map((sample) => ({ x: sample.radiusMm, y: sample.yMm }));
-  const svgPath = buildContourSvgPath([...leftPoints, ...rightPoints]) ?? "";
+  const tracedSvgPath = outline.sourceContourMode === "body-only" && outline.directContour && outline.directContour.length >= 3
+    ? buildContourSvgPath(outline.directContour.map((point) => ({ x: point.x, y: point.y })))
+    : null;
+  const svgPath = tracedSvgPath ?? buildContourSvgPath([...leftPoints, ...rightPoints]) ?? "";
   const wrapWidthMm = round2(Math.PI * Math.max(args.wrapDiameterMm ?? args.bodyDiameterMm ?? frontVisibleWidthMm, 0));
   const frontMeridianMm = round2(getWrapFrontCenter(wrapWidthMm, args.handleArcDeg));
   const backMeridianMm = round2((frontMeridianMm + (wrapWidthMm / 2)) % Math.max(wrapWidthMm, 1));
@@ -418,8 +499,8 @@ function deriveCanonicalSamples(args: {
       : (qaIssues.length > 0 ? "review" : "ready");
   const canonicalBodyProfile: CanonicalBodyProfile = {
     symmetrySource,
-    mirroredFromSymmetrySource: true,
-    mirroredRightFromLeft: symmetrySource === "left",
+    mirroredFromSymmetrySource: !useBodyOnlyTraceSampling,
+    mirroredRightFromLeft: useBodyOnlyTraceSampling ? undefined : symmetrySource === "left",
     axis: {
       xTop: round2(axisX),
       yTop: round2(axisYTop),

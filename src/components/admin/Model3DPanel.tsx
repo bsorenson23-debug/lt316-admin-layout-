@@ -10,7 +10,12 @@ import type {
   CanonicalBodyProfile,
   CanonicalDimensionCalibration,
   CanonicalHandleProfile,
+  ProductTemplateRingFinish,
 } from "@/types/productTemplate";
+import {
+  deriveTumblerPreviewModelState,
+  type TumblerPreviewModelState,
+} from "@/lib/tumblerPreviewModelState";
 import styles from "./Model3DPanel.module.css";
 
 const VIEWABLE_EXTS = new Set(["stl", "obj", "glb", "gltf"]);
@@ -104,13 +109,18 @@ export interface Model3DPanelProps {
   onUpdateCalibration?: (offsetX: number, offsetY: number, rotation: number) => void;
   /** Body tint hex color for 3D model material */
   bodyTintColor?: string;
+  /** Lid tint hex color for 3D model material */
+  lidTintColor?: string;
   /** Rim tint for the model body bands */
   rimTintColor?: string;
+  ringFinish?: ProductTemplateRingFinish;
   /** Artwork / engraving tint */
   artworkTintColor?: string;
+  manufacturerLogoStamp?: import("@/types/productTemplate").ManufacturerLogoStamp | null;
   dimensionCalibration?: CanonicalDimensionCalibration | null;
   canonicalBodyProfile?: CanonicalBodyProfile | null;
   canonicalHandleProfile?: CanonicalHandleProfile | null;
+  onPreviewStateChange?: (state: TumblerPreviewModelState | null) => void;
 }
 
 export function Model3DPanel({
@@ -128,11 +138,15 @@ export function Model3DPanel({
   onModelFileChange,
   onUpdateCalibration,
   bodyTintColor,
+  lidTintColor,
   rimTintColor,
+  ringFinish,
   artworkTintColor,
+  manufacturerLogoStamp,
   dimensionCalibration,
   canonicalBodyProfile,
   canonicalHandleProfile,
+  onPreviewStateChange,
 }: Model3DPanelProps) {
   const [modelFile, setModelFileLocal] = React.useState<File | null>(null);
 
@@ -150,6 +164,7 @@ export function Model3DPanel({
   const [templateError, setTemplateError] = React.useState<string | null>(null);
   const [templateAvailability, setTemplateAvailability] = React.useState<Record<string, boolean>>({});
   const [showCalibration, setShowCalibration] = React.useState(false);
+  const [previewState, setPreviewState] = React.useState<TumblerPreviewModelState | null>(null);
   const [calX, setCalX] = React.useState(tumblerMapping?.calibrationOffsetX ?? 0);
   const [calY, setCalY] = React.useState(tumblerMapping?.calibrationOffsetY ?? 0);
   const [calRot, setCalRot] = React.useState(tumblerMapping?.calibrationRotation ?? 0);
@@ -209,11 +224,40 @@ export function Model3DPanel({
     }),
     [hasAlignmentPreviewModel, hasFullPreviewModel, hasSourcePreviewModel, workspaceMode],
   );
+  const previewStateSeed = React.useMemo(
+    () => workspaceMode === "tumbler-wrap"
+      ? deriveTumblerPreviewModelState({
+          requestedMode: previewModelMode,
+          hasCanonicalAlignmentModel: hasAlignmentPreviewModel,
+          hasSourceModel: hasSourcePreviewModel,
+          sourceModelPath: modelPathOverride ?? modelFile?.name ?? null,
+          sourceBounds: null,
+          canonicalBounds: null,
+        })
+      : null,
+    [hasAlignmentPreviewModel, hasSourcePreviewModel, modelFile?.name, modelPathOverride, previewModelMode, workspaceMode],
+  );
+  const resolvedPreviewState =
+    previewStateSeed?.glbPreviewStatus === "degraded"
+      ? previewStateSeed
+      : (previewState ?? previewStateSeed);
+  const effectivePreviewModelMode = resolvedPreviewState?.effectiveMode ?? previewModelMode;
+  const previewModeMessage = resolvedPreviewState?.message ?? null;
   const previewModeSummary = React.useMemo(() => {
-    if (previewModelMode === "alignment-model") return "ALIGNMENT MODEL · DEFAULT";
-    if (previewModelMode === "full-model") return "FULL MODEL";
-    return "SOURCE MODEL · COMPARE";
-  }, [previewModelMode]);
+    if (effectivePreviewModelMode === "alignment-model") return "ALIGNMENT MODEL · APPEARANCE TRUTH";
+    if (effectivePreviewModelMode === "full-model") return "FULL MODEL · GEOMETRY REFERENCE";
+    return "SOURCE MODEL · TRACE COMPARE";
+  }, [effectivePreviewModelMode]);
+  const previewModeHint = React.useMemo(() => {
+    if (workspaceMode !== "tumbler-wrap") return null;
+    if (effectivePreviewModelMode === "alignment-model") {
+      return "Alignment uses canonical body calibration, template colors, and canonical logo placement as the authoritative drinkware preview.";
+    }
+    if (effectivePreviewModelMode === "full-model") {
+      return "Full model is geometry-first. Appearance truth still comes from Alignment; arbitrary GLBs may not expose separate lid or silver-ring parts.";
+    }
+    return "Source compare is trace/debug only. Placement and appearance authority still come from Alignment when canonical preview data exists.";
+  }, [effectivePreviewModelMode, workspaceMode]);
 
   // Probe template files so missing assets are disabled instead of erroring on click.
   React.useEffect(() => {
@@ -456,38 +500,52 @@ export function Model3DPanel({
                 <div className={styles.viewerModeButtons}>
                   <button
                     type="button"
-                    className={`${styles.viewerModeBtn} ${previewModelMode === "alignment-model" ? styles.viewerModeBtnActive : ""}`}
+                    className={`${styles.viewerModeBtn} ${effectivePreviewModelMode === "alignment-model" ? styles.viewerModeBtnActive : ""}`}
                     onClick={() => setPreviewModelMode("alignment-model")}
                     disabled={!hasAlignmentPreviewModel}
-                    aria-pressed={previewModelMode === "alignment-model"}
+                    aria-pressed={effectivePreviewModelMode === "alignment-model"}
                   >
-                    Alignment (Default)
+                    Alignment
                   </button>
                   <button
                     type="button"
-                    className={`${styles.viewerModeBtn} ${previewModelMode === "full-model" ? styles.viewerModeBtnActive : ""}`}
+                    className={`${styles.viewerModeBtn} ${effectivePreviewModelMode === "full-model" ? styles.viewerModeBtnActive : ""}`}
                     onClick={() => setPreviewModelMode("full-model")}
                     disabled={!hasFullPreviewModel}
-                    aria-pressed={previewModelMode === "full-model"}
+                    aria-pressed={effectivePreviewModelMode === "full-model"}
                   >
-                    Full
+                    Full model
                   </button>
                   <button
                     type="button"
-                    className={`${styles.viewerModeBtn} ${previewModelMode === "source-traced" ? styles.viewerModeBtnActive : ""}`}
+                    className={`${styles.viewerModeBtn} ${effectivePreviewModelMode === "source-traced" ? styles.viewerModeBtnActive : ""}`}
                     onClick={() => setPreviewModelMode("source-traced")}
                     disabled={!hasSourcePreviewModel}
-                    aria-pressed={previewModelMode === "source-traced"}
+                    aria-pressed={effectivePreviewModelMode === "source-traced"}
                   >
-                    Source (Compare)
+                    Source compare
                   </button>
                 </div>
-                {workspaceMode === "tumbler-wrap" && previewModelMode === "alignment-model" && hasAlignmentPreviewModel && (
+                {previewModeHint && (
+                  <div
+                    className={
+                      effectivePreviewModelMode === "full-model"
+                        ? styles.viewerModeCompareNote
+                        : styles.viewerModeNote
+                    }
+                  >
+                    {previewModeHint}
+                  </div>
+                )}
+                {previewModeMessage && (
+                  <div className={styles.viewerModeCompareNote}>{previewModeMessage}</div>
+                )}
+                {workspaceMode === "tumbler-wrap" && effectivePreviewModelMode === "alignment-model" && hasAlignmentPreviewModel && (
                   <div className={styles.viewerModeNote}>
                     Alignment is the production-default view. Placement, wrap mapping, centerline, and snap stay pinned to canonical alignment data.
                   </div>
                 )}
-                {workspaceMode === "tumbler-wrap" && previewModelMode === "source-traced" && hasAlignmentPreviewModel && (
+                {workspaceMode === "tumbler-wrap" && effectivePreviewModelMode === "source-traced" && hasAlignmentPreviewModel && (
                   <div className={styles.viewerModeCompareNote}>
                     Source is compare/debug only. Placement, wrap mapping, centerline, and snap still use canonical alignment data.
                   </div>
@@ -510,12 +568,19 @@ export function Model3DPanel({
                 handleArcDeg={handleArcDeg}
                 glbPath={modelPathOverride}
                 bodyTintColor={bodyTintColor}
+                lidTintColor={lidTintColor}
                 rimTintColor={rimTintColor}
+                ringFinish={ringFinish}
+                manufacturerLogoStamp={manufacturerLogoStamp ?? undefined}
                 tumblerMapping={effectiveMapping}
                 dimensionCalibration={dimensionCalibration}
                 canonicalBodyProfile={canonicalBodyProfile}
                 canonicalHandleProfile={canonicalHandleProfile}
                 previewModelMode={previewModelMode}
+                onPreviewStateChange={(state) => {
+                  setPreviewState(state);
+                  onPreviewStateChange?.(state);
+                }}
               />
             </div>
 

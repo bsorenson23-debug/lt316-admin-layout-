@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useDebugValue } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type {
   BedConfig,
@@ -41,7 +41,7 @@ interface UseAssetWorkflowParams {
   setPlacedItems: Dispatch<SetStateAction<PlacedItem[]>>;
   setSelectedItemId: Dispatch<SetStateAction<string | null>>;
   setBedConfig: Dispatch<SetStateAction<BedConfig>>;
-  setTumblerViewMode: Dispatch<SetStateAction<"grid" | "3d-placement">>;
+  setTumblerViewMode: (viewMode: "grid" | "3d-placement") => void;
   normalizeBedConfig: (config: BedConfig) => BedConfig;
 }
 
@@ -69,6 +69,14 @@ export function useAssetWorkflow({
   setTumblerViewMode,
   normalizeBedConfig,
 }: UseAssetWorkflowParams) {
+  useDebugValue({
+    workspaceMode: bedConfig.workspaceMode,
+    selectedAssetId,
+    placementAssetId,
+    selectedItemId,
+    isTumblerMode,
+  });
+
   const buildPlacedItem = useCallback((asset: SvgAsset, xMm: number, yMm: number): PlacedItem => {
     const maxAutoSize = Math.max(40, Math.min(100, Math.min(bedConfig.width, bedConfig.height) * 0.35));
     const { width, height } = defaultPlacedSize(asset, maxAutoSize);

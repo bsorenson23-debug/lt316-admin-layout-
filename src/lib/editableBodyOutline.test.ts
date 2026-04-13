@@ -4,7 +4,9 @@ import type { FlatItemLookupTraceDebug } from "../types/flatItemLookup.ts";
 import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
 import {
   createEditableBodyOutline,
+  createEditableBodyOutlineFromImportedSvg,
   createEditableBodyOutlineFromTraceDebug,
+  normalizeMeasurementContour,
 } from "./editableBodyOutline.ts";
 
 const noisyStanleyFitDebug: TumblerItemLookupFitDebug = {
@@ -145,9 +147,14 @@ test("trace-debug outline stores a body-only mirrored contour instead of the raw
 
   const byRole = new Map(outline.points.map((point) => [point.role, point]));
   assert.ok((outline.sourceContour?.length ?? 0) >= 40);
+  assert.equal(outline.directContour?.length, outline.sourceContour?.length);
   assert.ok((outline.sourceContourBounds?.minY ?? 0) > 80);
   assert.ok((outline.sourceContourBounds?.maxY ?? 999) < 660);
   assert.ok(widthAtY(outline.sourceContour ?? [], 380) > 70);
+  assert.ok(widthAtY(outline.directContour ?? [], 80) > 90);
+  assert.ok(widthAtY(outline.directContour ?? [], 80) < 110);
+  assert.ok(Math.abs((outline.directContour?.[0]?.y ?? 0) - 40) < 0.5);
+  assert.ok(Math.abs((outline.directContour?.at(-1)?.y ?? 999) - 40) < 0.5);
   assert.ok(
     Math.abs((byRole.get("topOuter")?.x ?? 0) - 50) < 1.0,
     `expected trace-derived top shell to stay seeded by diameter, got ${JSON.stringify(byRole.get("topOuter"))}`,
@@ -169,4 +176,148 @@ test("trace-debug outline ignores implausibly tiny top-outer seeds", () => {
     Math.abs((byRole.get("topOuter")?.x ?? 0) - 50) < 1.0,
     `expected trace-derived top shell to reject implausible topOuterDiameterMm, got ${JSON.stringify(byRole.get("topOuter"))}`,
   );
+});
+
+test("body-only imported outline does not get cropped a second time", () => {
+  const source = {
+    svgText: "",
+    pathData: "",
+    viewport: {
+      minX: 0,
+      minY: 0,
+      width: 800,
+      height: 800,
+    },
+    bounds: {
+      minX: 228,
+      minY: 158,
+      maxX: 452,
+      maxY: 777,
+      width: 224,
+      height: 619,
+    },
+    contour: [
+      { x: 228, y: 158 },
+      { x: 228, y: 552 },
+      { x: 256, y: 619 },
+      { x: 284, y: 777 },
+      { x: 396, y: 777 },
+      { x: 424, y: 619 },
+      { x: 452, y: 552 },
+      { x: 452, y: 158 },
+      { x: 228, y: 158 },
+    ],
+  };
+
+  const autoOutline = createEditableBodyOutlineFromImportedSvg({
+    source,
+    overallHeightMm: 254,
+    bodyTopFromOverallMm: 26,
+    bodyBottomFromOverallMm: 226,
+    diameterMm: 106,
+    topOuterDiameterMm: 106,
+    side: "right",
+  });
+  const bodyOnlyOutline = createEditableBodyOutlineFromImportedSvg({
+    source,
+    overallHeightMm: 254,
+    bodyTopFromOverallMm: 26,
+    bodyBottomFromOverallMm: 226,
+    diameterMm: 106,
+    topOuterDiameterMm: 106,
+    side: "right",
+    sourceMode: "body-only",
+  });
+
+  const autoByRole = new Map(autoOutline.points.map((point) => [point.role, point]));
+  const bodyOnlyByRole = new Map(bodyOnlyOutline.points.map((point) => [point.role, point]));
+
+  assert.equal(bodyOnlyByRole.get("topOuter")?.x, autoByRole.get("topOuter")?.x);
+  assert.ok((bodyOnlyByRole.get("upperTaper")?.x ?? 999) < (autoByRole.get("upperTaper")?.x ?? 0));
+  assert.ok((bodyOnlyByRole.get("lowerTaper")?.x ?? 999) < (autoByRole.get("lowerTaper")?.x ?? 0));
+  assert.ok((bodyOnlyByRole.get("base")?.x ?? 999) < (autoByRole.get("base")?.x ?? 0));
+});
+
+test("body-only imported outline trims narrow top protrusions before scaling the shell", () => {
+  const source = {
+    svgText: "",
+    pathData: "",
+    viewport: {
+      minX: 0,
+      minY: 0,
+      width: 800,
+      height: 900,
+    },
+    bounds: {
+      minX: 250,
+      minY: 20,
+      maxX: 470,
+      maxY: 820,
+      width: 220,
+      height: 800,
+    },
+    contour: [
+      { x: 350, y: 20 },
+      { x: 350, y: 80 },
+      { x: 250, y: 80 },
+      { x: 250, y: 420 },
+      { x: 280, y: 660 },
+      { x: 300, y: 820 },
+      { x: 420, y: 820 },
+      { x: 440, y: 660 },
+      { x: 470, y: 420 },
+      { x: 470, y: 80 },
+      { x: 370, y: 80 },
+      { x: 370, y: 20 },
+      { x: 350, y: 20 },
+    ],
+  };
+
+  const outline = createEditableBodyOutlineFromImportedSvg({
+    source,
+    overallHeightMm: 254,
+    bodyTopFromOverallMm: 26,
+    bodyBottomFromOverallMm: 226,
+    diameterMm: 106,
+    topOuterDiameterMm: 106,
+    side: "right",
+    sourceMode: "body-only",
+  });
+
+  const byRole = new Map(outline.points.map((point) => [point.role, point]));
+
+  assert.ok((outline.sourceContourBounds?.minY ?? 0) >= 70);
+  assert.ok((outline.sourceContourBounds?.height ?? 0) < source.bounds.height);
+  assert.ok(Math.abs((byRole.get("topOuter")?.x ?? 0) - 53) < 0.5);
+  assert.ok(Math.abs((byRole.get("body")?.x ?? 0) - 53) < 1);
+});
+
+test("body-only measurement contour preserves the traced contour without re-mirroring it", () => {
+  const tracedContour = [
+    { x: 220, y: 100 },
+    { x: 220, y: 360 },
+    { x: 238, y: 700 },
+    { x: 392, y: 700 },
+    { x: 430, y: 360 },
+    { x: 462, y: 100 },
+    { x: 220, y: 100 },
+  ];
+
+  const normalized = normalizeMeasurementContour({
+    outline: {
+      closed: true,
+      version: 1,
+      points: [],
+      sourceContour: tracedContour,
+      sourceContourMode: "body-only",
+    },
+    overallHeightMm: 254,
+    bodyTopFromOverallMm: 26,
+    bodyBottomFromOverallMm: 226,
+  });
+
+  assert.ok(normalized);
+  assert.equal(normalized?.mirrored, false);
+  assert.equal(normalized?.bodyOnly, false);
+  assert.deepEqual(normalized?.contour, tracedContour);
 });

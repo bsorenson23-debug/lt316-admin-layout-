@@ -48,6 +48,7 @@ export interface EditableBodyOutline {
     width: number;
     height: number;
   };
+  sourceContourMode?: "full-image" | "body-only";
   sourceContourViewport?: {
     minX: number;
     minY: number;
@@ -401,6 +402,13 @@ export interface ManufacturerLogoStamp {
 }
 
 export type BodyReferenceViewSide = "front" | "back";
+export type BodyReferenceOutlineSeedMode = "fresh-image-trace" | "saved-outline" | "fit-debug-fallback";
+export type BodyReferenceSourceTrust =
+  | "trusted-front"
+  | "advisory-angled"
+  | "manual-front-unclassified"
+  | "fit-debug-fallback";
+export type BodyReferenceSourceOrigin = "manual" | "lookup" | "fit-debug" | "saved-outline" | "unknown";
 
 export interface ProductTemplateColorOption {
   /** Stable variant key from the source catalog. */
@@ -471,6 +479,27 @@ export interface ProductReferenceSet {
   canonicalViewSelection?: CanonicalViewSelection;
 }
 
+export type ProductTemplateAppearanceSource = "sampled" | "manual";
+export type ProductTemplateLidAppearanceSource = ProductTemplateAppearanceSource | "fallback-body";
+export type ProductTemplateRingFinish = "metallic-silver" | "tinted";
+
+export interface ProductTemplateAppearanceEntry {
+  sampledHex?: string;
+  source: ProductTemplateAppearanceSource;
+}
+
+export interface ProductTemplateLidAppearanceEntry {
+  sampledHex?: string;
+  source: ProductTemplateLidAppearanceSource;
+}
+
+export interface ProductTemplateAppearance {
+  body: ProductTemplateAppearanceEntry;
+  lid: ProductTemplateLidAppearanceEntry;
+  rim: ProductTemplateAppearanceEntry;
+  ringFinish?: ProductTemplateRingFinish;
+}
+
 export interface ProductTemplate {
   id: string; // crypto.randomUUID()
   name: string; // "YETI Rambler 40oz"
@@ -498,10 +527,20 @@ export interface ProductTemplate {
   backPhotoDataUrl?: string;
   /** Selected BODY REFERENCE side used by the editor and later placement assistance. */
   bodyReferenceViewSide?: BodyReferenceViewSide;
+  /** Persisted BODY REFERENCE trust state used by readiness and reload recovery. */
+  bodyReferenceSourceTrust?: BodyReferenceSourceTrust;
+  /** Persisted BODY REFERENCE seed mode used by reload recovery. */
+  bodyReferenceOutlineSeedMode?: BodyReferenceOutlineSeedMode;
+  /** Persisted BODY REFERENCE source origin used by reload recovery. */
+  bodyReferenceSourceOrigin?: BodyReferenceSourceOrigin;
+  /** Persisted BODY REFERENCE source view classification used by reload recovery. */
+  bodyReferenceSourceViewClass?: ProductReferenceViewClass;
   /** Manufacturer logo extracted from the clean product photo and stamped onto the 3D preview. */
   manufacturerLogoStamp?: ManufacturerLogoStamp;
   /** Available catalog colors for this style; used for style-level selection without duplicating templates per color. */
   availableColors?: ProductTemplateColorOption[];
+  /** Operator-facing appearance provenance layered on top of sampled renderer colors. */
+  appearance?: ProductTemplateAppearance;
   /** Multi-image product references captured during lookup for later orientation and logo workflows. */
   productReferenceSet?: ProductReferenceSet;
   /** Compact persisted provenance for the image -> svg -> template diagnostic chain. */

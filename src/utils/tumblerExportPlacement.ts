@@ -157,13 +157,74 @@ function mapContractToBodyLocalSurface(args: {
   });
 }
 
+interface WorkspaceLocalSurface {
+  topMm: number;
+  bottomMm: number;
+  heightMm: number;
+  workspaceIsPrintableLocal: boolean;
+  workspaceTopFromBodyTopMm: number;
+}
+
+function mapContractToWorkspaceLocalSurface(args: {
+  calibration: CanonicalDimensionCalibration | null | undefined;
+  printableSurfaceContract?: PrintableSurfaceContract | null;
+  templateHeightMm: number;
+}): WorkspaceLocalSurface | null {
+  const localSurface = mapContractToBodyLocalSurface(args);
+  if (!localSurface || !args.calibration) {
+    return null;
+  }
+  const bodyHeightMm = args.calibration.bodyHeightMm;
+  const templateHeightMm = args.templateHeightMm;
+  const cropsBodyShell =
+    localSurface.topMm > 0.01 ||
+    localSurface.bottomMm < bodyHeightMm - 0.01;
+  const workspaceIsPrintableLocal =
+    cropsBodyShell &&
+    isFiniteNumber(templateHeightMm) &&
+    templateHeightMm > 0 &&
+    Math.abs(templateHeightMm - localSurface.heightMm) < 0.01;
+  if (!workspaceIsPrintableLocal) {
+    return {
+      ...localSurface,
+      workspaceIsPrintableLocal: false,
+      workspaceTopFromBodyTopMm: 0,
+    };
+  }
+  return {
+    topMm: 0,
+    bottomMm: toRounded2(templateHeightMm),
+    heightMm: toRounded2(templateHeightMm),
+    workspaceIsPrintableLocal: true,
+    workspaceTopFromBodyTopMm: toRounded2(localSurface.topMm),
+  };
+}
+
+function rebaseBodyLocalYToWorkspaceLocalSurface(
+  valueMm: number | null | undefined,
+  surface: WorkspaceLocalSurface | null,
+): number | null {
+  if (!surface || !isFiniteNumber(valueMm)) {
+    return null;
+  }
+  if (!surface.workspaceIsPrintableLocal) {
+    return toRounded2(valueMm ?? 0);
+  }
+  return toRounded2(
+    clampNonNegative(
+      Math.min(surface.heightMm, (valueMm ?? 0) - surface.workspaceTopFromBodyTopMm),
+    ),
+  );
+}
+
 function buildPrintableBoundaryGuideLines(args: {
   calibration: CanonicalDimensionCalibration;
+  templateHeightMm: number;
   printableSurfaceContract?: PrintableSurfaceContract | null;
   axialSurfaceBands?: AxialSurfaceBand[] | null;
 }): LightBurnAlignmentGuideLine[] {
-  const localSurface = mapContractToBodyLocalSurface(args);
-  if (!localSurface) {
+  const workspaceSurface = mapContractToWorkspaceLocalSurface(args);
+  if (!workspaceSurface) {
     return [];
   }
 
@@ -173,14 +234,14 @@ function buildPrintableBoundaryGuideLines(args: {
       kind: "printable-top",
       label: "Printable top",
       orientation: "horizontal",
-      yMm: toRounded2(localSurface.topMm),
+      yMm: toRounded2(workspaceSurface.topMm),
     },
     {
       id: "printable-bottom",
       kind: "printable-bottom",
       label: "Printable bottom",
       orientation: "horizontal",
-      yMm: toRounded2(localSurface.bottomMm),
+      yMm: toRounded2(workspaceSurface.bottomMm),
     },
   ];
 
@@ -191,30 +252,42 @@ function buildPrintableBoundaryGuideLines(args: {
   const bodyTopMm = args.calibration.lidBodyLineMm;
 
   if (lidExclusion && lidExclusion.endMm >= bodyTopMm) {
+    const lidBoundaryY = rebaseBodyLocalYToWorkspaceLocalSurface(
+      Math.max(0, lidExclusion.endMm - bodyTopMm),
+      workspaceSurface,
+    );
     lines.push({
       id: "lid-boundary",
       kind: "lid-boundary",
       label: "Lid boundary",
       orientation: "horizontal",
-      yMm: toRounded2(Math.max(0, lidExclusion.endMm - bodyTopMm)),
+      yMm: toRounded2(lidBoundaryY ?? 0),
     });
   }
   if (rimExclusion) {
+    const rimBoundaryY = rebaseBodyLocalYToWorkspaceLocalSurface(
+      Math.max(0, rimExclusion.endMm - bodyTopMm),
+      workspaceSurface,
+    );
     lines.push({
       id: "rim-boundary",
       kind: "rim-boundary",
       label: "Ring boundary",
       orientation: "horizontal",
-      yMm: toRounded2(Math.max(0, rimExclusion.endMm - bodyTopMm)),
+      yMm: toRounded2(rimBoundaryY ?? 0),
     });
   }
   if (baseExclusion) {
+    const baseBoundaryY = rebaseBodyLocalYToWorkspaceLocalSurface(
+      Math.max(0, baseExclusion.startMm - bodyTopMm),
+      workspaceSurface,
+    );
     lines.push({
       id: "base-boundary",
       kind: "base-boundary",
       label: "Base boundary",
       orientation: "horizontal",
-      yMm: toRounded2(Math.max(0, baseExclusion.startMm - bodyTopMm)),
+      yMm: toRounded2(baseBoundaryY ?? workspaceSurface.bottomMm),
     });
   }
 
@@ -252,17 +325,32 @@ export function buildLightBurnAlignmentGuidePayload(args: {
           wrapsAround: (wrapMappingMm.handleKeepOutStartMm ?? 0) > (wrapMappingMm.handleKeepOutEndMm ?? 0),
         }
       : null;
-  const logoRegion = mapLogoPlacementToWrapRegion({
-    templateWidthMm: args.templateWidthMm,
+  const workspaceSurface = mapContractToWorkspaceLocalSurface({
+    calibration: args.calibration,
+    printableSurfaceContract: args.printableSurfaceContract,
     templateHeightMm: args.templateHeightMm,
+  });
+  const bodyLocalLogoRegion = mapLogoPlacementToWrapRegion({
+    templateWidthMm: args.templateWidthMm,
+    templateHeightMm: args.calibration.bodyHeightMm,
     calibration: args.calibration,
     stamp: args.manufacturerLogoStamp,
   });
+  const logoRegion = bodyLocalLogoRegion
+    ? {
+        ...bodyLocalLogoRegion,
+        centerYMm: toRounded2(
+          rebaseBodyLocalYToWorkspaceLocalSurface(bodyLocalLogoRegion.centerYMm, workspaceSurface) ??
+            bodyLocalLogoRegion.centerYMm,
+        ),
+      }
+    : null;
 
   const lines = [
     ...buildAlignmentGuideLines(wrapMappingMm),
     ...buildPrintableBoundaryGuideLines({
       calibration: args.calibration,
+      templateHeightMm: args.templateHeightMm,
       printableSurfaceContract: args.printableSurfaceContract,
       axialSurfaceBands: args.axialSurfaceBands,
     }),
@@ -347,6 +435,7 @@ export function collectHandleKeepOutWarnings(args: {
 
 export function collectPrintableSurfaceWarnings(args: {
   items: Pick<PlacedItem, "id" | "name" | "y" | "height">[];
+  templateHeightMm: number;
   calibration: CanonicalDimensionCalibration | null | undefined;
   printableSurfaceContract?: PrintableSurfaceContract | null | undefined;
   lockedProductionGeometry: boolean;
@@ -354,8 +443,9 @@ export function collectPrintableSurfaceWarnings(args: {
   if (!args.lockedProductionGeometry || !args.calibration) {
     return [];
   }
-  const localSurface = mapContractToBodyLocalSurface({
+  const localSurface = mapContractToWorkspaceLocalSurface({
     calibration: args.calibration,
+    templateHeightMm: args.templateHeightMm,
     printableSurfaceContract: args.printableSurfaceContract,
   });
   if (!localSurface) {
@@ -401,6 +491,7 @@ export function collectLogoKeepOutWarnings(args: {
 
 export function collectLogoPrintableSurfaceWarnings(args: {
   logoRegion: LightBurnAlignmentLogoRegion | null | undefined;
+  templateHeightMm: number;
   calibration: CanonicalDimensionCalibration | null | undefined;
   printableSurfaceContract?: PrintableSurfaceContract | null | undefined;
   lockedProductionGeometry: boolean;
@@ -408,8 +499,9 @@ export function collectLogoPrintableSurfaceWarnings(args: {
   if (!args.lockedProductionGeometry || !args.logoRegion || !args.calibration) {
     return [];
   }
-  const localSurface = mapContractToBodyLocalSurface({
+  const localSurface = mapContractToWorkspaceLocalSurface({
     calibration: args.calibration,
+    templateHeightMm: args.templateHeightMm,
     printableSurfaceContract: args.printableSurfaceContract,
   });
   if (!localSurface) {
@@ -438,6 +530,24 @@ function getPrintableTopOffsetMm(args: {
   const topOffset = args.placementProfile?.topToSafeZoneStartMm;
   if (!isFiniteNumber(topOffset)) return 0;
   return clampNonNegative(topOffset);
+}
+
+export function resolvePrintableTopOffsetForWorkspace(args: {
+  workspaceHeightMm: number | null | undefined;
+  printableHeightMm: number | null | undefined;
+  printableTopOffsetMm: number | null | undefined;
+}): number {
+  if (!isFiniteNumber(args.printableTopOffsetMm) || (args.printableTopOffsetMm ?? 0) <= 0) {
+    return 0;
+  }
+  if (
+    isFiniteNumber(args.workspaceHeightMm) &&
+    isFiniteNumber(args.printableHeightMm) &&
+    Math.abs((args.workspaceHeightMm ?? 0) - (args.printableHeightMm ?? 0)) < 0.01
+  ) {
+    return 0;
+  }
+  return toRounded2(args.printableTopOffsetMm ?? 0);
 }
 
 function inferOutsideDiameterMm(config: BedConfig): number | undefined {
@@ -912,6 +1022,7 @@ export function buildLightBurnExportArtifacts(args: {
   });
   const printableSurfaceWarnings = collectPrintableSurfaceWarnings({
     items: args.items,
+    templateHeightMm: args.templateHeightMm,
     calibration: args.calibration,
     printableSurfaceContract: args.printableSurfaceContract,
     lockedProductionGeometry: Boolean(args.lockedProductionGeometry),
@@ -933,6 +1044,7 @@ export function buildLightBurnExportArtifacts(args: {
   });
   const logoPrintableSurfaceWarnings = collectLogoPrintableSurfaceWarnings({
     logoRegion: alignmentGuides?.logoRegion,
+    templateHeightMm: args.templateHeightMm,
     calibration: args.calibration,
     printableSurfaceContract: args.printableSurfaceContract,
     lockedProductionGeometry: Boolean(args.lockedProductionGeometry),

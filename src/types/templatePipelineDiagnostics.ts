@@ -1,3 +1,11 @@
+import type {
+  BodyReferenceOutlineSeedMode,
+  BodyReferenceSourceOrigin,
+  BodyReferenceSourceTrust,
+  BodyReferenceViewSide,
+  ProductReferenceViewClass,
+} from "./productTemplate";
+
 export type TemplatePipelineStageId =
   | "source-image"
   | "bg-cleanup"
@@ -61,6 +69,8 @@ export interface TemplatePipelineContractVersions {
 
 export interface TemplatePipelineDiagnostics {
   runId: string;
+  traceId?: string | null;
+  sectionId?: string | null;
   startedAt: string;
   inputFingerprints: TemplatePipelineInputFingerprints;
   stages: TemplatePipelineStageRecord[];
@@ -71,10 +81,17 @@ export interface TemplatePipelineDiagnostics {
 
 export interface TemplatePipelineProvenance {
   runId: string;
+  traceId?: string | null;
+  sectionId?: string | null;
   stageAuthorities: Partial<Record<TemplatePipelineStageId, string>>;
   fallbackFlags: Partial<Record<TemplatePipelineStageId, boolean>>;
   contractVersions?: TemplatePipelineContractVersions;
   blockingIssues: string[];
   bodyReferenceSignature?: string | null;
   templateGeometrySignature?: string | null;
+  bodyReferenceViewSide?: BodyReferenceViewSide | null;
+  bodyReferenceSourceTrust?: BodyReferenceSourceTrust | null;
+  bodyReferenceOutlineSeedMode?: BodyReferenceOutlineSeedMode | null;
+  bodyReferenceSourceOrigin?: BodyReferenceSourceOrigin | null;
+  bodyReferenceSourceViewClass?: ProductReferenceViewClass | null;
 }

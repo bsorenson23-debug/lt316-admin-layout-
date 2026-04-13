@@ -1,13 +1,13 @@
-import { useCallback } from "react";
+import { useCallback, useDebugValue } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { BedConfig, WorkspaceMode } from "@/types/admin";
 import { getTemplateEffectiveCylinderDiameterMm, type ProductTemplate } from "@/types/productTemplate";
 import type { ActiveMaterialSettings } from "../MaterialProfilePanel";
 import type { BedMockupConfig, FlatBedItemOverlay } from "../LaserBedWorkspace";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
-import { getPrintableSurfaceResolutionFromDimensions } from "@/lib/printableSurface";
+import { deriveTumblerWorkspaceRuntimeState } from "@/lib/tumblerPrintableWorkspace";
+import { normalizeProductTemplatePrintableSurface } from "@/lib/printableSurface";
 import { updateTemplate } from "@/lib/templateStorage";
-import { getTumblerWrapLayout } from "@/utils/tumblerWrapLayout";
 
 type BuildMaterialSettings = (profileId: string) => ActiveMaterialSettings | null;
 
@@ -28,7 +28,6 @@ interface TemplateWorkflowParams {
   setShowTemplateGallery: Dispatch<SetStateAction<boolean>>;
   setShowCreateForm: Dispatch<SetStateAction<boolean>>;
   setBgRemovalStatus: Dispatch<SetStateAction<BgRemovalStatus>>;
-  setEngravableZone: Dispatch<SetStateAction<import("@/types/admin").EngravableZone | null>>;
   setToastMessage: Dispatch<SetStateAction<string | null>>;
   bumpModelViewerResetKey: () => void;
   buildMaterialSettings: BuildMaterialSettings;
@@ -49,37 +48,44 @@ export function useTemplateWorkflow({
   setShowTemplateGallery,
   setShowCreateForm,
   setBgRemovalStatus,
-  setEngravableZone,
   setToastMessage,
   bumpModelViewerResetKey,
   buildMaterialSettings,
 }: TemplateWorkflowParams) {
+  useDebugValue({
+    templateId: selectedTemplate?.id ?? null,
+    workspaceMode: bedConfig.workspaceMode,
+    materialProfileId: selectedTemplate?.laserSettings.materialProfileId ?? null,
+  });
+
   const handleMaterialProfileSelection = useCallback((profileId: string) => {
     setSelectedMaterialProfileId(profileId);
     setMaterialSettings(buildMaterialSettings(profileId));
   }, [buildMaterialSettings, setMaterialSettings, setSelectedMaterialProfileId]);
 
   const handleTemplateSelect = useCallback((template: ProductTemplate) => {
+    const normalizedTemplateResult = normalizeProductTemplatePrintableSurface(template);
+    const activeTemplate = normalizedTemplateResult.template;
+    if (normalizedTemplateResult.changed && !template.builtIn) {
+      updateTemplate(activeTemplate.id, activeTemplate);
+    }
+
     // Apply all dimensions at once via bedConfig.
-    const isRotary = template.productType === "tumbler" || template.productType === "mug" || template.productType === "bottle";
+    const isRotary = activeTemplate.productType === "tumbler" || activeTemplate.productType === "mug" || activeTemplate.productType === "bottle";
     const mode: WorkspaceMode = isRotary ? "tumbler-wrap" : "flat-bed";
     const effectiveCylinderDiameterMm = isRotary
-      ? getTemplateEffectiveCylinderDiameterMm(template)
-      : template.dimensions.diameterMm;
-    const dims = isRotary ? getEngravableDimensions(template) : null;
-    const printableSurface = isRotary
-      ? getPrintableSurfaceResolutionFromDimensions(
-          template.dimensions,
-          template.dimensions.canonicalDimensionCalibration,
-        )
-      : null;
-    const workspaceHeightMm = dims?.engravableHeightMm ?? template.dimensions.printHeightMm;
+      ? getTemplateEffectiveCylinderDiameterMm(activeTemplate)
+      : activeTemplate.dimensions.diameterMm;
+    const dims = isRotary ? getEngravableDimensions(activeTemplate) : null;
+    const workspaceRuntime = isRotary && dims ? deriveTumblerWorkspaceRuntimeState(activeTemplate, dims) : null;
+    const workspaceHeightMm =
+      workspaceRuntime?.workspaceHeightMm ?? dims?.engravableHeightMm ?? activeTemplate.dimensions.printHeightMm;
     const usableHeightMm =
+      workspaceRuntime?.usableHeightMm ??
       dims?.printableHeightMm ??
-      printableSurface?.printableSurfaceContract.printableHeightMm ??
       workspaceHeightMm;
-    const materialProfileId = template.laserSettings.materialProfileId ?? "";
-    const rotaryPresetId = template.laserSettings.rotaryPresetId ?? "";
+    const materialProfileId = activeTemplate.laserSettings.materialProfileId ?? "";
+    const rotaryPresetId = activeTemplate.laserSettings.rotaryPresetId ?? "";
 
     setBedConfig((prev) =>
       normalizeBedConfig({
@@ -87,10 +93,11 @@ export function useTemplateWorkflow({
         workspaceMode: mode,
         tumblerDiameterMm: effectiveCylinderDiameterMm,
         tumblerPrintableHeightMm: workspaceHeightMm,
-        tumblerTemplateWidthMm: template.dimensions.templateWidthMm,
-        tumblerTemplateHeightMm: workspaceHeightMm,
+        tumblerTemplateWidthMm: workspaceRuntime?.templateWidthMm ?? activeTemplate.dimensions.templateWidthMm,
+        tumblerTemplateHeightMm: workspaceRuntime?.templateHeightMm ?? workspaceHeightMm,
         tumblerOverallHeightMm:
-          template.dimensions.overallHeightMm ??
+          activeTemplate.dimensions.overallHeightMm ??
+          workspaceRuntime?.overallHeightMm ??
           dims?.totalHeightMm,
         ...(isRotary
           ? {
@@ -98,8 +105,8 @@ export function useTemplateWorkflow({
               tumblerUsableHeightMm: usableHeightMm,
             }
           : {
-              flatWidth: template.dimensions.templateWidthMm,
-              flatHeight: template.dimensions.printHeightMm,
+              flatWidth: activeTemplate.dimensions.templateWidthMm,
+              flatHeight: activeTemplate.dimensions.printHeightMm,
             }),
       }),
     );
@@ -108,70 +115,20 @@ export function useTemplateWorkflow({
     setSelectedRotaryPresetId(rotaryPresetId);
     setRotaryAutoPlacementEnabled(isRotary && Boolean(rotaryPresetId));
     bumpModelViewerResetKey();
-    setSelectedTemplate(template);
+    setSelectedTemplate(activeTemplate);
     setMockupConfig(null);
     setFlatBedItemOverlay(null);
     setShowTemplateGallery(false);
     setShowCreateForm(false);
     setBgRemovalStatus("idle");
 
-    // Compute engravable safe zone for rotary products.
-    if (isRotary) {
-      const fullWrapW = dims?.circumferenceMm ?? template.dimensions.templateWidthMm;
-      const wrapMapping = template.dimensions.canonicalDimensionCalibration?.wrapMappingMm;
-      const layout = getTumblerWrapLayout(template.dimensions.handleArcDeg);
-      const frontCenterX = wrapMapping?.frontMeridianMm ?? (fullWrapW * layout.frontCenterRatio);
-      const backCenterX = wrapMapping?.backMeridianMm ?? (layout.backCenterRatio == null ? null : fullWrapW * layout.backCenterRatio);
-      const handleCenterX = wrapMapping?.handleMeridianMm ?? (layout.handleCenterRatio == null ? null : fullWrapW * layout.handleCenterRatio);
-
-      let zoneW = Math.max(0, Math.min(dims?.printableWidthMm ?? fullWrapW, fullWrapW));
-      if (zoneW <= 0) zoneW = fullWrapW;
-      let zoneX = frontCenterX - zoneW / 2;
-      if (zoneX < 0 || zoneX + zoneW > fullWrapW) {
-        zoneX = 0;
-        zoneW = fullWrapW;
-      }
-      const bodyTopMm = template.dimensions.bodyTopFromOverallMm ??
-        template.dimensions.canonicalDimensionCalibration?.lidBodyLineMm ??
-        0;
-      const lidBoundaryY = printableSurface?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "lid")?.endMm;
-      const rimBoundaryY = printableSurface?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "rim-ring")?.endMm;
-      const zoneY = dims?.printableTopFromBodyTopMm ?? 0;
-      const zoneH = dims?.printableHeightMm ?? Math.min(dims?.engravableHeightMm ?? template.dimensions.printHeightMm, template.dimensions.printHeightMm);
-      setEngravableZone({
-        x: zoneX,
-        y: zoneY,
-        width: zoneW,
-        height: zoneH,
-        printableTopY: zoneY,
-        printableBottomY: (dims?.printableBottomFromBodyTopMm ?? (zoneY + zoneH)),
-        lidBoundaryY: lidBoundaryY != null ? Math.max(0, lidBoundaryY - bodyTopMm) : null,
-        rimBoundaryY: rimBoundaryY != null ? Math.max(0, rimBoundaryY - bodyTopMm) : null,
-        printableDetectionWeak: dims?.automaticPrintableDetectionWeak,
-        frontCenterX,
-        backCenterX,
-        leftQuarterX: wrapMapping?.leftQuarterMm ?? null,
-        rightQuarterX: wrapMapping?.rightQuarterMm ?? null,
-        handleCenterX,
-        handleKeepOutStartX: wrapMapping?.handleKeepOutStartMm ?? null,
-        handleKeepOutEndX: wrapMapping?.handleKeepOutEndMm ?? null,
-        handleKeepOutWraps:
-          wrapMapping?.handleKeepOutStartMm != null &&
-          wrapMapping?.handleKeepOutEndMm != null &&
-          wrapMapping.handleKeepOutStartMm > wrapMapping.handleKeepOutEndMm,
-      });
-    } else {
-      setEngravableZone(null);
-    }
-
-    setToastMessage(`${template.name} loaded. Place your artwork.`);
+    setToastMessage(`${activeTemplate.name} loaded. Place your artwork.`);
   }, [
     bumpModelViewerResetKey,
     handleMaterialProfileSelection,
     normalizeBedConfig,
     setBedConfig,
     setBgRemovalStatus,
-    setEngravableZone,
     setFlatBedItemOverlay,
     setMockupConfig,
     setRotaryAutoPlacementEnabled,

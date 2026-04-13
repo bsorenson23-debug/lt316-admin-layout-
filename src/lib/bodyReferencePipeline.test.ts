@@ -6,6 +6,7 @@ import type { EditableBodyOutline, EditableBodyOutlinePoint } from "../types/pro
 import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
 import {
   createEditableBodyOutline,
+  createEditableBodyOutlineFromImportedSvg,
   createEditableBodyOutlineFromTraceDebug,
 } from "./editableBodyOutline.ts";
 import {
@@ -13,9 +14,6 @@ import {
   createPersistedBodyReferencePipeline,
   deriveBodyReferencePipeline,
 } from "./bodyReferencePipeline.ts";
-
-const WEAK_TOP_BAND_WARNING =
-  "Auto top-band detection is weak. Set printable top / bottom explicitly before saving production geometry.";
 
 const noisyStanleyFitDebug: TumblerItemLookupFitDebug = {
   kind: "lathe-body-fit",
@@ -147,7 +145,7 @@ function sampleByNearestY(points: EditableBodyOutlinePoint[], yMm: number): Edit
   return [...points].sort((a, b) => Math.abs(a.y - yMm) - Math.abs(b.y - yMm))[0];
 }
 
-test("Stanley golden fixture derives one stable contract and blocks weak top-band saves", () => {
+test("Stanley golden fixture keeps body bounds authoritative while preserving ring diagnostics", () => {
   const outline = buildStanleyOutline();
   const pipeline = deriveBodyReferencePipeline({
     outline,
@@ -158,12 +156,26 @@ test("Stanley golden fixture derives one stable contract and blocks weak top-ban
     baseDiameterMm: 78.7,
     handleArcDeg: 90,
     handleSide: "right",
+    lidSeamFromOverallMm: 62.8,
+    silverBandBottomFromOverallMm: 73.7,
   });
 
   assert.ok(pipeline);
-  assert.equal(pipeline?.qa.pass, false);
-  assert.ok(pipeline?.warnings.includes(WEAK_TOP_BAND_WARNING));
+  assert.equal(pipeline?.qa.pass, true);
+  assert.deepEqual(pipeline?.warnings, []);
   assert.ok(Math.abs((pipeline?.canonicalDimensionCalibration.frontVisibleWidthMm ?? 0) - 99.82) <= 0.75);
+  assert.equal(pipeline?.printableSurfaceResolution.printableSurfaceContract.printableTopMm, 28);
+  assert.equal(pipeline?.printableSurfaceResolution.printableSurfaceContract.printableBottomMm, 244);
+  assert.equal(pipeline?.printableSurfaceResolution.printableSurfaceContract.printableHeightMm, 216);
+  assert.deepEqual(
+    pipeline?.printableSurfaceResolution.printableSurfaceContract.axialExclusions,
+    [
+      { kind: "lid", startMm: 0, endMm: 62.8 },
+      { kind: "rim-ring", startMm: 62.8, endMm: 73.7 },
+    ],
+  );
+  assert.equal(pipeline?.printableSurfaceResolution.topBoundarySource, "body-top-fallback");
+  assert.equal(pipeline?.printableSurfaceResolution.automaticDetectionWeak, false);
 
   const firstRows = pipeline?.canonicalBodyProfile.samples.slice(0, 8) ?? [];
   assert.equal(firstRows.length, 8);
@@ -247,6 +259,99 @@ test("cleaned noisy trace starts the cutout at the body band instead of the cont
   assert.equal(pipeline?.qa.pass, true);
   assert.ok((pipeline?.canonicalBodyProfile.axis.yTop ?? 0) > 80);
   assert.ok((pipeline?.canonicalDimensionCalibration.frontVisibleWidthMm ?? 0) >= 95);
+});
+
+test("body-only traced shells calibrate from the traced contour before coarse control points", () => {
+  const outline = createEditableBodyOutlineFromImportedSvg({
+    source: {
+      svgText: "",
+      pathData: "",
+      viewport: {
+        minX: 0,
+        minY: 0,
+        width: 800,
+        height: 1200,
+      },
+      bounds: {
+        minX: 220,
+        minY: 120,
+        maxX: 580,
+        maxY: 1040,
+        width: 360,
+        height: 920,
+      },
+      contour: [
+        { x: 360, y: 120 },
+        { x: 220, y: 120 },
+        { x: 220, y: 650 },
+        { x: 260, y: 860 },
+        { x: 280, y: 1040 },
+        { x: 520, y: 1040 },
+        { x: 540, y: 860 },
+        { x: 580, y: 650 },
+        { x: 580, y: 120 },
+        { x: 440, y: 120 },
+        { x: 440, y: 40 },
+        { x: 360, y: 40 },
+        { x: 360, y: 120 },
+      ],
+    },
+    overallHeightMm: 254,
+    bodyTopFromOverallMm: 26,
+    bodyBottomFromOverallMm: 226,
+    diameterMm: 106,
+    topOuterDiameterMm: 106,
+    side: "right",
+    sourceMode: "body-only",
+  });
+
+  outline.points = outline.points.map((point) => {
+    if (point.role === "topOuter" || point.role === "body" || point.role === "shoulder") {
+      return { ...point, x: 41 };
+    }
+    return point;
+  });
+
+  const pipeline = deriveBodyReferencePipeline({
+    outline,
+    overallHeightMm: 254,
+    bodyTopFromOverallMm: 26,
+    bodyBottomFromOverallMm: 226,
+    wrapDiameterMm: 106,
+    baseDiameterMm: 74,
+    printableTopOverrideMm: 26,
+    printableBottomOverrideMm: 226,
+  });
+
+  assert.ok(pipeline);
+  assert.equal(pipeline?.qa.fallbackMode, "none");
+  assert.ok(Math.abs((pipeline?.canonicalDimensionCalibration.frontVisibleWidthMm ?? 0) - 106) <= 0.75);
+  assert.equal(pipeline?.canonicalBodyProfile.mirroredFromSymmetrySource, false);
+
+  const mirroredHandlePipeline = deriveBodyReferencePipeline({
+    outline,
+    overallHeightMm: 254,
+    bodyTopFromOverallMm: 26,
+    bodyBottomFromOverallMm: 226,
+    wrapDiameterMm: 106,
+    baseDiameterMm: 74,
+    handleSide: "left",
+    printableTopOverrideMm: 26,
+    printableBottomOverrideMm: 226,
+  });
+
+  assert.ok(mirroredHandlePipeline);
+  assert.equal(mirroredHandlePipeline?.qa.fallbackMode, "none");
+  assert.equal(mirroredHandlePipeline?.canonicalBodyProfile.mirroredFromSymmetrySource, false);
+  assert.ok(Math.abs((mirroredHandlePipeline?.canonicalDimensionCalibration.frontVisibleWidthMm ?? 0) - 106) <= 0.75);
+  assert.deepEqual(
+    mirroredHandlePipeline?.canonicalDimensionCalibration.photoToFrontTransform.matrix,
+    pipeline?.canonicalDimensionCalibration.photoToFrontTransform.matrix,
+  );
+  assert.deepEqual(
+    mirroredHandlePipeline?.canonicalBodyProfile.axis,
+    pipeline?.canonicalBodyProfile.axis,
+  );
 });
 
 test("manual BODY REFERENCE outline overrides remain authoritative through persisted reload", () => {
