@@ -20,10 +20,15 @@ import { getRotaryPresets } from "@/utils/adminCalibrationState";
 import {
   buildLightBurnExportArtifacts,
   getLightBurnExportOrigin,
+  resolvePrintableTopOffsetForWorkspace,
 } from "@/utils/tumblerExportPlacement";
 import { buildLightBurnLbrn, downloadLbrnFile } from "@/utils/lightBurnLbrnExport";
 import { buildLightBurnAlignmentGuideSvg, buildLightBurnExportSvg } from "@/utils/lightBurnSvgExport";
 import { isTaperWarpApplicable } from "@/utils/taperWarp";
+import {
+  lightburnPreprocessResponseSchema,
+  lightburnSaveExportResponseSchema,
+} from "@/lib/adminApi.schema";
 import type { LbrnMaterialSettings } from "@/utils/lightBurnLbrnExport";
 import { appendExportHistory, fingerprintItems } from "./ExportHistoryPanel";
 import {
@@ -69,6 +74,12 @@ interface Props {
   dimensionCalibration?: CanonicalDimensionCalibration | null;
   manufacturerLogoStamp?: ManufacturerLogoStamp | null;
   lockedProductionGeometry?: boolean;
+  traceMetadata?: {
+    traceId?: string | null;
+    runId?: string | null;
+    sectionId?: string | null;
+  };
+  traceHeaders?: HeadersInit;
 }
 
 function fmt(n: number) { return n.toFixed(2); }
@@ -84,10 +95,15 @@ function inferTopSafeOffsetMm(
   calibration?: CanonicalDimensionCalibration | null,
 ): number | undefined {
   const printableTopMm = calibration?.printableSurfaceContract?.printableTopMm;
+  const printableHeightMm = calibration?.printableSurfaceContract?.printableHeightMm;
   const bodyTopMm = calibration?.lidBodyLineMm;
   if (Number.isFinite(printableTopMm) && Number.isFinite(bodyTopMm)) {
     const delta = (printableTopMm ?? 0) - (bodyTopMm ?? 0);
-    return delta > 0 ? Number(delta.toFixed(2)) : 0;
+    return resolvePrintableTopOffsetForWorkspace({
+      workspaceHeightMm: resolveTumblerWorkspaceHeightMm(bedConfig),
+      printableHeightMm,
+      printableTopOffsetMm: delta,
+    });
   }
   const overall = bedConfig.tumblerOverallHeightMm;
   const usable  = resolveTumblerUsableHeightMm(bedConfig);
@@ -162,6 +178,7 @@ const CURRENT_JOB_BASENAME = "current-job";
 
 async function preprocessPayloadForLbrn(
   payload: LightBurnExportPayload,
+  traceHeaders?: HeadersInit,
 ): Promise<{
   payload: LightBurnExportPayload;
   usedInkscape: boolean;
@@ -170,7 +187,10 @@ async function preprocessPayloadForLbrn(
   try {
     const response = await fetch("/api/admin/lightburn/preprocess-svg", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(traceHeaders ?? {}),
+      },
       body: JSON.stringify({
         items: payload.items.map((item) => ({
           id: item.id,
@@ -178,20 +198,15 @@ async function preprocessPayloadForLbrn(
         })),
       }),
     });
-
     if (!response.ok) {
       return { payload, usedInkscape: false, messages: [] };
     }
-
-    const data = (await response.json()) as {
-      usedInkscape?: boolean;
-      items?: Array<{
-        id: string;
-        svgText: string;
-        message?: string | null;
-      }>;
-    };
-
+    const responseJson: unknown = await response.json();
+    const parsed = lightburnPreprocessResponseSchema.safeParse(responseJson);
+    if (!parsed.success) {
+      return { payload, usedInkscape: false, messages: [] };
+    }
+    const data = parsed.data;
     const byId = new Map(
       (data.items ?? []).map((item) => [item.id, item]),
     );
@@ -216,8 +231,6 @@ async function preprocessPayloadForLbrn(
   }
 }
 
-// ---------------------------------------------------------------------------
-
 export function TumblerExportPanel({
   bedConfig, placedItems, compact = false, onFramePreviewChange, materialSettings,
   rotaryEnabled: rotaryEnabledProp, onRotaryEnabledChange,
@@ -228,6 +241,8 @@ export function TumblerExportPanel({
   dimensionCalibration,
   manufacturerLogoStamp,
   lockedProductionGeometry = false,
+  traceMetadata,
+  traceHeaders,
 }: Props) {
   const [localRotaryEnabled,  setLocalRotaryEnabled]  = React.useState(false);
   const [availablePresets,    setAvailablePresets]    = React.useState<RotaryPlacementPreset[]>(DEFAULT_ROTARY_PLACEMENT_PRESETS);
@@ -495,7 +510,10 @@ export function TumblerExportPanel({
   const doExport = async (mode: "download" | "save") => {
     const name = `lt316-${Date.now()}`;
     const material = materialSettings ?? undefined;
-    const preprocessedForLbrn = await preprocessPayloadForLbrn(exportArtifacts.artworkPayload);
+    const preprocessedForLbrn = await preprocessPayloadForLbrn(
+      exportArtifacts.artworkPayload,
+      traceHeaders,
+    );
     const sidecarPayload = {
       artwork: exportArtifacts.artworkPayload,
       alignmentGuides: exportArtifacts.alignmentGuides,
@@ -525,14 +543,19 @@ export function TumblerExportPanel({
       const saveFile = async (filename: string, content: string) => {
         const res = await fetch("/api/admin/lightburn/save-export", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(traceHeaders ?? {}),
+          },
           body: JSON.stringify({
             outputFolderPath: outputFolderPath.trim(),
             filename,
             content,
           }),
         });
-        const data = (await res.json()) as { saved?: boolean; path?: string; error?: string };
+        const responseJson: unknown = await res.json();
+        const parsed = lightburnSaveExportResponseSchema.safeParse(responseJson);
+        const data = parsed.success ? parsed.data : { saved: false, error: `Failed to save ${filename}` };
         if (!res.ok || !data.saved || !data.path) {
           throw new Error(data.error ?? `Failed to save ${filename}`);
         }
@@ -599,11 +622,17 @@ export function TumblerExportPanel({
       exportOriginYmm: previewOrigin.yMm,
       exportPayloadSnapshot: preprocessedForLbrn.payload,
       materialSettingsSnapshot: material ? { ...material } : null,
+      traceId: traceMetadata?.traceId ?? undefined,
+      sectionId: traceMetadata?.sectionId ?? undefined,
+      runId: traceMetadata?.runId ?? undefined,
     });
   };
 
   const handleDownloadLbrn = async () => {
-    const preprocessedForLbrn = await preprocessPayloadForLbrn(exportArtifacts.artworkPayload);
+    const preprocessedForLbrn = await preprocessPayloadForLbrn(
+      exportArtifacts.artworkPayload,
+      traceHeaders,
+    );
     const lbrnContent = buildLightBurnLbrn(
       preprocessedForLbrn.payload,
       materialSettings ?? undefined,

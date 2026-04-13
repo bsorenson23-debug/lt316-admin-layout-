@@ -8,7 +8,7 @@
  * AdminMainPageShell which owns the page-level UI controls.
  */
 
-import { AdminMainPageShell } from "@/components/admin/AdminMainPageShell";
+import { AdminPageRoot } from "@/features/admin";
 
 export const metadata = {
   title: "LT316 Admin - Laser Bed Workspace",
@@ -16,5 +16,5 @@ export const metadata = {
 };
 
 export default function AdminPage() {
-  return <AdminMainPageShell />;
+  return <AdminPageRoot />;
 }

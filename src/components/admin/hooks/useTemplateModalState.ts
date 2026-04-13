@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useDebugValue, useState } from "react";
 import type { ProductTemplate } from "@/types/productTemplate";
 
 interface UseTemplateModalStateParams {
@@ -15,6 +15,13 @@ export function useTemplateModalState({
   const [editingTemplate, setEditingTemplate] = useState<ProductTemplate | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [, setTemplateRefreshNonce] = useState(0);
+
+  useDebugValue({
+    galleryOpen: showTemplateGallery,
+    createOpen: showCreateForm,
+    editingTemplateId: editingTemplate?.id ?? null,
+    selectedTemplateId: selectedTemplate?.id ?? null,
+  });
 
   const showToast = useCallback((message: string) => {
     setToastMessage(message);

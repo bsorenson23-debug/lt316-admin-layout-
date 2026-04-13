@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   BedConfig,
   DEFAULT_BED_CONFIG,
@@ -61,14 +61,14 @@ import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
 import { getPrintableSurfaceResolutionFromDimensions } from "@/lib/printableSurface";
-import { getTumblerWrapLayout } from "@/utils/tumblerWrapLayout";
+import type { TumblerPreviewModelState } from "@/lib/tumblerPreviewModelState";
 import { getMaterialProfileById } from "@/data/materialProfiles";
 import type { LightBurnExportPayload } from "@/types/export";
 import {
   LASER_PROFILE_STATE_CHANGED_EVENT,
   getActiveLaserAndLens,
 } from "@/utils/laserProfileState";
-import { buildLightBurnExportArtifacts, mapLogoPlacementToWrapRegion } from "@/utils/tumblerExportPlacement";
+import { buildLightBurnExportArtifacts, resolvePrintableTopOffsetForWorkspace } from "@/utils/tumblerExportPlacement";
 import { buildLightBurnLbrn } from "@/utils/lightBurnLbrnExport";
 import { buildLightBurnAlignmentGuideSvg, buildLightBurnExportSvg } from "@/utils/lightBurnSvgExport";
 import { useAdminWorkspacePersistence } from "./hooks/useAdminWorkspacePersistence";
@@ -79,6 +79,34 @@ import { useTemplateModalState } from "./hooks/useTemplateModalState";
 import { ModalDialog } from "./shared/ModalDialog";
 import { getRotaryPresets } from "@/utils/adminCalibrationState";
 import { isSvgLibrarySyncStorageKey } from "@/lib/svgLibrarySync";
+import {
+  AdminDebugDrawer,
+  buildAdminTraceHeaders,
+  createAdminTraceEnvelope,
+  useAdminSectionDebug,
+} from "@/features/admin/shared";
+import {
+  type ExportBundleSectionState,
+  type JobReadinessSectionState,
+  ExportBundleSectionSurface,
+  JobReadinessSectionSurface,
+  useJobReadinessDebugValue,
+} from "@/features/admin/job-readiness";
+import {
+  PreviewSectionSurface,
+  type PreviewSectionState,
+  usePreviewDebugValue,
+} from "@/features/admin/preview";
+import {
+  TemplateEditorSurface,
+  type TemplateEditorSectionState,
+  useTemplateEditorDebugValue,
+} from "@/features/admin/template-editor";
+import {
+  createInitialWorkspaceControllerState,
+  useWorkspaceController,
+  WorkspaceSectionSurface,
+} from "@/features/admin/workspace";
 import styles from "./AdminLayoutShell.module.css";
 
 function buildActiveMaterialSettings(profileId: string): ActiveMaterialSettings | null {
@@ -146,7 +174,11 @@ function inferTopSafeOffsetMm(
 ): number | undefined {
   if (printableSurfaceContract && Number.isFinite(printableSurfaceContract.printableTopMm) && Number.isFinite(bodyTopMm)) {
     const delta = printableSurfaceContract.printableTopMm - (bodyTopMm ?? 0);
-    return delta > 0 ? Number(delta.toFixed(2)) : 0;
+    return resolvePrintableTopOffsetForWorkspace({
+      workspaceHeightMm: resolveTumblerWorkspaceHeightMm(bedConfig),
+      printableHeightMm: printableSurfaceContract.printableHeightMm,
+      printableTopOffsetMm: delta,
+    });
   }
   const overallHeightMm = bedConfig.tumblerOverallHeightMm;
   const usableHeightMm = resolveTumblerUsableHeightMm(bedConfig);
@@ -157,13 +189,27 @@ function inferTopSafeOffsetMm(
   return delta > 0 ? Number(delta.toFixed(2)) : 0;
 }
 
+function formatPrintableBandLabel(
+  printableSurfaceContract?: ProductTemplate["dimensions"]["printableSurfaceContract"] | null,
+): string | null {
+  if (!printableSurfaceContract) return null;
+  const top = printableSurfaceContract.printableTopMm;
+  const bottom = printableSurfaceContract.printableBottomMm;
+  if (!Number.isFinite(top) || !Number.isFinite(bottom)) return null;
+  return `${top.toFixed(2)} -> ${bottom.toFixed(2)}`;
+}
+
 async function preprocessPayloadForCurrentJob(
   payload: LightBurnExportPayload,
+  traceHeaders?: HeadersInit,
 ): Promise<LightBurnExportPayload> {
   try {
     const response = await fetch("/api/admin/lightburn/preprocess-svg", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(traceHeaders ?? {}),
+      },
       body: JSON.stringify({
         items: payload.items.map((item) => ({
           id: item.id,
@@ -200,11 +246,16 @@ async function saveCurrentJobFile(args: {
   outputFolderPath: string;
   filename: string;
   content: string;
+  traceHeaders?: HeadersInit;
 }): Promise<void> {
+  const { traceHeaders, ...requestBody } = args;
   const response = await fetch("/api/admin/lightburn/save-export", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(args),
+    headers: {
+      "Content-Type": "application/json",
+      ...(traceHeaders ?? {}),
+    },
+    body: JSON.stringify(requestBody),
   });
 
   const payload = (await response.json()) as { saved?: boolean; error?: string };
@@ -215,7 +266,13 @@ async function saveCurrentJobFile(args: {
 
 export function AdminLayoutShell() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const handledAdminQueryRef = useRef<string | null>(null);
+  const adminTraceIdRef = useRef<string>(
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `trace-${Date.now()}`
+  );
 
   // -- Bed config -----------------------------------------------------------
   const [bedConfig, setBedConfig] = useState<BedConfig>(DEFAULT_BED_CONFIG);
@@ -244,9 +301,6 @@ export function AdminLayoutShell() {
   // -- Flat bed item footprint overlay --------------------------------------
   const [flatBedItemOverlay, setFlatBedItemOverlay] = useState<FlatBedItemOverlay | null>(null);
 
-  // -- Tumbler view mode (grid vs 3D placement) ----------------------------
-  const [tumblerViewMode, setTumblerViewMode] = useState<"grid" | "3d-placement">("grid");
-
   // -- Product photo overlay on grid ----------------------------------------
   const [overlayMode, setOverlayMode] = useState<"schematic" | "photo" | "off">("schematic");
   const [overlayOpacity, setOverlayOpacity] = useState(12); // percent (5–50)
@@ -256,9 +310,6 @@ export function AdminLayoutShell() {
   const [lbOutputFolderPath, setLbOutputFolderPath] = useState<string | undefined>(undefined);
   const [curvedOverlay, setCurvedOverlay] = useState(false);
   const [bgRemovalStatus, setBgRemovalStatus] = useState<"idle" | "running" | "done" | "failed">("idle");
-
-  // -- Engravable safe zone ---------------------------------------------------
-  const [engravableZone, setEngravableZone] = useState<import("@/types/admin").EngravableZone | null>(null);
 
   // -- Screenshot export from Konva stage ------------------------------------
   const konvaStageRef = useRef<import("konva").default.Stage | null>(null);
@@ -287,6 +338,8 @@ export function AdminLayoutShell() {
   const [selectedTemplate, setSelectedTemplate] = useState<ProductTemplate | null>(null);
   const [modelViewerResetKey, setModelViewerResetKey] = useState(0);
   const [activeLaserSetup, setActiveLaserSetup] = useState(readActiveLaserSetup);
+  const [templateEditorDebugState, setTemplateEditorDebugState] = useState<TemplateEditorSectionState | null>(null);
+  const [previewDebugState, setPreviewDebugState] = useState<TumblerPreviewModelState | null>(null);
 
   const {
     showTemplateGallery,
@@ -382,12 +435,30 @@ export function AdminLayoutShell() {
 
   // -- Derived --------------------------------------------------------------
   const isTumblerMode = bedConfig.workspaceMode === "tumbler-wrap";
-  const is3DPlacement = isTumblerMode && tumblerViewMode === "3d-placement";
   const placementAsset = svgAssets.find((a) => a.id === placementAssetId) ?? null;
   const templateEngravableDims = React.useMemo(() => {
     if (!isTumblerMode || !selectedTemplate) return null;
     return getEngravableDimensions(selectedTemplate);
   }, [isTumblerMode, selectedTemplate]);
+  const {
+    state: workspaceControllerState,
+    dispatch: dispatchWorkspaceController,
+    derived: workspaceController,
+  } = useWorkspaceController(
+    createInitialWorkspaceControllerState(),
+    React.useMemo(
+      () => ({
+        bedConfig,
+        selectedTemplate,
+        templateEngravableDims,
+      }),
+      [bedConfig, selectedTemplate, templateEngravableDims],
+    ),
+  );
+  const tumblerViewMode = workspaceControllerState.tumblerViewMode;
+  const setTumblerViewMode = React.useCallback((viewMode: "grid" | "3d-placement") => {
+    dispatchWorkspaceController({ type: "set-view-mode", viewMode });
+  }, [dispatchWorkspaceController]);
   const selectedTemplateEffectiveDiameterMm = React.useMemo(
     () => (selectedTemplate ? getTemplateEffectiveCylinderDiameterMm(selectedTemplate) : 0),
     [selectedTemplate],
@@ -399,6 +470,19 @@ export function AdminLayoutShell() {
       selectedTemplate.dimensions.canonicalDimensionCalibration,
     );
   }, [selectedTemplate]);
+  const effectiveDimensionCalibration = React.useMemo(() => {
+    const calibration = selectedTemplate?.dimensions.canonicalDimensionCalibration ?? null;
+    if (!calibration || !templatePrintableSurface) return calibration;
+    return {
+      ...calibration,
+      printableSurfaceContract: templatePrintableSurface.printableSurfaceContract,
+      axialSurfaceBands: templatePrintableSurface.axialSurfaceBands,
+    };
+  }, [selectedTemplate, templatePrintableSurface]);
+  const templateWorkspaceGeometry = workspaceController.templateWorkspaceGeometry;
+  const workspaceEngravableZone = workspaceController.workspaceEngravableZone;
+  const workspaceRenderKey = workspaceController.workspaceRenderKey;
+  const is3DPlacement = workspaceController.is3DPlacement;
 
   // Tumbler dimensions — shared between left panel preview and center 3D view
   const tumblerDims = React.useMemo(() => {
@@ -468,13 +552,13 @@ export function AdminLayoutShell() {
   }, [selectedTemplate?.id, selectedTemplate?.dimensions.bodyColorHex]);
 
   React.useEffect(() => {
-    if (!isTumblerMode || !selectedTemplate || !templateEngravableDims) return;
+    if (!isTumblerMode || !selectedTemplate || !templateEngravableDims || !templateWorkspaceGeometry) return;
 
     setBedConfig((prev) => {
-      const nextWorkspaceHeight = templateEngravableDims.engravableHeightMm;
-      const nextUsableHeight = templateEngravableDims.printableHeightMm;
-      const nextOverallHeight = templateEngravableDims.totalHeightMm;
-      const nextWidth = templateEngravableDims.circumferenceMm;
+      const nextWorkspaceHeight = templateWorkspaceGeometry.workspaceHeightMm;
+      const nextUsableHeight = templateWorkspaceGeometry.usableHeightMm;
+      const nextOverallHeight = templateWorkspaceGeometry.overallHeightMm;
+      const nextWidth = templateWorkspaceGeometry.templateWidthMm;
 
       if (
         Math.abs((prev.tumblerPrintableHeightMm ?? 0) - nextWorkspaceHeight) < 0.01 &&
@@ -497,104 +581,7 @@ export function AdminLayoutShell() {
         tumblerTemplateHeightMm: nextWorkspaceHeight,
       });
     });
-  }, [isTumblerMode, selectedTemplate, templateEngravableDims]);
-
-  React.useEffect(() => {
-    if (!isTumblerMode || !selectedTemplate || !templateEngravableDims) {
-      setEngravableZone(null);
-      return;
-    }
-
-    const fullWrapW = templateEngravableDims.circumferenceMm;
-    const printableSurfaceLocalTop = templateEngravableDims.printableTopFromBodyTopMm;
-    const printableSurfaceLocalBottom = templateEngravableDims.printableBottomFromBodyTopMm;
-    const printableSurfaceLocalCenter = (printableSurfaceLocalTop + printableSurfaceLocalBottom) / 2;
-    const wrapMapping = selectedTemplate.dimensions.canonicalDimensionCalibration?.wrapMappingMm;
-    const logoRegion = mapLogoPlacementToWrapRegion({
-      templateWidthMm: fullWrapW,
-      templateHeightMm: templateEngravableDims.engravableHeightMm,
-      calibration: selectedTemplate.dimensions.canonicalDimensionCalibration ?? null,
-      stamp: selectedTemplate.manufacturerLogoStamp ?? null,
-    });
-    const layout = getTumblerWrapLayout(activeHandleArcDeg);
-    const frontCenterX = wrapMapping?.frontMeridianMm ?? (fullWrapW * layout.frontCenterRatio);
-    const backCenterX = wrapMapping?.backMeridianMm ?? (layout.backCenterRatio == null ? null : fullWrapW * layout.backCenterRatio);
-    const handleCenterX = wrapMapping?.handleMeridianMm ?? (layout.handleCenterRatio == null ? null : fullWrapW * layout.handleCenterRatio);
-    let zoneW = Math.max(0, Math.min(templateEngravableDims.printableWidthMm, fullWrapW));
-    if (zoneW <= 0) zoneW = fullWrapW;
-    let zoneX = frontCenterX - zoneW / 2;
-    if (zoneX < 0 || zoneX + zoneW > fullWrapW) {
-      zoneX = 0;
-      zoneW = fullWrapW;
-    }
-    const bodyTopMm = selectedTemplate.dimensions.bodyTopFromOverallMm ??
-      selectedTemplate.dimensions.canonicalDimensionCalibration?.lidBodyLineMm ??
-      0;
-    const lidBoundaryY = templatePrintableSurface?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "lid")?.endMm;
-    const rimBoundaryY = templatePrintableSurface?.printableSurfaceContract.axialExclusions.find((band) => band.kind === "rim-ring")?.endMm;
-    const nextZone = {
-      x: zoneX,
-      y: printableSurfaceLocalTop,
-      width: zoneW,
-      height: templateEngravableDims.printableHeightMm,
-      printableTopY: printableSurfaceLocalTop,
-      printableBottomY: printableSurfaceLocalBottom,
-      printableCenterY: printableSurfaceLocalCenter,
-      lidBoundaryY: lidBoundaryY != null ? Math.max(0, lidBoundaryY - bodyTopMm) : null,
-      rimBoundaryY: rimBoundaryY != null ? Math.max(0, rimBoundaryY - bodyTopMm) : null,
-      printableDetectionWeak: templateEngravableDims.automaticPrintableDetectionWeak,
-      frontCenterX,
-      backCenterX,
-      leftQuarterX: wrapMapping?.leftQuarterMm ?? null,
-      rightQuarterX: wrapMapping?.rightQuarterMm ?? null,
-      handleCenterX,
-      handleKeepOutStartX: wrapMapping?.handleKeepOutStartMm ?? null,
-      handleKeepOutEndX: wrapMapping?.handleKeepOutEndMm ?? null,
-      handleKeepOutWraps:
-        wrapMapping?.handleKeepOutStartMm != null &&
-        wrapMapping?.handleKeepOutEndMm != null &&
-        wrapMapping.handleKeepOutStartMm > wrapMapping.handleKeepOutEndMm,
-      logoCenterX: logoRegion?.centerXMm ?? null,
-      logoCenterY: logoRegion?.centerYMm ?? null,
-      logoWidth: logoRegion?.widthMm ?? null,
-      logoHeight: logoRegion?.heightMm ?? null,
-      logoWraps: logoRegion?.wrapsAround ?? false,
-      logoConfidence: logoRegion?.confidence ?? null,
-    };
-
-    setEngravableZone((prev) => {
-      if (
-        prev &&
-        Math.abs(prev.x - nextZone.x) < 0.01 &&
-        Math.abs(prev.y - nextZone.y) < 0.01 &&
-        Math.abs(prev.width - nextZone.width) < 0.01 &&
-        Math.abs(prev.height - nextZone.height) < 0.01 &&
-        Math.abs((prev.printableTopY ?? -1) - (nextZone.printableTopY ?? -1)) < 0.01 &&
-        Math.abs((prev.printableBottomY ?? -1) - (nextZone.printableBottomY ?? -1)) < 0.01 &&
-        Math.abs((prev.printableCenterY ?? -1) - (nextZone.printableCenterY ?? -1)) < 0.01 &&
-        Math.abs((prev.lidBoundaryY ?? -1) - (nextZone.lidBoundaryY ?? -1)) < 0.01 &&
-        Math.abs((prev.rimBoundaryY ?? -1) - (nextZone.rimBoundaryY ?? -1)) < 0.01 &&
-        Boolean(prev.printableDetectionWeak) === Boolean(nextZone.printableDetectionWeak) &&
-        Math.abs(prev.frontCenterX - nextZone.frontCenterX) < 0.01 &&
-        Math.abs((prev.backCenterX ?? -1) - (nextZone.backCenterX ?? -1)) < 0.01 &&
-        Math.abs((prev.leftQuarterX ?? -1) - (nextZone.leftQuarterX ?? -1)) < 0.01 &&
-        Math.abs((prev.rightQuarterX ?? -1) - (nextZone.rightQuarterX ?? -1)) < 0.01 &&
-        Math.abs((prev.handleCenterX ?? -1) - (nextZone.handleCenterX ?? -1)) < 0.01 &&
-        Math.abs((prev.handleKeepOutStartX ?? -1) - (nextZone.handleKeepOutStartX ?? -1)) < 0.01 &&
-        Math.abs((prev.handleKeepOutEndX ?? -1) - (nextZone.handleKeepOutEndX ?? -1)) < 0.01 &&
-        Boolean(prev.handleKeepOutWraps) === Boolean(nextZone.handleKeepOutWraps) &&
-        Math.abs((prev.logoCenterX ?? -1) - (nextZone.logoCenterX ?? -1)) < 0.01 &&
-        Math.abs((prev.logoCenterY ?? -1) - (nextZone.logoCenterY ?? -1)) < 0.01 &&
-        Math.abs((prev.logoWidth ?? -1) - (nextZone.logoWidth ?? -1)) < 0.01 &&
-        Math.abs((prev.logoHeight ?? -1) - (nextZone.logoHeight ?? -1)) < 0.01 &&
-        Boolean(prev.logoWraps) === Boolean(nextZone.logoWraps) &&
-        Math.abs((prev.logoConfidence ?? -1) - (nextZone.logoConfidence ?? -1)) < 0.001
-      ) {
-        return prev;
-      }
-      return nextZone;
-    });
-  }, [isTumblerMode, selectedTemplate, templateEngravableDims, templatePrintableSurface, activeHandleArcDeg]);
+  }, [isTumblerMode, selectedTemplate, templateEngravableDims, templateWorkspaceGeometry]);
 
   const {
     handleUploadAssets,
@@ -617,7 +604,7 @@ export function AdminLayoutShell() {
     bedConfig,
     activeHandleArcDeg,
     isTumblerMode,
-    engravableZone,
+    engravableZone: workspaceEngravableZone,
     svgAssets,
     selectedAssetId,
     placementAssetId,
@@ -653,7 +640,6 @@ export function AdminLayoutShell() {
     setShowTemplateGallery,
     setShowCreateForm,
     setBgRemovalStatus,
-    setEngravableZone,
     setToastMessage,
     bumpModelViewerResetKey: () => setModelViewerResetKey((value) => value + 1),
     buildMaterialSettings: buildActiveMaterialSettings,
@@ -828,12 +814,12 @@ export function AdminLayoutShell() {
       ? buildActiveMaterialSettings(order.jobRecipe.materialProfileId) ?? undefined
       : undefined;
     const printableSurfaceContract =
-      selectedTemplate?.dimensions.printableSurfaceContract ??
-      selectedTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract ??
+      templatePrintableSurface?.printableSurfaceContract ??
+      effectiveDimensionCalibration?.printableSurfaceContract ??
       null;
     const axialSurfaceBands =
-      selectedTemplate?.dimensions.axialSurfaceBands ??
-      selectedTemplate?.dimensions.canonicalDimensionCalibration?.axialSurfaceBands ??
+      templatePrintableSurface?.axialSurfaceBands ??
+      effectiveDimensionCalibration?.axialSurfaceBands ??
       null;
     const bodyTopMm =
       selectedTemplate?.dimensions.bodyTopFromOverallMm ??
@@ -854,7 +840,7 @@ export function AdminLayoutShell() {
         workspaceMode: snapshot.workspaceMode,
         templateWidthMm: snapshot.width,
         templateHeightMm: snapshot.height,
-        calibration: selectedTemplate?.dimensions.canonicalDimensionCalibration ?? null,
+        calibration: effectiveDimensionCalibration,
         printableSurfaceContract,
         axialSurfaceBands,
         manufacturerLogoStamp: selectedTemplate?.manufacturerLogoStamp ?? null,
@@ -917,7 +903,7 @@ export function AdminLayoutShell() {
         }`,
       );
     }
-  }, [lbOutputFolderPath, selectedTemplate, setToastMessage]);
+  }, [effectiveDimensionCalibration, lbOutputFolderPath, selectedTemplate, setToastMessage, templatePrintableSurface]);
 
   const handleLoadOrder = useCallback((order: OrderRecord) => {
     const snapshot = normalizeBedConfig(order.bedConfigSnapshot);
@@ -1002,7 +988,6 @@ export function AdminLayoutShell() {
     setSelectedMaterialProfileId("");
     setSelectedRotaryPresetId("");
     setRotaryAutoPlacementEnabled(false);
-    setEngravableZone(null);
     setBedConfig(snapshot);
     if (order.jobRecipe?.materialProfileId) {
       handleMaterialProfileSelection(order.jobRecipe.materialProfileId);
@@ -1855,6 +1840,130 @@ export function AdminLayoutShell() {
     />
   );
 
+  const debugEnabled =
+    searchParams.get("debug") === "1" ||
+    process.env.NEXT_PUBLIC_ADMIN_DEBUG === "1";
+  const templateEditorSectionState = showCreateForm
+    ? {
+        open: true,
+        activeStep: templateEditorDebugState?.activeStep ?? "source",
+        reviewAccepted: templateEditorDebugState?.reviewAccepted ?? false,
+        stagedDetectionPending: templateEditorDebugState?.stagedDetectionPending ?? false,
+        saveGateReason: templateEditorDebugState?.saveGateReason ?? "Template review is pending.",
+        runId: templateEditorDebugState?.runId ?? null,
+        authority: templateEditorDebugState?.authority ?? "guided-template-editor",
+        warnings: templateEditorDebugState?.warnings ?? [],
+        errors: templateEditorDebugState?.errors ?? [],
+        sourceFingerprints: templateEditorDebugState?.sourceFingerprints ?? {},
+      } satisfies TemplateEditorSectionState
+    : null;
+  const workspaceSectionState = workspaceController.sectionState;
+  const previewSectionState = selectedTemplate && !is3DPlacement
+    ? {
+        visible: true,
+        requestedMode: previewDebugState?.requestedMode ?? null,
+        effectiveMode: previewDebugState?.effectiveMode ?? null,
+        status: previewDebugState?.glbPreviewStatus ?? null,
+        reason: previewDebugState?.reason ?? null,
+        message: previewDebugState?.message ?? null,
+        sourceModelPath: previewDebugState?.sourceModelPath ?? selectedTemplate.glbPath ?? null,
+        authority:
+          previewDebugState?.effectiveMode === "alignment-model"
+            ? "canonical-alignment-model"
+            : previewDebugState?.effectiveMode === "full-model"
+              ? "full-model-preview"
+              : previewDebugState?.effectiveMode === "source-traced"
+                ? "source-compare-preview"
+                : null,
+      } satisfies PreviewSectionState
+    : null;
+  const readinessSectionState = {
+    visible: rightTab === "workflow",
+    blockerCount: workflowBlockerCount,
+    warningCount: workflowWarningCount,
+    nextAction: workflowGuidance.text,
+    actionLabel: workflowGuidance.actionLabel,
+  } satisfies JobReadinessSectionState;
+  const exportBundleSectionState = {
+    visible: rightTab === "workflow" && isTumblerMode,
+    printableBandLabel: formatPrintableBandLabel(templatePrintableSurface?.printableSurfaceContract),
+    outputFolderPath: lbOutputFolderPath?.trim() || null,
+    selectedPresetLabel: selectedRotaryPresetName,
+    rotaryEnabled: rotaryAutoPlacementEnabled,
+  } satisfies ExportBundleSectionState;
+  const preferredSectionId = showCreateForm
+    ? templateEditorSectionState?.activeStep === "review"
+      ? "template.review"
+      : templateEditorSectionState?.activeStep === "detect"
+        ? "template.detect"
+        : "template.source"
+    : rightTab === "workflow" && workflowBlockerCount > 0
+      ? "job.readiness"
+      : rightTab === "workflow" && isTumblerMode
+        ? "export.bundle"
+        : selectedTemplate && !is3DPlacement
+          ? "workspace.preview"
+          : "workspace.placement";
+  const adminSectionContext = {
+    selection: {
+      templateId: selectedTemplate?.id ?? null,
+      selectedItemId,
+    },
+    templateEditor: templateEditorSectionState,
+    workspace: workspaceSectionState,
+    preview: previewSectionState,
+    readiness: readinessSectionState,
+    exportBundle: exportBundleSectionState,
+  };
+  const {
+    sections: adminSections,
+    trace: adminTrace,
+  } = useAdminSectionDebug({
+    enabled: debugEnabled,
+    context: adminSectionContext,
+    preferredSectionId,
+    traceId: adminTraceIdRef.current,
+  });
+  const adminTraceHeaders = React.useMemo(
+    () => buildAdminTraceHeaders(adminTrace),
+    [adminTrace],
+  );
+  const exportBundleTrace = React.useMemo(
+    () => createAdminTraceEnvelope({
+      traceId: adminTraceIdRef.current,
+      currentSectionId: "export.bundle",
+      context: adminSectionContext,
+    }),
+    [adminSectionContext],
+  );
+  const exportBundleTraceHeaders = React.useMemo(
+    () => buildAdminTraceHeaders(exportBundleTrace),
+    [exportBundleTrace],
+  );
+  const sectionSnapshotById = React.useMemo(
+    () => new Map(adminSections.map((section) => [section.id, section])),
+    [adminSections],
+  );
+  const templateSourceSnapshot = sectionSnapshotById.get("template.source");
+  const templateActiveSnapshot =
+    templateEditorSectionState == null
+      ? templateSourceSnapshot
+      : sectionSnapshotById.get(
+          templateEditorSectionState.activeStep === "review"
+            ? "template.review"
+            : templateEditorSectionState.activeStep === "detect"
+              ? "template.detect"
+              : "template.source",
+        ) ?? templateSourceSnapshot;
+  const workspaceSnapshot = sectionSnapshotById.get("workspace.placement");
+  const previewSnapshot = sectionSnapshotById.get("workspace.preview");
+  const readinessSnapshot = sectionSnapshotById.get("job.readiness");
+  const exportSnapshot = sectionSnapshotById.get("export.bundle");
+
+  useTemplateEditorDebugValue(templateEditorSectionState);
+  usePreviewDebugValue(previewSectionState);
+  useJobReadinessDebugValue(readinessSectionState, exportBundleSectionState);
+
   return (
     <div className={styles.shell}>
       {/* LEFT */}
@@ -2498,26 +2607,62 @@ export function AdminLayoutShell() {
 
           {/* 3D preview */}
           {selectedTemplate && !is3DPlacement && (
-            <Model3DPanel
-              viewerModeResetKey={modelViewerResetKey}
-              templateKey={selectedTemplate.id}
-              placedItems={placedItems}
-              bedWidthMm={bedConfig.width}
-              bedHeightMm={bedConfig.height}
-              workspaceMode={bedConfig.workspaceMode}
-              tumblerDims={tumblerDims}
-              handleArcDeg={activeHandleArcDeg}
-              modelPathOverride={selectedTemplate?.glbPath ?? null}
-              flatPreview={flatPreview}
-              tumblerMapping={selectedTemplate?.tumblerMapping}
-              onUpdateCalibration={handleUpdateCalibration}
-              bodyTintColor={bodyTintColor}
-              rimTintColor={rimTintColor}
-              artworkTintColor={rimTintColor}
-              dimensionCalibration={selectedTemplate?.dimensions.canonicalDimensionCalibration ?? null}
-              canonicalBodyProfile={selectedTemplate?.dimensions.canonicalBodyProfile ?? null}
-              canonicalHandleProfile={selectedTemplate?.dimensions.canonicalHandleProfile ?? null}
-            />
+            previewSnapshot ? (
+              <PreviewSectionSurface
+                snapshot={previewSnapshot}
+                debugEnabled={debugEnabled}
+              >
+                <Model3DPanel
+                  viewerModeResetKey={modelViewerResetKey}
+                  templateKey={selectedTemplate.id}
+                  placedItems={placedItems}
+                  bedWidthMm={bedConfig.width}
+                  bedHeightMm={bedConfig.height}
+                  workspaceMode={bedConfig.workspaceMode}
+                  tumblerDims={tumblerDims}
+                  handleArcDeg={activeHandleArcDeg}
+                  modelPathOverride={selectedTemplate?.glbPath ?? null}
+                  flatPreview={flatPreview}
+                  tumblerMapping={selectedTemplate?.tumblerMapping}
+                  onUpdateCalibration={handleUpdateCalibration}
+                  bodyTintColor={bodyTintColor}
+                  lidTintColor={selectedTemplate?.dimensions.lidColorHex ?? selectedTemplate?.dimensions.bodyColorHex ?? bodyTintColor}
+                  rimTintColor={rimTintColor}
+                  ringFinish={selectedTemplate?.appearance?.ringFinish ?? "metallic-silver"}
+                  artworkTintColor={rimTintColor}
+                  manufacturerLogoStamp={selectedTemplate?.manufacturerLogoStamp ?? null}
+                  dimensionCalibration={effectiveDimensionCalibration}
+                  canonicalBodyProfile={selectedTemplate?.dimensions.canonicalBodyProfile ?? null}
+                  canonicalHandleProfile={selectedTemplate?.dimensions.canonicalHandleProfile ?? null}
+                  onPreviewStateChange={setPreviewDebugState}
+                />
+              </PreviewSectionSurface>
+            ) : (
+              <Model3DPanel
+                viewerModeResetKey={modelViewerResetKey}
+                templateKey={selectedTemplate.id}
+                placedItems={placedItems}
+                bedWidthMm={bedConfig.width}
+                bedHeightMm={bedConfig.height}
+                workspaceMode={bedConfig.workspaceMode}
+                tumblerDims={tumblerDims}
+                handleArcDeg={activeHandleArcDeg}
+                modelPathOverride={selectedTemplate?.glbPath ?? null}
+                flatPreview={flatPreview}
+                tumblerMapping={selectedTemplate?.tumblerMapping}
+                onUpdateCalibration={handleUpdateCalibration}
+                bodyTintColor={bodyTintColor}
+                lidTintColor={selectedTemplate?.dimensions.lidColorHex ?? selectedTemplate?.dimensions.bodyColorHex ?? bodyTintColor}
+                rimTintColor={rimTintColor}
+                ringFinish={selectedTemplate?.appearance?.ringFinish ?? "metallic-silver"}
+                artworkTintColor={rimTintColor}
+                manufacturerLogoStamp={selectedTemplate?.manufacturerLogoStamp ?? null}
+                dimensionCalibration={effectiveDimensionCalibration}
+                canonicalBodyProfile={selectedTemplate?.dimensions.canonicalBodyProfile ?? null}
+                canonicalHandleProfile={selectedTemplate?.dimensions.canonicalHandleProfile ?? null}
+                onPreviewStateChange={setPreviewDebugState}
+              />
+            )
           )}
         </div>
       </aside>
@@ -2550,48 +2695,104 @@ export function AdminLayoutShell() {
             </div>
           </div>
         ) : (
-          <LaserBedWorkspace
-            bedConfig={bedConfig}
-            placedItems={placedItems}
-            selectedItemId={selectedItemId}
-            placementAsset={placementAsset}
-            isPlacementArmed={isPlacementArmed}
-            framePreview={framePreview}
-            showTwoSidedCrosshairs={isTumblerMode}
-            mockupConfig={mockupConfig}
-            flatBedItemOverlay={flatBedItemOverlay}
+          workspaceSnapshot ? (
+            <WorkspaceSectionSurface
+              snapshot={workspaceSnapshot}
+              debugEnabled={debugEnabled}
+            >
+              <LaserBedWorkspace
+                key={workspaceRenderKey}
+                bedConfig={bedConfig}
+                placedItems={placedItems}
+                selectedItemId={selectedItemId}
+                placementAsset={placementAsset}
+                isPlacementArmed={isPlacementArmed}
+                framePreview={framePreview}
+                showTwoSidedCrosshairs={isTumblerMode}
+                mockupConfig={mockupConfig}
+                flatBedItemOverlay={flatBedItemOverlay}
+                handleArcDeg={activeHandleArcDeg}
+                onWorkspaceModeChange={handleWorkspaceModeChange}
+                tumblerViewMode={tumblerViewMode}
+                onTumblerViewModeChange={setTumblerViewMode}
+                onPlaceAsset={handlePlaceAsset}
+                onSelectItem={handleSelectItem}
+                onUpdateItem={handleUpdateItem}
+                onNudgeSelected={handleNudgeSelected}
+                onDeleteItem={handleDeleteItem}
+                currentJobLabel={activeQueueOrder?.customerName ?? null}
+                currentJobProduct={currentJobProductLabel || selectedTemplate?.name || null}
+                onLoadNextJob={handleLoadNextQueuedOrder}
+                onDoneAndNextJob={handleDoneAndLoadNextQueuedOrder}
+                onReopenCurrentJob={handleReopenCurrentQueuedJob}
+                onViewAllJobs={() => setShowJobRunnerOverlay(true)}
+                hasQueuedJobs={queuedJobCount > 0}
+                queuedJobCount={queuedJobCount}
+                onClearWorkspace={handleClearWorkspace}
+                productName={selectedTemplate?.name}
+                templateOverlayUrl={selectedTemplate?.frontPhotoDataUrl ?? selectedTemplate?.productPhotoFullUrl ?? selectedTemplate?.thumbnailDataUrl ?? null}
+                backOverlayUrl={selectedTemplate?.backPhotoDataUrl ?? null}
+                tumblerOverallHeightMm={templateEngravableDims?.totalHeightMm ?? bedConfig.tumblerOverallHeightMm}
+                dimensionCalibration={effectiveDimensionCalibration}
+                tumblerTopMarginMm={templateWorkspaceGeometry?.geometry.frame.overallTopMarginMm ?? templateEngravableDims?.topMarginMm}
+                tumblerBottomMarginMm={templateWorkspaceGeometry?.geometry.frame.overallBottomMarginMm ?? templateEngravableDims?.bottomMarginMm}
+                overlayMode={overlayMode}
+                overlayOpacityPct={overlayOpacity}
+                overlayBlend={overlayBlend}
+                curvedOverlay={curvedOverlay}
+                twoSidedMode={twoSidedMode}
+                stageRefCallback={handleStageRef}
+                engravableZone={workspaceEngravableZone}
+                workspaceFrame={templateWorkspaceGeometry?.geometry.frame ?? null}
+              />
+            </WorkspaceSectionSurface>
+          ) : (
+            <LaserBedWorkspace
+              key={workspaceRenderKey}
+              bedConfig={bedConfig}
+              placedItems={placedItems}
+              selectedItemId={selectedItemId}
+              placementAsset={placementAsset}
+              isPlacementArmed={isPlacementArmed}
+              framePreview={framePreview}
+              showTwoSidedCrosshairs={isTumblerMode}
+              mockupConfig={mockupConfig}
+              flatBedItemOverlay={flatBedItemOverlay}
               handleArcDeg={activeHandleArcDeg}
-            onWorkspaceModeChange={handleWorkspaceModeChange}
-            tumblerViewMode={tumblerViewMode}
-            onTumblerViewModeChange={setTumblerViewMode}
-            onPlaceAsset={handlePlaceAsset}
-            onSelectItem={handleSelectItem}
-            onUpdateItem={handleUpdateItem}
-            onNudgeSelected={handleNudgeSelected}
-            onDeleteItem={handleDeleteItem}
-            currentJobLabel={activeQueueOrder?.customerName ?? null}
-            currentJobProduct={currentJobProductLabel || selectedTemplate?.name || null}
-            onLoadNextJob={handleLoadNextQueuedOrder}
-            onDoneAndNextJob={handleDoneAndLoadNextQueuedOrder}
-            onReopenCurrentJob={handleReopenCurrentQueuedJob}
-            onViewAllJobs={() => setShowJobRunnerOverlay(true)}
-            hasQueuedJobs={queuedJobCount > 0}
-            queuedJobCount={queuedJobCount}
-            onClearWorkspace={handleClearWorkspace}
-            productName={selectedTemplate?.name}
+              onWorkspaceModeChange={handleWorkspaceModeChange}
+              tumblerViewMode={tumblerViewMode}
+              onTumblerViewModeChange={setTumblerViewMode}
+              onPlaceAsset={handlePlaceAsset}
+              onSelectItem={handleSelectItem}
+              onUpdateItem={handleUpdateItem}
+              onNudgeSelected={handleNudgeSelected}
+              onDeleteItem={handleDeleteItem}
+              currentJobLabel={activeQueueOrder?.customerName ?? null}
+              currentJobProduct={currentJobProductLabel || selectedTemplate?.name || null}
+              onLoadNextJob={handleLoadNextQueuedOrder}
+              onDoneAndNextJob={handleDoneAndLoadNextQueuedOrder}
+              onReopenCurrentJob={handleReopenCurrentQueuedJob}
+              onViewAllJobs={() => setShowJobRunnerOverlay(true)}
+              hasQueuedJobs={queuedJobCount > 0}
+              queuedJobCount={queuedJobCount}
+              onClearWorkspace={handleClearWorkspace}
+              productName={selectedTemplate?.name}
               templateOverlayUrl={selectedTemplate?.frontPhotoDataUrl ?? selectedTemplate?.productPhotoFullUrl ?? selectedTemplate?.thumbnailDataUrl ?? null}
-            backOverlayUrl={selectedTemplate?.backPhotoDataUrl ?? null}
-            tumblerOverallHeightMm={templateEngravableDims?.totalHeightMm ?? bedConfig.tumblerOverallHeightMm}
-            tumblerTopMarginMm={templateEngravableDims?.topMarginMm}
-            tumblerBottomMarginMm={templateEngravableDims?.bottomMarginMm}
-            overlayMode={overlayMode}
-            overlayOpacityPct={overlayOpacity}
-            overlayBlend={overlayBlend}
-            curvedOverlay={curvedOverlay}
-            twoSidedMode={twoSidedMode}
-            stageRefCallback={handleStageRef}
-            engravableZone={engravableZone}
-          />
+              backOverlayUrl={selectedTemplate?.backPhotoDataUrl ?? null}
+              tumblerOverallHeightMm={templateEngravableDims?.totalHeightMm ?? bedConfig.tumblerOverallHeightMm}
+              dimensionCalibration={effectiveDimensionCalibration}
+              tumblerTopMarginMm={templateWorkspaceGeometry?.geometry.frame.overallTopMarginMm ?? templateEngravableDims?.topMarginMm}
+              tumblerBottomMarginMm={templateWorkspaceGeometry?.geometry.frame.overallBottomMarginMm ?? templateEngravableDims?.bottomMarginMm}
+              overlayMode={overlayMode}
+              overlayOpacityPct={overlayOpacity}
+              overlayBlend={overlayBlend}
+              curvedOverlay={curvedOverlay}
+              twoSidedMode={twoSidedMode}
+              stageRefCallback={handleStageRef}
+              engravableZone={workspaceEngravableZone}
+              workspaceFrame={templateWorkspaceGeometry?.geometry.frame ?? null}
+            />
+          )
         )}
       </main>
 
@@ -2646,12 +2847,26 @@ export function AdminLayoutShell() {
               />
 
               <div ref={runCheckSectionRef}>
-                <RunReadinessPanel
-                  items={workflowReadinessItems}
-                  nextAction={workflowGuidance.text}
-                  primaryActionLabel={workflowGuidance.actionLabel}
-                  onPrimaryAction={workflowGuidance.onAction}
-                />
+                {readinessSnapshot ? (
+                  <JobReadinessSectionSurface
+                    snapshot={readinessSnapshot}
+                    debugEnabled={debugEnabled}
+                  >
+                    <RunReadinessPanel
+                      items={workflowReadinessItems}
+                      nextAction={workflowGuidance.text}
+                      primaryActionLabel={workflowGuidance.actionLabel}
+                      onPrimaryAction={workflowGuidance.onAction}
+                    />
+                  </JobReadinessSectionSurface>
+                ) : (
+                  <RunReadinessPanel
+                    items={workflowReadinessItems}
+                    nextAction={workflowGuidance.text}
+                    primaryActionLabel={workflowGuidance.actionLabel}
+                    onPrimaryAction={workflowGuidance.onAction}
+                  />
+                )}
               </div>
 
               {/* Orders and batch queue */}
@@ -2684,7 +2899,7 @@ export function AdminLayoutShell() {
                   selectedItem={selectedItem}
                   bedConfig={bedConfig}
                   statusNote={inspectorNote}
-                  engravableZone={engravableZone}
+                  engravableZone={workspaceEngravableZone}
                   onUpdateItem={handleUpdateItem}
                   onAlignItem={handleAlignItem}
                   onCenterBetweenGuides={handleCenterSelectedBetweenGuides}
@@ -2763,41 +2978,96 @@ export function AdminLayoutShell() {
 
             {/* ZONE 1: Export — pinned at bottom */}
             <div ref={exportStepSectionRef} className={styles.rightPinnedExport}>
-              <TumblerExportPanel
-                compact
-                bedConfig={bedConfig}
-                placedItems={placedItems}
-                onFramePreviewChange={setFramePreview}
-                materialSettings={materialSettings}
-                rotaryEnabled={rotaryAutoPlacementEnabled}
-                onRotaryEnabledChange={setRotaryAutoPlacementEnabled}
-                selectedPresetId={selectedRotaryPresetId}
-                onSelectedPresetIdChange={setSelectedRotaryPresetId}
-                onPreflightNav={handlePreflightNav}
-                taperWarpEnabled={taperWarpEnabled}
-                onTaperWarpChange={setTaperWarpEnabled}
-                outputFolderPath={lbOutputFolderPath}
-                onDiameterChange={(d) => setBedConfig((prev) => normalizeBedConfig({
-                  ...prev,
-                  tumblerDiameterMm: d,
-                  tumblerOutsideDiameterMm: d,
-                }))}
-                onSnapFullWrap={() => {
-                  const w = bedConfig.width;
-                  const h = bedConfig.height;
-                  if (w <= 0 || h <= 0) return;
-                  setPlacedItems((prev) => prev.map((p) => ({
-                    ...p,
-                    x: 0,
-                    y: 0,
-                    width: w,
-                    height: h,
-                  })));
-                }}
-                dimensionCalibration={selectedTemplate?.dimensions.canonicalDimensionCalibration ?? null}
-                manufacturerLogoStamp={selectedTemplate?.manufacturerLogoStamp ?? null}
-                lockedProductionGeometry={Boolean(selectedTemplate && !selectedTemplate.dimensions.advancedGeometryOverridesUnlocked)}
-              />
+              {exportSnapshot ? (
+                <ExportBundleSectionSurface
+                  snapshot={exportSnapshot}
+                  debugEnabled={debugEnabled}
+                >
+                  <TumblerExportPanel
+                    compact
+                    bedConfig={bedConfig}
+                    placedItems={placedItems}
+                    onFramePreviewChange={setFramePreview}
+                    materialSettings={materialSettings}
+                    rotaryEnabled={rotaryAutoPlacementEnabled}
+                    onRotaryEnabledChange={setRotaryAutoPlacementEnabled}
+                    selectedPresetId={selectedRotaryPresetId}
+                    onSelectedPresetIdChange={setSelectedRotaryPresetId}
+                    onPreflightNav={handlePreflightNav}
+                    taperWarpEnabled={taperWarpEnabled}
+                    onTaperWarpChange={setTaperWarpEnabled}
+                    outputFolderPath={lbOutputFolderPath}
+                    onDiameterChange={(d) => setBedConfig((prev) => normalizeBedConfig({
+                      ...prev,
+                      tumblerDiameterMm: d,
+                      tumblerOutsideDiameterMm: d,
+                    }))}
+                    onSnapFullWrap={() => {
+                      const w = bedConfig.width;
+                      const h = bedConfig.height;
+                      if (w <= 0 || h <= 0) return;
+                      setPlacedItems((prev) => prev.map((p) => ({
+                        ...p,
+                        x: 0,
+                        y: 0,
+                        width: w,
+                        height: h,
+                      })));
+                    }}
+                    dimensionCalibration={effectiveDimensionCalibration}
+                    manufacturerLogoStamp={selectedTemplate?.manufacturerLogoStamp ?? null}
+                    lockedProductionGeometry={Boolean(selectedTemplate && !selectedTemplate.dimensions.advancedGeometryOverridesUnlocked)}
+                    traceMetadata={{
+                      traceId: adminTrace.traceId,
+                      runId: adminTrace.runId,
+                      sectionId: "export.bundle",
+                    }}
+                    traceHeaders={exportBundleTraceHeaders}
+                  />
+                </ExportBundleSectionSurface>
+              ) : (
+                <TumblerExportPanel
+                  compact
+                  bedConfig={bedConfig}
+                  placedItems={placedItems}
+                  onFramePreviewChange={setFramePreview}
+                  materialSettings={materialSettings}
+                  rotaryEnabled={rotaryAutoPlacementEnabled}
+                  onRotaryEnabledChange={setRotaryAutoPlacementEnabled}
+                  selectedPresetId={selectedRotaryPresetId}
+                  onSelectedPresetIdChange={setSelectedRotaryPresetId}
+                  onPreflightNav={handlePreflightNav}
+                  taperWarpEnabled={taperWarpEnabled}
+                  onTaperWarpChange={setTaperWarpEnabled}
+                  outputFolderPath={lbOutputFolderPath}
+                  onDiameterChange={(d) => setBedConfig((prev) => normalizeBedConfig({
+                    ...prev,
+                    tumblerDiameterMm: d,
+                    tumblerOutsideDiameterMm: d,
+                  }))}
+                  onSnapFullWrap={() => {
+                    const w = bedConfig.width;
+                    const h = bedConfig.height;
+                    if (w <= 0 || h <= 0) return;
+                    setPlacedItems((prev) => prev.map((p) => ({
+                      ...p,
+                      x: 0,
+                      y: 0,
+                      width: w,
+                      height: h,
+                    })));
+                  }}
+                  dimensionCalibration={effectiveDimensionCalibration}
+                  manufacturerLogoStamp={selectedTemplate?.manufacturerLogoStamp ?? null}
+                  lockedProductionGeometry={Boolean(selectedTemplate && !selectedTemplate.dimensions.advancedGeometryOverridesUnlocked)}
+                  traceMetadata={{
+                    traceId: adminTrace.traceId,
+                    runId: adminTrace.runId,
+                    sectionId: "export.bundle",
+                  }}
+                  traceHeaders={exportBundleTraceHeaders}
+                />
+              )}
             </div>
           </>
         )}
@@ -2921,17 +3191,46 @@ export function AdminLayoutShell() {
         initialFocusRef={showCreateForm ? undefined : templateSearchInputRef}
       >
         {showCreateForm ? (
-          <TemplateCreateForm
-            editingTemplate={editingTemplate ?? undefined}
-            onSave={(t) => {
-              handleTemplateSelect(t);
-              cancelCreateTemplate();
-              if (editingTemplate) {
-                showToast("Template updated");
-              }
-            }}
-            onCancel={cancelCreateTemplate}
-          />
+          templateActiveSnapshot ? (
+            <TemplateEditorSurface
+              snapshot={templateActiveSnapshot}
+              debugEnabled={debugEnabled}
+            >
+              <TemplateCreateForm
+                editingTemplate={editingTemplate ?? undefined}
+                onSave={(t) => {
+                  handleTemplateSelect(t);
+                  setTemplateEditorDebugState(null);
+                  cancelCreateTemplate();
+                  if (editingTemplate) {
+                    showToast("Template updated");
+                  }
+                }}
+                onCancel={() => {
+                  setTemplateEditorDebugState(null);
+                  cancelCreateTemplate();
+                }}
+                onDebugStateChange={setTemplateEditorDebugState}
+              />
+            </TemplateEditorSurface>
+          ) : (
+            <TemplateCreateForm
+              editingTemplate={editingTemplate ?? undefined}
+              onSave={(t) => {
+                handleTemplateSelect(t);
+                setTemplateEditorDebugState(null);
+                cancelCreateTemplate();
+                if (editingTemplate) {
+                  showToast("Template updated");
+                }
+              }}
+              onCancel={() => {
+                setTemplateEditorDebugState(null);
+                cancelCreateTemplate();
+              }}
+              onDebugStateChange={setTemplateEditorDebugState}
+            />
+          )
         ) : (
           <TemplateGallery
             onSelect={handleTemplateSelect}
@@ -2956,6 +3255,13 @@ export function AdminLayoutShell() {
           </button>
         </div>
       )}
+      {debugEnabled ? (
+        <AdminDebugDrawer
+          openByDefault={searchParams.get("debug") === "1"}
+          trace={adminTrace}
+          sections={adminSections}
+        />
+      ) : null}
     </div>
   );
 }

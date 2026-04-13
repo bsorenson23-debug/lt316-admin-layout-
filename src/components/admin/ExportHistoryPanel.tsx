@@ -4,19 +4,20 @@ import React from "react";
 import type { ExportHistoryEntry } from "@/types/exportHistory";
 import { EXPORT_HISTORY_KEY, EXPORT_HISTORY_MAX } from "@/types/exportHistory";
 import type { PlacedItem } from "@/types/admin";
+import { exportHistoryEntrySchema, parseExportHistoryEntries } from "@/lib/exportHistory.schema";
 import { buildLightBurnLbrn, downloadLbrnFile } from "@/utils/lightBurnLbrnExport";
 import styles from "./ExportHistoryPanel.module.css";
 
 function loadHistory(): ExportHistoryEntry[] {
   try {
-    return JSON.parse(localStorage.getItem(EXPORT_HISTORY_KEY) ?? "[]") as ExportHistoryEntry[];
+    return parseExportHistoryEntries(JSON.parse(localStorage.getItem(EXPORT_HISTORY_KEY) ?? "[]"));
   } catch {
     return [];
   }
 }
 
 function saveHistory(entries: ExportHistoryEntry[]) {
-  let trimmed = entries.slice(0, EXPORT_HISTORY_MAX);
+  let trimmed = parseExportHistoryEntries(entries).slice(0, EXPORT_HISTORY_MAX);
 
   while (trimmed.length > 0) {
     try {
@@ -34,12 +35,16 @@ export function appendExportHistory(
   entry: Omit<ExportHistoryEntry, "id" | "exportedAt">,
 ): void {
   const current = loadHistory();
-  const next: ExportHistoryEntry = {
+  const candidate: ExportHistoryEntry = {
     ...entry,
     id: `exp-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     exportedAt: new Date().toISOString(),
   };
-  const trimmed = [next, ...current].slice(0, EXPORT_HISTORY_MAX);
+  const parsed = exportHistoryEntrySchema.safeParse(candidate);
+  if (!parsed.success) {
+    return;
+  }
+  const trimmed = [parsed.data as ExportHistoryEntry, ...current].slice(0, EXPORT_HISTORY_MAX);
   saveHistory(trimmed);
 }
 

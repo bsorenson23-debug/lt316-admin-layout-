@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDebugValue, useEffect, useMemo, useState } from "react";
 import type { OrderRecord } from "@/types/orders";
 import {
   activateQueueOrder,
@@ -31,6 +31,12 @@ function getQueueStateSnapshot() {
 export function useQueueRunnerState({ onLoadOrder }: UseQueueRunnerStateParams) {
   const [queueState, setQueueState] = useState(getQueueStateSnapshot);
   const { queuedJobCount, runnableOrders, activeQueueOrder } = queueState;
+
+  useDebugValue({
+    queuedJobCount,
+    runnableOrderCount: runnableOrders.length,
+    activeQueueOrderId: activeQueueOrder?.id ?? null,
+  });
 
   const syncQueueState = useCallback(() => {
     setQueueState(getQueueStateSnapshot());

@@ -34,6 +34,9 @@ export interface ExportHistoryEntry {
   exportPayloadSnapshot?: LightBurnExportPayload;
   materialSettingsSnapshot?: ExportHistoryMaterialSettingsSnapshot | null;
   linkedOrderId?: string;
+  traceId?: string;
+  sectionId?: string;
+  runId?: string;
 }
 
 export const EXPORT_HISTORY_KEY = "lt316_export_history";

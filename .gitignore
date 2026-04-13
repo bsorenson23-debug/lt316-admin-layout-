@@ -47,6 +47,12 @@ dev-server.err.log
 dev-server.out.log
 .tmp-next-*.err.log
 .tmp-next-*.out.log
+.codex-start-*.err.log
+.codex-start-*.out.log
+.playwright-start-*.err.log
+.playwright-start-*.out.log
+.next-start-*.log
+next-start-*.log
 .next-dev.pid
 codex-bodyref-dev*.log
 .playwright-browsers/
@@ -59,6 +65,7 @@ codex-bodyref-dev*.log
 # temp
 /tmp/
 /tmp/audit/
+/tmp-*
 /.tools/
 /inkscape-extract/
 /inkscape-*.log

@@ -2,6 +2,10 @@ import type {
   LogoPlacementAssistResponse,
   TraceSettingsAssistResponse,
 } from "@/types/imageAssist";
+import {
+  parseLogoPlacementAssistResponse,
+  parseTraceSettingsAssistResponse,
+} from "@/lib/adminApi.schema";
 
 const logoPlacementCache = new Map<string, LogoPlacementAssistResponse>();
 const traceSettingsCache = new Map<string, TraceSettingsAssistResponse>();
@@ -53,6 +57,7 @@ export async function detectLogoPlacementAssist(args: {
   photoDataUrl: string;
   fileName: string;
   brandHint?: string | null;
+  traceHeaders?: HeadersInit;
 }): Promise<LogoPlacementAssistResponse> {
   const cacheKey = `logo:${await hashStringForCache(`${args.brandHint?.trim() ?? ""}\n${args.photoDataUrl}`)}`;
   const memoryCached = logoPlacementCache.get(cacheKey);
@@ -61,8 +66,11 @@ export async function detectLogoPlacementAssist(args: {
   }
   const stored = readStoredCache<LogoPlacementAssistResponse>(cacheKey);
   if (stored) {
-    logoPlacementCache.set(cacheKey, stored);
-    return stored;
+    const parsed = parseLogoPlacementAssistResponse(stored);
+    if (parsed) {
+      logoPlacementCache.set(cacheKey, parsed);
+      return parsed;
+    }
   }
 
   const formData = new FormData();
@@ -73,18 +81,26 @@ export async function detectLogoPlacementAssist(args: {
 
   const response = await fetch("/api/admin/image/assist/logo-placement", {
     method: "POST",
+    headers: args.traceHeaders,
     body: formData,
   });
   const payload = await readJson<LogoPlacementAssistResponse & { error?: string }>(response);
   if (!response.ok) {
     throw new Error(payload.error ?? "Logo placement assist failed.");
   }
-  logoPlacementCache.set(cacheKey, payload);
-  writeStoredCache(cacheKey, payload);
-  return payload;
+  const parsed = parseLogoPlacementAssistResponse(payload);
+  if (!parsed) {
+    throw new Error("Logo placement assist returned an invalid response.");
+  }
+  logoPlacementCache.set(cacheKey, parsed);
+  writeStoredCache(cacheKey, parsed);
+  return parsed;
 }
 
-export async function recommendTraceSettingsAssist(file: File): Promise<TraceSettingsAssistResponse> {
+export async function recommendTraceSettingsAssist(
+  file: File,
+  traceHeaders?: HeadersInit,
+): Promise<TraceSettingsAssistResponse> {
   const cacheKey = `trace:${file.type || "image/png"}:${await hashFileForCache(file)}`;
   const memoryCached = traceSettingsCache.get(cacheKey);
   if (memoryCached) {
@@ -92,8 +108,11 @@ export async function recommendTraceSettingsAssist(file: File): Promise<TraceSet
   }
   const stored = readStoredCache<TraceSettingsAssistResponse>(cacheKey);
   if (stored) {
-    traceSettingsCache.set(cacheKey, stored);
-    return stored;
+    const parsed = parseTraceSettingsAssistResponse(stored);
+    if (parsed) {
+      traceSettingsCache.set(cacheKey, parsed);
+      return parsed;
+    }
   }
 
   const formData = new FormData();
@@ -101,13 +120,18 @@ export async function recommendTraceSettingsAssist(file: File): Promise<TraceSet
 
   const response = await fetch("/api/admin/image/assist/trace-settings", {
     method: "POST",
+    headers: traceHeaders,
     body: formData,
   });
   const payload = await readJson<TraceSettingsAssistResponse & { error?: string }>(response);
   if (!response.ok) {
     throw new Error(payload.error ?? "Trace settings assist failed.");
   }
-  traceSettingsCache.set(cacheKey, payload);
-  writeStoredCache(cacheKey, payload);
-  return payload;
+  const parsed = parseTraceSettingsAssistResponse(payload);
+  if (!parsed) {
+    throw new Error("Trace settings assist returned an invalid response.");
+  }
+  traceSettingsCache.set(cacheKey, parsed);
+  writeStoredCache(cacheKey, parsed);
+  return parsed;
 }

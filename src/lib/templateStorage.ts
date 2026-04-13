@@ -1,6 +1,13 @@
 import type { ProductTemplate, ProductTemplateStore } from "@/types/productTemplate";
 import { BUILT_IN_TEMPLATES } from "@/data/builtInTemplates";
 import { getMaterialProfileById } from "@/data/materialProfiles";
+import { hydrateProductTemplateAppearance } from "@/lib/templateAppearance";
+import { createFallbackCanonicalBodyProfileFromCalibration } from "@/lib/canonicalBodyProfileFallback";
+import { normalizeProductTemplatePrintableSurface } from "@/lib/printableSurface";
+import {
+  parseProductTemplateArray,
+  parseProductTemplateStore,
+} from "@/lib/templateStorage.schema";
 
 const STORAGE_KEY = "lt316_product_templates";
 const REMOVED_GLB_PATHS = new Set([
@@ -54,26 +61,56 @@ function inferMaterialFromProfileId(materialProfileId: string | undefined): Pick
 
 function normalizeTemplate(template: ProductTemplate): ProductTemplate {
   const inferredMaterial = inferMaterialFromProfileId(template.laserSettings.materialProfileId);
-  return {
+  const hydrated = hydrateProductTemplateAppearance({
     ...template,
     materialSlug: template.materialSlug ?? inferredMaterial.materialSlug,
     materialLabel: template.materialLabel ?? inferredMaterial.materialLabel,
+  });
+
+  if (
+    hydrated.productType === "flat" ||
+    hydrated.dimensions.canonicalBodyProfile ||
+    !hydrated.dimensions.canonicalDimensionCalibration
+  ) {
+    return hydrated;
+  }
+
+  const fallbackCanonicalBodyProfile = createFallbackCanonicalBodyProfileFromCalibration(
+    hydrated.dimensions.canonicalDimensionCalibration,
+  );
+  if (!fallbackCanonicalBodyProfile) {
+    return hydrated;
+  }
+
+  return {
+    ...hydrated,
+    dimensions: {
+      ...hydrated.dimensions,
+      canonicalBodyProfile: fallbackCanonicalBodyProfile,
+    },
   };
 }
 
 function normalizeStore(store: Partial<InternalTemplateStore>): InternalTemplateStore {
   const rawTemplates = Array.isArray(store.templates) ? dedupeTemplates(store.templates) : [];
   let sanitizedRemovedGlbPath = false;
+  let repairedPrintableSurface = false;
+  let synthesizedCanonicalBodyProfile = false;
   const normalizedTemplates = rawTemplates
     .filter((template) => !(BUILT_IN_IDS.has(template.id) && template.builtIn))
     .map((template) => {
       const removedGlbPath = template.glbPath && REMOVED_GLB_PATHS.has(template.glbPath);
       if (removedGlbPath) sanitizedRemovedGlbPath = true;
-      return normalizeTemplate({
+      const normalized = normalizeProductTemplatePrintableSurface(normalizeTemplate({
         ...template,
         builtIn: false,
         glbPath: removedGlbPath ? "" : template.glbPath,
-      });
+      }));
+      if (normalized.changed) repairedPrintableSurface = true;
+      if (!template.dimensions.canonicalBodyProfile && normalized.template.dimensions.canonicalBodyProfile) {
+        synthesizedCanonicalBodyProfile = true;
+      }
+      return normalized.template;
     });
 
   return {
@@ -86,7 +123,9 @@ function normalizeStore(store: Partial<InternalTemplateStore>): InternalTemplate
       store.__needsWrite ||
       normalizedTemplates.length !== rawTemplates.length ||
       rawTemplates.some((template) => template.builtIn) ||
-      sanitizedRemovedGlbPath,
+      sanitizedRemovedGlbPath ||
+      repairedPrintableSurface ||
+      synthesizedCanonicalBodyProfile,
   };
 }
 
@@ -118,17 +157,14 @@ function readStore(): InternalTemplateStore {
 
     if (Array.isArray(parsed)) {
       return normalizeStore({
-        templates: parsed.filter((template): template is ProductTemplate => (
-          !!template &&
-          typeof template === "object" &&
-          typeof (template as ProductTemplate).id === "string"
-        )),
+        templates: parseProductTemplateArray(parsed),
         __needsWrite: true,
       });
     }
 
-    if (parsed && typeof parsed === "object" && Array.isArray((parsed as ProductTemplateStore).templates)) {
-      return normalizeStore(parsed as InternalTemplateStore);
+    const parsedStore = parseProductTemplateStore(parsed);
+    if (parsedStore) {
+      return normalizeStore(parsedStore as InternalTemplateStore);
     }
 
     return emptyStore();
@@ -180,11 +216,12 @@ export function loadTemplates(): ProductTemplate[] {
 export function saveTemplate(template: ProductTemplate): void {
   const store = readStore();
   const nextTemplates = store.templates.filter((existing) => existing.id !== template.id);
-
-  nextTemplates.push(normalizeTemplate({
+  const normalized = normalizeProductTemplatePrintableSurface(normalizeTemplate({
     ...template,
     builtIn: false,
   }));
+
+  nextTemplates.push(normalized.template);
 
   writeStore({
     ...store,

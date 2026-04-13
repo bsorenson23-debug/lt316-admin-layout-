@@ -1,12 +1,15 @@
 import type { FlatItemLookupResponse } from "@/types/flatItemLookup";
+import { parseFlatItemLookupResponse } from "@/lib/adminApi.schema";
 
 export async function lookupFlatItem(
   lookupInput: string,
+  traceHeaders?: HeadersInit,
 ): Promise<FlatItemLookupResponse> {
   const res = await fetch("/api/admin/flatbed/item-lookup", {
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...(traceHeaders ?? {}),
     },
     body: JSON.stringify({ lookupInput }),
   });
@@ -24,5 +27,9 @@ export async function lookupFlatItem(
     throw new Error(message);
   }
 
-  return payload as FlatItemLookupResponse;
+  const response = parseFlatItemLookupResponse(payload);
+  if (!response) {
+    throw new Error("Flat item lookup returned an invalid response.");
+  }
+  return response;
 }
