@@ -921,3 +921,344 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+.appearancePanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.appearanceHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.appearanceHeaderText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.appearanceTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.appearanceNote {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.appearanceGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.appearanceCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+}
+
+.appearanceCardHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.appearanceCardTitleGroup {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.appearanceCardTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.appearanceSourceBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-normal);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.appearanceSwatchLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.appearanceSwatchLabel code {
+  font-size: 10px;
+  color: var(--text-primary);
+}
+
+.appearanceSwatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: transparent;
+}
+
+.appearanceCardControls {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.appearanceCardControls button {
+  grid-column: 1 / -1;
+  justify-self: flex-start;
+}
+
+.appearanceColorPicker {
+  width: 40px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  cursor: pointer;
+}
+
+.appearanceSampleRow {
+  display: flex;
+  align-items: center;
+}
+
+.appearanceRingRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.appearanceRingLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.appearanceRingToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.appearanceRingNote {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.workflowSteps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workflowStep {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  text-align: left;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.workflowStep:hover {
+  background: var(--bg-hover);
+}
+
+.workflowStepActive {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-dark) 35%, var(--bg-card) 65%);
+}
+
+.workflowStepHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workflowStepLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.workflowStepDetail {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.stepLead {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.detectStageCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.detectStageSummary {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.detectStageActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.reviewStatusBar {
+  padding: 10px 12px;
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius);
+  background: var(--info-bg);
+  color: var(--info);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.reviewCardGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.reviewCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.reviewCardTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.reviewCardRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.reviewCardRow strong {
+  color: var(--text-primary);
+  font-family: monospace;
+  text-align: right;
+}
+
+.reviewWarningBanner {
+  padding: 10px 12px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.advancedDrawer {
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.advancedDrawerSummary {
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.advancedDrawerSummary::-webkit-details-marker {
+  display: none;
+}
+
+.advancedDrawerBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 14px 14px;
+}
+
+.stickyActionBar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 0 0;
+  background: linear-gradient(180deg, transparent 0%, var(--bg-panel) 28px);
+}
+
+.finalReadinessBar {
+  padding: 10px 12px;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}

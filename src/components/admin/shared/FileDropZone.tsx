@@ -8,6 +8,8 @@ interface FileDropZoneProps {
   fileName?: string | null;
   label?: string;
   hint?: string;
+  inputTestId?: string;
+  dropZoneTestId?: string;
   onFileSelected: (file: File) => void;
   onClear: () => void;
 }
@@ -17,6 +19,8 @@ export function FileDropZone({
   fileName,
   label,
   hint,
+  inputTestId,
+  dropZoneTestId,
   onFileSelected,
   onClear,
 }: FileDropZoneProps) {
@@ -71,6 +75,7 @@ export function FileDropZone({
         ref={inputRef}
         type="file"
         accept={accept}
+        data-testid={inputTestId}
         className={styles.hiddenInput}
         onChange={(e) => {
           handleFiles(e.target.files);
@@ -78,6 +83,7 @@ export function FileDropZone({
         }}
       />
       <div
+        data-testid={dropZoneTestId}
         className={`${styles.dropZone} ${dragOver ? styles.dropZoneDragOver : ""}`}
         onClick={() => inputRef.current?.click()}
         onDragOver={handleDragOver}

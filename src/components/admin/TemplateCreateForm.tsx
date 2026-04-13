@@ -4,12 +4,14 @@ import React from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
+  type BodyReferenceOutlineSeedMode,
   type BodyReferenceViewSide,
   type CanonicalBodyProfile,
   type CanonicalDimensionCalibration,
   type CanonicalHandleProfile,
   type EditableBodyOutline,
   type ManufacturerLogoStamp,
+  type ProductTemplateRingFinish,
   type ProductReferenceSet,
   type ReferenceLayerState,
   type ReferencePaths,
@@ -56,6 +58,11 @@ import {
   getPrintableSurfaceResolutionFromDimensions,
   type PrintableSurfaceDetection,
 } from "@/lib/printableSurface";
+import {
+  buildTemplateCreateReviewProjection,
+  isTemplateCreateReviewFlowProductType,
+  type TemplateCreateWorkflowStep,
+} from "@/lib/templateCreateFlow";
 import { buildTemplateHandlePreset } from "@/lib/handlePresets";
 import { buildTemplateLidPreset, type LidAssemblyPreset } from "@/lib/lidPresets";
 import {
@@ -94,7 +101,39 @@ import {
   updateTemplatePipelineInputFingerprints,
 } from "@/lib/templatePipelineDiagnostics";
 import {
+  getBodyReferenceTrustMessage,
+  isTrustedBodyReferenceSourceTrust,
+  resolveBodyReferenceTrust,
+} from "@/lib/bodyReferenceTrust";
+import {
+  deriveTumblerPreviewModelState,
+  type TumblerPreviewModelState,
+} from "@/lib/tumblerPreviewModelState";
+import { buildAdminTraceHeaders } from "@/features/admin/shared";
+import {
+  createInitialTemplateEditorControllerState,
+  selectTemplateEditorSectionState,
+  selectTemplateEditorWorkflowState,
+  templateEditorControllerActions,
+  useTemplateEditorController,
+  type TemplateEditorDetectDraftSnapshot,
+  type TemplateEditorSectionState,
+} from "@/features/admin/template-editor";
+import {
+  applyManualTemplateAppearanceColor,
+  applySampledTemplateAppearance,
+  applyTemplateRingFinish,
+  applyUseSampledTemplateAppearanceColor,
+  DEFAULT_TEMPLATE_BODY_COLOR_HEX,
+  DEFAULT_TEMPLATE_RIM_COLOR_HEX,
+  hydrateTemplateAppearanceState,
+  type TemplateAppearanceColorKey,
+  type TemplateAppearanceSampleInput,
+} from "@/lib/templateAppearance";
+import {
   isOrthographicBodyReferenceImage,
+  isTraceableFrontBodyReferenceImage,
+  resolvePreferredFrontBodyReferenceImage,
   resolveBodyReferenceViewSource,
 } from "@/lib/bodyReferenceViewSource";
 import { inferFlatFamilyKey } from "@/lib/flatItemFamily";
@@ -123,6 +162,7 @@ interface Props {
   onCancel: () => void;
   editingTemplate?: ProductTemplate;
   showActions?: boolean;
+  onDebugStateChange?: (state: TemplateEditorSectionState | null) => void;
 }
 
 export interface TemplateCreateFormHandle {
@@ -131,6 +171,8 @@ export interface TemplateCreateFormHandle {
 
 type PreviewModelMode = "alignment-model" | "full-model" | "source-traced";
 type TemplateReadinessStatus = "ready" | "review" | "action";
+type TemplateLaserType = ProductTemplate["laserType"] | "";
+type TemplateProductType = ProductTemplate["productType"] | "";
 
 const CATALOG_BATCH_IMPORT_AVAILABLE = false;
 
@@ -140,6 +182,12 @@ function round2(n: number): number {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function getTemplateAppearanceSourceLabel(source: "sampled" | "manual" | "fallback-body"): string {
+  if (source === "manual") return "manual";
+  if (source === "fallback-body") return "fallback-body";
+  return "sampled";
 }
 
 function estimateEditableHandleWallThicknessMm(args: {
@@ -327,6 +375,7 @@ function editableOutlineGeometrySignature(outline: EditableBodyOutline | null | 
           height: round2(outline.sourceContourBounds.height),
         }
       : null,
+    sourceContourMode: outline.sourceContourMode ?? null,
     sourceContourViewport: outline.sourceContourViewport
       ? {
           minX: round2(outline.sourceContourViewport.minX),
@@ -659,7 +708,7 @@ function fileToFacePhotoDataUrl(file: File, maxSize = 480): Promise<string> {
       const canvas = document.createElement("canvas");
       canvas.width = w;
       canvas.height = h;
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
       if (!ctx) { URL.revokeObjectURL(img.src); resolve(""); return; }
       ctx.drawImage(img, 0, 0, w, h);
       let hasTransparency = false;
@@ -695,7 +744,7 @@ function fileToFacePhotoDataUrl(file: File, maxSize = 480): Promise<string> {
         const cropCanvas = document.createElement("canvas");
         cropCanvas.width = cropW;
         cropCanvas.height = cropH;
-        const cropCtx = cropCanvas.getContext("2d");
+        const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
         if (cropCtx) {
           cropCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
           resolve(cropCanvas.toDataURL("image/png"));
@@ -717,7 +766,7 @@ function flipImageHorizontal(dataUrl: string): Promise<string> {
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
       if (!ctx) { resolve(""); return; }
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
@@ -759,12 +808,17 @@ async function dataUrlToFile(dataUrl: string, fileName: string): Promise<File> {
   return new File([blob], fileName, { type });
 }
 
-async function removeBackgroundForOutlineSeed(sourceDataUrl: string, fileName: string): Promise<string> {
+async function removeBackgroundForOutlineSeed(
+  sourceDataUrl: string,
+  fileName: string,
+  traceHeaders?: HeadersInit,
+): Promise<string> {
   const sourceFile = await dataUrlToFile(sourceDataUrl, fileName);
   const result = await removeBackgroundWithFallback({
     file: sourceFile,
     preferServer: true,
     localModel: "isnet_quint8",
+    traceHeaders,
   });
   return result.dataUrl;
 }
@@ -773,36 +827,74 @@ interface OutlineSeedTracePreparation {
   sourceDataUrl: string;
   cleanedDataUrl: string;
   cleanupApplied: boolean;
+  cleanupMethod: "openai" | "original";
   traceSettings: TraceSettingsAssistResponse | null;
   traceSourceDataUrl: string;
 }
 
-function resolveOutlineSeedTraceSource(args: {
+async function loadDataUrlImageSize(dataUrl: string): Promise<{ width: number; height: number } | null> {
+  return await new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      resolve({
+        width: image.naturalWidth || image.width || 0,
+        height: image.naturalHeight || image.height || 0,
+      });
+    };
+    image.onerror = () => resolve(null);
+    image.src = dataUrl;
+  });
+}
+
+async function resolveOutlineSeedTraceSource(args: {
   sourceDataUrl: string;
   cleanedDataUrl: string;
   cleanupApplied: boolean;
+  cleanupMethod: "openai" | "original";
   traceSettings: TraceSettingsAssistResponse | null;
-}): string {
-  const { sourceDataUrl, cleanedDataUrl, cleanupApplied, traceSettings } = args;
+}): Promise<string> {
+  const { sourceDataUrl, cleanedDataUrl, cleanupApplied, cleanupMethod, traceSettings } = args;
   if (!cleanupApplied) return sourceDataUrl;
+  if (cleanupMethod === "openai") return sourceDataUrl;
+  const [sourceSize, cleanedSize] = await Promise.all([
+    loadDataUrlImageSize(sourceDataUrl),
+    loadDataUrlImageSize(cleanedDataUrl),
+  ]);
+  if (
+    sourceSize &&
+    cleanedSize &&
+    (
+      Math.abs(sourceSize.width - cleanedSize.width) > 1 ||
+      Math.abs(sourceSize.height - cleanedSize.height) > 1
+    )
+  ) {
+    return sourceDataUrl;
+  }
   if (!traceSettings) return cleanedDataUrl;
   return traceSettings.backgroundStrategy === "original"
     ? sourceDataUrl
     : cleanedDataUrl;
 }
 
-async function prepareOutlineSeedTrace(sourceDataUrl: string, fileName: string): Promise<OutlineSeedTracePreparation> {
+async function prepareOutlineSeedTrace(
+  sourceDataUrl: string,
+  fileName: string,
+  traceHeaders?: HeadersInit,
+): Promise<OutlineSeedTracePreparation> {
   const sourceFile = await dataUrlToFile(sourceDataUrl, fileName);
   let cleanedDataUrl = sourceDataUrl;
   let cleanupApplied = false;
+  let cleanupMethod: "openai" | "original" = "original";
 
   try {
-    const cleanupResult = await cleanupImageForTracing(sourceFile);
+    const cleanupResult = await cleanupImageForTracing(sourceFile, traceHeaders);
     cleanedDataUrl = cleanupResult.dataUrl || sourceDataUrl;
     cleanupApplied = Boolean(cleanupResult.cleaned && cleanupResult.dataUrl);
+    cleanupMethod = cleanupResult.method === "openai" ? "openai" : "original";
   } catch {
-    cleanedDataUrl = await removeBackgroundForOutlineSeed(sourceDataUrl, fileName);
+    cleanedDataUrl = await removeBackgroundForOutlineSeed(sourceDataUrl, fileName, traceHeaders);
     cleanupApplied = cleanedDataUrl !== sourceDataUrl;
+    cleanupMethod = "original";
   }
 
   let traceSettings: TraceSettingsAssistResponse | null = null;
@@ -811,7 +903,7 @@ async function prepareOutlineSeedTrace(sourceDataUrl: string, fileName: string):
       cleanedDataUrl,
       `${fileName.replace(/\.[^.]+$/, "")}-assist.png`,
     );
-    traceSettings = await recommendTraceSettingsAssist(assistFile);
+    traceSettings = await recommendTraceSettingsAssist(assistFile, traceHeaders);
   } catch {
     traceSettings = null;
   }
@@ -820,11 +912,13 @@ async function prepareOutlineSeedTrace(sourceDataUrl: string, fileName: string):
     sourceDataUrl,
     cleanedDataUrl,
     cleanupApplied,
+    cleanupMethod,
     traceSettings,
-    traceSourceDataUrl: resolveOutlineSeedTraceSource({
+    traceSourceDataUrl: await resolveOutlineSeedTraceSource({
       sourceDataUrl,
       cleanedDataUrl,
       cleanupApplied,
+      cleanupMethod,
       traceSettings,
     }),
   };
@@ -844,7 +938,9 @@ async function vectorizeOutlineSeedSvg(
   formData.set("threshold", String(settings?.threshold ?? 160));
   formData.set("invert", String(settings?.invert ?? true));
   formData.set("normalizeLevels", "true");
-  formData.set("trimWhitespace", "true");
+  // Keep the vectorized SVG in the original photo coordinate space so the
+  // traced contour can drive the visible photo alignment without drifting.
+  formData.set("trimWhitespace", "false");
   formData.set("preserveText", "false");
   formData.set("recipe", settings?.traceRecipe ?? "badge");
   formData.set("backgroundStrategy", settings?.backgroundStrategy ?? "cutout");
@@ -853,6 +949,7 @@ async function vectorizeOutlineSeedSvg(
   formData.set("optTolerance", String(settings?.optTolerance ?? 0.05));
   formData.set("posterizeSteps", String(settings?.posterizeSteps ?? 4));
   formData.set("preferLocal", "true");
+  formData.set("traceProfile", "body-outline");
 
   const response = await fetch("/api/admin/image/vectorize", {
     method: "POST",
@@ -867,6 +964,60 @@ async function vectorizeOutlineSeedSvg(
     );
   }
   return payload.svg;
+}
+
+function extractPrimarySvgPathData(svgText: string): string | null {
+  const match = svgText.match(/<path\b[^>]*\bd=(["'])(.*?)\1/i);
+  return match?.[2]?.trim() || null;
+}
+
+function isDegenerateOutlineSeedSvg(svgText: string): boolean {
+  const pathData = extractPrimarySvgPathData(svgText);
+  if (!pathData) return true;
+
+  const commands = (pathData.match(/[a-zA-Z]/g) ?? []).map((command) => command.toUpperCase());
+  const drawingCommands = commands.filter((command) => command !== "M" && command !== "Z");
+  const uniqueDrawingCommands = [...new Set(drawingCommands)];
+  const coordinateCount = (pathData.match(/-?\d*\.?\d+/g) ?? []).length;
+  const usesOnlyStraightSegments = uniqueDrawingCommands.every((command) =>
+    command === "L" || command === "H" || command === "V"
+  );
+
+  return usesOnlyStraightSegments && drawingCommands.length <= 12 && coordinateCount <= 24;
+}
+
+function resolveOutlineSeedTraceRetrySettings(
+  traceSettings?: TraceSettingsAssistResponse | null,
+): TraceSettingsAssistResponse | null {
+  if (!traceSettings) return null;
+  return {
+    ...traceSettings,
+    backgroundStrategy: "original",
+  };
+}
+
+async function vectorizeOutlineSeedSvgWithFallback(args: {
+  preparedSeed: OutlineSeedTracePreparation;
+  fileName: string;
+}): Promise<string> {
+  const primarySvgText = await vectorizeOutlineSeedSvg(
+    args.preparedSeed.traceSourceDataUrl,
+    args.fileName,
+    args.preparedSeed.traceSettings,
+  );
+
+  if (
+    args.preparedSeed.traceSourceDataUrl !== args.preparedSeed.sourceDataUrl &&
+    isDegenerateOutlineSeedSvg(primarySvgText)
+  ) {
+    return vectorizeOutlineSeedSvg(
+      args.preparedSeed.sourceDataUrl,
+      args.fileName,
+      resolveOutlineSeedTraceRetrySettings(args.preparedSeed.traceSettings),
+    );
+  }
+
+  return primarySvgText;
 }
 
 
@@ -1178,15 +1329,31 @@ function getPreviewModelModeLabel(args: {
     return "SOURCE MODEL";
   }
   if (args.mode === "alignment-model") {
-    return "ALIGNMENT MODEL · DEFAULT";
+    return "ALIGNMENT MODEL · APPEARANCE TRUTH";
   }
   if (args.mode === "full-model") {
-    return "FULL MODEL · VISUAL";
+    return "FULL MODEL · GEOMETRY REFERENCE";
   }
   if (args.glbStatus === "placeholder-model") {
-    return "PLACEHOLDER MODEL · COMPARE";
+    return "PLACEHOLDER MODEL · TRACE COMPARE";
   }
-  return "SOURCE MODEL · COMPARE";
+  return "SOURCE MODEL · TRACE COMPARE";
+}
+
+function getPreviewModelModeHint(args: {
+  productType: ProductTemplate["productType"] | "" | null;
+  mode: PreviewModelMode;
+}): string | null {
+  if (args.productType === "flat") {
+    return null;
+  }
+  if (args.mode === "alignment-model") {
+    return "Alignment uses canonical body calibration, sampled colors, and canonical logo placement as the authoritative drinkware preview.";
+  }
+  if (args.mode === "full-model") {
+    return "Full model is geometry-first. Appearance truth still comes from Alignment; uploaded GLBs may not expose separate lid or silver-ring parts.";
+  }
+  return "Source compare is for trace/reference only. Placement and appearance authority still come from Alignment when canonical preview data exists.";
 }
 
 function inferDrinkwareGlbStatus(args: {
@@ -1332,11 +1499,9 @@ function parseCapacityOzValue(value: string | null | undefined): number | null {
 const LOCKED_WRAP_DIAMETER_TOLERANCE_MM = 0.5;
 
 export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Props>(function TemplateCreateForm(
-  { onSave, onCancel, editingTemplate, showActions = true }: Props,
+  { onSave, onCancel, editingTemplate, showActions = true, onDebugStateChange }: Props,
   ref,
 ) {
-  type TemplateLaserType = ProductTemplate["laserType"] | "";
-  type TemplateProductType = ProductTemplate["productType"] | "";
   const isEdit = Boolean(editingTemplate);
   const derivedEditingDims = React.useMemo(
     () => (editingTemplate ? getEngravableDimensions(editingTemplate) : null),
@@ -1415,8 +1580,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
   // ── Auto-detect ──────────────────────────────────────────────────
   const [detecting, setDetecting] = React.useState(false);
-  const [detectResult, setDetectResult] = React.useState<AutoDetectResult | null>(null);
-  const [detectError, setDetectError] = React.useState<string | null>(null);
+  const [advancedDiagnosticsOpen, setAdvancedDiagnosticsOpen] = React.useState(false);
   const [lookupInput, setLookupInput] = React.useState("");
   const [lookingUpItem, setLookingUpItem] = React.useState(false);
   const [lookupResult, setLookupResult] = React.useState<TumblerItemLookupResponse | null>(null);
@@ -1441,6 +1605,29 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     return null;
   }, [batchImportUrl]);
   const [smartLookupApplied, setSmartLookupApplied] = React.useState(false);
+  const { state: templateEditorState, dispatch: dispatchTemplateEditor } = useTemplateEditorController(
+    React.useMemo(
+      () => createInitialTemplateEditorControllerState({
+        productType: editingTemplate?.productType,
+        hasAcceptedReview:
+          editingTemplate?.productType === "flat" ||
+          Boolean(
+            editingTemplate?.dimensions.canonicalBodyProfile &&
+            editingTemplate?.dimensions.canonicalDimensionCalibration,
+          ),
+        hasCanonicalBodyProfile: Boolean(editingTemplate?.dimensions.canonicalBodyProfile),
+        hasCanonicalDimensionCalibration: Boolean(editingTemplate?.dimensions.canonicalDimensionCalibration),
+      }),
+      [editingTemplate],
+    ),
+  );
+  const stagedDetectResult = templateEditorState.stagedDetectResult;
+  const acceptedDetectResult = templateEditorState.acceptedDetectResult;
+  const detectError = templateEditorState.detectError;
+  const reviewAccepted = templateEditorState.reviewAccepted;
+  const workflowStep = templateEditorState.workflowStep;
+  const detectDraftSnapshot = templateEditorState.detectDraftSnapshot;
+  const detectResult = stagedDetectResult;
   const clearLookupState = React.useCallback((options?: { keepInput?: boolean; clearFamilyKey?: boolean }) => {
     autoZoneSignatureRef.current = "";
     bodyOutlineSeedSignatureRef.current = "";
@@ -1459,7 +1646,15 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
   }, []);
   const pipelineRunIdRef = React.useRef<string>(editingTemplate?.pipelineProvenance?.runId ?? createTemplatePipelineRunId());
+  const templateTraceIdRef = React.useRef<string>(editingTemplate?.pipelineProvenance?.traceId ?? crypto.randomUUID());
   const pipelineStartedAtRef = React.useRef<string>(new Date().toISOString());
+  const buildTemplateSectionTraceHeaders = React.useCallback((
+    sectionId: "template.source" | "template.detect" | "template.review",
+  ) => buildAdminTraceHeaders({
+    traceId: templateTraceIdRef.current,
+    runId: pipelineRunIdRef.current,
+    sectionId,
+  }), []);
   const viewerSyncStageFingerprintsRef = React.useRef<Record<string, string>>({});
   const handleViewerSyncStage = React.useCallback((source: string, stage: TemplatePipelineStageRecord) => {
     const nextFingerprint = fingerprintJson(stage);
@@ -1474,6 +1669,24 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   }, []);
 
   // ── Dimensions ───────────────────────────────────────────────────
+  const setStagedDetectResult = React.useCallback((value: AutoDetectResult | null) => {
+    dispatchTemplateEditor(templateEditorControllerActions.setStagedDetectResult(value));
+  }, [dispatchTemplateEditor]);
+  const setAcceptedDetectResult = React.useCallback((value: AutoDetectResult | null) => {
+    dispatchTemplateEditor(templateEditorControllerActions.setAcceptedDetectResult(value));
+  }, [dispatchTemplateEditor]);
+  const setDetectError = React.useCallback((value: string | null) => {
+    dispatchTemplateEditor(templateEditorControllerActions.setDetectError(value));
+  }, [dispatchTemplateEditor]);
+  const setReviewAccepted = React.useCallback((value: boolean) => {
+    dispatchTemplateEditor(templateEditorControllerActions.setReviewAccepted(value));
+  }, [dispatchTemplateEditor]);
+  const setWorkflowStep = React.useCallback((step: TemplateCreateWorkflowStep) => {
+    dispatchTemplateEditor(templateEditorControllerActions.setWorkflowStep(step));
+  }, [dispatchTemplateEditor]);
+  const setDetectDraftSnapshot = React.useCallback((value: TemplateEditorDetectDraftSnapshot | null) => {
+    dispatchTemplateEditor(templateEditorControllerActions.setDetectDraftSnapshot(value));
+  }, [dispatchTemplateEditor]);
   const [diameterMm, setDiameterMm] = React.useState(editingBodyDiameterMm);
   const [wrapWidthInputMm, setWrapWidthInputMm] = React.useState(
     editingTemplate?.productType === "flat"
@@ -1659,6 +1872,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [previewModelMode, setPreviewModelMode] = React.useState<PreviewModelMode>(
     productType !== "flat" ? "alignment-model" : "source-traced",
   );
+  const [previewModelState, setPreviewModelState] = React.useState<TumblerPreviewModelState | null>(null);
   const currentMatchedProfile = React.useMemo(() => {
     if (productType === "flat") return null;
     const profileId =
@@ -1718,15 +1932,35 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         : nextState
     ));
   }, []);
-  const [bodyColorHex, setBodyColorHex] = React.useState(
-    editingTemplate?.dimensions.bodyColorHex ?? "#b0b8c4",
-  );
-  const [lidColorHex, setLidColorHex] = React.useState(
-    editingTemplate?.dimensions.lidColorHex ?? editingTemplate?.dimensions.bodyColorHex ?? "#b0b8c4",
-  );
-  const [rimColorHex, setRimColorHex] = React.useState(
-    editingTemplate?.dimensions.rimColorHex ?? "#d0d0d0",
-  );
+  const [appearanceState, setAppearanceState] = React.useState(() => hydrateTemplateAppearanceState({
+    bodyColorHex: editingTemplate?.dimensions.bodyColorHex,
+    lidColorHex: editingTemplate?.dimensions.lidColorHex,
+    rimColorHex: editingTemplate?.dimensions.rimColorHex,
+    appearance: editingTemplate?.appearance,
+    defaultBodyColorHex: DEFAULT_TEMPLATE_BODY_COLOR_HEX,
+    defaultRimColorHex: DEFAULT_TEMPLATE_RIM_COLOR_HEX,
+  }));
+  const appearanceStateRef = React.useRef(appearanceState);
+  React.useEffect(() => {
+    appearanceStateRef.current = appearanceState;
+  }, [appearanceState]);
+  const bodyColorHex = appearanceState.bodyColorHex;
+  const lidColorHex = appearanceState.lidColorHex;
+  const rimColorHex = appearanceState.rimColorHex;
+  const ringFinish = appearanceState.appearance.ringFinish ?? "metallic-silver";
+  const [appearanceDraftHex, setAppearanceDraftHex] = React.useState(() => ({
+    body: bodyColorHex,
+    lid: lidColorHex,
+    rim: rimColorHex,
+  }));
+  const [appearanceResampleRequestKey, setAppearanceResampleRequestKey] = React.useState(0);
+  React.useEffect(() => {
+    setAppearanceDraftHex({
+      body: bodyColorHex,
+      lid: lidColorHex,
+      rim: rimColorHex,
+    });
+  }, [bodyColorHex, lidColorHex, rimColorHex]);
 
   const lockedProductionGeometry = productType !== "flat" && !advancedGeometryOverridesUnlocked;
   const derivedCylinderDiameterMm = productType === "flat"
@@ -1871,18 +2105,17 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     editingTemplate?.tumblerMapping,
   );
   const [showMappingWizard, setShowMappingWizard] = React.useState(false);
-  const handleAutoSampleColors = React.useCallback((nextBody: string, nextLid: string, nextRim: string) => {
-    setBodyColorHex((prev) => (prev === nextBody ? prev : nextBody));
-    setLidColorHex((prev) => (prev === nextLid ? prev : nextLid));
-    setRimColorHex((prev) => (prev === nextRim ? prev : nextRim));
+  const handleApplyAppearanceSample = React.useCallback((sample: TemplateAppearanceSampleInput) => {
+    const nextAppearanceState = applySampledTemplateAppearance(appearanceStateRef.current, sample);
+    setAppearanceState(nextAppearanceState);
     if (!materialProfileTouchedRef.current && productType && productType !== "flat") {
       applyResolvedDrinkwareMaterial({
         laserType,
         productType,
         materialSlug: resolvedMaterialSlug || null,
         materialLabel: resolvedMaterialLabel || null,
-        bodyColorHex: nextBody,
-        rimColorHex: nextRim,
+        bodyColorHex: nextAppearanceState.bodyColorHex,
+        rimColorHex: nextAppearanceState.rimColorHex,
         textHints: [name, brand, capacity],
       });
     }
@@ -1890,13 +2123,30 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     applyResolvedDrinkwareMaterial,
     brand,
     capacity,
-    lidColorHex,
     laserType,
     name,
     productType,
     resolvedMaterialLabel,
     resolvedMaterialSlug,
   ]);
+  const applyManualAppearanceColor = React.useCallback((key: TemplateAppearanceColorKey, colorHex: string) => {
+    setAppearanceState((current) => applyManualTemplateAppearanceColor(current, key, colorHex));
+  }, []);
+  const applySampledAppearanceColor = React.useCallback((key: TemplateAppearanceColorKey) => {
+    setAppearanceState((current) => applyUseSampledTemplateAppearanceColor(current, key));
+  }, []);
+  const handleRingFinishChange = React.useCallback((nextRingFinish: ProductTemplateRingFinish) => {
+    setAppearanceState((current) => applyTemplateRingFinish(current, nextRingFinish));
+  }, []);
+  const handleAppearanceDraftHexChange = React.useCallback((key: TemplateAppearanceColorKey, value: string) => {
+    setAppearanceDraftHex((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  }, []);
+  const commitAppearanceDraftHex = React.useCallback((key: TemplateAppearanceColorKey) => {
+    applyManualAppearanceColor(key, appearanceDraftHex[key]);
+  }, [appearanceDraftHex, applyManualAppearanceColor]);
 
   const validateGlbPath = React.useCallback(async (candidate: string) => {
     const trimmed = candidate.trim();
@@ -1977,12 +2227,45 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [frontCleanUrl, setFrontCleanUrl] = React.useState("");
   const [backCleanUrl, setBackCleanUrl] = React.useState("");
   const [bodyReferencePhotoDataUrl, setBodyReferencePhotoDataUrl] = React.useState("");
+  const persistedBodyReferenceSourceTrust =
+    editingTemplate?.bodyReferenceSourceTrust
+    ?? editingTemplate?.pipelineProvenance?.bodyReferenceSourceTrust
+    ?? null;
+  const persistedBodyReferenceSourceOrigin =
+    editingTemplate?.bodyReferenceSourceOrigin
+    ?? editingTemplate?.pipelineProvenance?.bodyReferenceSourceOrigin
+    ?? null;
+  const persistedBodyReferenceSourceViewClass =
+    editingTemplate?.bodyReferenceSourceViewClass
+    ?? editingTemplate?.pipelineProvenance?.bodyReferenceSourceViewClass
+    ?? null;
+  const persistedBodyReferenceOutlineSeedMode =
+    editingTemplate?.bodyReferenceOutlineSeedMode
+    ?? editingTemplate?.pipelineProvenance?.bodyReferenceOutlineSeedMode
+    ?? null;
+  const hasPersistedBodyReferenceTrustProvenance = Boolean(
+    persistedBodyReferenceSourceTrust ||
+    persistedBodyReferenceSourceOrigin ||
+    persistedBodyReferenceSourceViewClass ||
+    persistedBodyReferenceOutlineSeedMode,
+  );
   const [bodyReferenceViewSide, setBodyReferenceViewSide] = React.useState<BodyReferenceViewSide>(
     editingTemplate?.bodyReferenceViewSide === "back" ? "back" : "front",
+  );
+  const [bodyReferenceOutlineSeedMode, setBodyReferenceOutlineSeedMode] = React.useState<BodyReferenceOutlineSeedMode | null>(
+    persistedBodyReferenceOutlineSeedMode
+      ?? (
+        editingTemplate?.dimensions.referencePaths?.bodyOutline || editingTemplate?.dimensions.bodyOutlineProfile
+          ? "saved-outline"
+          : null
+      ),
   );
   const [resolvedCanonicalBackReferencePhotoDataUrl, setResolvedCanonicalBackReferencePhotoDataUrl] = React.useState("");
   const [frontPhotoOrigin, setFrontPhotoOrigin] = React.useState<"manual" | "lookup" | null>(
     editingTemplate?.frontPhotoDataUrl ? "manual" : null,
+  );
+  const [bodyReferenceManualFrontConfirmed, setBodyReferenceManualFrontConfirmed] = React.useState(
+    persistedBodyReferenceSourceTrust === "trusted-front",
   );
   const [productReferenceSet, setProductReferenceSet] = React.useState<ProductReferenceSet | undefined>(
     editingTemplate?.productReferenceSet,
@@ -1996,6 +2279,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [frontUseOriginal, setFrontUseOriginal] = React.useState(false);
   const [backUseOriginal, setBackUseOriginal] = React.useState(false);
   const [mirrorForBack, setMirrorForBack] = React.useState(false);
+  React.useEffect(() => {
+    if (frontPhotoOrigin === "manual" && frontPhotoDataUrl) return;
+    setBodyReferenceManualFrontConfirmed(false);
+  }, [frontPhotoDataUrl, frontPhotoOrigin]);
   const autoZoneSignatureRef = React.useRef<string>("");
   const bodyOutlineSeedSignatureRef = React.useRef<string>("");
   const manufacturerLogoSignatureRef = React.useRef<string>("");
@@ -2028,17 +2315,25 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
     return null;
   }, [flatLookupResult?.traceDebug?.sourceImageUrl, referenceImagesById]);
-  const preferredBodyReferenceImageCandidate =
-    !lookupResult?.fitDebug &&
-    flatLookupResult?.traceDebug?.accepted &&
-    traceDebugReferenceImage
-      ? traceDebugReferenceImage
-      : canonicalFrontReferenceImage;
-  const preferredBodyReferenceImage = isOrthographicBodyReferenceImage(preferredBodyReferenceImageCandidate)
-    ? preferredBodyReferenceImageCandidate
-    : null;
+  const preferredBodyReferenceImageCandidate = React.useMemo(
+    () => resolvePreferredFrontBodyReferenceImage({
+      productReferenceSet,
+      traceDebugSourceUrl:
+        !lookupResult?.fitDebug &&
+        flatLookupResult?.traceDebug?.accepted &&
+        (flatLookupResult.traceDebug.outlinePointsPx.length ?? 0) > 20
+          ? flatLookupResult.traceDebug.sourceImageUrl
+          : null,
+    }) ?? canonicalFrontReferenceImage,
+    [
+      canonicalFrontReferenceImage,
+      flatLookupResult?.traceDebug,
+      lookupResult?.fitDebug,
+      productReferenceSet,
+    ],
+  );
   const canAutoUseLookupPhotoForBodyReference = Boolean(
-    lookupResult?.fitDebug || isOrthographicBodyReferenceImage(preferredBodyReferenceImageCandidate),
+    lookupResult?.fitDebug || isTraceableFrontBodyReferenceImage(preferredBodyReferenceImageCandidate),
   );
   const canAutoSyncFrontPhotoToBodyReference = frontPhotoOrigin === "manual" || canAutoUseLookupPhotoForBodyReference;
   const {
@@ -2079,14 +2374,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     referenceSelection?.backConfidence,
     resolvedCanonicalBackReferencePhotoDataUrl,
   ]);
-  const requiresOrthographicBodyReferencePhoto = Boolean(
-    productType &&
-    productType !== "flat" &&
-    activeBodyReferenceViewSide === "front" &&
-    frontPhotoOrigin === "lookup" &&
-    !canAutoUseLookupPhotoForBodyReference &&
-    preferredBodyReferenceImageCandidate,
-  );
+  const canResampleAppearanceFromFrontPhoto = Boolean(frontDisplayReferencePhotoDataUrl || frontReferencePhotoDataUrl);
+  const handleResampleAppearanceFromFrontPhoto = React.useCallback(() => {
+    if (!canResampleAppearanceFromFrontPhoto) return;
+    if (bodyReferenceViewSide !== "front") {
+      setBodyReferenceViewSide("front");
+    }
+    setAppearanceResampleRequestKey((current) => current + 1);
+  }, [bodyReferenceViewSide, canResampleAppearanceFromFrontPhoto]);
   const resolvedCalibrationHandleSide = React.useMemo<"left" | "right" | null>(() => {
     const candidates = [
       lookupResult?.fitDebug?.handleSide,
@@ -2114,6 +2409,66 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       side: resolvedCalibrationHandleSide,
     };
   }, [canonicalHandleProfile, resolvedCalibrationHandleSide]);
+  const allowFitDebugPhotoCrop = React.useMemo(
+    () => Boolean(
+      lookupResult?.fitDebug &&
+      activeBodyReferenceViewSide === "front" &&
+      normalizeImageIdentity(lookupResult.fitDebug.sourceImageUrl) &&
+      normalizeImageIdentity(activeReferencePhotoDataUrl || activeDisplayReferencePhotoDataUrl) &&
+      normalizeImageIdentity(lookupResult.fitDebug.sourceImageUrl) === normalizeImageIdentity(activeReferencePhotoDataUrl || activeDisplayReferencePhotoDataUrl),
+    ),
+    [
+      activeBodyReferenceViewSide,
+      activeDisplayReferencePhotoDataUrl,
+      activeReferencePhotoDataUrl,
+      lookupResult?.fitDebug,
+    ],
+  );
+  const effectiveBodyReferenceOutlineSeedMode = bodyReferenceOutlineSeedMode
+    ?? (
+      (referencePaths.bodyOutline?.sourceContour && referencePaths.bodyOutline.sourceContour.length >= 8) ||
+      (bodyOutlineProfile?.sourceContour && bodyOutlineProfile.sourceContour.length >= 8)
+        ? "fresh-image-trace"
+        : (referencePaths.bodyOutline ?? bodyOutlineProfile)
+          ? "fit-debug-fallback"
+          : null
+    );
+  const bodyReferenceTrustResolution = React.useMemo(
+    () => resolveBodyReferenceTrust({
+      outlineSeedMode: effectiveBodyReferenceOutlineSeedMode,
+      frontPhotoOrigin,
+      frontPhotoDataUrl,
+      manualFrontConfirmed: bodyReferenceManualFrontConfirmed,
+      preferredFrontReferenceViewClass: preferredBodyReferenceImageCandidate?.viewClass ?? null,
+      persistedTrust: persistedBodyReferenceSourceTrust,
+      persistedOutlineSeedMode: persistedBodyReferenceOutlineSeedMode,
+      persistedSourceOrigin: persistedBodyReferenceSourceOrigin,
+      persistedSourceViewClass: persistedBodyReferenceSourceViewClass,
+    }),
+    [
+      bodyReferenceManualFrontConfirmed,
+      effectiveBodyReferenceOutlineSeedMode,
+      frontPhotoDataUrl,
+      frontPhotoOrigin,
+      persistedBodyReferenceOutlineSeedMode,
+      persistedBodyReferenceSourceOrigin,
+      persistedBodyReferenceSourceTrust,
+      persistedBodyReferenceSourceViewClass,
+      preferredBodyReferenceImageCandidate?.viewClass,
+    ],
+  );
+  const bodyReferenceTrustMessage = React.useMemo(
+    () => getBodyReferenceTrustMessage(bodyReferenceTrustResolution),
+    [bodyReferenceTrustResolution],
+  );
+  const bodyReferenceTrustReviewBanner = React.useMemo(() => {
+    if (productType === "flat") return null;
+    if (isTrustedBodyReferenceSourceTrust(bodyReferenceTrustResolution.trust)) return null;
+    return bodyReferenceTrustMessage;
+  }, [bodyReferenceTrustMessage, bodyReferenceTrustResolution.trust, productType]);
+  React.useEffect(() => {
+    bodyOutlineSeedSignatureRef.current = "";
+  }, [activeBodyReferenceViewSide, activeDisplayReferencePhotoDataUrl, activeReferencePhotoDataUrl]);
   React.useEffect(() => {
     if (productType === "flat" || !activeDisplayReferencePhotoDataUrl) {
       setPrintableSurfaceDetection(null);
@@ -2312,6 +2667,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           ? persistedPrintableSurfaceResolution?.printableSurfaceContract.printableBottomMm
           : undefined),
       baseBandStartMm: usePersistedPrintableSurfaceFallback ? persistedBaseBandStartMm : undefined,
+      persistedPrintableSurfaceContract: editingTemplate?.dimensions.printableSurfaceContract ?? null,
+      persistedCanonicalPrintableSurfaceContract:
+        editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract ?? null,
       detection: printableSurfaceDetection,
       fitDebug: lookupResult?.fitDebug ?? null,
     }) ?? persistedBodyReferencePipeline;
@@ -2320,6 +2678,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
     calibrationBodyOutline,
+    editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract,
+    editingTemplate?.dimensions.printableSurfaceContract,
     effectiveCylinderDiameterMm,
     handleArcDeg,
     lookupResult?.fitDebug,
@@ -2344,8 +2704,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     activeBodyReferencePipeline?.canonicalDimensionCalibration ?? null;
   const activePrintableSurfaceResolution =
     activeBodyReferencePipeline?.printableSurfaceResolution ?? null;
-  const bodyReferenceWarnings = activeBodyReferencePipeline?.warnings ?? [];
+  const bodyReferenceOperationalWarnings = activeBodyReferencePipeline?.warnings ?? [];
   const bodyReferenceQa = activeBodyReferencePipeline?.qa ?? null;
+  const bodyReferenceWarnings = React.useMemo(
+    () => Array.from(new Set([
+      ...(isTrustedBodyReferenceSourceTrust(bodyReferenceTrustResolution.trust) ? [] : [bodyReferenceTrustMessage]),
+      ...bodyReferenceOperationalWarnings,
+    ])),
+    [bodyReferenceOperationalWarnings, bodyReferenceTrustMessage, bodyReferenceTrustResolution.trust],
+  );
+  const bodyReferenceHasTrustedCalibrationSource = isTrustedBodyReferenceSourceTrust(bodyReferenceTrustResolution.trust);
   const bodyReferenceContractVersion =
     productType === "flat" ? null : BODY_REFERENCE_CONTRACT_VERSION;
   const fullPreviewBodyTopMm = React.useMemo(() => {
@@ -2848,6 +3216,33 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     previewModelMode,
     previewModeContextKey,
   ]);
+  const previewModelStateSeed = React.useMemo(
+    () => productType !== "flat"
+      ? deriveTumblerPreviewModelState({
+          requestedMode: previewModelMode,
+          hasCanonicalAlignmentModel: canUseCanonicalPreviewModel,
+          hasSourceModel: hasSourcePreviewModel,
+          sourceModelPath: glbPath || resolvedDrinkwarePreviewModelUrl || previewModelFile?.name || null,
+          sourceBounds: null,
+          canonicalBounds: null,
+        })
+      : null,
+    [
+      canUseCanonicalPreviewModel,
+      glbPath,
+      hasSourcePreviewModel,
+      previewModelFile?.name,
+      previewModelMode,
+      productType,
+      resolvedDrinkwarePreviewModelUrl,
+      ],
+  );
+  const resolvedPreviewModelState =
+    previewModelStateSeed?.glbPreviewStatus === "degraded"
+      ? previewModelStateSeed
+      : (previewModelState ?? previewModelStateSeed);
+  const effectivePreviewModelMode = resolvedPreviewModelState?.effectiveMode ?? previewModelMode;
+  const previewModeMessage = resolvedPreviewModelState?.message ?? null;
   const silhouetteMismatchSummary = React.useMemo(
     () => summarizeCanonicalSilhouetteMismatch({
       outline: calibrationBodyOutline,
@@ -2858,7 +3253,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   );
   const alignmentShellMismatchSummary = React.useMemo(
     () => (
-      previewModelMode === "alignment-model" && activeCanonicalBodyProfile?.svgPath && activeCanonicalDimensionCalibration
+      effectivePreviewModelMode === "alignment-model" && activeCanonicalBodyProfile?.svgPath && activeCanonicalDimensionCalibration
         ? {
             averageErrorMm: 0,
             maxErrorMm: 0,
@@ -2866,7 +3261,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           }
         : silhouetteMismatchSummary
     ),
-    [activeCanonicalBodyProfile, activeCanonicalDimensionCalibration, previewModelMode, silhouetteMismatchSummary],
+    [activeCanonicalBodyProfile, activeCanonicalDimensionCalibration, effectivePreviewModelMode, silhouetteMismatchSummary],
   );
   const silhouetteLockPass = alignmentShellMismatchSummary
     ? alignmentShellMismatchSummary.averageErrorMm <= 0.5 && alignmentShellMismatchSummary.maxErrorMm <= 2.0
@@ -2911,11 +3306,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const canonicalHandleRenderMode = React.useMemo(
     () => resolveCanonicalHandleRenderMode({
       handleProfile: normalizedCanonicalHandleProfile,
-      previewMode: previewModelMode === "source-traced" ? "full-model" : previewModelMode,
+      previewMode: effectivePreviewModelMode === "source-traced" ? "full-model" : effectivePreviewModelMode,
     }),
-    [normalizedCanonicalHandleProfile, previewModelMode],
+    [effectivePreviewModelMode, normalizedCanonicalHandleProfile],
   );
-  const usingEditableHandlePreview = previewModelMode === "full-model" && Boolean(editableHandlePreview);
+  const usingEditableHandlePreview = effectivePreviewModelMode === "full-model" && Boolean(editableHandlePreview);
   React.useEffect(() => {
     if (productType === "flat" || !hasStrictCanonicalBack || !canonicalBackReferenceImage?.url || backPhotoDataUrl || backCleanUrl) {
       setResolvedCanonicalBackReferencePhotoDataUrl("");
@@ -3071,22 +3466,41 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       if (!traceIdentity || !referenceIdentity) return false;
       return traceIdentity === referenceIdentity;
     })();
+    const selectedTraceSourceUrl = activeReferencePhotoDataUrl || activeDisplayReferencePhotoDataUrl || "";
+    const selectedTraceSourceIdentity = normalizeImageIdentity(selectedTraceSourceUrl);
     const canSeedFromFitDebug = Boolean(fitDebug && fitDebug.profilePoints.length > 1);
     const canSeedFromTraceDebug = Boolean(
       traceDebug?.accepted &&
       (traceDebug.outlinePointsPx.length ?? 0) > 20 &&
       traceMatchesReferenceImage,
     );
-    if (!canSeedFromFitDebug && !canSeedFromTraceDebug) return;
+    // The selected BODY REFERENCE photo is the operator-visible trace source.
+    // Always try to seed the orange shell from that photo first and only fall
+    // back to traceDebug / fitDebug when the selected image cannot be traced.
+    const shouldSeedFromSelectedTracePhoto = Boolean(
+      selectedTraceSourceUrl &&
+      selectedTraceSourceIdentity,
+    );
+    const canSeedFromSelectedTrace = Boolean(selectedTraceSourceUrl && shouldSeedFromSelectedTracePhoto);
+    if (!canSeedFromFitDebug && !canSeedFromTraceDebug && !canSeedFromSelectedTrace) return;
+
+    const preferredSeedMode: BodyReferenceOutlineSeedMode = canSeedFromSelectedTrace || canSeedFromTraceDebug
+      ? "fresh-image-trace"
+      : "fit-debug-fallback";
 
     const signature = JSON.stringify({
-      seedMode: canSeedFromFitDebug ? "fit-debug" : "trace-debug",
+      seedMode: preferredSeedMode,
       fitDebugSource: fitDebug
         ? `${fitDebug.sourceImageUrl}:${fitDebug.imageWidthPx}x${fitDebug.imageHeightPx}:${fitDebug.fullTopPx}:${fitDebug.fullBottomPx}:${fitDebug.bodyTopPx}:${fitDebug.bodyBottomPx}`
         : "",
       traceDebugSource: traceDebug
         ? `${traceDebug.sourceImageUrl}:${traceDebug.imageWidthPx}x${traceDebug.imageHeightPx}:${traceDebug.silhouetteBoundsPx.minY}:${traceDebug.silhouetteBoundsPx.maxY}:${traceDebug.outlinePointsPx.length}`
         : "",
+      selectedTraceSource: fingerprintText(selectedTraceSourceUrl),
+      selectedTraceSourceIdentity,
+      selectedTraceViewSide: activeBodyReferenceViewSide,
+      selectedTraceSourceIsManualFront: activeBodyReferenceViewSide === "front" && frontPhotoOrigin === "manual",
+      shouldSeedFromSelectedTracePhoto,
       traceMatchesReferenceImage,
       canonicalFrontReferenceUrl: normalizeImageIdentity(preferredBodyReferenceUrl),
       overallHeightMm: round2(overallHeightMm),
@@ -3102,15 +3516,70 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     });
 
     const hasSeededContour = (bodyOutlineProfile?.directContour?.length ?? 0) > 20;
+    const shouldUpgradeToFreshTrace =
+      !editingTemplate &&
+      hasSeededContour &&
+      preferredSeedMode === "fresh-image-trace" &&
+      effectiveBodyReferenceOutlineSeedMode !== "fresh-image-trace";
     if (editingTemplate && hasSeededContour) return;
-    if (bodyOutlineSeedSignatureRef.current === signature && hasSeededContour) return;
+    if (bodyOutlineSeedSignatureRef.current === signature && hasSeededContour && !shouldUpgradeToFreshTrace) return;
     bodyOutlineSeedSignatureRef.current = signature;
 
     let cancelled = false;
-    const applyFallbackOutline = () => {
+    const commitSeededOutline = (outline: EditableBodyOutline, seedMode: BodyReferenceOutlineSeedMode) => {
       if (cancelled) return false;
-      const outline = canSeedFromFitDebug
-        ? createEditableBodyOutline({
+      commitBodyOutlineProfile(outline);
+      commitReferencePaths(createReferencePaths({
+        bodyOutline: outline,
+        lidProfile: referencePaths.lidProfile,
+        silverProfile: referencePaths.silverProfile,
+      }));
+      setBodyReferenceOutlineSeedMode(seedMode);
+      return true;
+    };
+    const seedBodyOutlineFromProfile = async () => {
+      try {
+        if (canSeedFromSelectedTrace) {
+          let traceSeedPhotoDataUrl = selectedTraceSourceUrl;
+          if (!/^data:/i.test(traceSeedPhotoDataUrl)) {
+            traceSeedPhotoDataUrl = await fetchImageUrlAsDataUrl(traceSeedPhotoDataUrl);
+          }
+          const preparedSeed = await prepareOutlineSeedTrace(
+            traceSeedPhotoDataUrl,
+            `body-outline-seed-${activeBodyReferenceViewSide}.png`,
+            buildTemplateSectionTraceHeaders("template.review"),
+          );
+          const svgText = await vectorizeOutlineSeedSvgWithFallback({
+            preparedSeed,
+            fileName: `body-outline-seed-${activeBodyReferenceViewSide}.png`,
+          });
+          const { outline } = createEditableBodyOutlineFromSeedSvgText({
+            svgText,
+            overallHeightMm,
+            bodyTopFromOverallMm,
+            bodyBottomFromOverallMm,
+            diameterMm: effectiveCylinderDiameterMm,
+            topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
+            side: normalizedCanonicalHandleProfile?.side === "left" ? "right" : "left",
+            sourceMode: "body-only",
+          });
+          if (commitSeededOutline(outline, "fresh-image-trace")) return;
+        }
+
+        if (canSeedFromTraceDebug) {
+          const tracedOutline = createEditableBodyOutlineFromTraceDebug({
+            traceDebug: traceDebug!,
+            overallHeightMm,
+            bodyTopFromOverallMm,
+            bodyBottomFromOverallMm,
+            diameterMm: effectiveCylinderDiameterMm,
+            topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
+          });
+          if (commitSeededOutline(tracedOutline, "fresh-image-trace")) return;
+        }
+
+        if (canSeedFromFitDebug) {
+          const fallbackOutline = createEditableBodyOutline({
             overallHeightMm,
             bodyTopFromOverallMm,
             bodyBottomFromOverallMm,
@@ -3122,30 +3591,29 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             taperLowerDiameterMm,
             bevelDiameterMm,
             fitDebug,
-          })
-        : createEditableBodyOutlineFromTraceDebug({
-            traceDebug: traceDebug!,
+          });
+          if (commitSeededOutline(fallbackOutline, "fit-debug-fallback")) return;
+        }
+
+        bodyOutlineSeedSignatureRef.current = "";
+      } catch {
+        if (!cancelled && canSeedFromFitDebug) {
+          const fallbackOutline = createEditableBodyOutline({
             overallHeightMm,
             bodyTopFromOverallMm,
             bodyBottomFromOverallMm,
             diameterMm: effectiveCylinderDiameterMm,
             topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
+            baseDiameterMm: baseDiameterMm > 0 ? baseDiameterMm : undefined,
+            shoulderDiameterMm,
+            taperUpperDiameterMm,
+            taperLowerDiameterMm,
+            bevelDiameterMm,
+            fitDebug,
           });
-      commitBodyOutlineProfile(outline);
-      commitReferencePaths(createReferencePaths({
-        bodyOutline: outline,
-        lidProfile: referencePaths.lidProfile,
-        silverProfile: referencePaths.silverProfile,
-      }));
-      return true;
-    };
-    const seedBodyOutlineFromProfile = async () => {
-      try {
-        applyFallbackOutline();
-      } catch {
-        if (!cancelled && !applyFallbackOutline()) {
-          bodyOutlineSeedSignatureRef.current = "";
+          if (commitSeededOutline(fallbackOutline, "fit-debug-fallback")) return;
         }
+        bodyOutlineSeedSignatureRef.current = "";
       }
     };
 
@@ -3154,6 +3622,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       cancelled = true;
     };
   }, [
+    activeBodyReferenceViewSide,
+    activeDisplayReferencePhotoDataUrl,
     activeReferencePhotoDataUrl,
     bodyBottomFromOverallMm,
     bodyOutlineProfile,
@@ -3162,6 +3632,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     baseDiameterMm,
     editingTemplate,
     effectiveCylinderDiameterMm,
+    frontPhotoOrigin,
     lookupResult?.fitDebug,
     flatLookupResult?.traceDebug,
     normalizedCanonicalHandleProfile?.side,
@@ -3176,6 +3647,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     commitReferencePaths,
     referencePaths.lidProfile,
     referencePaths.silverProfile,
+    buildTemplateSectionTraceHeaders,
   ]);
 
   const resolveManufacturerLogoStamp = React.useCallback(async (options?: { useOpenAiAssist?: boolean }) => {
@@ -3215,6 +3687,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               ? `${options.sourceImageId}-logo-assist.png`
               : "template-logo-assist.png",
             brandHint: brand.trim() || lookupResult?.brand || undefined,
+            traceHeaders: buildTemplateSectionTraceHeaders("template.review"),
           });
           if (assistedDetection.detected && assistedDetection.logoBox) {
             assistedLogoBox = assistedDetection.logoBox;
@@ -3246,7 +3719,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
     if ((activeBodyReferenceViewSide === "front" ? !bodyReferencePhotoDataUrl : !(backCleanUrl || backPhotoDataUrl)) && rawPhotoUrl) {
       try {
-        const cleanDataUrl = await removeBackgroundForOutlineSeed(rawPhotoUrl, "manufacturer-logo-stamp.png");
+        const cleanDataUrl = await removeBackgroundForOutlineSeed(
+          rawPhotoUrl,
+          "manufacturer-logo-stamp.png",
+          buildTemplateSectionTraceHeaders("template.review"),
+        );
         if (activeBodyReferenceViewSide === "back") {
           setBackCleanUrl(cleanDataUrl);
           setBackPhotoDataUrl(cleanDataUrl);
@@ -3308,6 +3785,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     productPhotoFullUrl,
     productType,
     resolvedCanonicalBackReferencePhotoDataUrl,
+    buildTemplateSectionTraceHeaders,
     topMarginMm,
   ]);
 
@@ -3336,12 +3814,15 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setOutlineAssistNote("Running AI cleanup and trace recommendation for BODY REFERENCE...");
 
     try {
-      const preparedSeed = await prepareOutlineSeedTrace(seedPhotoDataUrl, "body-outline-seed.png");
-      const svgText = await vectorizeOutlineSeedSvg(
-        preparedSeed.traceSourceDataUrl,
+      const preparedSeed = await prepareOutlineSeedTrace(
+        seedPhotoDataUrl,
         "body-outline-seed.png",
-        preparedSeed.traceSettings,
+        buildTemplateSectionTraceHeaders("template.review"),
       );
+      const svgText = await vectorizeOutlineSeedSvgWithFallback({
+        preparedSeed,
+        fileName: "body-outline-seed.png",
+      });
       const { outline } = createEditableBodyOutlineFromSeedSvgText({
         svgText,
         overallHeightMm,
@@ -3350,6 +3831,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         diameterMm: effectiveCylinderDiameterMm,
         topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : undefined,
         side: resolvedCalibrationHandleSide === "left" ? "right" : "left",
+        sourceMode: "body-only",
       });
 
       if (activeBodyReferenceViewSide === "back") {
@@ -3365,6 +3847,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         lidProfile: referencePaths.lidProfile,
         silverProfile: referencePaths.silverProfile,
       }));
+      setBodyReferenceOutlineSeedMode("fresh-image-trace");
       setOutlineAssistStatus("done");
       setOutlineAssistNote(
         preparedSeed.cleanupApplied
@@ -3386,6 +3869,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     overallHeightMm,
     productType,
     resolvedCalibrationHandleSide,
+    buildTemplateSectionTraceHeaders,
     topOuterDiameterMm,
     commitBodyOutlineProfile,
     commitReferencePaths,
@@ -3801,10 +4285,27 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         id: "viewer-truth",
         title: "Viewer mode / placement truth",
         fields: [
-          { label: "Current visible mode", value: previewModelMode, source: "template preview mode" },
+          {
+            label: "Current visible mode",
+            value: effectivePreviewModelMode,
+            source: "effective preview mode",
+            warning: previewModeMessage ?? undefined,
+          },
+          { label: "Requested preview mode", value: previewModelMode, source: "template preview mode" },
           { label: "Production default mode", value: defaultPreviewModelMode, source: "resolveDefaultPreviewModelMode(...)" },
-          { label: "Placement truth", value: "canonical alignment", source: "placement/wrap/snap contract", warning: previewModelMode === "source-traced" ? "Source model visible; placement still uses canonical alignment data." : undefined },
-          { label: "Body-only camera fit", value: previewModelMode === "alignment-model" ? "yes" : "n/a", source: "alignment-model camera", },
+          {
+            label: "Placement truth",
+            value: "canonical alignment",
+            source: "placement/wrap/snap contract",
+            warning: effectivePreviewModelMode === "source-traced"
+              ? "Source model visible; placement still uses canonical alignment data."
+              : undefined,
+          },
+          {
+            label: "Body-only camera fit",
+            value: effectivePreviewModelMode === "alignment-model" ? "yes" : "n/a",
+            source: "alignment-model camera",
+          },
         ],
       },
       {
@@ -3831,6 +4332,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     canonicalHandleRenderMode,
     defaultPreviewModelMode,
     effectiveCylinderDiameterMm,
+    effectivePreviewModelMode,
     baseDiameterMm,
     frontBgStatus,
     frontCleanUrl,
@@ -3843,6 +4345,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     lookupResult?.mode,
     manufacturerLogoStamp,
     overallHeightMm,
+    previewModeMessage,
     previewModelMode,
     productReferenceSet?.canonicalViewSelection,
     productType,
@@ -3877,7 +4380,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     if (logoPlacementSurfaceStatus?.overlapsPrintableSurface) {
       warnings.push("Logo overlaps the locked printable-height boundary.");
     }
-    if (previewModelMode === "source-traced") {
+    if (effectivePreviewModelMode === "source-traced") {
       warnings.push("Source traced model is visible; placement still uses canonical alignment data.");
     }
     return warnings;
@@ -3890,7 +4393,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     handleSpanMm,
     logoPlacementSurfaceStatus?.overlapsPrintableSurface,
     overallHeightMm,
-    previewModelMode,
+    effectivePreviewModelMode,
     templateWidthMm,
   ]);
 
@@ -3931,6 +4434,41 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     ],
   );
 
+  const usesGuidedReviewFlow = isTemplateCreateReviewFlowProductType(productType);
+  const hasTemplateSourceImage = Boolean(
+    productImageFile ||
+    productPhotoFullUrl ||
+    frontPhotoDataUrl ||
+    activeDisplayReferencePhotoDataUrl,
+  );
+  const templateEditorWorkflow = React.useMemo(
+    () => selectTemplateEditorWorkflowState(templateEditorState, {
+      open: true,
+      productType,
+      hasProductImage: hasTemplateSourceImage,
+      hasCanonicalBodyProfile: Boolean(activeCanonicalBodyProfile),
+      hasCanonicalDimensionCalibration: Boolean(activeCanonicalDimensionCalibration),
+      runId: null,
+      warnings: [],
+      errors: [],
+      sourceFingerprints: {},
+    }),
+    [
+      activeCanonicalBodyProfile,
+      activeCanonicalDimensionCalibration,
+      hasTemplateSourceImage,
+      productType,
+      templateEditorState,
+    ],
+  );
+  const workflowSteps = templateEditorWorkflow.workflowSteps;
+  const derivedWorkflowStep = templateEditorWorkflow.derivedWorkflowStep;
+  const effectiveWorkflowStep = templateEditorWorkflow.effectiveWorkflowStep;
+  const reviewFlowSaveGateReason = templateEditorWorkflow.reviewFlowSaveGateReason;
+  const stagedDetectionPending = templateEditorWorkflow.stagedDetectionPending;
+  const activeTemplateSectionId = templateEditorWorkflow.activeSectionId;
+  const templateTraceRunId = smartLookupDiagnostics?.runId ?? pipelineRunIdRef.current;
+
   const computedBlockingIssues = React.useMemo(() => {
     const issues: string[] = [];
     if (!name.trim()) issues.push("Product name is required.");
@@ -3951,7 +4489,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       issues.push("Canonical dimension calibration is missing. Re-run lookup or BODY REFERENCE before saving.");
     }
     if (productType && productType !== "flat" && bodyReferenceQa?.severity === "action") {
-      issues.push(...bodyReferenceWarnings);
+      issues.push(...bodyReferenceOperationalWarnings);
     }
     if (hasBlockingGeometryMismatch) {
       issues.push(`Cylinder diameter override is inconsistent with wrap width by ${derivedDiameterMismatchMm.toFixed(2)} mm. Recompute derived fields from wrap width or relock production geometry.`);
@@ -3968,12 +4506,15 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     if (glbPath.trim() && glbUploadError?.startsWith("Model file not found:")) {
       issues.push("3D model path is missing or invalid.");
     }
+    if (reviewFlowSaveGateReason) {
+      issues.push(reviewFlowSaveGateReason);
+    }
     return Array.from(new Set(issues));
   }, [
     activeCanonicalBodyProfile,
     activeCanonicalDimensionCalibration,
+    bodyReferenceOperationalWarnings,
     bodyReferenceQa?.severity,
-    bodyReferenceWarnings,
     bodyBottomFromOverallMm,
     bodyTopFromOverallMm,
     derivedDiameterMismatchMm,
@@ -3986,6 +4527,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     overallHeightMm,
     printHeightMm,
     productType,
+    reviewFlowSaveGateReason,
     templateWidthMm,
   ]);
 
@@ -4013,15 +4555,23 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         status: productType === "flat"
           ? "review"
           : (activeCanonicalBodyProfile && activeCanonicalDimensionCalibration
-            ? (bodyReferenceQa?.severity === "action" ? "action" : (bodyReferenceWarnings.length > 0 ? "review" : "ready"))
+            ? (
+              bodyReferenceQa?.severity === "action"
+                ? "action"
+                : (bodyReferenceHasTrustedCalibrationSource && bodyReferenceWarnings.length === 0 ? "ready" : "review")
+            )
             : "action"),
         detail: productType === "flat"
           ? "Not required for flat items."
           : (!activeCanonicalBodyProfile || !activeCanonicalDimensionCalibration
             ? "Canonical body contracts are missing."
-            : bodyReferenceWarnings[0]
-              ? bodyReferenceWarnings[0]
-              : "Canonical body profile and printable surface contract are locked."),
+            : (
+              !bodyReferenceHasTrustedCalibrationSource
+                ? bodyReferenceTrustMessage
+                : bodyReferenceWarnings[0]
+                  ? bodyReferenceWarnings[0]
+                  : "Canonical body profile and printable surface contract are locked."
+            )),
       });
       items.push({
         label: "3D preview + orientation",
@@ -4054,8 +4604,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     [
       activeCanonicalBodyProfile,
       activeCanonicalDimensionCalibration,
+      bodyReferenceHasTrustedCalibrationSource,
       activeDisplayReferencePhotoDataUrl,
       bodyReferenceQa?.severity,
+      bodyReferenceTrustMessage,
       bodyReferenceWarnings,
       glbPath,
       glbUploadError,
@@ -4152,7 +4704,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   }, [viewerSyncStageMap]);
   const pipelineDiagnostics = React.useMemo<TemplatePipelineDiagnostics>(() => {
     let next = createTemplatePipelineDiagnostics({
-      runId: smartLookupDiagnostics?.runId ?? pipelineRunIdRef.current,
+      runId: templateTraceRunId,
+      traceId: templateTraceIdRef.current,
+      sectionId: activeTemplateSectionId,
       startedAt: smartLookupDiagnostics?.startedAt ?? pipelineStartedAtRef.current,
       contractVersions: {
         ...(smartLookupDiagnostics?.contractVersions ?? {}),
@@ -4187,7 +4741,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         status:
           bodyReferenceQa?.severity === "action"
             ? "action"
-            : bodyReferenceWarnings.length > 0
+            : (!bodyReferenceHasTrustedCalibrationSource || bodyReferenceWarnings.length > 0)
               ? "warning"
               : "ready",
         authority: bodyReferenceQa?.shellAuthority ?? "outline-profile",
@@ -4204,6 +4758,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           rejectedRowCount: bodyReferenceQa?.rejectedRowCount ?? null,
           printableTopMm: activePrintableSurfaceResolution?.printableSurfaceContract.printableTopMm ?? null,
           printableBottomMm: activePrintableSurfaceResolution?.printableSurfaceContract.printableBottomMm ?? null,
+          bodyReferenceViewSide: activeBodyReferenceViewSide,
+          sourceTrust: bodyReferenceTrustResolution.trust,
+          sourceOrigin: bodyReferenceTrustResolution.sourceOrigin,
+          sourceViewClass: bodyReferenceTrustResolution.sourceViewClass,
+          outlineSeedMode: effectiveBodyReferenceOutlineSeedMode,
         },
       });
     }
@@ -4227,23 +4786,83 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     activePrintableSurfaceResolution?.printableSurfaceContract.printableBottomMm,
     activePrintableSurfaceResolution?.printableSurfaceContract.printableTopMm,
     activeDisplayReferencePhotoDataUrl,
+    activeBodyReferenceViewSide,
     bodyReferenceContractVersion,
+    bodyReferenceHasTrustedCalibrationSource,
     bodyReferencePhotoDataUrl,
     bodyReferenceQa,
     bodyReferenceSignature,
+    bodyReferenceTrustResolution.sourceOrigin,
+    bodyReferenceTrustResolution.sourceViewClass,
+    bodyReferenceTrustResolution.trust,
     bodyReferenceWarnings,
     computedBlockingIssues,
     editingTemplate?.pipelineProvenance,
+    effectiveBodyReferenceOutlineSeedMode,
     frontPhotoDataUrl,
     lookupInput,
     productPhotoFullUrl,
     productType,
     smartLookupDiagnostics,
     templateGeometrySignature,
+    templateTraceRunId,
     viewerSyncAggregateStage,
+    activeTemplateSectionId,
   ]);
   const saveBlockingIssues = pipelineDiagnostics.blockingIssues;
   const saveDisabledReason = saveBlockingIssues[0] ?? null;
+  const primaryReviewProjection = React.useMemo(() => {
+    if (productType === "flat" || !activeCanonicalDimensionCalibration || !activePrintableSurfaceResolution) {
+      return null;
+    }
+    return buildTemplateCreateReviewProjection({
+      lidBodyLineMm: round2(activeCanonicalDimensionCalibration.lidBodyLineMm),
+      bodyBottomMm: round2(activeCanonicalDimensionCalibration.bodyBottomMm),
+      bodyHeightMm: round2(activeCanonicalDimensionCalibration.bodyHeightMm),
+      diameterMm: round2(activeCanonicalDimensionCalibration.wrapDiameterMm),
+      wrapWidthMm: round2(activeCanonicalDimensionCalibration.wrapWidthMm),
+      printableTopMm: round2(activePrintableSurfaceResolution.printableSurfaceContract.printableTopMm),
+      printableBottomMm: round2(activePrintableSurfaceResolution.printableSurfaceContract.printableBottomMm),
+      printableHeightMm: round2(activePrintableSurfaceResolution.printableSurfaceContract.printableHeightMm),
+      topExclusions:
+        activePrintableSurfaceResolution.printableSurfaceContract.axialExclusions
+          .filter((band) => band.kind !== "base")
+          .map((band) => (band.kind === "rim-ring" ? "ring" : band.kind))
+          .join(" / ") || "none",
+      hasHandleKeepOut: activePrintableSurfaceResolution.printableSurfaceContract.circumferentialExclusions.length > 0,
+      frontTransform: activeCanonicalDimensionCalibration.photoToFrontTransform.matrix
+        .map((value) => value.toFixed(3))
+        .join(", "),
+      visibleOuterDiameterLabel: frontVisibleWidthReady
+        ? `${derivedFrontVisibleWidthMm} mm`
+        : "pending body calibration",
+      silverRingTopMm:
+        typeof resolvedLidSeamForPersistence === "number"
+          ? round2(resolvedLidSeamForPersistence)
+          : null,
+      silverRingBottomMm:
+        typeof resolvedSilverBandBottomForPersistence === "number"
+          ? round2(resolvedSilverBandBottomForPersistence)
+          : null,
+      bandDetectLabel: activePrintableSurfaceResolution.topBoundarySource,
+      handleMetricsLabel:
+        handleTopFromOverallMm != null && handleBottomFromOverallMm != null
+          ? `${round2(handleTopFromOverallMm)} → ${round2(handleBottomFromOverallMm)} mm`
+          : "not set",
+      warnings: bodyReferenceWarnings,
+    });
+  }, [
+    activeCanonicalDimensionCalibration,
+    activePrintableSurfaceResolution,
+    bodyReferenceWarnings,
+    derivedFrontVisibleWidthMm,
+    frontVisibleWidthReady,
+    handleBottomFromOverallMm,
+    handleTopFromOverallMm,
+    productType,
+    resolvedLidSeamForPersistence,
+    resolvedSilverBandBottomForPersistence,
+  ]);
 
   const pipelineDebugRawObjects = React.useMemo<PipelineDebugRawObject[]>(() => ([
     { id: "canonical-body-profile", label: "canonicalBodyProfile", value: activeCanonicalBodyProfile },
@@ -4323,12 +4942,21 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       canonicalDimensionCalibration: activeCanonicalDimensionCalibration,
       printableSurfaceContract: activePrintableSurfaceResolution?.printableSurfaceContract ?? activeCanonicalDimensionCalibration?.printableSurfaceContract ?? null,
       bodyReferenceQA: bodyReferenceQa,
+      bodyReferenceTrust: {
+        trust: bodyReferenceTrustResolution.trust,
+        sourceOrigin: bodyReferenceTrustResolution.sourceOrigin,
+        sourceViewClass: bodyReferenceTrustResolution.sourceViewClass,
+        outlineSeedMode: effectiveBodyReferenceOutlineSeedMode,
+        savedProvenancePresent: hasPersistedBodyReferenceTrustProvenance,
+      },
       bodyReferenceContractVersion,
       canonicalHandleProfile: normalizedCanonicalHandleProfile ?? null,
       logoPlacement: manufacturerLogoStamp?.logoPlacement ?? null,
       viewer: {
         previewModelMode,
+        effectivePreviewModelMode,
         defaultPreviewModelMode,
+        previewModeMessage,
         lockedProductionGeometry,
       },
       diagnostics: pipelineDiagnostics,
@@ -4344,10 +4972,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       bodyReferenceContractVersion,
       bodyReferenceQa,
       bodyReferencePhotoDataUrl,
+      bodyReferenceTrustResolution.sourceOrigin,
+      bodyReferenceTrustResolution.sourceViewClass,
+      bodyReferenceTrustResolution.trust,
       defaultPreviewModelMode,
+      effectivePreviewModelMode,
+      effectiveBodyReferenceOutlineSeedMode,
       frontBgStatus,
       frontCleanUrl,
       glbPath,
+      hasPersistedBodyReferenceTrustProvenance,
       lockedProductionGeometry,
       lookupResult?.fitDebug,
       lookupResult?.matchedProfileId,
@@ -4358,7 +4992,53 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       pipelineDiagnostics,
       pipelineDebugWarnings,
       previewModelMode,
+      previewModeMessage,
     ],
+  );
+  const templateEditorSectionStateForDebug = React.useMemo(
+    () => selectTemplateEditorSectionState(templateEditorState, {
+      open: true,
+      productType,
+      hasProductImage: hasTemplateSourceImage,
+      hasCanonicalBodyProfile: Boolean(activeCanonicalBodyProfile),
+      hasCanonicalDimensionCalibration: Boolean(activeCanonicalDimensionCalibration),
+      runId: pipelineDiagnostics.runId ?? null,
+      warnings: pipelineDiagnostics.warnings,
+      errors: saveBlockingIssues,
+      sourceFingerprints: Object.fromEntries(
+        Object.entries(pipelineDiagnostics.inputFingerprints).map(([key, value]) => [
+          key,
+          typeof value === "string" && value.trim().length > 0 ? value : null,
+        ]),
+      ),
+    }),
+    [
+      activeCanonicalBodyProfile,
+      activeCanonicalDimensionCalibration,
+      hasTemplateSourceImage,
+      pipelineDiagnostics.inputFingerprints,
+      pipelineDiagnostics.runId,
+      pipelineDiagnostics.warnings,
+      productType,
+      saveBlockingIssues,
+      templateEditorState,
+    ],
+  );
+
+  React.useEffect(() => {
+    if (!onDebugStateChange) return;
+
+    onDebugStateChange(templateEditorSectionStateForDebug);
+  }, [
+    onDebugStateChange,
+    templateEditorSectionStateForDebug,
+  ]);
+
+  React.useEffect(
+    () => () => {
+      onDebugStateChange?.(null);
+    },
+    [onDebugStateChange],
   );
 
   React.useEffect(() => {
@@ -4422,7 +5102,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const handleProductImage = React.useCallback(async (file: File) => {
     setProductImageFile(file);
     setProductImageLabel(file.name);
-    setDetectResult(null);
+    setStagedDetectResult(null);
+    setDetectDraftSnapshot(null);
+    setReviewAccepted(false);
+    setWorkflowStep("detect");
     setDetectError(null);
     // Thumbnail: 120x120 cropped (for gallery cards)
     const thumb = await generateThumbnail(file);
@@ -4445,9 +5128,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setPrintableBottomOverrideMm(undefined);
     setManufacturerLogoStamp(undefined);
     setDetectedManufacturerLogoStamp(undefined);
-    setDetectResult(null);
+    setStagedDetectResult(null);
+    setAcceptedDetectResult(null);
+    setDetectDraftSnapshot(null);
+    setReviewAccepted(isEdit);
+    setWorkflowStep("source");
     setDetectError(null);
-  }, []);
+  }, [isEdit]);
 
   const applyFacePhotoFile = React.useCallback(async (
     file: File,
@@ -4459,9 +5146,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
     if (side === "front") {
       setFrontPhotoOrigin(origin);
+      setBodyReferenceManualFrontConfirmed(origin === "manual");
       setFrontOriginalUrl(original);
       setFrontCleanUrl("");
       setFrontPhotoDataUrl(original);
+      setBodyReferencePhotoDataUrl(origin === "manual" ? original : "");
       setFrontUseOriginal(false);
       setFrontBgStatus("idle");
       return;
@@ -4649,7 +5338,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       (result.flatLookupResult.traceDebug.outlinePointsPx.length ?? 0) > 20
         ? result.flatLookupResult.traceDebug.sourceImageUrl
         : null;
-    const preferredFrontPhotoUrl = tracedFrontReferenceUrl ?? canonicalFrontReferenceImage?.url ?? draft.productPhotoUrl ?? null;
+    const preferredFrontBodyReferenceImage = resolvePreferredFrontBodyReferenceImage({
+      productReferenceSet: resolvedProductReferenceSet,
+      traceDebugSourceUrl: tracedFrontReferenceUrl,
+    });
+    const preferredFrontPhotoUrl =
+      preferredFrontBodyReferenceImage?.url
+      ?? tracedFrontReferenceUrl
+      ?? canonicalFrontReferenceImage?.url
+      ?? draft.productPhotoUrl
+      ?? null;
     const matchedLookupProfile = result.matchedProfileId
       ? getTumblerProfileById(result.matchedProfileId)
       : null;
@@ -4660,9 +5358,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
     setErrors([]);
     setDetectError(null);
-    setDetectResult(null);
+    setStagedDetectResult(null);
+    setDetectDraftSnapshot(null);
     setLookupError(null);
     setSmartLookupApplied(true);
+    setReviewAccepted(draft.productType === "flat");
+    setWorkflowStep(draft.productType === "flat" ? "source" : "detect");
     setSmartLookupDiagnostics(result.diagnostics ?? null);
     setLookupResult(result.tumblerLookupResult ?? null);
     setFlatLookupResult(result.flatLookupResult ?? null);
@@ -4682,6 +5383,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         lidProfile: null,
         silverProfile: null,
       }));
+      setBodyReferenceOutlineSeedMode(null);
       commitReferenceLayerState(cloneReferenceLayerState(null));
     }
 
@@ -4689,6 +5391,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     // so rerunning lookup in the same open modal cannot keep a stale image alive.
     if (!files.frontPhotoFile) {
       setFrontPhotoOrigin(null);
+      setBodyReferenceManualFrontConfirmed(false);
       setFrontOriginalUrl("");
       setFrontPhotoDataUrl("");
       setFrontCleanUrl("");
@@ -4715,9 +5418,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         const resolvedFront = await resolveLookupPhotoUrl(preferredFrontPhotoUrl);
         resolvedLookupPhotoFile = resolvedFront.file;
         setProductImageLabel(
-          canonicalFrontReferenceImage
-            ? draft.productPhotoLabel ?? "Canonical front reference"
-            : draft.productPhotoLabel ?? "Lookup product photo",
+          preferredFrontBodyReferenceImage
+            ? draft.productPhotoLabel ?? `Lookup ${preferredFrontBodyReferenceImage.viewClass} reference`
+            : canonicalFrontReferenceImage
+              ? draft.productPhotoLabel ?? "Canonical front reference"
+              : draft.productPhotoLabel ?? "Lookup product photo",
         );
         setLookupDebugImageUrl(resolvedFront.dataUrl);
       } catch {
@@ -4727,9 +5432,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       try {
         const resolved = await applyResolvedProductPhotoUrl(
           preferredFrontPhotoUrl,
-          canonicalFrontReferenceImage
-            ? draft.productPhotoLabel ?? "Canonical front reference"
-            : draft.productPhotoLabel ?? null,
+          preferredFrontBodyReferenceImage
+            ? draft.productPhotoLabel ?? `Lookup ${preferredFrontBodyReferenceImage.viewClass} reference`
+            : canonicalFrontReferenceImage
+              ? draft.productPhotoLabel ?? "Canonical front reference"
+              : draft.productPhotoLabel ?? null,
         );
         resolvedLookupPhotoFile = resolved.file;
       } catch {
@@ -4855,6 +5562,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         lidProfile: draftDims?.referencePaths?.lidProfile ?? null,
         silverProfile: draftDims?.referencePaths?.silverProfile ?? null,
       }));
+      setBodyReferenceOutlineSeedMode(
+        draftDims?.referencePaths?.bodyOutline || draftDims?.bodyOutlineProfile
+          ? "saved-outline"
+          : null,
+      );
       commitReferenceLayerState(cloneReferenceLayerState(draftDims?.referenceLayerState ?? null));
       setTopMarginMm(draftDims?.topMarginMm ?? 0);
       setBottomMarginMm(draftDims?.bottomMarginMm ?? 0);
@@ -5040,6 +5752,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         lidProfile: draftDims?.referencePaths?.lidProfile ?? null,
         silverProfile: draftDims?.referencePaths?.silverProfile ?? null,
       }));
+      setBodyReferenceOutlineSeedMode(
+        draftDims?.referencePaths?.bodyOutline || draftDims?.bodyOutlineProfile
+          ? "saved-outline"
+          : null,
+      );
       commitReferenceLayerState(cloneReferenceLayerState(draftDims?.referenceLayerState ?? null));
       if (typeof draftDims?.topMarginMm === "number") {
         setTopMarginMm(round2(draftDims.topMarginMm));
@@ -5050,17 +5767,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       if (typeof draftDims?.printHeightMm === "number") {
         setPrintHeightMm(round2(draftDims.printHeightMm));
       }
-      if (draftDims?.bodyColorHex) {
-        setBodyColorHex(draftDims.bodyColorHex);
-      }
-      if (draftDims?.lidColorHex) {
-        setLidColorHex(draftDims.lidColorHex);
-      } else if (draftDims?.bodyColorHex) {
-        setLidColorHex(draftDims.bodyColorHex);
-      }
-      if (draftDims?.rimColorHex) {
-        setRimColorHex(draftDims.rimColorHex);
-      }
+      setAppearanceState(hydrateTemplateAppearanceState({
+        bodyColorHex: draftDims?.bodyColorHex,
+        lidColorHex: draftDims?.lidColorHex,
+        rimColorHex: draftDims?.rimColorHex,
+        appearance: editingTemplate?.appearance,
+        defaultBodyColorHex: DEFAULT_TEMPLATE_BODY_COLOR_HEX,
+        defaultRimColorHex: DEFAULT_TEMPLATE_RIM_COLOR_HEX,
+      }));
     }
   }, [applyFacePhotoFile, applyMaterialProfileSettings, applyProfileOrDimensions, applyResolvedProductPhotoUrl, handleProductImage, resolveLookupPhotoUrl]);
 
@@ -5075,7 +5789,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     try {
       if (productType === "flat") {
         try {
-          const result = await lookupFlatItemRequest(raw);
+          const result = await lookupFlatItemRequest(raw, buildTemplateSectionTraceHeaders("template.source"));
           setFlatLookupResult(result);
           setFlatLookupMatch(
             result.matchedItemId
@@ -5103,7 +5817,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             try {
               const imageRes = await fetch("/api/admin/flatbed/fetch-url", {
                 method: "POST",
-                headers: { "content-type": "application/json" },
+                headers: {
+                  "content-type": "application/json",
+                  ...buildTemplateSectionTraceHeaders("template.source"),
+                },
                 body: JSON.stringify({ url: result.imageUrl }),
               });
               const imagePayload = await imageRes.json();
@@ -5145,7 +5862,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         }
       }
 
-      const result = await lookupTumblerItem(raw);
+      const result = await lookupTumblerItem(raw, buildTemplateSectionTraceHeaders("template.source"));
       setLookupResult(result);
 
       setName(buildTemplateDisplayName({
@@ -5171,11 +5888,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             : "";
       setGlbPath(nextLookupGlbPath);
       setGlbFileName(nextLookupGlbPath ? (nextLookupGlbPath.split("/").pop() ?? null) : null);
-      if (result.bodyColorHex) {
-        setBodyColorHex(result.bodyColorHex);
-        setLidColorHex(result.bodyColorHex);
+      if (result.bodyColorHex || result.rimColorHex) {
+        setAppearanceState((current) => applySampledTemplateAppearance(current, {
+          bodyColorHex: result.bodyColorHex,
+          rimColorHex: result.rimColorHex,
+        }));
       }
-      if (result.rimColorHex) setRimColorHex(result.rimColorHex);
       if (inferredProductType !== "flat" && !materialProfileTouchedRef.current) {
         applyResolvedDrinkwareMaterial({
           laserType,
@@ -5255,6 +5973,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               setLookupDebugImageUrl(full);
               setProductPhotoFullUrl(full);
               setFrontPhotoOrigin("lookup");
+              setBodyReferenceManualFrontConfirmed(false);
               setFrontOriginalUrl(full);
               setFrontPhotoDataUrl((prev) => prev || full);
             }
@@ -5313,15 +6032,138 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
   };
 
+  const createDetectDraftSnapshot = React.useCallback(
+    (): TemplateEditorDetectDraftSnapshot => ({
+      name,
+      brand,
+      capacity,
+      laserType: laserType ?? "",
+      productType,
+      flatFamilyKey,
+      resolvedMaterialSlug,
+      resolvedMaterialLabel,
+      materialProfileId,
+      power,
+      speed,
+      frequency,
+      lineInterval,
+      materialProfileTouched: materialProfileTouchedRef.current,
+      diameterMm,
+      wrapWidthInputMm,
+      topOuterDiameterMm,
+      baseDiameterMm,
+      printHeightMm,
+      handleArcDeg,
+      taperCorrection,
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      topMarginMm,
+      bottomMarginMm,
+      detectError,
+      acceptedDetectResult,
+      workflowStep,
+      reviewAccepted,
+    }),
+    [
+      acceptedDetectResult,
+      baseDiameterMm,
+      bodyBottomFromOverallMm,
+      bodyTopFromOverallMm,
+      brand,
+      capacity,
+      detectError,
+      diameterMm,
+      flatFamilyKey,
+      frequency,
+      handleArcDeg,
+      laserType,
+      lineInterval,
+      materialProfileId,
+      name,
+      overallHeightMm,
+      power,
+      printHeightMm,
+      productType,
+      resolvedMaterialLabel,
+      resolvedMaterialSlug,
+      reviewAccepted,
+      speed,
+      taperCorrection,
+      topMarginMm,
+      topOuterDiameterMm,
+      workflowStep,
+      wrapWidthInputMm,
+      bottomMarginMm,
+    ],
+  );
+
+  const restoreDetectDraftSnapshot = React.useCallback((snapshot: TemplateEditorDetectDraftSnapshot) => {
+    setName(snapshot.name);
+    setBrand(snapshot.brand);
+    setCapacity(snapshot.capacity);
+    setLaserType(snapshot.laserType);
+    setProductType(snapshot.productType);
+    setFlatFamilyKey(snapshot.flatFamilyKey);
+    setResolvedMaterialSlug(snapshot.resolvedMaterialSlug);
+    setResolvedMaterialLabel(snapshot.resolvedMaterialLabel);
+    setMaterialProfileId(snapshot.materialProfileId);
+    setPower(snapshot.power);
+    setSpeed(snapshot.speed);
+    setFrequency(snapshot.frequency);
+    setLineInterval(snapshot.lineInterval);
+    materialProfileTouchedRef.current = snapshot.materialProfileTouched;
+    setDiameterMm(snapshot.diameterMm);
+    setWrapWidthInputMm(snapshot.wrapWidthInputMm);
+    setTopOuterDiameterMm(snapshot.topOuterDiameterMm);
+    setBaseDiameterMm(snapshot.baseDiameterMm);
+    setPrintHeightMm(snapshot.printHeightMm);
+    setHandleArcDeg(snapshot.handleArcDeg);
+    setTaperCorrection(snapshot.taperCorrection);
+    setOverallHeightMm(snapshot.overallHeightMm);
+    setBodyTopFromOverallMm(snapshot.bodyTopFromOverallMm);
+    setBodyBottomFromOverallMm(snapshot.bodyBottomFromOverallMm);
+    setTopMarginMm(snapshot.topMarginMm);
+    setBottomMarginMm(snapshot.bottomMarginMm);
+    dispatchTemplateEditor(templateEditorControllerActions.restoreDetectDraftSnapshot(snapshot));
+  }, [dispatchTemplateEditor]);
+
+  const acceptDetectedBodyReference = React.useCallback(() => {
+    if (stagedDetectResult) {
+      setAcceptedDetectResult(stagedDetectResult);
+      setStagedDetectResult(null);
+    }
+    setDetectDraftSnapshot(null);
+    setReviewAccepted(true);
+    setWorkflowStep("review");
+  }, [stagedDetectResult]);
+
+  const discardDetectedBodyReference = React.useCallback(() => {
+    if (detectDraftSnapshot) {
+      restoreDetectDraftSnapshot(detectDraftSnapshot);
+    }
+    setStagedDetectResult(null);
+    setDetectDraftSnapshot(null);
+    setDetectError(null);
+  }, [detectDraftSnapshot, restoreDetectDraftSnapshot]);
+
   /** Run auto-detect on the uploaded product image */
   const handleAutoDetect = async () => {
     if (!productImageFile) return;
     setDetecting(true);
     setDetectError(null);
-    setDetectResult(null);
+    if (!detectDraftSnapshot || reviewAccepted) {
+      setDetectDraftSnapshot(createDetectDraftSnapshot());
+    }
+    setStagedDetectResult(null);
+    setAcceptedDetectResult(reviewAccepted ? acceptedDetectResult : null);
+    setReviewAccepted(false);
     try {
-      const result = await detectTumblerFromImage(productImageFile);
-      setDetectResult(result);
+      const result = await detectTumblerFromImage(
+        productImageFile,
+        buildTemplateSectionTraceHeaders("template.detect"),
+      );
+      setStagedDetectResult(result);
       // Auto-fill form fields from detection
       const { draft, response } = result;
       const sug = response.suggestion;
@@ -5416,39 +6258,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
         setTopMarginMm(topM);
         setBottomMarginMm(bottomM);
       }
-
-      // Auto-assign product photo as front face + auto BG removal
-      if (productImageFile && !frontPhotoDataUrl) {
-        const original = await fileToFacePhotoDataUrl(productImageFile);
-        if (original) {
-          setFrontPhotoOrigin("lookup");
-          setFrontOriginalUrl(original);
-          setFrontPhotoDataUrl(original);
-          // Auto-trigger background removal
-          setFrontBgStatus("processing");
-          try {
-            const imgRes = await fetch(original);
-            const blob = await imgRes.blob();
-            const { removeBackground } = await import("@imgly/background-removal");
-            const clean = await removeBackground(blob, { model: "isnet_quint8", proxyToWorker: false });
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const url = reader.result as string;
-              if (url) {
-                setFrontCleanUrl(url);
-                setFrontPhotoDataUrl(url);
-                setFrontBgStatus("done");
-              } else {
-                setFrontBgStatus("failed");
-              }
-            };
-            reader.onerror = () => setFrontBgStatus("failed");
-            reader.readAsDataURL(clean);
-          } catch {
-            setFrontBgStatus("failed");
-          }
-        }
-      }
+      setWorkflowStep("review");
     } catch (e) {
       setDetectError(e instanceof Error ? e.message : "Auto-detect failed. Fill in manually.");
     } finally {
@@ -5712,9 +6522,20 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       frontPhotoDataUrl: frontPhotoDataUrl || undefined,
       backPhotoDataUrl: backPhotoDataUrl || undefined,
       bodyReferenceViewSide: productType === "flat" ? undefined : activeBodyReferenceViewSide,
+      bodyReferenceSourceTrust: productType === "flat" ? undefined : bodyReferenceTrustResolution.trust,
+      bodyReferenceOutlineSeedMode: productType === "flat" ? undefined : (effectiveBodyReferenceOutlineSeedMode ?? undefined),
+      bodyReferenceSourceOrigin: productType === "flat" ? undefined : bodyReferenceTrustResolution.sourceOrigin,
+      bodyReferenceSourceViewClass: productType === "flat" ? undefined : (bodyReferenceTrustResolution.sourceViewClass ?? undefined),
       manufacturerLogoStamp: productType === "flat" ? undefined : resolvedManufacturerLogoStamp,
+      appearance: appearanceState.appearance,
       productReferenceSet: productType === "flat" ? undefined : productReferenceSet,
-      pipelineProvenance: buildTemplatePipelineProvenance(diagnosticsForSave),
+      pipelineProvenance: buildTemplatePipelineProvenance(diagnosticsForSave, {
+        bodyReferenceViewSide: productType === "flat" ? null : activeBodyReferenceViewSide,
+        bodyReferenceSourceTrust: productType === "flat" ? null : bodyReferenceTrustResolution.trust,
+        bodyReferenceOutlineSeedMode: productType === "flat" ? null : effectiveBodyReferenceOutlineSeedMode,
+        bodyReferenceSourceOrigin: productType === "flat" ? null : bodyReferenceTrustResolution.sourceOrigin,
+        bodyReferenceSourceViewClass: productType === "flat" ? null : bodyReferenceTrustResolution.sourceViewClass,
+      }),
     };
 
     if (isEdit) {
@@ -5726,6 +6547,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   }, [
     backPhotoDataUrl,
     activeBodyReferenceViewSide,
+    bodyReferenceTrustResolution.sourceOrigin,
+    bodyReferenceTrustResolution.sourceViewClass,
+    bodyReferenceTrustResolution.trust,
+    appearanceState.appearance,
     bodyColorHex,
     lidColorHex,
     bodyBottomFromOverallMm,
@@ -5743,6 +6568,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     advancedGeometryOverridesUnlocked,
     derivedDiameterMismatchMm,
     editingTemplate,
+    effectiveBodyReferenceOutlineSeedMode,
     effectiveCylinderDiameterMm,
     hasBlockingGeometryMismatch,
     activeDrinkwareGlbStatus,
@@ -5827,37 +6653,73 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     },
   }), [handleSave]);
 
+  const showSourceStepContent = !usesGuidedReviewFlow || effectiveWorkflowStep === "source";
+  const showDetectStepContent = usesGuidedReviewFlow && effectiveWorkflowStep === "detect";
+  const showReviewStepContent = !usesGuidedReviewFlow || effectiveWorkflowStep === "review";
+  const canRunAutoDetect = Boolean(productImageFile && productType && productType !== "flat");
+  const detectStepMessage = !productType
+    ? "Choose a drinkware product type in Source first."
+    : productType === "flat"
+      ? "Detection is not required for flat templates."
+      : !productImageFile
+        ? "Upload a product image in Source before detection."
+        : "Run auto-detect to stage a BODY REFERENCE proposal for review.";
+  const reviewReadinessMessage = stagedDetectionPending
+    ? "Detection is staged locally. Accept or discard it before saving."
+    : reviewAccepted
+      ? "BODY REFERENCE has been accepted. Save stays blocked only if the underlying contracts are still incomplete."
+      : reviewFlowSaveGateReason ?? "Review is pending.";
+
   return (
     <div className={styles.form}>
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>Template readiness</div>
-        <div className={styles.readinessList}>
-          {templateReadinessItems.map((item) => (
-            <div key={item.label} className={styles.readinessItem}>
-              <div className={styles.readinessItemHeader}>
-                <span className={styles.readinessItemLabel}>{item.label}</span>
-                <span
-                  className={
-                    item.status === "ready"
-                      ? styles.lookupBadgePrimary
-                      : item.status === "action"
-                        ? styles.lookupBadgeWarning
-                        : styles.lookupBadgeReview
+      {usesGuidedReviewFlow && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Workflow</div>
+          <div className={styles.workflowSteps}>
+            {workflowSteps.map((step) => (
+              <button
+                key={step.step}
+                type="button"
+                data-section-id={`template.${step.step}`}
+                data-section-owner="template-editor"
+                data-testid={`template-${step.step}-step`}
+                className={[
+                  styles.workflowStep,
+                  effectiveWorkflowStep === step.step ? styles.workflowStepActive : "",
+                ].filter(Boolean).join(" ")}
+                onClick={() => {
+                  if (step.step === "detect" && !hasTemplateSourceImage) return;
+                  if (
+                    step.step === "review" &&
+                    !stagedDetectionPending &&
+                    !reviewAccepted &&
+                    !(activeCanonicalBodyProfile && activeCanonicalDimensionCalibration)
+                  ) {
+                    return;
                   }
-                >
-                  {item.status === "ready" ? "Ready" : item.status === "action" ? "Needs action" : "Review"}
-                </span>
-              </div>
-              <div className={styles.readinessItemDetail}>{item.detail}</div>
-            </div>
-          ))}
-        </div>
-        {saveDisabledReason && (
-          <div className={styles.readinessBlocker}>
-            Save is blocked: {saveDisabledReason}
+                  setWorkflowStep(step.step);
+                }}
+              >
+                <div className={styles.workflowStepHeader}>
+                  <span className={styles.workflowStepLabel}>{step.label}</span>
+                  <span
+                    className={
+                      step.status === "ready"
+                        ? styles.lookupBadgePrimary
+                        : step.status === "action"
+                          ? styles.lookupBadgeWarning
+                          : styles.lookupBadgeReview
+                    }
+                  >
+                    {step.status === "ready" ? "Ready" : step.status === "action" ? "Action" : "Review"}
+                  </span>
+                </div>
+                <div className={styles.workflowStepDetail}>{step.detail}</div>
+              </button>
+            ))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {errors.length > 0 && (
         <div ref={errorSummaryRef} className={styles.errorSummary} role="alert" aria-live="assertive">
@@ -5869,28 +6731,41 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           </div>
         </div>
       )}
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>Smart lookup</div>
-        <SmartTemplateLookupPanel
-          onResolved={applySmartLookupResult}
-          onOpenMapping={() => setShowMappingWizard(true)}
-          canOpenMapping={Boolean(glbPath.trim()) && Boolean(productType) && productType !== "flat"}
-          onClearResult={() => setSmartLookupApplied(false)}
-        />
-        <div className={styles.externalToolNotice}>
-          Need manual raster cleanup or tracing from a product photo?
-          {" "}
-          <Link
-            href="/admin/image-to-svg"
-            target="_blank"
-            rel="noreferrer"
-            className={styles.externalToolLink}
+      {showSourceStepContent && (
+        <>
+          <div
+            className={styles.section}
+            data-section-id="template.source"
+            data-section-owner="template-editor"
+            data-testid="template-source-section"
           >
-            Open Image to SVG in a new tab
-          </Link>
-          .
-        </div>
-      </div>
+            <div className={styles.sectionTitle}>1. Source</div>
+            <div className={styles.stepLead}>
+              Load the product source, confirm identity, and prepare the photos before detection.
+            </div>
+          </div>
+          <div className={styles.section}>
+            <div className={styles.sectionTitle}>Smart lookup</div>
+            <SmartTemplateLookupPanel
+              onResolved={applySmartLookupResult}
+              onOpenMapping={() => setShowMappingWizard(true)}
+              canOpenMapping={Boolean(glbPath.trim()) && Boolean(productType) && productType !== "flat"}
+              onClearResult={() => setSmartLookupApplied(false)}
+            />
+            <div className={styles.externalToolNotice}>
+              Need manual raster cleanup or tracing from a product photo?
+              {" "}
+              <Link
+                href="/admin/image-to-svg"
+                target="_blank"
+                rel="noreferrer"
+                className={styles.externalToolLink}
+              >
+                Open Image to SVG in a new tab
+              </Link>
+              .
+            </div>
+          </div>
       {/* ── Product identity ──────────────────────────────────────── */}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Product identity</div>
@@ -5964,8 +6839,18 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             className={styles.selectInput}
             value={productType}
             onChange={(e) => {
-              setProductType(e.target.value as TemplateProductType);
+              const nextProductType = e.target.value as TemplateProductType;
+              setProductType(nextProductType);
               setSmartLookupApplied(false);
+              setStagedDetectResult(null);
+              setAcceptedDetectResult(null);
+              setDetectDraftSnapshot(null);
+              setReviewAccepted(nextProductType === "flat");
+              setWorkflowStep(
+                nextProductType && nextProductType !== "flat" && hasTemplateSourceImage
+                  ? "detect"
+                  : "source",
+              );
               clearLookupState({ clearFamilyKey: true });
             }}
           >
@@ -6262,6 +7147,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               <FileDropZone
                 accept="image/*"
                 fileName={productImageLabel}
+                inputTestId="template-product-photo-input"
+                dropZoneTestId="template-product-photo-dropzone"
                 onFileSelected={(f) => void handleProductImage(f)}
                 onClear={clearProductImage}
               />
@@ -6282,7 +7169,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           </div>
         </div>
 
-        {productImageFile && productType && productType !== "flat" && !detectResult && !lookupResult && !smartLookupApplied && (
+        {!usesGuidedReviewFlow && productImageFile && productType && productType !== "flat" && !detectResult && !lookupResult && !smartLookupApplied && (
           <button
             type="button"
             className={styles.detectBtn}
@@ -6293,7 +7180,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           </button>
         )}
 
-        {detectResult && !lookupResult && !smartLookupApplied && (
+        {!usesGuidedReviewFlow && detectResult && !lookupResult && !smartLookupApplied && (
           <div className={styles.detectBanner}>
             <span className={styles.detectBannerText}>
               Detected: <strong>{name || "Unknown product"}</strong> — review and confirm
@@ -6309,7 +7196,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           </div>
         )}
 
-        {detectError && !lookupResult && !smartLookupApplied && (
+        {!usesGuidedReviewFlow && detectError && !lookupResult && !smartLookupApplied && (
           <div className={styles.detectErrorBanner}>
             {detectError} — fill in manually below.
           </div>
@@ -6335,6 +7222,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                     const original = await fileToFacePhotoDataUrl(f);
                     if (!original) return;
                     setFrontPhotoOrigin("manual");
+                    setBodyReferenceManualFrontConfirmed(true);
                     setFrontOriginalUrl(original);
                     setFrontCleanUrl("");
                     setFrontPhotoDataUrl(original);
@@ -6350,6 +7238,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                   }}
                   onClear={() => {
                     setFrontPhotoOrigin(null);
+                    setBodyReferenceManualFrontConfirmed(false);
                     setFrontPhotoDataUrl("");
                     setFrontOriginalUrl("");
                     setFrontCleanUrl("");
@@ -6500,11 +7389,15 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               </div>
             </div>
           )}
-          {requiresOrthographicBodyReferencePhoto && (
-            <div className={styles.detectErrorBanner}>
-              BODY REFERENCE is not using the lookup photo because the selected reference is angled
-              {preferredBodyReferenceImageCandidate?.viewClass ? ` (${preferredBodyReferenceImageCandidate.viewClass})` : ""}.
-              Upload a straight-on front photo if you want the shell overlay to line up with the image.
+          {bodyReferenceTrustReviewBanner && (
+            <div
+              className={
+                bodyReferenceTrustResolution.trust === "fit-debug-fallback"
+                  ? styles.detectErrorBanner
+                  : styles.bodyReferenceSourceWarning
+              }
+            >
+              {bodyReferenceTrustReviewBanner}
             </div>
           )}
 
@@ -6729,7 +7622,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 <span className={styles.modelPreviewMode}>
                   {getPreviewModelModeLabel({
                     productType,
-                    mode: previewModelMode,
+                    mode: effectivePreviewModelMode,
                     glbStatus: activeDrinkwareGlbStatus?.status,
                   })}
                 </span>
@@ -6738,30 +7631,30 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                     <>
                       <button
                         type="button"
-                        className={`${styles.detectBtn} ${previewModelMode === "alignment-model" ? styles.detectBtnActive : ""}`}
+                        className={`${styles.detectBtn} ${effectivePreviewModelMode === "alignment-model" ? styles.detectBtnActive : ""}`}
                         disabled={!canUseCanonicalPreviewModel}
-                        aria-pressed={previewModelMode === "alignment-model"}
+                        aria-pressed={effectivePreviewModelMode === "alignment-model"}
                         onClick={() => handlePreviewModelModeChange("alignment-model")}
                       >
-                        Alignment (Default)
+                        Alignment
                       </button>
                       <button
                         type="button"
-                        className={`${styles.detectBtn} ${previewModelMode === "full-model" ? styles.detectBtnActive : ""}`}
+                        className={`${styles.detectBtn} ${effectivePreviewModelMode === "full-model" ? styles.detectBtnActive : ""}`}
                         disabled={!canUseCanonicalPreviewModel}
-                        aria-pressed={previewModelMode === "full-model"}
+                        aria-pressed={effectivePreviewModelMode === "full-model"}
                         onClick={() => handlePreviewModelModeChange("full-model")}
                       >
-                        Full
+                        Full model
                       </button>
                       <button
                         type="button"
-                        className={`${styles.detectBtn} ${previewModelMode === "source-traced" ? styles.detectBtnActive : ""}`}
+                        className={`${styles.detectBtn} ${effectivePreviewModelMode === "source-traced" ? styles.detectBtnActive : ""}`}
                         disabled={!hasSourcePreviewModel}
-                        aria-pressed={previewModelMode === "source-traced"}
+                        aria-pressed={effectivePreviewModelMode === "source-traced"}
                         onClick={() => handlePreviewModelModeChange("source-traced")}
                       >
-                        Source (Compare)
+                        Source compare
                       </button>
                     </>
                   )}
@@ -6770,13 +7663,30 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       {liveFlatPreview.widthMm} x {liveFlatPreview.heightMm} x {liveFlatPreview.thicknessMm} mm
                     </span>
                   )}
-                  {productType !== "flat" && activeDrinkwareGlbStatus && previewModelMode === "source-traced" && (
+                  {productType !== "flat" && activeDrinkwareGlbStatus && effectivePreviewModelMode === "source-traced" && (
                     <span className={styles.modelPreviewDims}>
                       {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus.status) ?? "Source model"}
                     </span>
                   )}
                 </div>
               </div>
+              {(() => {
+                const hint = getPreviewModelModeHint({ productType, mode: effectivePreviewModelMode });
+                return hint ? (
+                  <div
+                    className={
+                      effectivePreviewModelMode === "full-model"
+                        ? styles.modelPreviewCompareNote
+                        : styles.modelPreviewHint
+                    }
+                  >
+                    {hint}
+                  </div>
+                ) : null;
+              })()}
+              {previewModeMessage && (
+                <div className={styles.modelPreviewCompareNote}>{previewModeMessage}</div>
+              )}
               <div className={styles.modelPreviewViewport}>
                 {glbPath.trim() || previewModelFile || liveFlatPreview || canUseCanonicalPreviewModel ? (
                   <>
@@ -6791,7 +7701,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       bedWidthMm={liveFlatPreview?.widthMm}
                       bedHeightMm={liveFlatPreview?.heightMm}
                       tumblerDims={
-                        previewModelMode === "full-model"
+                        effectivePreviewModelMode === "full-model"
                           ? (fullPreviewTumblerDims ?? liveTumblerDims)
                           : liveTumblerDims
                       }
@@ -6801,14 +7711,15 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       bodyTintColor={productType === "flat" ? undefined : bodyColorHex}
                       lidTintColor={productType === "flat" ? undefined : lidColorHex}
                       rimTintColor={productType === "flat" ? undefined : rimColorHex}
+                      ringFinish={productType === "flat" ? undefined : ringFinish}
                       lidAssemblyPreset={productType === "flat" ? undefined : fullPreviewLidPreset}
                       manufacturerLogoStamp={productType === "flat" ? undefined : manufacturerLogoStamp}
-                      showTemplateSurfaceZones={previewModelMode === "alignment-model"}
+                      showTemplateSurfaceZones={effectivePreviewModelMode === "alignment-model"}
                       dimensionCalibration={
                         productType === "flat"
                           ? undefined
                           : (
-                              previewModelMode === "full-model"
+                              effectivePreviewModelMode === "full-model"
                                 ? (fullPreviewCanonicalDimensionCalibration ?? activeCanonicalDimensionCalibration)
                                 : activeCanonicalDimensionCalibration
                             )
@@ -6817,7 +7728,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                         productType === "flat"
                           ? undefined
                           : (
-                              previewModelMode === "full-model"
+                              effectivePreviewModelMode === "full-model"
                                 ? (fullPreviewCanonicalBodyProfile ?? activeCanonicalBodyProfile)
                                 : activeCanonicalBodyProfile
                             )
@@ -6825,9 +7736,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                       canonicalHandleProfile={productType === "flat" ? undefined : normalizedCanonicalHandleProfile}
                       editableHandlePreview={productType === "flat" ? undefined : editableHandlePreview}
                       previewModelMode={previewModelMode}
+                      onPreviewStateChange={setPreviewModelState}
                       onPipelineStage={(stage) => handleViewerSyncStage("model-viewer", stage)}
                     />
-                    {productType !== "flat" && previewModelMode === "alignment-model" && activeCanonicalBodyProfile && activeCanonicalDimensionCalibration && (
+                    {productType !== "flat" && effectivePreviewModelMode === "alignment-model" && activeCanonicalBodyProfile && activeCanonicalDimensionCalibration && (
                       <svg
                         className={styles.modelPreviewOverlay}
                         viewBox={`${activeCanonicalDimensionCalibration.svgFrontViewBoxMm.x} ${activeCanonicalDimensionCalibration.svgFrontViewBoxMm.y} ${activeCanonicalDimensionCalibration.svgFrontViewBoxMm.width} ${activeCanonicalDimensionCalibration.svgFrontViewBoxMm.height}`}
@@ -6887,14 +7799,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                   <div className={styles.modelPreviewEmpty}>Preview unavailable</div>
                 )}
               </div>
-              {productType !== "flat" && previewModelMode === "alignment-model" && alignmentShellMismatchSummary && (
+              {productType !== "flat" && effectivePreviewModelMode === "alignment-model" && alignmentShellMismatchSummary && (
                 <div className={styles.modelPreviewDims}>
                   Canonical silhouette QA: avg {alignmentShellMismatchSummary.averageErrorMm.toFixed(2)} mm / max {alignmentShellMismatchSummary.maxErrorMm.toFixed(2)} mm across {alignmentShellMismatchSummary.rowCount} rows
                   {" "}
                   {silhouetteLockPass ? "PASS" : "MISMATCH WARNING"}
                 </div>
               )}
-              {productType !== "flat" && previewModelMode === "alignment-model" && alignmentOrientationQASummary && (
+              {productType !== "flat" && effectivePreviewModelMode === "alignment-model" && alignmentOrientationQASummary && (
                 <div className={styles.modelPreviewDims}>
                   Canonical orientation QA: body top {alignmentOrientationQASummary.bodyTopWorldY.toFixed(1)} &gt; body bottom {alignmentOrientationQASummary.bodyBottomWorldY.toFixed(1)}
                   {" / "}
@@ -6907,12 +7819,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                   {orientationLockPass ? "PASS" : "ORIENTATION WARNING"}
                 </div>
               )}
-              {productType !== "flat" && canUseCanonicalPreviewModel && previewModelMode === "alignment-model" && (
+              {productType !== "flat" && canUseCanonicalPreviewModel && effectivePreviewModelMode === "alignment-model" && (
                 <div className={styles.modelPreviewHint}>
                   Alignment is the production-default view. Placement, wrap mapping, centerline, and snap stay pinned to canonical alignment data.
                 </div>
               )}
-              {productType !== "flat" && canUseCanonicalPreviewModel && previewModelMode === "source-traced" && (
+              {productType !== "flat" && canUseCanonicalPreviewModel && effectivePreviewModelMode === "source-traced" && (
                 <div className={styles.modelPreviewCompareNote}>
                   Source is compare/debug only. Placement, wrap mapping, centerline, and snap still use canonical alignment data.
                 </div>
@@ -6920,6 +7832,241 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               {previewLoadError && (
                 <div className={styles.modelPreviewNote}>{previewLoadError}</div>
               )}
+            </div>
+          </div>
+        )}
+
+        {productType !== "flat" && (
+          <div className={styles.fieldRow}>
+            <label className={styles.fieldLabel}>Appearance</label>
+            <div className={styles.appearancePanel}>
+              <div className={styles.appearanceHeader}>
+                <div className={styles.appearanceHeaderText}>
+                  <span className={styles.appearanceTitle}>Preview QA</span>
+                  <span className={styles.appearanceNote}>
+                    Appearance controls affect preview/template appearance only. They do not change template geometry, wrap math, or printable limits.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  disabled={!canResampleAppearanceFromFrontPhoto}
+                  onClick={handleResampleAppearanceFromFrontPhoto}
+                >
+                  Re-sample from current front photo
+                </button>
+              </div>
+              <div className={styles.appearanceGrid}>
+                <div className={styles.appearanceCard}>
+                  <div className={styles.appearanceCardHeader}>
+                    <div className={styles.appearanceCardTitleGroup}>
+                      <span className={styles.appearanceCardTitle}>Body</span>
+                      <span className={styles.appearanceSourceBadge}>
+                        {getTemplateAppearanceSourceLabel(appearanceState.appearance.body.source)}
+                      </span>
+                    </div>
+                    <span className={styles.appearanceSwatchLabel}>
+                      effective
+                      <span className={styles.appearanceSwatch} style={{ background: bodyColorHex }} aria-hidden="true" />
+                      <code>{bodyColorHex}</code>
+                    </span>
+                  </div>
+                  <div className={styles.appearanceCardControls}>
+                    <input
+                      type="color"
+                      className={styles.appearanceColorPicker}
+                      aria-label="Body color picker"
+                      value={bodyColorHex}
+                      onChange={(event) => {
+                        const nextHex = event.target.value;
+                        handleAppearanceDraftHexChange("body", nextHex);
+                        applyManualAppearanceColor("body", nextHex);
+                      }}
+                    />
+                    <input
+                      type="text"
+                      className={styles.input}
+                      value={appearanceDraftHex.body}
+                      onChange={(event) => handleAppearanceDraftHexChange("body", event.target.value)}
+                      onBlur={() => commitAppearanceDraftHex("body")}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitAppearanceDraftHex("body");
+                        }
+                      }}
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className={styles.detectBtn}
+                      disabled={!appearanceState.appearance.body.sampledHex}
+                      onClick={() => applySampledAppearanceColor("body")}
+                    >
+                      Use sampled
+                    </button>
+                  </div>
+                  <div className={styles.appearanceSampleRow}>
+                    <span className={styles.appearanceSwatchLabel}>
+                      sampled
+                      <span
+                        className={styles.appearanceSwatch}
+                        style={{ background: appearanceState.appearance.body.sampledHex ?? "transparent" }}
+                        aria-hidden="true"
+                      />
+                      <code>{appearanceState.appearance.body.sampledHex ?? "none"}</code>
+                    </span>
+                  </div>
+                </div>
+
+                <div className={styles.appearanceCard}>
+                  <div className={styles.appearanceCardHeader}>
+                    <div className={styles.appearanceCardTitleGroup}>
+                      <span className={styles.appearanceCardTitle}>Lid</span>
+                      <span className={styles.appearanceSourceBadge}>
+                        {getTemplateAppearanceSourceLabel(appearanceState.appearance.lid.source)}
+                      </span>
+                    </div>
+                    <span className={styles.appearanceSwatchLabel}>
+                      effective
+                      <span className={styles.appearanceSwatch} style={{ background: lidColorHex }} aria-hidden="true" />
+                      <code>{lidColorHex}</code>
+                    </span>
+                  </div>
+                  <div className={styles.appearanceCardControls}>
+                    <input
+                      type="color"
+                      className={styles.appearanceColorPicker}
+                      aria-label="Lid color picker"
+                      value={lidColorHex}
+                      onChange={(event) => {
+                        const nextHex = event.target.value;
+                        handleAppearanceDraftHexChange("lid", nextHex);
+                        applyManualAppearanceColor("lid", nextHex);
+                      }}
+                    />
+                    <input
+                      type="text"
+                      className={styles.input}
+                      value={appearanceDraftHex.lid}
+                      onChange={(event) => handleAppearanceDraftHexChange("lid", event.target.value)}
+                      onBlur={() => commitAppearanceDraftHex("lid")}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitAppearanceDraftHex("lid");
+                        }
+                      }}
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className={styles.detectBtn}
+                      disabled={!appearanceState.appearance.lid.sampledHex}
+                      onClick={() => applySampledAppearanceColor("lid")}
+                    >
+                      Use sampled
+                    </button>
+                  </div>
+                  <div className={styles.appearanceSampleRow}>
+                    <span className={styles.appearanceSwatchLabel}>
+                      sampled
+                      <span
+                        className={styles.appearanceSwatch}
+                        style={{ background: appearanceState.appearance.lid.sampledHex ?? "transparent" }}
+                        aria-hidden="true"
+                      />
+                      <code>{appearanceState.appearance.lid.sampledHex ?? "none"}</code>
+                    </span>
+                  </div>
+                </div>
+
+                <div className={styles.appearanceCard}>
+                  <div className={styles.appearanceCardHeader}>
+                    <div className={styles.appearanceCardTitleGroup}>
+                      <span className={styles.appearanceCardTitle}>Rim / ring</span>
+                      <span className={styles.appearanceSourceBadge}>
+                        {getTemplateAppearanceSourceLabel(appearanceState.appearance.rim.source)}
+                      </span>
+                    </div>
+                    <span className={styles.appearanceSwatchLabel}>
+                      effective
+                      <span className={styles.appearanceSwatch} style={{ background: rimColorHex }} aria-hidden="true" />
+                      <code>{rimColorHex}</code>
+                    </span>
+                  </div>
+                  <div className={styles.appearanceCardControls}>
+                    <input
+                      type="color"
+                      className={styles.appearanceColorPicker}
+                      aria-label="Rim color picker"
+                      value={rimColorHex}
+                      onChange={(event) => {
+                        const nextHex = event.target.value;
+                        handleAppearanceDraftHexChange("rim", nextHex);
+                        applyManualAppearanceColor("rim", nextHex);
+                      }}
+                    />
+                    <input
+                      type="text"
+                      className={styles.input}
+                      value={appearanceDraftHex.rim}
+                      onChange={(event) => handleAppearanceDraftHexChange("rim", event.target.value)}
+                      onBlur={() => commitAppearanceDraftHex("rim")}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitAppearanceDraftHex("rim");
+                        }
+                      }}
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className={styles.detectBtn}
+                      disabled={!appearanceState.appearance.rim.sampledHex}
+                      onClick={() => applySampledAppearanceColor("rim")}
+                    >
+                      Use sampled
+                    </button>
+                  </div>
+                  <div className={styles.appearanceSampleRow}>
+                    <span className={styles.appearanceSwatchLabel}>
+                      sampled
+                      <span
+                        className={styles.appearanceSwatch}
+                        style={{ background: appearanceState.appearance.rim.sampledHex ?? "transparent" }}
+                        aria-hidden="true"
+                      />
+                      <code>{appearanceState.appearance.rim.sampledHex ?? "none"}</code>
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className={styles.appearanceRingRow}>
+                <span className={styles.appearanceRingLabel}>Ring finish</span>
+                <div className={styles.appearanceRingToggle}>
+                  <button
+                    type="button"
+                    className={`${styles.detectBtn} ${ringFinish === "metallic-silver" ? styles.detectBtnActive : ""}`}
+                    aria-pressed={ringFinish === "metallic-silver"}
+                    onClick={() => handleRingFinishChange("metallic-silver")}
+                  >
+                    Metallic silver
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.detectBtn} ${ringFinish === "tinted" ? styles.detectBtnActive : ""}`}
+                    aria-pressed={ringFinish === "tinted"}
+                    onClick={() => handleRingFinishChange("tinted")}
+                  >
+                    Tinted
+                  </button>
+                </div>
+                <span className={styles.appearanceRingNote}>
+                  Metallic silver keeps the ring neutral; tinted uses the stored rim color in Alignment preview only.
+                </span>
+              </div>
             </div>
           </div>
         )}
@@ -7128,6 +8275,149 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       </div>
 
       {/* ── Physical dimensions ───────────────────────────────────── */}
+        </>
+      )}
+
+      {showDetectStepContent && (
+        <div
+          className={styles.section}
+          data-section-id="template.detect"
+          data-section-owner="template-editor"
+          data-testid="template-detect-section"
+        >
+          <div className={styles.sectionTitle}>2. Detect</div>
+          <div className={styles.stepLead}>
+            Stage a BODY REFERENCE proposal without saving it yet.
+          </div>
+          <div className={styles.detectStageCard}>
+            <div className={styles.detectStageSummary}>{detectStepMessage}</div>
+            {detectError && (
+              <div className={styles.detectErrorBanner}>{detectError}</div>
+            )}
+            <div className={styles.detectStageActions}>
+              <button
+                type="button"
+                className={styles.detectBtn}
+                onClick={() => void handleAutoDetect()}
+                disabled={!canRunAutoDetect || detecting}
+                title={!canRunAutoDetect ? detectStepMessage : undefined}
+              >
+                {detecting ? "Running auto-detect..." : "Run auto-detect"}
+              </button>
+              <button
+                type="button"
+                className={styles.cancelBtn}
+                onClick={() => setWorkflowStep("source")}
+              >
+                Back to source
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showReviewStepContent && (
+        <>
+          {usesGuidedReviewFlow && (
+            <div
+              className={styles.section}
+              data-section-id="template.review"
+              data-section-owner="template-editor"
+              data-testid="template-review-section"
+            >
+              <div className={styles.sectionTitle}>3. Review &amp; Save</div>
+              <div className={styles.stepLead}>
+                Confirm the staged body reference before it becomes the template baseline.
+              </div>
+              <div className={styles.reviewStatusBar}>
+                {reviewReadinessMessage}
+              </div>
+              {stagedDetectionPending && (
+                <div className={styles.detectBanner}>
+                  <span className={styles.detectBannerText}>
+                    Detection is staged locally. Review the printable band, then accept or discard it.
+                  </span>
+                </div>
+              )}
+              {!stagedDetectionPending && !reviewAccepted && (
+                <div className={styles.bodyReferenceLockedNotice}>
+                  BODY REFERENCE is still pending review. Auto-detect or lookup can populate the draft, but save remains blocked until you accept it here.
+                </div>
+              )}
+            </div>
+          )}
+
+      {primaryReviewProjection && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Body reference</div>
+          <div className={styles.reviewCardGrid}>
+            <div className={styles.reviewCard}>
+              <div className={styles.reviewCardTitle}>Body bounds</div>
+              {primaryReviewProjection.bodyBounds.map((field) => (
+                <div key={field.label} className={styles.reviewCardRow}>
+                  <span>{field.label}</span>
+                  <strong>{field.value}</strong>
+                </div>
+              ))}
+            </div>
+            <div className={styles.reviewCard}>
+              <div className={styles.reviewCardTitle}>Printable band</div>
+              {primaryReviewProjection.printableBand.map((field) => (
+                <div key={field.label} className={styles.reviewCardRow}>
+                  <span>{field.label}</span>
+                  <strong>{field.value}</strong>
+                </div>
+              ))}
+            </div>
+            <div className={styles.reviewCard}>
+              <div className={styles.reviewCardTitle}>Exclusions</div>
+              {primaryReviewProjection.exclusions.map((field) => (
+                <div key={field.label} className={styles.reviewCardRow}>
+                  <span>{field.label}</span>
+                  <strong>{field.value}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+          {bodyReferenceWarnings.length > 0 && (
+            <div className={styles.reviewWarningBanner}>
+              {bodyReferenceWarnings[0]}
+            </div>
+          )}
+        </div>
+      )}
+
+      {productType !== "flat" && !primaryReviewProjection && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Body reference</div>
+          <div className={styles.bodyReferenceLockedNotice}>
+            BODY REFERENCE is not ready yet. Run detection or finish the required body measurements, then review the printable band here.
+          </div>
+        </div>
+      )}
+
+      {showReviewStepContent && Boolean(productType && productType !== "flat") && (
+        <details
+          className={styles.advancedDrawer}
+          open={advancedDiagnosticsOpen}
+          onToggle={(event) => setAdvancedDiagnosticsOpen((event.target as HTMLDetailsElement).open)}
+        >
+          <summary className={styles.advancedDrawerSummary}>
+            Advanced diagnostics
+          </summary>
+          <div className={styles.advancedDrawerBody}>
+            {primaryReviewProjection && (
+              <div className={styles.reviewCard}>
+                <div className={styles.reviewCardTitle}>Diagnostics snapshot</div>
+                {primaryReviewProjection.advanced.map((field) => (
+                  <div key={field.label} className={styles.reviewCardRow}>
+                    <span>{field.label}</span>
+                    <strong>{field.value}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+
       {productType !== "flat" && pipelineDebugSections.length > 0 && (
         <div className={styles.section}>
           <PipelineDebugDrawer
@@ -7228,7 +8518,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 ? `${round2(activePrintableSurfaceResolution.printableSurfaceContract.printableTopMm)} mm`
                 : "\u2014"}
             </span>
-            <span className={styles.fieldHint}>Derived from detected lid/body or silver-ring boundaries, measured from the overall top.</span>
+            <span className={styles.fieldHint}>Authoritative body-band start measured from the overall top. Lid and ring detections stay as semantic exclusions.</span>
           </div>
         )}
 
@@ -7252,7 +8542,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 ? `${round2(activePrintableSurfaceResolution.printableSurfaceContract.printableHeightMm)} mm`
                 : (printHeightMm > 0 ? `${round2(printHeightMm)} mm` : "\u2014")}
             </span>
-            <span className={styles.fieldHint}>Derived from printable top and bottom boundaries; not seeded from the overall catalog height.</span>
+            <span className={styles.fieldHint}>Authoritative body-band height from printable top and bottom. Top exclusions are tracked separately.</span>
           </div>
         )}
 
@@ -7301,9 +8591,15 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           <div className={styles.fieldRow}>
             <label className={styles.fieldLabel}>Canonical body shell</label>
             <span className={styles.readOnly}>
-              clean side {activeCanonicalBodyProfile.symmetrySource} / mirrored shell / body-only
+              {activeBodyReferenceOutline?.sourceContourMode === "body-only"
+                ? "direct body trace / centered shell / handle excluded"
+                : `clean side ${activeCanonicalBodyProfile.symmetrySource} / mirrored shell / body-only`}
             </span>
-            <span className={styles.fieldHint}>Body geometry is sampled from the non-handle side and mirrored across the detected body axis. Interior logo/ring analysis does not redefine the shell.</span>
+            <span className={styles.fieldHint}>
+              {activeBodyReferenceOutline?.sourceContourMode === "body-only"
+                ? "Body geometry is sampled directly from the traced body contour. Handle-side metadata only reserves the keep-out sector and does not reshape the shell."
+                : "Body geometry is sampled from the non-handle side and mirrored across the detected body axis. Interior logo/ring analysis does not redefine the shell."}
+            </span>
           </div>
         )}
 
@@ -7482,6 +8778,28 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 ? "Back tracing is using the selected true-back/manual back source only."
                 : "Front tracing is using the selected front/body-reference source only."}
             </div>
+            <div
+              className={
+                isTrustedBodyReferenceSourceTrust(bodyReferenceTrustResolution.trust)
+                  ? styles.bodyReferenceSourceNote
+                  : styles.bodyReferenceSourceWarning
+              }
+            >
+              {bodyReferenceTrustMessage}
+            </div>
+            <div
+              className={effectiveBodyReferenceOutlineSeedMode === "fit-debug-fallback"
+                ? styles.bodyReferenceSourceWarning
+                : styles.bodyReferenceSourceNote}
+            >
+              {effectiveBodyReferenceOutlineSeedMode === "fresh-image-trace"
+                ? "BODY REFERENCE shell is currently seeded from a fresh image trace."
+                : effectiveBodyReferenceOutlineSeedMode === "saved-outline"
+                  ? "BODY REFERENCE shell is currently showing the saved outline for this template."
+                  : effectiveBodyReferenceOutlineSeedMode === "fit-debug-fallback"
+                    ? "BODY REFERENCE shell is currently using the fit-debug fallback because no valid image trace was accepted."
+                    : "BODY REFERENCE shell has not been seeded yet."}
+            </div>
             {!hasRealBackTraceSource && bodyReferenceBackUnavailableReason && (
               <div className={styles.bodyReferenceSourceWarning}>
                 Back unavailable: {bodyReferenceBackUnavailableReason}
@@ -7534,7 +8852,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               <div className={`${styles.surfaceContractSummaryNote} ${bodyReferenceQa?.severity === "action" ? styles.surfaceContractSummaryWarning : ""}`}>
                 {bodyReferenceQa?.severity === "action" && bodyReferenceWarnings[0]
                   ? bodyReferenceWarnings[0]
-                  : "Axial bands only affect printable height. Wrap width and centerline stay unchanged."}
+                  : "Axial exclusions annotate lid, ring, and base zones without changing the saved body-band contract. Wrap width and centerline stay unchanged."}
               </div>
             </div>
           )}
@@ -7560,7 +8878,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             lidColorHex={lidColorHex}
             rimColorHex={rimColorHex}
             fitDebug={lookupResult?.fitDebug ?? null}
+            allowFitDebugPhotoCrop={allowFitDebugPhotoCrop}
             canonicalHandleProfile={normalizedCanonicalHandleProfile ?? null}
+            canonicalBodySvgPath={activeCanonicalBodyProfile?.svgPath ?? null}
             outlineProfile={bodyOutlineProfile}
             referencePaths={referencePaths}
             referenceLayerState={referenceLayerState}
@@ -7636,7 +8956,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             onPhotoOffsetYChange={setReferencePhotoOffsetYPct}
             onPhotoAnchorYChange={setReferencePhotoAnchorY}
             onPhotoCenterModeChange={setReferencePhotoCenterMode}
-            onColorsChange={handleAutoSampleColors}
+            colorResampleRequestKey={appearanceResampleRequestKey}
+            onColorsChange={handleApplyAppearanceSample}
             onDiameterChange={(nextDiameter) => {
               if (advancedGeometryOverridesUnlocked) {
                 setDiameterMm(round2(nextDiameter));
@@ -7690,6 +9011,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               commitReferencePaths(nextPaths);
               commitBodyOutlineProfile(nextPaths.bodyOutline ?? undefined);
             }}
+            onOutlineSeedModeChange={setBodyReferenceOutlineSeedMode}
             onReferenceLayerStateChange={commitReferenceLayerState}
             onPipelineStage={(stage) => handleViewerSyncStage("engravable-zone-editor", stage)}
           />
@@ -7697,7 +9019,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       )}
 
       {/* ── Default laser settings ────────────────────────────────── */}
-      <div className={styles.section}>
+          </div>
+        </details>
+      )}
+        </>
+      )}
+      {showReviewStepContent && (
+        <div className={styles.section}>
         <div className={styles.sectionTitle}>Default laser settings</div>
 
         <div className={styles.fieldRow}>
@@ -7768,7 +9096,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           </select>
         </div>
 
-      </div>
+        </div>
+      )}
 
       {/* ── Errors ────────────────────────────────────────────────── */}
       {errors.length > 0 && (
@@ -7781,19 +9110,94 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
       {/* ── Buttons ───────────────────────────────────────────────── */}
       {showActions ? (
-        <div className={styles.btnRow}>
-          <button type="button" className={styles.cancelBtn} onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className={styles.saveBtn}
-            onClick={() => void handleSave()}
-            disabled={saveBlockingIssues.length > 0 || lookingUpItem || detecting || checkingGlbPath}
-            title={saveDisabledReason ?? undefined}
-          >
-            {isEdit ? "Save changes" : "Save template"}
-          </button>
+        <div className={styles.stickyActionBar}>
+          <div className={styles.finalReadinessBar}>
+            {saveDisabledReason
+              ? `Save blocked: ${saveDisabledReason}`
+              : "Template is ready to save."}
+          </div>
+          <div className={styles.btnRow}>
+            <button type="button" className={styles.cancelBtn} onClick={onCancel}>
+              Cancel
+            </button>
+            {usesGuidedReviewFlow && effectiveWorkflowStep === "source" && (
+              <button
+                type="button"
+                className={styles.detectBtn}
+                onClick={() => setWorkflowStep("detect")}
+                disabled={!hasTemplateSourceImage || !productType}
+                title={!productType ? "Choose a product type first." : (!hasTemplateSourceImage ? "Add a product image first." : undefined)}
+              >
+                Continue to detect
+              </button>
+            )}
+            {usesGuidedReviewFlow && effectiveWorkflowStep === "detect" && (
+              <button
+                type="button"
+                className={styles.detectBtn}
+                onClick={() => void handleAutoDetect()}
+                disabled={!canRunAutoDetect || detecting}
+                title={!canRunAutoDetect ? detectStepMessage : undefined}
+              >
+                {detecting ? "Running auto-detect..." : "Run auto-detect"}
+              </button>
+            )}
+            {usesGuidedReviewFlow && effectiveWorkflowStep === "review" && (
+              <>
+                {(stagedDetectionPending || (!reviewAccepted && (activeCanonicalBodyProfile || activeCanonicalDimensionCalibration))) && (
+                  <>
+                    <button
+                      type="button"
+                      className={styles.cancelBtn}
+                      onClick={discardDetectedBodyReference}
+                      disabled={!stagedDetectionPending}
+                    >
+                      Discard
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.detectBtn}
+                      onClick={() => void handleAutoDetect()}
+                      disabled={!canRunAutoDetect || detecting}
+                      title={!canRunAutoDetect ? detectStepMessage : undefined}
+                    >
+                      {detecting ? "Re-running..." : "Re-run detect"}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.saveBtn}
+                      onClick={acceptDetectedBodyReference}
+                      disabled={detecting}
+                    >
+                      Accept detected body reference
+                    </button>
+                  </>
+                )}
+                {(reviewAccepted || !usesGuidedReviewFlow) && (
+                  <button
+                    type="button"
+                    className={styles.saveBtn}
+                    onClick={() => void handleSave()}
+                    disabled={saveBlockingIssues.length > 0 || lookingUpItem || detecting || checkingGlbPath}
+                    title={saveDisabledReason ?? undefined}
+                  >
+                    {isEdit ? "Save changes" : "Save template"}
+                  </button>
+                )}
+              </>
+            )}
+            {!usesGuidedReviewFlow && (
+              <button
+                type="button"
+                className={styles.saveBtn}
+                onClick={() => void handleSave()}
+                disabled={saveBlockingIssues.length > 0 || lookingUpItem || detecting || checkingGlbPath}
+                title={saveDisabledReason ?? undefined}
+              >
+                {isEdit ? "Save changes" : "Save template"}
+              </button>
+            )}
+          </div>
         </div>
       ) : null}
 
