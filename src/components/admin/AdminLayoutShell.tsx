@@ -3210,7 +3210,7 @@ export function AdminLayoutShell() {
                   setTemplateEditorDebugState(null);
                   cancelCreateTemplate();
                 }}
-                onDebugStateChange={setTemplateEditorDebugState}
+                onDebugStateChange={debugEnabled ? setTemplateEditorDebugState : undefined}
               />
             </TemplateEditorSurface>
           ) : (
@@ -3228,7 +3228,7 @@ export function AdminLayoutShell() {
                 setTemplateEditorDebugState(null);
                 cancelCreateTemplate();
               }}
-              onDebugStateChange={setTemplateEditorDebugState}
+              onDebugStateChange={debugEnabled ? setTemplateEditorDebugState : undefined}
             />
           )
         ) : (

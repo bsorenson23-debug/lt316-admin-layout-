@@ -67,6 +67,8 @@ import {
 import { buildTemplateHandlePreset } from "@/lib/handlePresets";
 import { buildTemplateLidPreset, type LidAssemblyPreset } from "@/lib/lidPresets";
 import {
+  buildContourSvgPath,
+  cloneEditableBodyOutline,
   cloneReferenceLayerState,
   createEditableBodyOutline,
   createEditableBodyOutlineFromTraceDebug,
@@ -75,6 +77,7 @@ import {
   createReferencePaths,
   deriveDimensionsFromEditableBodyOutline,
 } from "@/lib/editableBodyOutline";
+import { buildSymmetricContourFromSourceAxis } from "@/lib/bodyContourSourceAxis";
 import { extractCanonicalHandleProfileFromCutout } from "@/lib/canonicalHandleProfile";
 import {
   resolveCanonicalHandleRenderMode,
@@ -88,6 +91,7 @@ import {
   deriveBodyReferencePipeline,
   type BodyReferencePipelineResult,
 } from "@/lib/bodyReferencePipeline";
+import { resolveCommittedBodyReferenceAuthority } from "@/lib/bodyReferenceDebugView";
 import {
   buildTemplatePipelineProvenance,
   buildTemplateReloadVerificationStage,
@@ -110,6 +114,7 @@ import {
   deriveTumblerPreviewModelState,
   type TumblerPreviewModelState,
 } from "@/lib/tumblerPreviewModelState";
+import { resolveMatchedProfileBodyShellBounds } from "@/lib/tumblerBodyShellBounds";
 import { buildAdminTraceHeaders } from "@/features/admin/shared";
 import {
   createInitialTemplateEditorControllerState,
@@ -386,6 +391,230 @@ function editableOutlineGeometrySignature(outline: EditableBodyOutline | null | 
         }
       : null,
   });
+}
+
+function parseLinearContourPathPoints(path: string | null): {
+  points: Array<{ x: number; y: number }>;
+  closed: boolean;
+} | null {
+  if (!path) return null;
+  const tokens = path.trim().split(/\s+/);
+  const points: Array<{ x: number; y: number }> = [];
+  let closed = false;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (!token) continue;
+    if (token === "M" || token === "L") {
+      const x = Number(tokens[index + 1]);
+      const y = Number(tokens[index + 2]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      points.push({ x, y });
+      index += 2;
+      continue;
+    }
+    if (token === "Z") {
+      closed = true;
+      continue;
+    }
+    const x = Number(token);
+    const y = Number(tokens[index + 1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    points.push({ x, y });
+    index += 1;
+  }
+  return points.length >= 2 ? { points, closed } : null;
+}
+
+function buildDirectContourFromApprovedProfilePoints(
+  points: Array<{ x: number; y: number }> | null | undefined,
+): Array<{ x: number; y: number }> | null {
+  const ordered = (points ?? [])
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((left, right) => left.y - right.y);
+  if (ordered.length < 4) return null;
+
+  const right: Array<{ x: number; y: number }> = [];
+  for (let index = 0; index < ordered.length; index += 1) {
+    const current = ordered[index]!;
+    const next = ordered[index + 1] ?? null;
+    right.push({
+      x: round2(Math.abs(current.x)),
+      y: round2(current.y),
+    });
+    if (!next) continue;
+    const spanY = Math.abs(next.y - current.y);
+    const subdivisions = Math.max(1, Math.ceil(spanY / 10));
+    for (let step = 1; step < subdivisions; step += 1) {
+      const t = step / subdivisions;
+      right.push({
+        x: round2(Math.abs(current.x + ((next.x - current.x) * t))),
+        y: round2(current.y + ((next.y - current.y) * t)),
+      });
+    }
+  }
+
+  if (right.length < 4) return null;
+  const left = [...right]
+    .reverse()
+    .map((point) => ({
+      x: round2(-point.x),
+      y: point.y,
+    }));
+  return [...right, ...left];
+}
+
+function buildApprovedProfilePointsFromDirectContour(
+  contour: Array<{ x: number; y: number }> | null | undefined,
+): Array<{ x: number; y: number; role: string; pointType: "smooth" }> | null {
+  const finiteContour = (contour ?? [])
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (finiteContour.length < 8) {
+    return null;
+  }
+  const rowsByY = new Map<number, { y: number; radius: number }>();
+  for (const point of finiteContour) {
+    const y = round2(point.y);
+    const radius = round2(Math.abs(point.x));
+    const existing = rowsByY.get(y);
+    if (!existing || radius > existing.radius) {
+      rowsByY.set(y, { y, radius });
+    }
+  }
+  const points = [...rowsByY.values()]
+    .sort((left, right) => left.y - right.y)
+    .map((row, index, rows) => {
+      const t = rows.length > 1 ? index / (rows.length - 1) : 0;
+      const role =
+        index === 0
+          ? "topOuter"
+          : index === rows.length - 1
+            ? "base"
+            : t < 0.32
+              ? "body"
+              : t < 0.7
+                ? "lowerTaper"
+                : "bevel";
+      return {
+        x: round2(row.radius),
+        y: round2(row.y),
+        pointType: "smooth" as const,
+        role,
+      };
+    });
+  return points.length >= 4 ? points : null;
+}
+
+function buildApprovedBodyOutline(
+  outline: EditableBodyOutline | null | undefined,
+  options?: {
+    bodyTopMm?: number | null;
+    bodyBottomMm?: number | null;
+    topDiameterMm?: number | null;
+  },
+): EditableBodyOutline | null {
+  if (!outline) return null;
+  if (outline.sourceContourMode === "body-only") {
+    return outline;
+  }
+
+  const requestedBodyTopMm = Number.isFinite(options?.bodyTopMm ?? NaN)
+    ? round2(options?.bodyTopMm ?? 0)
+    : null;
+  const requestedBodyBottomMm = Number.isFinite(options?.bodyBottomMm ?? NaN)
+    ? round2(options?.bodyBottomMm ?? 0)
+    : null;
+  const requestedTopDiameterMm =
+    Number.isFinite(options?.topDiameterMm ?? NaN) && (options?.topDiameterMm ?? 0) > 0
+      ? round2(options?.topDiameterMm ?? 0)
+      : null;
+  const targetBodyTopMm = requestedBodyTopMm ?? 0;
+  const targetBodyBottomMm = requestedBodyBottomMm ?? (() => {
+    if (outline.directContour?.length) {
+      return round2(Math.max(...outline.directContour.map((point) => point.y)));
+    }
+    return targetBodyTopMm + 1;
+  })();
+  const canResolveApprovedContour =
+    requestedTopDiameterMm != null &&
+    targetBodyBottomMm - targetBodyTopMm > 1;
+  const buildApprovedContourFromPath = (path: string | null): Array<{ x: number; y: number }> | null => {
+    if (!canResolveApprovedContour || !path) return null;
+    return buildSymmetricContourFromSourceAxis(path, {
+      bodyTopMm: targetBodyTopMm,
+      bodyBottomMm: targetBodyBottomMm,
+      topDiameterMm: requestedTopDiameterMm!,
+    });
+  };
+
+  const approvedSourceContour = (() => {
+    if (!outline.sourceContour || outline.sourceContour.length < 8) return null;
+    const sourceContourPath = buildContourSvgPath(outline.sourceContour);
+    return buildApprovedContourFromPath(sourceContourPath);
+  })();
+
+  if (approvedSourceContour) {
+    const approvedProfilePoints = buildApprovedProfilePointsFromDirectContour(approvedSourceContour);
+    return {
+      ...outline,
+      points: approvedProfilePoints
+        ? approvedProfilePoints.map((point, index) => ({
+            id: `approved-profile-${index}`,
+            x: point.x,
+            y: point.y,
+            pointType: point.pointType,
+            role: point.role as EditableBodyOutline["points"][number]["role"],
+            inHandle: null,
+            outHandle: null,
+          }))
+        : outline.points,
+      directContour: approvedSourceContour,
+    };
+  }
+
+  const approvedProfileContour = buildDirectContourFromApprovedProfilePoints(
+    outline.points.map((point) => ({ x: point.x, y: point.y })),
+  );
+  if (approvedProfileContour) {
+    return {
+      ...outline,
+      directContour: approvedProfileContour,
+    };
+  }
+
+  if (!outline.directContour || outline.directContour.length < 8) {
+    return outline;
+  }
+  const approvedDirectContour = buildApprovedContourFromPath(buildContourSvgPath(outline.directContour));
+  if (approvedDirectContour) {
+    const approvedProfilePoints = buildApprovedProfilePointsFromDirectContour(approvedDirectContour);
+    return {
+      ...outline,
+      points: approvedProfilePoints
+        ? approvedProfilePoints.map((point, index) => ({
+            id: `approved-profile-${index}`,
+            x: point.x,
+            y: point.y,
+            pointType: point.pointType,
+            role: point.role as EditableBodyOutline["points"][number]["role"],
+            inHandle: null,
+            outHandle: null,
+          }))
+        : outline.points,
+      directContour: approvedDirectContour,
+    };
+  }
+  return outline;
+}
+
+function hasBodyOnlySourceOutline(outline: EditableBodyOutline | null | undefined): boolean {
+  return Boolean(
+    outline?.sourceContourMode === "body-only" &&
+    (
+      (outline.sourceContour?.length ?? 0) >= 8 ||
+      (outline.directContour?.length ?? 0) >= 8 ||
+      outline.points.length >= 4
+    )
+  );
 }
 
 function referencePathsGeometrySignature(paths: ReferencePaths | null | undefined): string {
@@ -1670,6 +1899,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const pipelineRunIdRef = React.useRef<string>(editingTemplate?.pipelineProvenance?.runId ?? createTemplatePipelineRunId());
   const templateTraceIdRef = React.useRef<string>(editingTemplate?.pipelineProvenance?.traceId ?? crypto.randomUUID());
   const pipelineStartedAtRef = React.useRef<string>(new Date().toISOString());
+  const lastReportedDebugStateSignatureRef = React.useRef<string | null>(null);
   const buildTemplateSectionTraceHeaders = React.useCallback((
     sectionId: "template.source" | "template.detect" | "template.review",
   ) => buildAdminTraceHeaders({
@@ -1857,6 +2087,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [bodyOutlineProfile, setBodyOutlineProfile] = React.useState<EditableBodyOutline | undefined>(
     resolveReferencePaths(editingTemplate?.dimensions).bodyOutline ?? undefined,
   );
+  const [reviewedBodyCutoutQaOutlineSnapshot, setReviewedBodyCutoutQaOutlineSnapshot] = React.useState<EditableBodyOutline | null>(null);
   const [referencePaths, setReferencePaths] = React.useState<ReferencePaths>(
     resolveReferencePaths(editingTemplate?.dimensions),
   );
@@ -2654,24 +2885,116 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     () => Number.isFinite(resolvedLidSeamForPersistence) || Number.isFinite(resolvedSilverBandBottomForPersistence),
     [resolvedLidSeamForPersistence, resolvedSilverBandBottomForPersistence],
   );
+  const matchedProfileCommittedBounds = React.useMemo(() => {
+    if (productType === "flat" || !currentMatchedProfile) {
+      return null;
+    }
+
+    const shellBounds = resolveMatchedProfileBodyShellBounds(currentMatchedProfile);
+    if (!shellBounds) {
+      return null;
+    }
+
+    return {
+      overallHeightMm: shellBounds.overallHeightMm,
+      bodyTopMm: shellBounds.bodyTopMm,
+      bodyBottomMm: shellBounds.bodyBottomMm,
+    };
+  }, [
+    currentMatchedProfile,
+    productType,
+  ]);
+  const committedBodyReferenceAuthority = React.useMemo(
+    () => resolveCommittedBodyReferenceAuthority({
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      outlineSeedMode: effectiveBodyReferenceOutlineSeedMode,
+      matchedProfileBounds: matchedProfileCommittedBounds,
+      bodyOutline: calibrationBodyOutline,
+    }),
+    [
+      bodyBottomFromOverallMm,
+      bodyTopFromOverallMm,
+      calibrationBodyOutline,
+      effectiveBodyReferenceOutlineSeedMode,
+      matchedProfileCommittedBounds,
+      overallHeightMm,
+    ],
+  );
+  const committedOverallHeightMm = React.useMemo(
+    () => round2(committedBodyReferenceAuthority?.totalHeightMm ?? 0),
+    [committedBodyReferenceAuthority?.totalHeightMm],
+  );
+  const committedBodyTopInputMm = React.useMemo(
+    () => round2(committedBodyReferenceAuthority?.bodyTopMm ?? Number.NaN),
+    [committedBodyReferenceAuthority?.bodyTopMm],
+  );
+  const committedBodyBottomInputMm = React.useMemo(
+    () => round2(committedBodyReferenceAuthority?.bodyBottomMm ?? Number.NaN),
+    [committedBodyReferenceAuthority?.bodyBottomMm],
+  );
+  const bodyReferencePipelineDiameterMm = React.useMemo(() => {
+    if (
+      productType !== "flat" &&
+      committedBodyReferenceAuthority?.lockedToMatchedProfile
+    ) {
+      return resolveBodyReferenceDiameterMm({
+        outsideDiameterMm: currentMatchedProfile?.outsideDiameterMm ?? null,
+        topDiameterMm: currentMatchedProfile?.topDiameterMm ?? null,
+        bottomDiameterMm: currentMatchedProfile?.bottomDiameterMm ?? null,
+        fallbackOutsideDiameterMm: currentMatchedProfile?.outsideDiameterMm ?? null,
+      }) ?? effectiveCylinderDiameterMm;
+    }
+    return effectiveCylinderDiameterMm;
+  }, [
+    committedBodyReferenceAuthority?.lockedToMatchedProfile,
+    currentMatchedProfile?.bottomDiameterMm,
+    currentMatchedProfile?.outsideDiameterMm,
+    currentMatchedProfile?.topDiameterMm,
+    effectiveCylinderDiameterMm,
+    productType,
+  ]);
+  const bodyReferencePipelineOutline = React.useMemo<EditableBodyOutline | null>(() => {
+    if (
+      productType === "flat" ||
+      !calibrationBodyOutline ||
+      !committedBodyReferenceAuthority ||
+      committedBodyReferenceAuthority.bodyBottomMm <= committedBodyReferenceAuthority.bodyTopMm ||
+      bodyReferencePipelineDiameterMm <= 0
+    ) {
+      return calibrationBodyOutline;
+    }
+
+    return buildApprovedBodyOutline(calibrationBodyOutline, {
+      bodyTopMm: committedBodyReferenceAuthority.bodyTopMm,
+      bodyBottomMm: committedBodyReferenceAuthority.bodyBottomMm,
+      topDiameterMm: bodyReferencePipelineDiameterMm,
+    }) ?? calibrationBodyOutline;
+  }, [
+    bodyReferencePipelineDiameterMm,
+    calibrationBodyOutline,
+    committedBodyReferenceAuthority,
+    productType,
+  ]);
   const activeBodyReferencePipeline = React.useMemo<BodyReferencePipelineResult | null>(() => {
     if (
       productType === "flat" ||
-      !overallHeightMm ||
-      effectiveCylinderDiameterMm <= 0 ||
-      !calibrationBodyOutline ||
-      !Number.isFinite(bodyTopFromOverallMm) ||
-      !Number.isFinite(bodyBottomFromOverallMm) ||
-      bodyBottomFromOverallMm <= bodyTopFromOverallMm
+      !committedOverallHeightMm ||
+      bodyReferencePipelineDiameterMm <= 0 ||
+      !bodyReferencePipelineOutline ||
+      !Number.isFinite(committedBodyTopInputMm) ||
+      !Number.isFinite(committedBodyBottomInputMm) ||
+      committedBodyBottomInputMm <= committedBodyTopInputMm
     ) {
       return persistedBodyReferencePipeline;
     }
     return deriveBodyReferencePipeline({
-      outline: calibrationBodyOutline,
-      overallHeightMm,
-      bodyTopFromOverallMm,
-      bodyBottomFromOverallMm,
-      wrapDiameterMm: effectiveCylinderDiameterMm,
+      outline: bodyReferencePipelineOutline,
+      overallHeightMm: committedOverallHeightMm,
+      bodyTopFromOverallMm: committedBodyTopInputMm,
+      bodyBottomFromOverallMm: committedBodyBottomInputMm,
+      wrapDiameterMm: bodyReferencePipelineDiameterMm,
       baseDiameterMm,
       handleArcDeg,
       handleSide: resolvedCalibrationHandleSide,
@@ -2696,19 +3019,20 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       persistedCanonicalPrintableSurfaceContract:
         editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract ?? null,
       detection: printableSurfaceDetection,
-      fitDebug: lookupResult?.fitDebug ?? null,
+      fitDebug: committedBodyReferenceAuthority?.lockedToMatchedProfile ? null : lookupResult?.fitDebug ?? null,
     }) ?? persistedBodyReferencePipeline;
   }, [
     baseDiameterMm,
-    bodyBottomFromOverallMm,
-    bodyTopFromOverallMm,
-    calibrationBodyOutline,
+    bodyReferencePipelineOutline,
+    bodyReferencePipelineDiameterMm,
+    committedBodyBottomInputMm,
+    committedBodyReferenceAuthority?.lockedToMatchedProfile,
+    committedBodyTopInputMm,
+    committedOverallHeightMm,
     editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract,
     editingTemplate?.dimensions.printableSurfaceContract,
-    effectiveCylinderDiameterMm,
     handleArcDeg,
     lookupResult?.fitDebug,
-    overallHeightMm,
     persistedBaseBandStartMm,
     persistedBodyReferencePipeline,
     persistedLidBoundaryMm,
@@ -2727,10 +3051,49 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     activeBodyReferencePipeline?.canonicalBodyProfile ?? null;
   const activeCanonicalDimensionCalibration =
     activeBodyReferencePipeline?.canonicalDimensionCalibration ?? null;
+  const resolvedApprovedBodyReferenceOutlineForGlb = React.useMemo(
+    () => buildApprovedBodyOutline(bodyReferencePipelineOutline ?? calibrationBodyOutline, {
+      bodyTopMm: activeCanonicalDimensionCalibration?.lidBodyLineMm ?? committedBodyReferenceAuthority?.bodyTopMm ?? null,
+      bodyBottomMm: activeCanonicalDimensionCalibration?.bodyBottomMm ?? committedBodyReferenceAuthority?.bodyBottomMm ?? null,
+      topDiameterMm:
+        topOuterDiameterMm > 0
+          ? topOuterDiameterMm
+          : (activeCanonicalDimensionCalibration?.wrapDiameterMm ?? bodyReferencePipelineDiameterMm),
+    }),
+    [
+      activeCanonicalDimensionCalibration?.bodyBottomMm,
+      activeCanonicalDimensionCalibration?.lidBodyLineMm,
+      activeCanonicalDimensionCalibration?.wrapDiameterMm,
+      bodyReferencePipelineDiameterMm,
+      bodyReferencePipelineOutline,
+      calibrationBodyOutline,
+      committedBodyReferenceAuthority?.bodyBottomMm,
+      committedBodyReferenceAuthority?.bodyTopMm,
+      topOuterDiameterMm,
+    ],
+  );
   const approvedBodyReferenceOutlineForGlb =
     productType === "flat"
       ? null
-      : calibrationBodyOutline;
+      : resolvedApprovedBodyReferenceOutlineForGlb;
+  const bodyCutoutQaApprovedOutline = React.useMemo(
+    () => (
+      productType === "flat"
+        ? null
+        : (
+            activeDrinkwareGlbStatus?.status === "generated-reviewed-model" &&
+            reviewedBodyCutoutQaOutlineSnapshot
+              ? reviewedBodyCutoutQaOutlineSnapshot
+              : approvedBodyReferenceOutlineForGlb
+          )
+    ),
+    [
+      activeDrinkwareGlbStatus?.status,
+      approvedBodyReferenceOutlineForGlb,
+      productType,
+      reviewedBodyCutoutQaOutlineSnapshot,
+    ],
+  );
   const activePrintableSurfaceResolution =
     activeBodyReferencePipeline?.printableSurfaceResolution ?? null;
   const bodyReferenceOperationalWarnings = activeBodyReferencePipeline?.warnings ?? [];
@@ -3474,6 +3837,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       return;
     }
 
+    if (reviewAccepted && hasBodyOnlySourceOutline(activeBodyReferenceOutline)) {
+      return;
+    }
+
     const fitDebug = lookupResult?.fitDebug ?? null;
     const traceDebug = flatLookupResult?.traceDebug ?? null;
     const referenceImagesById = new Map(
@@ -3664,6 +4031,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   }, [
     activeBodyReferenceViewSide,
     activeDisplayReferencePhotoDataUrl,
+    activeBodyReferenceOutline,
     activeReferencePhotoDataUrl,
     bodyBottomFromOverallMm,
     bodyOutlineProfile,
@@ -3679,6 +4047,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     overallHeightMm,
     productReferenceSet,
     productType,
+    reviewAccepted,
     shoulderDiameterMm,
     taperLowerDiameterMm,
     taperUpperDiameterMm,
@@ -5068,6 +5437,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   React.useEffect(() => {
     if (!onDebugStateChange) return;
 
+    const nextSignature = fingerprintJson(templateEditorSectionStateForDebug);
+    if (lastReportedDebugStateSignatureRef.current === nextSignature) return;
+    lastReportedDebugStateSignatureRef.current = nextSignature;
     onDebugStateChange(templateEditorSectionStateForDebug);
   }, [
     onDebugStateChange,
@@ -5076,6 +5448,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
 
   React.useEffect(
     () => () => {
+      lastReportedDebugStateSignatureRef.current = null;
       onDebugStateChange?.(null);
     },
     [onDebugStateChange],
@@ -6174,6 +6547,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       setStagedDetectResult(null);
     }
     setDetectDraftSnapshot(null);
+    setReviewedBodyCutoutQaOutlineSnapshot(null);
     setReviewAccepted(true);
     setWorkflowStep("review");
   }, [stagedDetectResult]);
@@ -6185,6 +6559,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setStagedDetectResult(null);
     setDetectDraftSnapshot(null);
     setDetectError(null);
+    setReviewedBodyCutoutQaOutlineSnapshot(null);
   }, [detectDraftSnapshot, restoreDetectDraftSnapshot]);
 
   /** Run auto-detect on the uploaded product image */
@@ -6192,6 +6567,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     if (!productImageFile) return;
     setDetecting(true);
     setDetectError(null);
+    setReviewedBodyCutoutQaOutlineSnapshot(null);
     if (!detectDraftSnapshot || reviewAccepted) {
       setDetectDraftSnapshot(createDetectDraftSnapshot());
     }
@@ -6344,13 +6720,17 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setGeneratingReviewedBodyReferenceGlb(true);
     setGlbUploadError(null);
     try {
+      const approvedOutlineSnapshot = cloneEditableBodyOutline(approvedBodyReferenceOutlineForGlb) ?? null;
+      if (!approvedOutlineSnapshot) {
+        throw new Error("Accepted BODY REFERENCE outline could not be snapshotted for reviewed GLB generation.");
+      }
       const generated = await generateBodyReferenceGlbRequest(
         {
           templateName: name.trim() || null,
           renderMode: "body-cutout-qa",
           matchedProfileId: lookupResult?.matchedProfileId ?? null,
-          bodyOutline: approvedBodyReferenceOutlineForGlb,
-          bodyOutlineSourceMode: approvedBodyReferenceOutlineForGlb.sourceContourMode ?? null,
+          bodyOutline: approvedOutlineSnapshot,
+          bodyOutlineSourceMode: approvedOutlineSnapshot.sourceContourMode ?? null,
           canonicalBodyProfile: activeCanonicalBodyProfile,
           canonicalDimensionCalibration: activeCanonicalDimensionCalibration,
           canonicalHandleProfile: normalizedCanonicalHandleProfile ?? null,
@@ -6380,6 +6760,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             rimColorHex: generated.rimColorHex ?? current.rimColorHex,
           }
         : current);
+      setReviewedBodyCutoutQaOutlineSnapshot(approvedOutlineSnapshot);
     } catch (error) {
       setGlbUploadError(error instanceof Error ? error.message : "Failed to generate the reviewed BODY REFERENCE GLB.");
     } finally {
@@ -6767,7 +7148,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     },
   }), [handleSave]);
 
-  const showSourceStepContent = !usesGuidedReviewFlow || effectiveWorkflowStep === "source";
+  const showSourceStepContent =
+    !usesGuidedReviewFlow ||
+    effectiveWorkflowStep === "source" ||
+    effectiveWorkflowStep === "review";
   const showDetectStepContent = usesGuidedReviewFlow && effectiveWorkflowStep === "detect";
   const showReviewStepContent = !usesGuidedReviewFlow || effectiveWorkflowStep === "review";
   const canRunAutoDetect = Boolean(productImageFile && productType && productType !== "flat");
@@ -7876,7 +8260,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                             )
                       }
                       canonicalHandleProfile={productType === "flat" ? undefined : normalizedCanonicalHandleProfile}
-                      approvedBodyOutline={productType === "flat" ? undefined : approvedBodyReferenceOutlineForGlb}
+                      approvedBodyOutline={productType === "flat" ? undefined : bodyCutoutQaApprovedOutline}
                       editableHandlePreview={productType === "flat" ? undefined : editableHandlePreview}
                       previewModelMode={previewModelMode}
                       sourceModelStatus={productType === "flat" ? null : (activeDrinkwareGlbStatus?.status ?? null)}

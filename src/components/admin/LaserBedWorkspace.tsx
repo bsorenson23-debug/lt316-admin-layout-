@@ -765,8 +765,15 @@ export function LaserBedWorkspace({
     if (!el) return;
     const recalc = () => {
       const { offsetWidth, offsetHeight } = el;
-      setContainerSize({ w: offsetWidth, h: offsetHeight });
-      setBasePxPerMm(calcBedScale(bedConfig.width, bedConfig.height, offsetWidth, offsetHeight, 40));
+      setContainerSize((prev) => (
+        prev.w === offsetWidth && prev.h === offsetHeight
+          ? prev
+          : { w: offsetWidth, h: offsetHeight }
+      ));
+      setBasePxPerMm((prev) => {
+        const next = calcBedScale(bedConfig.width, bedConfig.height, offsetWidth, offsetHeight, 40);
+        return Math.abs(prev - next) < 0.001 ? prev : next;
+      });
     };
     recalc();
     const ro = new ResizeObserver(recalc);
