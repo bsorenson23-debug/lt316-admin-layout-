@@ -1,15 +1,54 @@
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import * as THREE from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { getTumblerProfileById, type TumblerProfile } from "@/data/tumblerProfiles";
+import { getTumblerProfileById, type TumblerProfile } from "../../data/tumblerProfiles.ts";
+import {
+  resolveBodyReferenceTopBandArtifactGuard,
+  resolveCompactBodyReferenceFallbackTopBand,
+} from "../../lib/bodyReferenceTopBandGuard.ts";
+import {
+  getGeneratedModelWriteAbsolutePath,
+  writeGeneratedModelGlb,
+} from "../models/generatedModelStorage.ts";
+import { writeBodyGeometryAuditArtifact } from "../models/bodyGeometryAuditArtifact.ts";
+import type {
+  CanonicalBodyProfile,
+  CanonicalDimensionCalibration,
+  CanonicalHandleProfile,
+  EditableBodyOutline,
+  EditableBodyOutlinePoint,
+} from "../../types/productTemplate.ts";
+import {
+  resolveBodyReferenceVisualLikeness,
+  type BodyReferenceVisualLikenessReport,
+} from "../../lib/bodyReferenceVisualLikeness.ts";
+import {
+  buildBodyReferenceSilhouetteAudit,
+  buildBodyReferenceSilhouetteAuditSvg,
+  buildCanonicalBodyLatheContour,
+  type BodyReferenceSilhouetteAuditReport,
+} from "../../lib/bodyReferenceSilhouetteAudit.ts";
+import {
+  buildBodyReferenceGlbSourceSignature,
+  type BodyReferenceGlbRenderMode,
+} from "../../lib/bodyReferenceGlbSource.ts";
+import {
+  buildBodyGeometrySourceHashPayload,
+  createEmptyBodyGeometryContract,
+  detectAccessoryMeshes,
+  detectFallbackMeshes,
+  updateContractValidation,
+  type BodyGeometryContract,
+} from "../../lib/bodyGeometryContract.ts";
+import { buildBodyReferenceSvgQualityReportFromOutline } from "../../lib/bodyReferenceSvgQuality.ts";
+import { hashJsonSha256Node, hashArrayBufferSha256Node } from "../../lib/hashSha256.node.ts";
 import type {
   TumblerItemLookupFitDebug,
   TumblerItemLookupFitProfilePoint,
-} from "@/types/tumblerItemLookup";
-
-const GENERATED_PUBLIC_PREFIX = "/models/generated";
-const GENERATED_DIR = path.join(process.cwd(), "public", "models", "generated");
+} from "../../types/tumblerItemLookup.ts";
+import { isFiniteNumber } from "../../utils/guards.ts";
 const BODY_SAMPLE_COUNT = 30;
 
 type FileReaderLike = {
@@ -35,6 +74,8 @@ type RowBounds = {
   width: number;
 };
 
+type ModelCoordinateOrigin = "center" | "bottom";
+
 type CenterRun = {
   y: number;
   left: number;
@@ -52,6 +93,10 @@ type StanleySilhouetteFit = {
   rimBottomYmm: number;
   rimHeightMm: number;
   rimRadiusMm: number;
+  bodyReferenceFallbackAssemblyRadiusMm?: number;
+  bodyReferenceRadialFit?: BodyReferenceGlbRadialFit;
+  bodyReferenceFallbackTopGeometryMode?: "artifact-guard" | "compact-preview-body-only" | "omitted" | null;
+  modelCoordinateOrigin?: ModelCoordinateOrigin;
   bodyColorHex: string;
   rimColorHex: string;
   fitDebug?: TumblerItemLookupFitDebug | null;
@@ -63,6 +108,7 @@ type StanleyCandidateFit = StanleySilhouetteFit & {
 
 export type GeneratedTumblerGlbResult = {
   glbPath: string;
+  auditJsonPath?: string | null;
   fitDebug: TumblerItemLookupFitDebug | null;
   bodyColorHex: string | null;
   rimColorHex: string | null;
@@ -73,6 +119,56 @@ type EnsureGeneratedTumblerGlbInput = {
   imageUrl?: string | null;
   imageUrls?: string[];
   [key: string]: unknown;
+};
+
+export type GenerateBodyReferenceGlbInput = {
+  renderMode?: BodyReferenceGlbRenderMode | null;
+  templateName?: string | null;
+  matchedProfileId?: string | null;
+  bodyOutlineSourceMode?: EditableBodyOutline["sourceContourMode"] | null;
+  bodyOutline?: EditableBodyOutline | null;
+  canonicalBodyProfile: CanonicalBodyProfile;
+  canonicalDimensionCalibration: CanonicalDimensionCalibration;
+  canonicalHandleProfile?: CanonicalHandleProfile | null;
+  lidProfile?: EditableBodyOutline | null;
+  silverProfile?: EditableBodyOutline | null;
+  bodyColorHex?: string | null;
+  lidColorHex?: string | null;
+  rimColorHex?: string | null;
+  lidSeamFromOverallMm?: number | null;
+  silverBandBottomFromOverallMm?: number | null;
+  topOuterDiameterMm?: number | null;
+};
+
+export type GeneratedBodyReferenceMeshBounds = {
+  minMm: { x: number; y: number; z: number };
+  maxMm: { x: number; y: number; z: number };
+  sizeMm: { x: number; y: number; z: number };
+};
+
+export type GeneratedBodyReferenceGlbResult = GeneratedTumblerGlbResult & {
+  modelStatus: "generated-reviewed-model";
+  renderMode: BodyReferenceGlbRenderMode;
+  generatedSourceSignature: string;
+  modelSourceLabel: string;
+  bodyGeometrySource: string;
+  lidGeometrySource: string;
+  ringGeometrySource: string;
+  meshNames: string[];
+  fallbackMeshNames: string[];
+  bodyMeshBounds: GeneratedBodyReferenceMeshBounds | null;
+  visualLikeness: BodyReferenceVisualLikenessReport;
+  silhouetteAudit: BodyReferenceSilhouetteAuditReport | null;
+  bodyGeometryContract: BodyGeometryContract;
+  auditJsonPath: string | null;
+};
+
+export type BodyReferenceGlbRadialFit = {
+  sourceMaxRadiusMm: number;
+  targetMaxRadiusMm: number;
+  scale: number;
+  normalized: boolean;
+  toleranceMm: number;
 };
 
 class NodeFileReader implements FileReaderLike {
@@ -128,6 +224,37 @@ async function exportSceneToGlb(scene: THREE.Scene): Promise<ArrayBuffer> {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+export function overallYToBottomAnchoredModelY(
+  totalHeightMm: number,
+  yOverallMm: number,
+): number {
+  return round2(Math.max(1, totalHeightMm) - yOverallMm);
+}
+
+function overallYToModelY(
+  totalHeightMm: number,
+  yOverallMm: number,
+  origin: ModelCoordinateOrigin,
+): number {
+  return origin === "bottom"
+    ? overallYToBottomAnchoredModelY(totalHeightMm, yOverallMm)
+    : round2((Math.max(1, totalHeightMm) / 2) - yOverallMm);
+}
+
+function modelYToOverallY(
+  totalHeightMm: number,
+  modelYmm: number,
+  origin: ModelCoordinateOrigin,
+): number {
+  return origin === "bottom"
+    ? round2(Math.max(1, totalHeightMm) - modelYmm)
+    : round2((Math.max(1, totalHeightMm) / 2) - modelYmm);
+}
+
+function getFitModelCoordinateOrigin(fit: StanleySilhouetteFit): ModelCoordinateOrigin {
+  return fit.modelCoordinateOrigin ?? "center";
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -199,6 +326,314 @@ function makeStandardMaterial(
     roughness: 0.65,
     ...options,
   });
+}
+
+function slugifyFileStem(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "body-reference";
+}
+
+function buildBodyReferenceFileStem(input: GenerateBodyReferenceGlbInput): string {
+  const hash = createHash("sha1")
+    .update(JSON.stringify({
+      bodyReferenceGlbFitVersion: 9,
+      renderMode: input.renderMode ?? "hybrid-preview",
+      profile: input.matchedProfileId ?? null,
+      bodyOutlineSourceMode: input.bodyOutlineSourceMode ?? null,
+      totalHeightMm: input.canonicalDimensionCalibration.totalHeightMm,
+      lidBodyLineMm: input.canonicalDimensionCalibration.lidBodyLineMm,
+      bodyBottomMm: input.canonicalDimensionCalibration.bodyBottomMm,
+      wrapDiameterMm: input.canonicalDimensionCalibration.wrapDiameterMm,
+      lidSeamFromOverallMm: input.lidSeamFromOverallMm ?? null,
+      silverBandBottomFromOverallMm: input.silverBandBottomFromOverallMm ?? null,
+      topOuterDiameterMm: input.topOuterDiameterMm ?? null,
+      bodyOutline:
+        input.bodyOutline?.directContour?.map((point) => [round2(point.x), round2(point.y)]) ??
+        input.bodyOutline?.points?.map((point) => [round2(point.x), round2(point.y)]) ??
+        null,
+      bodyColorHex: input.bodyColorHex ?? null,
+      lidColorHex: input.lidColorHex ?? null,
+      rimColorHex: input.rimColorHex ?? null,
+      samples: input.canonicalBodyProfile.samples.map((sample) => [round2(sample.yMm), round2(sample.radiusMm)]),
+      lidProfile: input.lidProfile?.directContour?.map((point) => [round2(point.x), round2(point.y)]) ?? null,
+      silverProfile: input.silverProfile?.directContour?.map((point) => [round2(point.x), round2(point.y)]) ?? null,
+    }))
+    .digest("hex")
+    .slice(0, 12);
+  return `${slugifyFileStem(input.templateName ?? input.matchedProfileId ?? "body-reference")}-cutout-${hash}`;
+}
+
+type OutlineContourPointMm = {
+  x: number;
+  y: number;
+};
+
+function buildClosedContourFromOutlinePoints(
+  points: EditableBodyOutlinePoint[],
+): OutlineContourPointMm[] | null {
+  const sorted = [...points]
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((left, right) => left.y - right.y);
+  if (sorted.length < 2) return null;
+  const right = sorted.map((point) => ({ x: round2(point.x), y: round2(point.y) }));
+  const left = [...sorted]
+    .reverse()
+    .map((point) => ({ x: round2(-point.x), y: round2(point.y) }));
+  return [...right, ...left];
+}
+
+function resolveOutlineHalfProfilePointsMm(
+  outline: EditableBodyOutline | null | undefined,
+): Array<{ x: number; y: number }> | null {
+  const sorted = [...(outline?.points ?? [])]
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .map((point) => ({ x: round2(Math.abs(point.x)), y: round2(point.y) }))
+    .sort((left, right) => left.y - right.y);
+  if (sorted.length < 2) {
+    return null;
+  }
+  return sorted;
+}
+
+function resolveOutlineContourMm(
+  outline: EditableBodyOutline | null | undefined,
+): OutlineContourPointMm[] | null {
+  if (outline?.directContour && outline.directContour.length >= 3) {
+    return outline.directContour
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+      .map((point) => ({ x: round2(point.x), y: round2(point.y) }));
+  }
+  if (outline?.points && outline.points.length >= 2) {
+    return buildClosedContourFromOutlinePoints(outline.points);
+  }
+  return null;
+}
+
+function getContourBoundsMm(
+  contour: OutlineContourPointMm[],
+): { minY: number; maxY: number } | null {
+  if (contour.length < 2) return null;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const point of contour) {
+    if (point.y < minY) minY = point.y;
+    if (point.y > maxY) maxY = point.y;
+  }
+  if (!Number.isFinite(minY) || !Number.isFinite(maxY) || maxY <= minY) {
+    return null;
+  }
+  return { minY: round2(minY), maxY: round2(maxY) };
+}
+
+function getContourIntersectionsAtYMm(
+  contour: OutlineContourPointMm[],
+  yMm: number,
+): number[] {
+  if (contour.length < 2) return [];
+  const xs: number[] = [];
+  for (let index = 0; index < contour.length; index += 1) {
+    const current = contour[index];
+    const next = contour[(index + 1) % contour.length];
+    if (!current || !next) continue;
+    const minY = Math.min(current.y, next.y);
+    const maxY = Math.max(current.y, next.y);
+    if (yMm < minY || yMm > maxY) continue;
+    if (Math.abs(next.y - current.y) < 0.0001) {
+      xs.push(current.x, next.x);
+      continue;
+    }
+    const t = (yMm - current.y) / (next.y - current.y);
+    if (t < 0 || t > 1) continue;
+    xs.push(round2(current.x + ((next.x - current.x) * t)));
+  }
+  return xs;
+}
+
+function sampleHalfWidthAtYMm(
+  contour: OutlineContourPointMm[],
+  yMm: number,
+): number {
+  const intersections = getContourIntersectionsAtYMm(contour, yMm)
+    .filter((value) => Number.isFinite(value))
+    .map((value) => Math.abs(value));
+  if (intersections.length > 0) {
+    return round2(Math.max(...intersections));
+  }
+  const nearest = contour.reduce<OutlineContourPointMm | null>((best, point) => {
+    if (!best) return point;
+    return Math.abs(point.y - yMm) < Math.abs(best.y - yMm) ? point : best;
+  }, null);
+  return round2(Math.abs(nearest?.x ?? 0));
+}
+
+function sampleHalfWidthFromProfilePointsAtYMm(
+  points: Array<{ x: number; y: number }>,
+  yMm: number,
+): number {
+  if (points.length === 0) {
+    return 0;
+  }
+  if (points.length === 1) {
+    return round2(Math.abs(points[0]?.x ?? 0));
+  }
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    if (!current || !next) continue;
+    if (Math.abs(yMm - current.y) < 0.0001) {
+      return round2(Math.abs(current.x));
+    }
+    if (yMm < current.y || yMm > next.y) {
+      continue;
+    }
+    const span = next.y - current.y;
+    if (Math.abs(span) < 0.0001) {
+      return round2(Math.abs(next.x));
+    }
+    const t = clamp((yMm - current.y) / span, 0, 1);
+    return round2(Math.abs(current.x + ((next.x - current.x) * t)));
+  }
+  const nearest = points.reduce<{ x: number; y: number } | null>((best, point) => {
+    if (!best) return point;
+    return Math.abs(point.y - yMm) < Math.abs(best.y - yMm) ? point : best;
+  }, null);
+  return round2(Math.abs(nearest?.x ?? 0));
+}
+
+function buildOutlineLatheContour(args: {
+  outline: EditableBodyOutline | null | undefined;
+  totalHeightMm: number;
+  sampleCount?: number;
+  minYOverallMm?: number | null;
+  maxYOverallMm?: number | null;
+  modelCoordinateOrigin?: ModelCoordinateOrigin;
+}): Array<{ radiusMm: number; yMm: number }> | null {
+  const halfProfilePoints = resolveOutlineHalfProfilePointsMm(args.outline);
+  if (halfProfilePoints) {
+    const pointMinY = halfProfilePoints[0]?.y ?? 0;
+    const pointMaxY = halfProfilePoints[halfProfilePoints.length - 1]?.y ?? 0;
+    const minYOverallMm = round2(Math.max(pointMinY, args.minYOverallMm ?? pointMinY));
+    const maxYOverallMm = round2(Math.min(pointMaxY, args.maxYOverallMm ?? pointMaxY));
+    if (maxYOverallMm - minYOverallMm >= 0.5) {
+      const totalHeightMm = Math.max(1, args.totalHeightMm);
+      const origin = args.modelCoordinateOrigin ?? "center";
+      const profileRowYs = Array.from(
+        new Set(
+          halfProfilePoints
+            .map((point) => round2(point.y))
+            .filter((yMm) => yMm >= minYOverallMm && yMm <= maxYOverallMm),
+        ),
+      ).sort((a, b) => a - b);
+      const sampledYs =
+        profileRowYs.length >= 12
+          ? profileRowYs
+          : (() => {
+              const sampleCount = Math.max(24, args.sampleCount ?? 48);
+              const ys: number[] = [];
+              for (let index = 0; index < sampleCount; index += 1) {
+                const t = sampleCount === 1 ? 0 : index / (sampleCount - 1);
+                ys.push(round2(minYOverallMm + ((maxYOverallMm - minYOverallMm) * t)));
+              }
+              return ys;
+            })();
+      return sampledYs.map((yOverallMm) => ({
+        radiusMm: round2(Math.max(0.8, sampleHalfWidthFromProfilePointsAtYMm(halfProfilePoints, yOverallMm))),
+        yMm: overallYToModelY(totalHeightMm, yOverallMm, origin),
+      }));
+    }
+  }
+  const contour = resolveOutlineContourMm(args.outline);
+  if (!contour) return null;
+  const bounds = getContourBoundsMm(contour);
+  if (!bounds) return null;
+  const minYOverallMm = round2(Math.max(bounds.minY, args.minYOverallMm ?? bounds.minY));
+  const maxYOverallMm = round2(Math.min(bounds.maxY, args.maxYOverallMm ?? bounds.maxY));
+  if (maxYOverallMm - minYOverallMm < 0.5) {
+    return null;
+  }
+  const totalHeightMm = Math.max(1, args.totalHeightMm);
+  const origin = args.modelCoordinateOrigin ?? "center";
+  const contourRowYs = Array.from(
+    new Set(
+      contour
+        .map((point) => round2(point.y))
+        .filter((yMm) => yMm >= minYOverallMm && yMm <= maxYOverallMm),
+    ),
+  ).sort((a, b) => a - b);
+  const sampledYs =
+    contourRowYs.length >= 8
+      ? contourRowYs
+      : (() => {
+          const sampleCount = Math.max(8, args.sampleCount ?? 20);
+          const ys: number[] = [];
+          for (let index = 0; index < sampleCount; index += 1) {
+            const t = sampleCount === 1 ? 0 : index / (sampleCount - 1);
+            ys.push(round2(minYOverallMm + ((maxYOverallMm - minYOverallMm) * t)));
+          }
+          return ys;
+        })();
+  const latheContour: Array<{ radiusMm: number; yMm: number }> = [];
+  for (const yOverallMm of sampledYs) {
+    const radiusMm = Math.max(0.8, sampleHalfWidthAtYMm(contour, yOverallMm));
+    latheContour.push({
+      radiusMm: round2(radiusMm),
+      yMm: overallYToModelY(totalHeightMm, yOverallMm, origin),
+    });
+  }
+  return latheContour;
+}
+
+export function resolveBodyReferenceGlbRadialFit(args: {
+  sourceRadiiMm: number[];
+  wrapDiameterMm?: number | null;
+}): BodyReferenceGlbRadialFit {
+  const sourceRadii = args.sourceRadiiMm
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((value) => Math.max(0, value));
+  const sourceMaxRadiusMm = round2(sourceRadii.length > 0 ? Math.max(...sourceRadii) : 0);
+  const wrapRadiusMm =
+    isFiniteNumber(args.wrapDiameterMm) && (args.wrapDiameterMm ?? 0) > 0
+      ? round2((args.wrapDiameterMm ?? 0) / 2)
+      : 0;
+  const toleranceMm = round2(Math.max(0.25, wrapRadiusMm * 0.006));
+  const shouldNormalize =
+    sourceMaxRadiusMm > 0 &&
+    wrapRadiusMm > 0 &&
+    sourceMaxRadiusMm > wrapRadiusMm + toleranceMm;
+  const targetMaxRadiusMm = shouldNormalize ? wrapRadiusMm : sourceMaxRadiusMm;
+  const scale = shouldNormalize ? targetMaxRadiusMm / sourceMaxRadiusMm : 1;
+
+  return {
+    sourceMaxRadiusMm,
+    targetMaxRadiusMm: round2(targetMaxRadiusMm),
+    scale,
+    normalized: shouldNormalize,
+    toleranceMm,
+  };
+}
+
+export function resolveBodyReferenceFallbackAssemblyRadius(args: {
+  normalizedBodyRadiiMm: number[];
+  wrapDiameterMm?: number | null;
+}): number {
+  const bodyRadii = args.normalizedBodyRadiiMm
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((value) => Math.max(0, value));
+  const bodyMaxRadiusMm = bodyRadii.length > 0 ? Math.max(...bodyRadii) : 0;
+  const wrapRadiusMm =
+    isFiniteNumber(args.wrapDiameterMm) && (args.wrapDiameterMm ?? 0) > 0
+      ? (args.wrapDiameterMm ?? 0) / 2
+      : 0;
+  const capRadiusMm = wrapRadiusMm > 0 ? wrapRadiusMm : bodyMaxRadiusMm;
+  const assemblyRadiusMm = bodyMaxRadiusMm > 0
+    ? Math.min(bodyMaxRadiusMm, capRadiusMm)
+    : capRadiusMm;
+
+  return round2(Math.max(1, assemblyRadiusMm));
 }
 
 async function fetchBuffer(url: string): Promise<Buffer> {
@@ -709,6 +1144,134 @@ function buildFallbackBodyProfile(profile: TumblerProfile) {
   } satisfies StanleySilhouetteFit;
 }
 
+function buildBodyReferenceFit(input: GenerateBodyReferenceGlbInput): StanleySilhouetteFit {
+  const totalHeightMm = input.canonicalDimensionCalibration.totalHeightMm;
+  const bodyTopFromOverallMm = input.canonicalDimensionCalibration.lidBodyLineMm;
+  const bodyBottomFromOverallMm = input.canonicalDimensionCalibration.bodyBottomMm;
+  const coordinateOrigin: ModelCoordinateOrigin = "bottom";
+  const bodyOnlyTrace = input.bodyOutlineSourceMode === "body-only";
+  const hasReviewedLidGeometry = Boolean(
+    (input.lidProfile?.directContour && input.lidProfile.directContour.length >= 3) ||
+    (input.lidProfile?.points && input.lidProfile.points.length >= 2),
+  );
+  const hasReviewedRingGeometry = Boolean(
+    (input.silverProfile?.directContour && input.silverProfile.directContour.length >= 3) ||
+    (input.silverProfile?.points && input.silverProfile.points.length >= 2),
+  );
+  const rawBodyProfile = [...input.canonicalBodyProfile.samples]
+    .map((sample) => ({
+      yMm: overallYToBottomAnchoredModelY(totalHeightMm, sample.yMm),
+      radiusMm: round2(Math.max(1, sample.radiusMm)),
+    }))
+    .sort((left, right) => left.yMm - right.yMm);
+
+  if (rawBodyProfile.length < 2) {
+    throw new Error("Canonical body profile is missing enough samples to generate a GLB.");
+  }
+
+  const radialFit = resolveBodyReferenceGlbRadialFit({
+    sourceRadiiMm: rawBodyProfile.map((point) => point.radiusMm),
+    wrapDiameterMm: input.canonicalDimensionCalibration.wrapDiameterMm,
+  });
+  const normalizedBodyProfile = rawBodyProfile.map((point) => ({
+    ...point,
+    radiusMm: round2(point.radiusMm * radialFit.scale),
+  }));
+  const fallbackAssemblyRadiusMm = resolveBodyReferenceFallbackAssemblyRadius({
+    normalizedBodyRadiiMm: normalizedBodyProfile.map((point) => point.radiusMm),
+    wrapDiameterMm: input.canonicalDimensionCalibration.wrapDiameterMm,
+  });
+
+  const bodyTopYmm = overallYToBottomAnchoredModelY(totalHeightMm, bodyTopFromOverallMm);
+  const bodyBottomYmm = overallYToBottomAnchoredModelY(totalHeightMm, bodyBottomFromOverallMm);
+  const topBandArtifactGuard =
+    !hasReviewedLidGeometry && !hasReviewedRingGeometry
+      ? resolveBodyReferenceTopBandArtifactGuard({
+          totalHeightMm,
+          bodyTopFromOverallMm,
+          bodyBottomFromOverallMm,
+          wrapDiameterMm: input.canonicalDimensionCalibration.wrapDiameterMm,
+          frontVisibleWidthMm: input.canonicalDimensionCalibration.frontVisibleWidthMm,
+          lidSeamFromOverallMm: input.lidSeamFromOverallMm,
+          silverBandBottomFromOverallMm: input.silverBandBottomFromOverallMm,
+          printableTopOverrideMm: input.canonicalDimensionCalibration.printableSurfaceContract?.printableTopMm,
+        })
+      : null;
+  const explicitLidSeamFromOverallMm = isFiniteNumber(input.lidSeamFromOverallMm)
+    ? round2(input.lidSeamFromOverallMm ?? bodyTopFromOverallMm)
+    : null;
+  const explicitSilverBandBottomFromOverallMm =
+    isFiniteNumber(input.silverBandBottomFromOverallMm) &&
+    (input.silverBandBottomFromOverallMm ?? 0) > (explicitLidSeamFromOverallMm ?? bodyTopFromOverallMm) + 0.5
+      ? round2(input.silverBandBottomFromOverallMm ?? bodyTopFromOverallMm)
+      : null;
+  const previewBodyOnlyTopBandFallback =
+    !topBandArtifactGuard &&
+    bodyOnlyTrace &&
+    !hasReviewedLidGeometry &&
+    !hasReviewedRingGeometry &&
+    explicitLidSeamFromOverallMm == null &&
+    explicitSilverBandBottomFromOverallMm == null
+      ? resolveCompactBodyReferenceFallbackTopBand({
+          totalHeightMm,
+          bodyTopFromOverallMm,
+          bodyBottomFromOverallMm,
+        })
+      : null;
+  const resolvedTopBandFallback = topBandArtifactGuard ?? previewBodyOnlyTopBandFallback;
+  const rimTopFromOverallMm =
+    resolvedTopBandFallback?.lidSeamFromOverallMm ??
+    (
+      explicitLidSeamFromOverallMm != null
+        ? explicitLidSeamFromOverallMm
+        : bodyTopFromOverallMm
+    );
+  const rimBottomFromOverallMm =
+    resolvedTopBandFallback?.silverBandBottomFromOverallMm ??
+    (
+      explicitSilverBandBottomFromOverallMm != null
+        ? explicitSilverBandBottomFromOverallMm
+        : null
+    );
+  const fallbackTopGeometryMode =
+    topBandArtifactGuard
+      ? "artifact-guard"
+      : previewBodyOnlyTopBandFallback
+        ? "compact-preview-body-only"
+        : (
+            bodyOnlyTrace &&
+            !hasReviewedLidGeometry &&
+            !hasReviewedRingGeometry &&
+            explicitLidSeamFromOverallMm == null &&
+            explicitSilverBandBottomFromOverallMm == null
+          )
+          ? "omitted"
+          : null;
+
+  return {
+    bodyProfile: normalizedBodyProfile,
+    bodyTopYmm,
+    bodyBottomYmm,
+    rimTopYmm: overallYToBottomAnchoredModelY(totalHeightMm, rimTopFromOverallMm),
+    rimBottomYmm:
+      rimBottomFromOverallMm != null
+        ? overallYToBottomAnchoredModelY(totalHeightMm, rimBottomFromOverallMm)
+        : bodyTopYmm,
+    rimHeightMm:
+      rimBottomFromOverallMm != null
+        ? round2(Math.max(0, rimBottomFromOverallMm - rimTopFromOverallMm))
+        : 0,
+    rimRadiusMm: fallbackAssemblyRadiusMm,
+    bodyReferenceFallbackAssemblyRadiusMm: fallbackAssemblyRadiusMm,
+    bodyReferenceRadialFit: radialFit,
+    bodyReferenceFallbackTopGeometryMode: fallbackTopGeometryMode,
+    modelCoordinateOrigin: coordinateOrigin,
+    bodyColorHex: input.bodyColorHex ?? "#d7d4df",
+    rimColorHex: input.rimColorHex ?? "#b6b6b6",
+    fitDebug: null,
+  };
+}
+
 function createBodyMesh(fit: StanleySilhouetteFit): THREE.Mesh {
   const orderedProfile = [...fit.bodyProfile]
     .map((point) => ({
@@ -723,16 +1286,21 @@ function createBodyMesh(fit: StanleySilhouetteFit): THREE.Mesh {
     { radiusMm: bottomRadiusMm, yMm: round2(fit.bodyBottomYmm) },
     ...orderedProfile,
     { radiusMm: topRadiusMm, yMm: round2(fit.bodyTopYmm) },
-  ].filter((point, index, array) => {
-    if (index === 0) return true;
-    const prev = array[index - 1];
-    return !(prev.radiusMm === point.radiusMm && prev.yMm === point.yMm);
-  });
+  ]
+    .sort((left, right) => left.yMm - right.yMm)
+    .filter((point, index, array) => {
+      if (index === 0) return true;
+      const prev = array[index - 1];
+      return !(prev.radiusMm === point.radiusMm && prev.yMm === point.yMm);
+    });
+  const yValues = contour.map((point) => point.yMm);
+  const bodyBottomYmm = round2(Math.min(...yValues));
+  const bodyTopYmm = round2(Math.max(...yValues));
 
   const points = [
-    new THREE.Vector2(0, fit.bodyBottomYmm),
+    new THREE.Vector2(0, bodyBottomYmm),
     ...contour.map((point) => new THREE.Vector2(point.radiusMm, point.yMm)),
-    new THREE.Vector2(0, fit.bodyTopYmm),
+    new THREE.Vector2(0, bodyTopYmm),
   ];
 
   const geometry = new THREE.LatheGeometry(points, 112);
@@ -748,6 +1316,49 @@ function createBodyMesh(fit: StanleySilhouetteFit): THREE.Mesh {
   return mesh;
 }
 
+function createBodyOnlyMeshFromFit(args: {
+  fit: StanleySilhouetteFit;
+  bodyColorHex?: string | null;
+}): THREE.Mesh | null {
+  const orderedProfile = [...args.fit.bodyProfile]
+    .map((point) => ({
+      yMm: round2(point.yMm),
+      radiusMm: round2(Math.max(1, point.radiusMm)),
+    }))
+    .sort((left, right) => left.yMm - right.yMm);
+  if (orderedProfile.length < 2) {
+    return null;
+  }
+
+  const bottomRadiusMm = orderedProfile[0]?.radiusMm ?? 1;
+  const topRadiusMm = orderedProfile[orderedProfile.length - 1]?.radiusMm ?? bottomRadiusMm;
+  const contour: Array<{ radiusMm: number; yMm: number }> = [
+    { radiusMm: bottomRadiusMm, yMm: round2(args.fit.bodyBottomYmm) },
+    ...orderedProfile,
+    { radiusMm: topRadiusMm, yMm: round2(args.fit.bodyTopYmm) },
+  ]
+    .sort((left, right) => left.yMm - right.yMm)
+    .filter((point, index, array) => {
+      if (index === 0) return true;
+      const previous = array[index - 1];
+      return !(previous.radiusMm === point.radiusMm && previous.yMm === point.yMm);
+    });
+  const bottomYmm = contour[0]?.yMm ?? round2(args.fit.bodyBottomYmm);
+  const topYmm = contour[contour.length - 1]?.yMm ?? round2(args.fit.bodyTopYmm);
+  return createLatheMeshFromContour({
+    name: "body_mesh",
+    contour,
+    bottomYmm,
+    topYmm,
+    material: makeStandardMaterial(args.bodyColorHex ?? args.fit.bodyColorHex, {
+      metalness: 0.16,
+      roughness: 0.72,
+    }),
+    closeBottom: true,
+    closeTop: false,
+  });
+}
+
 function createRimMesh(fit: StanleySilhouetteFit): THREE.Mesh {
   const orderedProfile = [...fit.bodyProfile]
     .map((point) => ({
@@ -756,9 +1367,15 @@ function createRimMesh(fit: StanleySilhouetteFit): THREE.Mesh {
     }))
     .sort((a, b) => a.yMm - b.yMm);
   const topBodyRadiusMm = orderedProfile[orderedProfile.length - 1]?.radiusMm ?? fit.rimRadiusMm;
-  const outerRadiusMm = round2(
-    Math.min(Math.max(topBodyRadiusMm * 1.002, fit.rimRadiusMm), topBodyRadiusMm * 1.02),
-  );
+  const fallbackAssemblyRadiusMm =
+    isFiniteNumber(fit.bodyReferenceFallbackAssemblyRadiusMm) && (fit.bodyReferenceFallbackAssemblyRadiusMm ?? 0) > 0
+      ? fit.bodyReferenceFallbackAssemblyRadiusMm ?? null
+      : null;
+  const outerRadiusMm = fallbackAssemblyRadiusMm != null
+    ? round2(fallbackAssemblyRadiusMm)
+    : round2(
+        Math.min(Math.max(topBodyRadiusMm * 1.002, fit.rimRadiusMm), topBodyRadiusMm * 1.02),
+      );
   const wallThicknessMm = round2(Math.max(1.2, outerRadiusMm * 0.04));
   const innerRadiusMm = round2(Math.max(1, outerRadiusMm - wallThicknessMm));
   const rimProfile = [
@@ -780,28 +1397,711 @@ function createRimMesh(fit: StanleySilhouetteFit): THREE.Mesh {
   return mesh;
 }
 
-function buildStanleyIceFlow30Scene(profile: TumblerProfile, fit: StanleySilhouetteFit): THREE.Scene {
-  const scene = new THREE.Scene();
-  scene.name = "stanley_iceflow_30_generated";
+function createLatheMeshFromContour(args: {
+  name: string;
+  contour: Array<{ radiusMm: number; yMm: number }>;
+  material: THREE.MeshStandardMaterial;
+  bottomYmm: number;
+  topYmm: number;
+  segments?: number;
+  closeBottom?: boolean;
+  closeTop?: boolean;
+}): THREE.Mesh | null {
+  const dedupedContour = args.contour
+    .map((point) => ({
+      radiusMm: round2(Math.max(0.8, point.radiusMm)),
+      yMm: round2(point.yMm),
+    }))
+    .sort((left, right) => left.yMm - right.yMm)
+    .filter((point, index, array) => {
+      if (index === 0) return true;
+      const previous = array[index - 1];
+      return !(previous.radiusMm === point.radiusMm && previous.yMm === point.yMm);
+    });
+  if (dedupedContour.length < 2) {
+    return null;
+  }
 
-  const body = createBodyMesh(fit);
-  const rim = createRimMesh(fit);
+  const points: THREE.Vector2[] = [];
+  if (args.closeBottom !== false) {
+    points.push(new THREE.Vector2(0, args.bottomYmm));
+  }
+  points.push(...dedupedContour.map((point) => new THREE.Vector2(point.radiusMm, point.yMm)));
+  if (args.closeTop !== false) {
+    points.push(new THREE.Vector2(0, args.topYmm));
+  }
+  const geometry = new THREE.LatheGeometry(points, args.segments ?? 96);
+  geometry.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geometry, args.material);
+  mesh.name = args.name;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function createOutlineDrivenMesh(args: {
+  outline: EditableBodyOutline | null | undefined;
+  totalHeightMm: number;
+  name: string;
+  color: string;
+  metalness: number;
+  roughness: number;
+  minYOverallMm?: number | null;
+  maxYOverallMm?: number | null;
+  modelCoordinateOrigin?: ModelCoordinateOrigin;
+  closeBottom?: boolean;
+  closeTop?: boolean;
+}): THREE.Mesh | null {
+  const contour = buildOutlineLatheContour({
+    outline: args.outline,
+    totalHeightMm: args.totalHeightMm,
+    minYOverallMm: args.minYOverallMm,
+    maxYOverallMm: args.maxYOverallMm,
+    modelCoordinateOrigin: args.modelCoordinateOrigin,
+  });
+  if (!contour || contour.length < 2) {
+    return null;
+  }
+  const yValues = contour.map((point) => point.yMm);
+  const bottomYmm = round2(Math.min(...yValues));
+  const topYmm = round2(Math.max(...yValues));
+  return createLatheMeshFromContour({
+    name: args.name,
+    contour,
+    bottomYmm,
+    topYmm,
+    material: makeStandardMaterial(args.color, {
+      metalness: args.metalness,
+      roughness: args.roughness,
+    }),
+    closeBottom: args.closeBottom,
+    closeTop: args.closeTop,
+  });
+}
+
+function createCanonicalBodyProfileMesh(args: {
+  canonicalBodyProfile: CanonicalBodyProfile;
+  totalHeightMm: number;
+  name: string;
+  color: string;
+  metalness: number;
+  roughness: number;
+  minYOverallMm?: number | null;
+  maxYOverallMm?: number | null;
+  modelCoordinateOrigin?: ModelCoordinateOrigin;
+  closeBottom?: boolean;
+  closeTop?: boolean;
+}): THREE.Mesh | null {
+  const contour = buildCanonicalBodyLatheContour({
+    canonicalBodyProfile: args.canonicalBodyProfile,
+    totalHeightMm: args.totalHeightMm,
+    minYOverallMm: args.minYOverallMm,
+    maxYOverallMm: args.maxYOverallMm,
+    modelCoordinateOrigin: args.modelCoordinateOrigin,
+  });
+  if (contour.length < 2) {
+    return null;
+  }
+  const yValues = contour.map((point) => point.yMm);
+  const bottomYmm = round2(Math.min(...yValues));
+  const topYmm = round2(Math.max(...yValues));
+  return createLatheMeshFromContour({
+    name: args.name,
+    contour,
+    bottomYmm,
+    topYmm,
+    material: makeStandardMaterial(args.color, {
+      metalness: args.metalness,
+      roughness: args.roughness,
+    }),
+    closeBottom: args.closeBottom,
+    closeTop: args.closeTop,
+  });
+}
+
+function createParametricLidMesh(args: {
+  fit: StanleySilhouetteFit;
+  totalHeightMm: number;
+  lidColorHex: string;
+}): THREE.Mesh | null {
+  const origin = getFitModelCoordinateOrigin(args.fit);
+  const topYmm = origin === "bottom" ? round2(args.totalHeightMm) : round2(args.totalHeightMm / 2);
+  const bottomYmm = round2(args.fit.rimTopYmm);
+  if (topYmm - bottomYmm < 1) {
+    return null;
+  }
+  const fallbackAssemblyRadiusMm =
+    isFiniteNumber(args.fit.bodyReferenceFallbackAssemblyRadiusMm) &&
+    (args.fit.bodyReferenceFallbackAssemblyRadiusMm ?? 0) > 0
+      ? args.fit.bodyReferenceFallbackAssemblyRadiusMm ?? null
+      : null;
+  const outerRadiusMm = fallbackAssemblyRadiusMm != null
+    ? round2(Math.max(fallbackAssemblyRadiusMm, 8))
+    : round2(Math.max(args.fit.rimRadiusMm * 1.02, 8));
+  const mouthRadiusMm = round2(Math.max(2, outerRadiusMm * 0.22));
+  const lidContour = [
+    { radiusMm: mouthRadiusMm, yMm: topYmm },
+    { radiusMm: mouthRadiusMm, yMm: round2(topYmm - 6) },
+    { radiusMm: outerRadiusMm * 0.94, yMm: round2(topYmm - 9) },
+    { radiusMm: outerRadiusMm, yMm: round2(topYmm - 14) },
+    { radiusMm: outerRadiusMm, yMm: bottomYmm },
+  ];
+  return createLatheMeshFromContour({
+    name: "lid_mesh",
+    contour: lidContour,
+    bottomYmm,
+    topYmm,
+    material: makeStandardMaterial(args.lidColorHex, { metalness: 0.22, roughness: 0.56 }),
+  });
+}
+
+function createHandleMesh(args: {
+  fit: StanleySilhouetteFit;
+  handleProfile: CanonicalHandleProfile;
+  canonicalBodyProfile: CanonicalBodyProfile;
+  calibration: CanonicalDimensionCalibration;
+  bodyColorHex: string;
+}): THREE.Mesh | null {
+  const { handleProfile, canonicalBodyProfile, calibration, fit } = args;
+  const upper = handleProfile.anchors.upper;
+  const lower = handleProfile.anchors.lower;
+  if (
+    !Number.isFinite(upper?.yPx) ||
+    !Number.isFinite(lower?.yPx) ||
+    !Number.isFinite(upper?.xPx) ||
+    !Number.isFinite(lower?.xPx)
+  ) {
+    return null;
+  }
+
+  const axis = canonicalBodyProfile.axis;
+  const bodyYSpanPx = axis.yBottom - axis.yTop;
+  if (!Number.isFinite(bodyYSpanPx) || Math.abs(bodyYSpanPx) < 1) {
+    return null;
+  }
+
+  const orderedProfile = [...fit.bodyProfile].sort((a, b) => a.yMm - b.yMm);
+  if (orderedProfile.length < 2) return null;
+  const bodyMinYmm = orderedProfile[0].yMm;
+  const bodyMaxYmm = orderedProfile[orderedProfile.length - 1].yMm;
+
+  const anchorToBodyModelY = (yPx: number): number => {
+    const t = clamp((yPx - axis.yTop) / bodyYSpanPx, 0, 1);
+    // In photo coords, yPx increases downward. axis.yTop is the body top in photo space.
+    // In model space (origin "bottom"), modelY increases upward — so t=0 (top) maps to bodyMaxYmm.
+    return bodyMaxYmm + (bodyMinYmm - bodyMaxYmm) * t;
+  };
+
+  const upperModelYmm = anchorToBodyModelY(upper.yPx);
+  const lowerModelYmm = anchorToBodyModelY(lower.yPx);
+  const handleTopYmm = Math.max(upperModelYmm, lowerModelYmm);
+  const handleBottomYmm = Math.min(upperModelYmm, lowerModelYmm);
+  const handleHeightMm = handleTopYmm - handleBottomYmm;
+  if (handleHeightMm < 4) return null;
+  const handleMidYmm = (handleTopYmm + handleBottomYmm) / 2;
+
+  const sx = calibration.photoToFrontTransform.matrix[0] ?? 0;
+  if (!Number.isFinite(sx) || sx === 0) return null;
+  const pxToMmX = Math.abs(sx);
+
+  const bodyRadiusAtMid =
+    orderedProfile.reduce((best, point) => {
+      return Math.abs(point.yMm - handleMidYmm) < Math.abs(best.yMm - handleMidYmm)
+        ? point
+        : best;
+    }).radiusMm;
+
+  const anchorXPx = (upper.xPx + lower.xPx) / 2;
+  const axisXAtMidPx = axis.xTop + ((axis.xBottom - axis.xTop) * (axis.yTop + bodyYSpanPx / 2 - axis.yTop)) / bodyYSpanPx;
+  const lateralOffsetMm = Math.abs(anchorXPx - axisXAtMidPx) * pxToMmX;
+  const extrusionWidthPx = handleProfile.symmetricExtrusionWidthPx;
+  const estimatedOuterOffsetMm =
+    Number.isFinite(extrusionWidthPx) && (extrusionWidthPx ?? 0) > 0
+      ? Math.max(lateralOffsetMm, (extrusionWidthPx ?? 0) * pxToMmX * 0.85)
+      : lateralOffsetMm;
+  const minOuterOffsetMm = Math.max(handleHeightMm * 0.28, 12);
+  const outerOffsetMm = Math.max(estimatedOuterOffsetMm, minOuterOffsetMm);
+
+  const widthSamples = handleProfile.widthProfile
+    .map((sample) => Math.abs(sample.widthPx) * pxToMmX)
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  const medianWidthMm =
+    widthSamples.length > 0 ? widthSamples[Math.floor(widthSamples.length / 2)] : 0;
+  const tubeRadiusMm = clamp(medianWidthMm > 0 ? medianWidthMm * 0.4 : 4.5, 2.5, 9);
+
+  const sideSign = handleProfile.side === "left" ? -1 : 1;
+  const attachX = bodyRadiusAtMid * sideSign;
+  const outwardX = (bodyRadiusAtMid + outerOffsetMm) * sideSign;
+
+  const curve = new THREE.CubicBezierCurve3(
+    new THREE.Vector3(attachX, handleTopYmm, 0),
+    new THREE.Vector3(outwardX, handleTopYmm - handleHeightMm * 0.08, 0),
+    new THREE.Vector3(outwardX, handleBottomYmm + handleHeightMm * 0.08, 0),
+    new THREE.Vector3(attachX, handleBottomYmm, 0),
+  );
+  const geometry = new THREE.TubeGeometry(curve, 48, tubeRadiusMm, 20, false);
+  geometry.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(
+    geometry,
+    makeStandardMaterial(args.bodyColorHex, { metalness: 0.18, roughness: 0.7 }),
+  );
+  mesh.name = "handle_mesh";
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function buildLatheScene(args: {
+  sceneName: string;
+  fit: StanleySilhouetteFit;
+  totalHeightMm: number;
+  lidProfile?: EditableBodyOutline | null;
+  silverProfile?: EditableBodyOutline | null;
+  canonicalHandleProfile?: CanonicalHandleProfile | null;
+  canonicalBodyProfile?: CanonicalBodyProfile | null;
+  canonicalDimensionCalibration?: CanonicalDimensionCalibration | null;
+  allowFallbackTopGeometry?: boolean;
+  lidColorHex: string;
+  rimColorHex: string;
+}): THREE.Scene {
+  const scene = new THREE.Scene();
+  scene.name = args.sceneName;
+
+  const origin = getFitModelCoordinateOrigin(args.fit);
+  const rimTopOverallMm = modelYToOverallY(args.totalHeightMm, args.fit.rimTopYmm, origin);
+  const rimBottomOverallMm = modelYToOverallY(args.totalHeightMm, args.fit.rimBottomYmm, origin);
+
+  const body = createBodyMesh(args.fit);
 
   scene.add(body);
-  scene.add(rim);
+  const allowFallbackTopGeometry = args.allowFallbackTopGeometry !== false;
+  const lidMesh =
+    createOutlineDrivenMesh({
+      outline: args.lidProfile,
+      totalHeightMm: args.totalHeightMm,
+      name: "lid_mesh",
+      color: args.lidColorHex,
+      metalness: 0.22,
+      roughness: 0.56,
+      maxYOverallMm: rimTopOverallMm,
+      modelCoordinateOrigin: origin,
+    }) ??
+    (allowFallbackTopGeometry
+      ? createParametricLidMesh({
+          fit: args.fit,
+          totalHeightMm: args.totalHeightMm,
+          lidColorHex: args.lidColorHex,
+        })
+      : null);
+  if (lidMesh) {
+    scene.add(lidMesh);
+  }
+
+  const silverMesh =
+    createOutlineDrivenMesh({
+      outline: args.silverProfile,
+      totalHeightMm: args.totalHeightMm,
+      name: "silver_ring_mesh",
+      color: args.rimColorHex,
+      metalness: 0.82,
+      roughness: 0.22,
+      minYOverallMm: rimTopOverallMm,
+      maxYOverallMm:
+        args.fit.rimHeightMm > 0.5
+          ? rimBottomOverallMm
+          : undefined,
+      modelCoordinateOrigin: origin,
+    }) ??
+    (allowFallbackTopGeometry && args.fit.rimHeightMm > 0.5 && args.fit.rimTopYmm > args.fit.rimBottomYmm
+      ? createRimMesh(args.fit)
+      : null);
+  if (silverMesh) {
+    scene.add(silverMesh);
+  }
+
+  if (args.canonicalHandleProfile && args.canonicalBodyProfile && args.canonicalDimensionCalibration) {
+    const handleMesh = createHandleMesh({
+      fit: args.fit,
+      handleProfile: args.canonicalHandleProfile,
+      canonicalBodyProfile: args.canonicalBodyProfile,
+      calibration: args.canonicalDimensionCalibration,
+      bodyColorHex: args.fit.bodyColorHex,
+    });
+    if (handleMesh) {
+      scene.add(handleMesh);
+    }
+  }
 
   return scene;
+}
+
+function buildGeneratedMeshBounds(object: THREE.Object3D | null | undefined): GeneratedBodyReferenceMeshBounds | null {
+  if (!object) return null;
+  const bounds = new THREE.Box3().setFromObject(object);
+  if (bounds.isEmpty()) return null;
+  const size = bounds.getSize(new THREE.Vector3());
+  return {
+    minMm: {
+      x: round2(bounds.min.x),
+      y: round2(bounds.min.y),
+      z: round2(bounds.min.z),
+    },
+    maxMm: {
+      x: round2(bounds.max.x),
+      y: round2(bounds.max.y),
+      z: round2(bounds.max.z),
+    },
+    sizeMm: {
+      x: round2(size.x),
+      y: round2(size.y),
+      z: round2(size.z),
+    },
+  };
+}
+
+function collectSceneMeshNames(scene: THREE.Scene): string[] {
+  const meshNames = new Set<string>();
+  scene.traverse((child) => {
+    const maybeMesh = child as THREE.Object3D & { isMesh?: boolean };
+    if (maybeMesh.isMesh && child.name) {
+      meshNames.add(child.name);
+    }
+  });
+  return [...meshNames].sort((left, right) => left.localeCompare(right));
+}
+
+function buildBodyOutlineOnlyScene(args: {
+  sceneName: string;
+  fit: StanleySilhouetteFit;
+  renderMode: BodyReferenceGlbRenderMode;
+  canonicalBodyProfile: CanonicalBodyProfile;
+  lidProfile?: EditableBodyOutline | null;
+  silverProfile?: EditableBodyOutline | null;
+  totalHeightMm: number;
+  bodyTopMm: number;
+  bodyBottomMm: number;
+  bodyColorHex: string;
+  lidColorHex: string;
+  rimColorHex: string;
+}): {
+  scene: THREE.Scene;
+  bodyMesh: THREE.Mesh;
+  meshNames: string[];
+  fallbackMeshNames: string[];
+  bodyMeshBounds: GeneratedBodyReferenceMeshBounds | null;
+} {
+  const scene = new THREE.Scene();
+  scene.name = args.sceneName;
+  const fallbackMeshNames: string[] = [];
+  const origin = getFitModelCoordinateOrigin(args.fit);
+  const rimTopOverallMm = modelYToOverallY(args.totalHeightMm, args.fit.rimTopYmm, origin);
+  const rimBottomOverallMm = modelYToOverallY(args.totalHeightMm, args.fit.rimBottomYmm, origin);
+
+  const bodyMesh = createCanonicalBodyProfileMesh({
+    canonicalBodyProfile: args.canonicalBodyProfile,
+    totalHeightMm: args.totalHeightMm,
+    name: "body_mesh",
+    color: args.bodyColorHex,
+    metalness: 0.16,
+    roughness: 0.72,
+    minYOverallMm: args.bodyTopMm,
+    maxYOverallMm: args.bodyBottomMm,
+    modelCoordinateOrigin: origin,
+    closeBottom: true,
+    closeTop: false,
+  });
+  if (!bodyMesh) {
+    throw new Error("Reviewed body outline is missing enough geometry to generate a reviewed preview GLB.");
+  }
+  scene.add(bodyMesh);
+
+  if (args.renderMode === "hybrid-preview") {
+    const reviewedLidMesh = createOutlineDrivenMesh({
+      outline: args.lidProfile,
+      totalHeightMm: args.totalHeightMm,
+      name: "lid_mesh",
+      color: args.lidColorHex,
+      metalness: 0.22,
+      roughness: 0.56,
+      maxYOverallMm: rimTopOverallMm,
+      modelCoordinateOrigin: origin,
+    });
+    const lidMesh =
+      reviewedLidMesh ??
+      createParametricLidMesh({
+        fit: args.fit,
+        totalHeightMm: args.totalHeightMm,
+        lidColorHex: args.lidColorHex,
+      });
+    if (lidMesh) {
+      scene.add(lidMesh);
+      if (!reviewedLidMesh) {
+        fallbackMeshNames.push(lidMesh.name);
+      }
+    }
+
+    const reviewedRingMesh = createOutlineDrivenMesh({
+      outline: args.silverProfile,
+      totalHeightMm: args.totalHeightMm,
+      name: "silver_ring_mesh",
+      color: args.rimColorHex,
+      metalness: 0.82,
+      roughness: 0.22,
+      minYOverallMm: rimTopOverallMm,
+      maxYOverallMm:
+        args.fit.rimHeightMm > 0.5
+          ? rimBottomOverallMm
+          : undefined,
+      modelCoordinateOrigin: origin,
+    });
+    const ringMesh =
+      reviewedRingMesh ??
+      (args.fit.rimHeightMm > 0.5 && args.fit.rimTopYmm > args.fit.rimBottomYmm
+        ? createRimMesh(args.fit)
+        : null);
+    if (ringMesh) {
+      scene.add(ringMesh);
+      if (!reviewedRingMesh) {
+        fallbackMeshNames.push(ringMesh.name);
+      }
+    }
+  }
+
+  return {
+    scene,
+    bodyMesh,
+    meshNames: collectSceneMeshNames(scene),
+    fallbackMeshNames,
+    bodyMeshBounds: buildGeneratedMeshBounds(bodyMesh),
+  };
+}
+
+function buildResolvedBodyProfileOnlyScene(args: {
+  sceneName: string;
+  fit: StanleySilhouetteFit;
+  bodyColorHex: string;
+}): THREE.Scene {
+  const scene = new THREE.Scene();
+  scene.name = args.sceneName;
+  const bodyMesh = createBodyOnlyMeshFromFit({
+    fit: args.fit,
+    bodyColorHex: args.bodyColorHex,
+  });
+  if (!bodyMesh) {
+    throw new Error("Resolved body profile is missing enough geometry to generate a body-only GLB.");
+  }
+  scene.add(bodyMesh);
+  return scene;
+}
+
+function buildStanleyIceFlow30Scene(profile: TumblerProfile, fit: StanleySilhouetteFit): THREE.Scene {
+  return buildLatheScene({
+    sceneName: "stanley_iceflow_30_generated",
+    fit,
+    totalHeightMm: profile.overallHeightMm,
+    lidColorHex: "#d8ef80",
+    rimColorHex: fit.rimColorHex,
+  });
+}
+
+function resolveOutlineGeometrySource(
+  outline: EditableBodyOutline | null | undefined,
+  fallbackLabel: string,
+): string {
+  const hasDirectContour = Boolean(outline?.directContour && outline.directContour.length >= 3);
+  const hasPointProfile = Boolean(outline?.points && outline.points.length >= 2);
+  if (hasDirectContour || hasPointProfile) {
+    return "reviewed outline";
+  }
+  return fallbackLabel;
 }
 
 async function writeGeneratedGlb(
   fileName: string,
   scene: THREE.Scene,
-): Promise<string> {
-  const absolutePath = path.join(GENERATED_DIR, fileName);
-  await mkdir(GENERATED_DIR, { recursive: true });
+): Promise<{
+  glbPath: string;
+  glbAbsolutePath: string;
+  glbHash: string;
+  generatedAt: string;
+}> {
   const arrayBuffer = await exportSceneToGlb(scene);
-  await writeFile(absolutePath, Buffer.from(arrayBuffer));
-  return `${GENERATED_PUBLIC_PREFIX}/${fileName}`;
+  return {
+    glbPath: await writeGeneratedModelGlb(fileName, arrayBuffer),
+    glbAbsolutePath: getGeneratedModelWriteAbsolutePath(fileName),
+    glbHash: hashArrayBufferSha256Node(arrayBuffer),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function buildGeneratedTumblerAuditContract(args: {
+  profile: TumblerProfile;
+  generatedGlb: {
+    glbPath: string;
+    glbHash: string;
+    generatedAt: string;
+  };
+  scene: THREE.Scene;
+}): BodyGeometryContract {
+  const meshNames = collectSceneMeshNames(args.scene);
+  const accessoryMeshNames = detectAccessoryMeshes(meshNames);
+  const fallbackMeshNames = detectFallbackMeshes(meshNames);
+  const bodyMeshBounds = buildGeneratedMeshBounds(args.scene.getObjectByName("body_mesh"));
+  const wrapDiameterMm = round2(args.profile.outsideDiameterMm ?? args.profile.topDiameterMm ?? 0);
+  const expectedBodyHeightMm = round2(args.profile.usableHeightMm ?? args.profile.overallHeightMm ?? 0);
+
+  return updateContractValidation({
+    ...createEmptyBodyGeometryContract(),
+    mode: "hybrid-preview",
+    source: {
+      type: "generated",
+      filename: `${args.profile.id}.generated-profile`,
+      detectedBodyOnly: false,
+    },
+    glb: {
+      path: args.generatedGlb.glbPath,
+      hash: args.generatedGlb.glbHash,
+      generatedAt: args.generatedGlb.generatedAt,
+      freshRelativeToSource: undefined,
+    },
+    meshes: {
+      names: meshNames,
+      bodyMeshNames: meshNames.filter((name) => name === "body_mesh"),
+      accessoryMeshNames,
+      fallbackMeshNames,
+      fallbackDetected: fallbackMeshNames.length > 0,
+      unexpectedMeshes: [],
+    },
+    dimensionsMm: {
+      bodyBounds: bodyMeshBounds
+        ? {
+            width: bodyMeshBounds.sizeMm.x,
+            height: bodyMeshBounds.sizeMm.y,
+            depth: bodyMeshBounds.sizeMm.z,
+          }
+        : undefined,
+      bodyBoundsUnits: bodyMeshBounds ? "mm" : undefined,
+      wrapDiameterMm: wrapDiameterMm > 0 ? wrapDiameterMm : undefined,
+      wrapWidthMm: wrapDiameterMm > 0 ? round2(Math.PI * wrapDiameterMm) : undefined,
+      expectedBodyWidthMm: wrapDiameterMm > 0 ? wrapDiameterMm : undefined,
+      expectedBodyHeightMm: expectedBodyHeightMm > 0 ? expectedBodyHeightMm : undefined,
+      scaleSource: bodyMeshBounds ? "mesh-bounds" : (wrapDiameterMm > 0 ? "physical-wrap" : "unknown"),
+    },
+    validation: {
+      status: "unknown",
+      errors: [],
+      warnings: [],
+    },
+  });
+}
+
+function buildBodyReferenceBodyGeometryContract(args: {
+  input: GenerateBodyReferenceGlbInput;
+  renderMode: BodyReferenceGlbRenderMode;
+  meshNames: string[];
+  fallbackMeshNames: string[];
+  bodyMeshBounds: GeneratedBodyReferenceMeshBounds | null;
+  glbPath: string;
+  glbHash: string;
+  generatedAt: string;
+  silhouetteAudit: BodyReferenceSilhouetteAuditReport | null;
+}): BodyGeometryContract {
+  const sourceHashPayload = buildBodyGeometrySourceHashPayload(args.input.bodyOutline);
+  const sourceContourViewport = args.input.bodyOutline?.sourceContourViewport ?? null;
+  const sourceType = args.input.bodyOutline ? "approved-svg" : "unknown";
+  const contract = createEmptyBodyGeometryContract();
+  const accessoryMeshNames = detectAccessoryMeshes(args.meshNames);
+  const fallbackMeshNames = detectFallbackMeshes(args.meshNames);
+  const sourceHash = sourceHashPayload ? hashJsonSha256Node(sourceHashPayload) : undefined;
+  const svgQuality = buildBodyReferenceSvgQualityReportFromOutline({
+    outline: args.input.bodyOutline,
+    sourceHash,
+    label: args.input.templateName ?? args.input.matchedProfileId ?? undefined,
+  });
+
+  return updateContractValidation({
+    ...contract,
+    mode: args.renderMode,
+    source: {
+      type: sourceType,
+      hash: sourceHash,
+      widthPx: sourceContourViewport?.width ? round2(sourceContourViewport.width) : undefined,
+      heightPx: sourceContourViewport?.height ? round2(sourceContourViewport.height) : undefined,
+      viewBox: sourceContourViewport
+        ? `${round2(sourceContourViewport.minX)} ${round2(sourceContourViewport.minY)} ${round2(sourceContourViewport.width)} ${round2(sourceContourViewport.height)}`
+        : undefined,
+      detectedBodyOnly: args.input.bodyOutlineSourceMode === "body-only",
+    },
+    glb: {
+      path: args.glbPath,
+      hash: args.glbHash,
+      sourceHash,
+      generatedAt: args.generatedAt,
+      freshRelativeToSource: sourceHashPayload ? true : undefined,
+    },
+    meshes: {
+      names: args.meshNames,
+      bodyMeshNames: args.meshNames.filter((name) => name === "body_mesh"),
+      accessoryMeshNames,
+      fallbackMeshNames: [...new Set([...args.fallbackMeshNames, ...fallbackMeshNames])],
+      fallbackDetected: args.fallbackMeshNames.length > 0 || fallbackMeshNames.length > 0,
+      unexpectedMeshes: [],
+    },
+    dimensionsMm: {
+      bodyBounds: args.bodyMeshBounds
+        ? {
+            width: args.bodyMeshBounds.sizeMm.x,
+            height: args.bodyMeshBounds.sizeMm.y,
+            depth: args.bodyMeshBounds.sizeMm.z,
+          }
+        : undefined,
+      bodyBoundsUnits: args.bodyMeshBounds ? "mm" : undefined,
+      wrapDiameterMm: round2(args.input.canonicalDimensionCalibration.wrapDiameterMm),
+      wrapWidthMm: round2(args.input.canonicalDimensionCalibration.wrapWidthMm),
+      frontVisibleWidthMm: round2(args.input.canonicalDimensionCalibration.frontVisibleWidthMm),
+      expectedBodyWidthMm: args.silhouetteAudit?.approvedWidthMm ?? round2(args.input.canonicalDimensionCalibration.frontVisibleWidthMm),
+      expectedBodyHeightMm: args.silhouetteAudit?.approvedHeightMm ?? round2(
+        args.input.canonicalDimensionCalibration.bodyBottomMm - args.input.canonicalDimensionCalibration.lidBodyLineMm,
+      ),
+      printableTopMm: args.input.canonicalDimensionCalibration.printableSurfaceContract?.printableTopMm,
+      printableBottomMm: args.input.canonicalDimensionCalibration.printableSurfaceContract?.printableBottomMm,
+      scaleSource: args.bodyMeshBounds ? "mesh-bounds" : "physical-wrap",
+    },
+    validation: {
+      status: "unknown",
+      errors: [],
+      warnings: [],
+    },
+    svgQuality,
+  });
+}
+
+const BODY_REFERENCE_AUDIT_DIR = path.join(process.cwd(), "tmp", "audit");
+
+async function writeBodyReferenceSilhouetteAuditArtifacts(args: {
+  fileStem: string;
+  audit: BodyReferenceSilhouetteAuditReport;
+}): Promise<BodyReferenceSilhouetteAuditReport> {
+  try {
+    await mkdir(BODY_REFERENCE_AUDIT_DIR, { recursive: true });
+    const jsonPath = path.join(BODY_REFERENCE_AUDIT_DIR, `${args.fileStem}-silhouette-audit.json`);
+    const svgPath = path.join(BODY_REFERENCE_AUDIT_DIR, `${args.fileStem}-silhouette-audit.svg`);
+    const nextAudit: BodyReferenceSilhouetteAuditReport = {
+      ...args.audit,
+      artifactPaths: {
+        jsonPath,
+        svgPath,
+      },
+    };
+    await writeFile(jsonPath, JSON.stringify(nextAudit, null, 2), "utf8");
+    await writeFile(svgPath, buildBodyReferenceSilhouetteAuditSvg(nextAudit), "utf8");
+    return nextAudit;
+  } catch {
+    return args.audit;
+  }
 }
 
 export async function ensureGeneratedTumblerGlb(
@@ -844,10 +2144,160 @@ export async function ensureGeneratedTumblerGlb(
   }
 
   const fileName = `${profileId}-bodyfit-v5.glb`;
+  const scene = buildStanleyIceFlow30Scene(profile, fit);
+  const generated = await writeGeneratedGlb(fileName, scene);
+  const auditArtifact = await writeBodyGeometryAuditArtifact({
+    glbAbsolutePath: generated.glbAbsolutePath,
+    contract: buildGeneratedTumblerAuditContract({
+      profile,
+      generatedGlb: generated,
+      scene,
+    }),
+  });
   return {
-    glbPath: await writeGeneratedGlb(fileName, buildStanleyIceFlow30Scene(profile, fit)),
+    glbPath: generated.glbPath,
+    auditJsonPath: auditArtifact.auditAbsolutePath,
     fitDebug: fit.fitDebug ?? null,
     bodyColorHex: fit.bodyColorHex ?? null,
     rimColorHex: fit.rimColorHex ?? null,
+  };
+}
+
+export async function generateBodyReferenceGlb(
+  input: GenerateBodyReferenceGlbInput,
+): Promise<GeneratedBodyReferenceGlbResult> {
+  const fit = buildBodyReferenceFit(input);
+  const renderMode = input.renderMode ?? "hybrid-preview";
+  const bodyOnlyTrace = input.bodyOutlineSourceMode === "body-only";
+  const hasReviewedLidGeometry = Boolean(
+    (input.lidProfile?.directContour && input.lidProfile.directContour.length >= 3) ||
+    (input.lidProfile?.points && input.lidProfile.points.length >= 2),
+  );
+  const hasReviewedRingGeometry = Boolean(
+    (input.silverProfile?.directContour && input.silverProfile.directContour.length >= 3) ||
+    (input.silverProfile?.points && input.silverProfile.points.length >= 2),
+  );
+  if (!input.bodyOutline) {
+    throw new Error("Reviewed body outline is required to generate a reviewed preview GLB.");
+  }
+  const fallbackTopGeometryOmitted =
+    renderMode === "body-cutout-qa" ||
+    fit.bodyReferenceFallbackTopGeometryMode === "omitted";
+  const visualLikeness = resolveBodyReferenceVisualLikeness({
+    canonicalDimensionCalibration: input.canonicalDimensionCalibration,
+    canonicalBodyProfile: input.canonicalBodyProfile,
+    canonicalHandleProfile: input.canonicalHandleProfile ?? null,
+    lidProfile: input.lidProfile ?? null,
+    silverProfile: input.silverProfile ?? null,
+    fallbackTopGeometryOmitted,
+  });
+  const bodyGeometrySource = bodyOnlyTrace
+    ? "approved contour -> mirrored body profile -> revolved body_mesh (body-only trace)"
+    : "approved contour -> mirrored body profile -> revolved body_mesh";
+  const lidGeometrySource = renderMode === "body-cutout-qa"
+    ? "excluded in BODY CUTOUT QA mode"
+    : hasReviewedLidGeometry
+    ? "reviewed lid outline"
+    : fallbackTopGeometryOmitted
+      ? bodyOnlyTrace
+        ? "unreviewed lid geometry omitted (body-only trace)"
+        : "unreviewed lid geometry omitted"
+    : bodyOnlyTrace
+      ? "parametric lid fallback (body-only trace)"
+      : "parametric lid fallback";
+  const ringGeometrySource = renderMode === "body-cutout-qa"
+    ? "excluded in BODY CUTOUT QA mode"
+    : hasReviewedRingGeometry
+    ? "reviewed silver-ring outline"
+    : fallbackTopGeometryOmitted
+      ? bodyOnlyTrace
+        ? "unreviewed silver-ring geometry omitted (body-only trace)"
+        : "unreviewed silver-ring geometry omitted"
+    : bodyOnlyTrace
+      ? "parametric silver-ring fallback (body-only trace)"
+      : "parametric silver-ring fallback";
+  const lidPreviewLabel = renderMode === "body-cutout-qa"
+    ? lidGeometrySource
+    : hasReviewedLidGeometry
+    ? lidGeometrySource
+    : fallbackTopGeometryOmitted
+      ? lidGeometrySource
+      : `${lidGeometrySource} as preview-only silhouette`;
+  const ringPreviewLabel = renderMode === "body-cutout-qa"
+    ? ringGeometrySource
+    : hasReviewedRingGeometry
+    ? ringGeometrySource
+    : fallbackTopGeometryOmitted
+      ? ringGeometrySource
+      : `${ringGeometrySource} as preview-only silhouette`;
+  const fileStem = buildBodyReferenceFileStem(input);
+  const generatedSourceSignature = buildBodyReferenceGlbSourceSignature(input);
+  const builtScene = buildBodyOutlineOnlyScene({
+    sceneName: `${fileStem}_generated`,
+    fit,
+    renderMode,
+    canonicalBodyProfile: input.canonicalBodyProfile,
+    lidProfile: input.lidProfile ?? null,
+    silverProfile: input.silverProfile ?? null,
+    totalHeightMm: input.canonicalDimensionCalibration.totalHeightMm,
+    bodyTopMm: input.canonicalDimensionCalibration.lidBodyLineMm,
+    bodyBottomMm: input.canonicalDimensionCalibration.bodyBottomMm,
+    bodyColorHex: input.bodyColorHex ?? fit.bodyColorHex ?? "#d7d4df",
+    lidColorHex: input.lidColorHex ?? input.bodyColorHex ?? fit.bodyColorHex ?? "#d7d4df",
+    rimColorHex: input.rimColorHex ?? fit.rimColorHex ?? "#b6b6b6",
+  });
+  const silhouetteAudit = await writeBodyReferenceSilhouetteAuditArtifacts({
+    fileStem,
+    audit: buildBodyReferenceSilhouetteAudit({
+      bodyMesh: builtScene.bodyMesh,
+      canonicalBodyProfile: input.canonicalBodyProfile,
+      canonicalDimensionCalibration: input.canonicalDimensionCalibration,
+      modelCoordinateOrigin: getFitModelCoordinateOrigin(fit),
+      minYOverallMm: input.canonicalDimensionCalibration.lidBodyLineMm,
+      maxYOverallMm: input.canonicalDimensionCalibration.bodyBottomMm,
+    }),
+  });
+  const generatedGlb = await writeGeneratedGlb(
+    `${fileStem}.glb`,
+    builtScene.scene,
+  );
+  const bodyGeometryContract = buildBodyReferenceBodyGeometryContract({
+    input,
+    renderMode,
+    meshNames: builtScene.meshNames,
+    fallbackMeshNames: builtScene.fallbackMeshNames,
+    bodyMeshBounds: builtScene.bodyMeshBounds,
+    glbPath: generatedGlb.glbPath,
+    glbHash: generatedGlb.glbHash,
+    generatedAt: generatedGlb.generatedAt,
+    silhouetteAudit,
+  });
+  const auditArtifact = await writeBodyGeometryAuditArtifact({
+    glbAbsolutePath: generatedGlb.glbAbsolutePath,
+    contract: bodyGeometryContract,
+  });
+  const modelSourceLabel = renderMode === "body-cutout-qa"
+    ? `BODY CUTOUT QA mode. Body geometry authority: ${bodyGeometrySource}. Lid geometry: ${lidGeometrySource}. Ring geometry: ${ringGeometrySource}. Preview trust: ${visualLikeness.status} (${visualLikeness.score}).`
+    : `Body geometry authority: ${bodyGeometrySource}. Lid preview geometry: ${lidPreviewLabel}. Ring preview geometry: ${ringPreviewLabel}. Preview trust: ${visualLikeness.status} (${visualLikeness.score}).`;
+
+  return {
+    glbPath: generatedGlb.glbPath,
+    modelStatus: "generated-reviewed-model",
+    renderMode,
+    generatedSourceSignature,
+    fitDebug: null,
+    bodyColorHex: fit.bodyColorHex ?? null,
+    rimColorHex: fit.rimColorHex ?? null,
+    modelSourceLabel,
+    bodyGeometrySource,
+    lidGeometrySource,
+    ringGeometrySource,
+    meshNames: builtScene.meshNames,
+    fallbackMeshNames: builtScene.fallbackMeshNames,
+    bodyMeshBounds: builtScene.bodyMeshBounds,
+    visualLikeness,
+    silhouetteAudit,
+    bodyGeometryContract,
+    auditJsonPath: auditArtifact.auditAbsolutePath,
   };
 }

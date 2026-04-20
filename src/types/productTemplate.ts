@@ -512,8 +512,8 @@ export interface ProductTemplate {
   thumbnailDataUrl: string; // base64 120x120 PNG
   /** Full-resolution product photo (max 1024px, JPEG base64) for grid overlay */
   productPhotoFullUrl?: string;
-  glbPath: string; // path in /public/models/
-  glbStatus?: "verified-product-model" | "placeholder-model" | "missing-model";
+  glbPath: string; // path in /public/models/ or generated-model API route
+  glbStatus?: "verified-product-model" | "generated-reviewed-model" | "placeholder-model" | "missing-model";
   glbSourceLabel?: string;
   dimensions: ProductTemplateDimensions;
   laserSettings: ProductTemplateLaserSettings;

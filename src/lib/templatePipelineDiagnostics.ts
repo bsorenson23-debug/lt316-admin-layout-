@@ -10,7 +10,7 @@ import {
   parseTemplatePipelineDiagnostics,
   parseTemplatePipelineProvenance,
   parseTemplatePipelineStageRecord,
-} from "./templatePipelineDiagnostics.schema";
+} from "./templatePipelineDiagnostics.schema.ts";
 
 const DEFAULT_CONTRACT_VERSION = "2026-04-10-v1";
 

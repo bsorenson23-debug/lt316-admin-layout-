@@ -4,6 +4,7 @@ import {
   Suspense,
   useState,
   useEffect,
+  useEffectEvent,
   useCallback,
   useRef,
   useMemo,
@@ -29,6 +30,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 import * as THREE from "three";
 import type { PlacedItem } from "@/types/admin";
+import type { EditableBodyOutline } from "@/types/productTemplate";
 import {
   BODY_RADIUS_TOLERANCE_DEFAULT,
   BODY_RADIUS_TOLERANCE_WITH_HANDLE,
@@ -43,6 +45,7 @@ import type {
   CanonicalBodyProfile,
   CanonicalDimensionCalibration,
   CanonicalHandleProfile,
+  ProductTemplate,
 } from "@/types/productTemplate";
 import type { TemplatePipelineStageRecord } from "@/types/templatePipelineDiagnostics";
 import { resolveCanonicalHandleRenderMode } from "@/lib/canonicalDimensionCalibration";
@@ -53,9 +56,39 @@ import {
 import type { LidAssemblyPreset } from "@/lib/lidPresets";
 import {
   deriveTumblerPreviewModelState,
+  getTumblerPreviewModelStateSignature,
+  type PreviewModelMode,
   type TumblerPreviewBoundsSnapshot,
   type TumblerPreviewModelState,
 } from "@/lib/tumblerPreviewModelState";
+import {
+  isGeneratedModelUrl,
+  isLegacyGeneratedModelPath,
+  resolveGeneratedModelAuditRequestPlan,
+} from "@/lib/generatedModelUrl";
+import { resolvePreviewPerspectiveCameraFit } from "@/lib/modelPreviewCameraFit";
+import {
+  box3EqualsByQuantizedSignature,
+  getQuantizedBox3Signature,
+} from "@/lib/modelPreviewBounds";
+import { hashArrayBufferSha256, hashFileSha256, hashJsonSha256 } from "@/lib/hashSha256";
+import { parseBodyGeometryAuditArtifact } from "@/lib/adminApi.schema";
+import type { BodyGeometryContract, BodyGeometrySourceType } from "@/lib/bodyGeometryContract";
+import {
+  buildBodyGeometrySourceHashPayload,
+  createEmptyBodyGeometryContract,
+  mergeAuditContractWithLoadedInspection,
+  resolveLoadedGlbFreshRelativeToSource,
+  type BodyGeometryContractSeed,
+} from "@/lib/bodyGeometryContract";
+import { buildBodyCutoutQaGuardState } from "@/lib/bodyCutoutQaGuard";
+import { buildBodyReferenceSvgQualityReportFromOutline } from "@/lib/bodyReferenceSvgQuality";
+import type { LoadedGltfSceneInspection, LoadedSceneBoundsSummary, LoadedSceneBoundsUnits } from "@/lib/inspectLoadedGltfScene";
+import { inspectLoadedGltfScene } from "@/lib/inspectLoadedGltfScene";
+import { BodyCutoutQaGuardBanner } from "./BodyCutoutQaGuardBanner";
+import { BodyContractInspectorPanel } from "./BodyContractInspectorPanel";
+import { BodyGeometryStatusBadge } from "./BodyGeometryStatusBadge";
+import type { BodyGeometryAuditArtifactLike } from "@/lib/bodyGeometryDebugReport";
 
 // ---------------------------------------------------------------------------
 // Suppress noisy Three.js deprecation warnings
@@ -141,14 +174,127 @@ export interface ModelViewerProps {
   dimensionCalibration?: CanonicalDimensionCalibration | null;
   canonicalBodyProfile?: CanonicalBodyProfile | null;
   canonicalHandleProfile?: CanonicalHandleProfile | null;
+  approvedBodyOutline?: EditableBodyOutline | null;
   editableHandlePreview?: EditableHandlePreview | null;
-  previewModelMode?: "alignment-model" | "full-model" | "source-traced";
+  previewModelMode?: PreviewModelMode;
+  sourceModelStatus?: ProductTemplate["glbStatus"] | null;
+  sourceModelLabel?: string | null;
+  showModelDebug?: boolean;
+  bodyGeometryContractSeed?: BodyGeometryContractSeed | null;
   onPipelineStage?: (stage: TemplatePipelineStageRecord) => void;
   onPreviewStateChange?: (state: TumblerPreviewModelState | null) => void;
+  onBodyGeometryContractChange?: (contract: BodyGeometryContract | null) => void;
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function formatBoundsSize(bounds: THREE.Box3 | LoadedSceneBoundsSummary | null | undefined): string {
+  if (!bounds) return "n/a";
+  if (bounds instanceof THREE.Box3) {
+    const size = bounds.getSize(new THREE.Vector3());
+    return `${round2(size.x)} x ${round2(size.y)} x ${round2(size.z)}`;
+  }
+  return `${round2(bounds.width)} x ${round2(bounds.height)} x ${round2(bounds.depth)}`;
+}
+
+function formatBoundsMinMax(bounds: THREE.Box3 | LoadedSceneBoundsSummary | null | undefined): string {
+  if (!bounds) return "n/a";
+  if (bounds instanceof THREE.Box3) {
+    return `min(${round2(bounds.min.x)}, ${round2(bounds.min.y)}, ${round2(bounds.min.z)}) max(${round2(bounds.max.x)}, ${round2(bounds.max.y)}, ${round2(bounds.max.z)})`;
+  }
+  return `min(${round2(bounds.minX)}, ${round2(bounds.minY)}, ${round2(bounds.minZ)}) max(${round2(bounds.maxX)}, ${round2(bounds.maxY)}, ${round2(bounds.maxZ)})`;
+}
+
+const BODY_CONTRACT_INSPECTOR_ENABLED =
+  process.env.NEXT_PUBLIC_ADMIN_DEBUG === "1" ||
+  process.env.NEXT_PUBLIC_SHOW_BODY_CONTRACT_INSPECTOR === "1";
+
+function getStableStringHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+type LoadedSceneInspectionState =
+  | {
+      status: "idle";
+      source: "three-loaded-scene";
+      glbUrl?: string;
+    }
+  | {
+      status: "pending";
+      source: "three-loaded-scene";
+      glbUrl?: string;
+      sourceKey?: string;
+    }
+  | {
+      status: "complete";
+      source: "three-loaded-scene";
+      glbUrl?: string;
+      sourceKey: string;
+      boundsSignature: string;
+      inspectedAt: string;
+      sceneInspection: LoadedGltfSceneInspection;
+    }
+  | {
+      status: "failed";
+      source: "three-loaded-scene";
+      glbUrl?: string;
+      sourceKey?: string;
+      error: string;
+    };
+
+type LoadedAuditArtifactState =
+  | {
+      status: "idle";
+      auditUrl?: string;
+      expectation: "none";
+    }
+  | {
+      status: "loading";
+      auditUrl: string;
+      expectation: "required";
+    }
+  | {
+      status: "present";
+      auditUrl: string;
+      expectation: "required";
+    }
+  | {
+      status: "optional-missing";
+      auditUrl?: string;
+      expectation: "optional";
+    }
+  | {
+      status: "required-missing";
+      auditUrl: string;
+      expectation: "required";
+    }
+  | {
+      status: "failed";
+      auditUrl: string;
+      expectation: "required";
+      error: string;
+    };
+
+type ParsedBodyGeometryAuditArtifact = BodyGeometryAuditArtifactLike;
+
+function resolveViewerSourceType(args: {
+  sourceModelStatus?: ProductTemplate["glbStatus"] | null;
+  approvedBodyOutline?: EditableBodyOutline | null;
+}): BodyGeometrySourceType {
+  if (args.approvedBodyOutline) return "approved-svg";
+  if (args.sourceModelStatus === "generated-reviewed-model") return "generated";
+  return "unknown";
 }
 
 function logoDataUrlToCanvas(dataUrl: string): Promise<HTMLCanvasElement> {
@@ -214,6 +360,30 @@ function computeDecalDepthMm(itemWidthMm: number, radiusMm: number): number {
   const sagittaMm = radiusMm * (1 - Math.cos(halfArc));
   const inwardNeededMm = sagittaMm + Math.max(4, itemWidthMm * 0.04);
   return THREE.MathUtils.clamp(inwardNeededMm * 1.8, 20, 110);
+}
+
+function buildModelReadySignature(
+  sourceKey: string,
+  transform: ModelTransform,
+  extras: readonly string[] = [],
+): string {
+  const formatTransformValue = (value: unknown): string => {
+    const numericValue = typeof value === "number" ? value : Number(value);
+    if (Number.isFinite(numericValue)) return numericValue.toFixed(4);
+    return String(value);
+  };
+
+  return [
+    sourceKey,
+    ...extras,
+    formatTransformValue(transform.scale),
+    formatTransformValue(transform.rotation[0]),
+    formatTransformValue(transform.rotation[1]),
+    formatTransformValue(transform.rotation[2]),
+    formatTransformValue(transform.position[0]),
+    formatTransformValue(transform.position[1]),
+    formatTransformValue(transform.position[2]),
+  ].join("|");
 }
 
 function computeModelTransform(
@@ -454,11 +624,13 @@ function PreviewPerspectiveCamera({
   modelBounds,
   focusCenter,
   previewMode,
+  reviewedBodyOnly,
 }: {
   enabled: boolean;
   modelBounds: THREE.Box3 | null;
   focusCenter?: THREE.Vector3 | null;
-  previewMode?: "alignment-model" | "full-model" | "source-traced";
+  previewMode?: PreviewModelMode;
+  reviewedBodyOnly?: boolean;
 }) {
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
   const viewport = useThree((state) => state.size);
@@ -468,45 +640,57 @@ function PreviewPerspectiveCamera({
     if (!enabled || !cameraRef.current || !modelBounds) return;
     const center = focusCenter?.clone() ?? modelBounds.getCenter(new THREE.Vector3());
     const size = modelBounds.getSize(new THREE.Vector3());
-    const fov = THREE.MathUtils.degToRad(cameraRef.current.fov);
     const aspect = viewport.width > 0 && viewport.height > 0
       ? viewport.width / viewport.height
       : 1;
-    const isFullPreview = previewMode === "full-model";
-    const tanHalfFov = Math.max(0.1, Math.tan(fov / 2));
-    const fitDistanceHeight = (size.y / 2) / tanHalfFov;
-    const fitDistanceWidth = (size.x / 2) / Math.max(0.1, tanHalfFov * aspect);
-    const fitDistance = Math.max(
-      fitDistanceHeight,
-      fitDistanceWidth,
-      1,
-    );
-    const fitMargin = isFullPreview ? 0.62 : 1.02;
-    const depthPadding = Math.max(
-      size.z * (isFullPreview ? 0.006 : 0.18),
-      size.y * (isFullPreview ? 0.01 : 0.035),
-      isFullPreview ? 1.2 : 8,
-    );
-    const distance = Math.max(
-      (fitDistance * fitMargin) + depthPadding,
-      (size.z / 2) + (isFullPreview ? 0.9 : 12),
-    );
+    const isFullPreview = previewMode === "full-model" || previewMode === "body-cutout-qa";
+    const fit = resolvePreviewPerspectiveCameraFit({
+      previewMode,
+      size,
+      fovDeg: cameraRef.current.fov,
+      aspect,
+    });
+    const distance = fit.distance;
     const compositionCenter = new THREE.Vector3(
       center.x,
       center.y - size.y * (isFullPreview ? 0.012 : -0.016),
       center.z,
     );
+    const reviewedBodyAzimuthRad =
+      reviewedBodyOnly && isFullPreview
+        ? THREE.MathUtils.degToRad(7)
+        : 0;
+    const reviewedBodyDistance =
+      reviewedBodyOnly && isFullPreview
+        ? distance * 1.08
+        : distance;
+    const cameraX =
+      reviewedBodyOnly && isFullPreview
+        ? compositionCenter.x + (Math.sin(reviewedBodyAzimuthRad) * reviewedBodyDistance)
+        : compositionCenter.x;
+    const cameraY =
+      reviewedBodyOnly && isFullPreview
+        ? compositionCenter.y + (size.y * 0.035)
+        : compositionCenter.y;
+    const cameraZ =
+      reviewedBodyOnly && isFullPreview
+        ? compositionCenter.z + (Math.cos(reviewedBodyAzimuthRad) * reviewedBodyDistance)
+        : compositionCenter.z + distance;
+    const lookAtY =
+      reviewedBodyOnly && isFullPreview
+        ? compositionCenter.y
+        : compositionCenter.y;
     cameraRef.current.position.set(
-      compositionCenter.x,
-      compositionCenter.y,
-      compositionCenter.z + distance,
+      cameraX,
+      cameraY,
+      cameraZ,
     );
-    cameraRef.current.lookAt(compositionCenter);
+    cameraRef.current.lookAt(compositionCenter.x, lookAtY, compositionCenter.z);
     cameraRef.current.near = 0.1;
     cameraRef.current.far = 8000;
     cameraRef.current.updateProjectionMatrix();
     if (controls) {
-      controls.target.copy(compositionCenter);
+      controls.target.set(compositionCenter.x, lookAtY, compositionCenter.z);
       controls.update?.();
     }
   }, [
@@ -517,6 +701,7 @@ function PreviewPerspectiveCamera({
     focusCenter?.z,
     modelBounds,
     previewMode,
+    reviewedBodyOnly,
     viewport.height,
     viewport.width,
   ]);
@@ -756,6 +941,24 @@ function computeCanonicalBodyBounds(bodyProfile: CanonicalBodyProfile, totalHeig
   );
 }
 
+function computePhysicalBodyReferenceBounds(calibration: CanonicalDimensionCalibration): THREE.Box3 | null {
+  if (
+    !(calibration.totalHeightMm > 0) ||
+    !(calibration.wrapDiameterMm > 0) ||
+    !Number.isFinite(calibration.lidBodyLineMm) ||
+    !Number.isFinite(calibration.bodyBottomMm)
+  ) {
+    return null;
+  }
+  const radiusMm = calibration.wrapDiameterMm / 2;
+  const topY = calibration.totalHeightMm - calibration.lidBodyLineMm;
+  const bottomY = calibration.totalHeightMm - calibration.bodyBottomMm;
+  return new THREE.Box3(
+    new THREE.Vector3(-radiusMm, Math.min(bottomY, topY), -radiusMm),
+    new THREE.Vector3(radiusMm, Math.max(bottomY, topY), radiusMm),
+  );
+}
+
 function computeRegistrationShellBounds(viewBoxMm: CanonicalDimensionCalibration["svgFrontViewBoxMm"]): THREE.Box3 {
   const minX = viewBoxMm.x;
   const maxX = viewBoxMm.x + viewBoxMm.width;
@@ -818,6 +1021,165 @@ function box3ToPreviewBoundsSnapshot(bounds: THREE.Box3 | null): TumblerPreviewB
     heightMm: Math.max(size.y, 0),
     depthMm: Math.max(size.z, 0),
   };
+}
+
+function formatMm(value: number): string {
+  if (!Number.isFinite(value)) return "n/a";
+  if (Math.abs(value) >= 100) return `${value.toFixed(1)} mm`;
+  return `${value.toFixed(2)} mm`;
+}
+
+function DebugBoundsBox({
+  bounds,
+  color,
+}: {
+  bounds: THREE.Box3;
+  color: string;
+}) {
+  const helper = useMemo(() => {
+    const next = new THREE.Box3Helper(bounds.clone(), new THREE.Color(color));
+    next.renderOrder = 1000;
+    const material = next.material as THREE.LineBasicMaterial;
+    material.depthTest = false;
+    material.transparent = true;
+    material.opacity = 0.95;
+    return next;
+  }, [bounds, color]);
+
+  useEffect(() => {
+    return () => {
+      const material = helper.material as THREE.Material | THREE.Material[];
+      if (Array.isArray(material)) {
+        material.forEach((entry) => entry.dispose());
+      } else {
+        material.dispose();
+      }
+      helper.geometry.dispose();
+    };
+  }, [helper]);
+
+  return <primitive object={helper} />;
+}
+
+function DebugLine({
+  start,
+  end,
+  color,
+}: {
+  start: THREE.Vector3;
+  end: THREE.Vector3;
+  color: string;
+}) {
+  const line = useMemo(() => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([start, end]);
+    const material = new THREE.LineBasicMaterial({
+      color,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.95,
+    });
+    const next = new THREE.Line(geometry, material);
+    next.renderOrder = 1001;
+    return next;
+  }, [color, end, start]);
+
+  useEffect(() => {
+    return () => {
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
+    };
+  }, [line]);
+
+  return <primitive object={line} />;
+}
+
+function DebugLabel({
+  position,
+  children,
+  color = "#e5e7eb",
+}: {
+  position: THREE.Vector3;
+  children: ReactNode;
+  color?: string;
+}) {
+  return (
+    <Html position={position} center style={{ pointerEvents: "none" }} zIndexRange={[20, 0]}>
+      <div style={{
+        background: "rgba(12, 16, 24, 0.86)",
+        border: `1px solid ${color}`,
+        borderRadius: 4,
+        color,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+        fontSize: 10,
+        fontWeight: 700,
+        lineHeight: 1.35,
+        padding: "3px 5px",
+        whiteSpace: "nowrap",
+      }}>
+        {children}
+      </div>
+    </Html>
+  );
+}
+
+function ModelDebugOverlay({
+  bounds,
+  referenceBounds,
+  label,
+  dims,
+}: {
+  bounds: THREE.Box3;
+  referenceBounds?: THREE.Box3 | null;
+  label: string;
+  dims?: TumblerDimensions | null;
+}) {
+  const size = bounds.getSize(new THREE.Vector3());
+  const center = bounds.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z, 1);
+  const pad = Math.max(maxDim * 0.07, 6);
+  const referenceSize = referenceBounds?.getSize(new THREE.Vector3()) ?? null;
+
+  const xStart = new THREE.Vector3(bounds.min.x, bounds.min.y - pad, bounds.max.z + pad);
+  const xEnd = new THREE.Vector3(bounds.max.x, bounds.min.y - pad, bounds.max.z + pad);
+  const yStart = new THREE.Vector3(bounds.max.x + pad, bounds.min.y, bounds.max.z + pad);
+  const yEnd = new THREE.Vector3(bounds.max.x + pad, bounds.max.y, bounds.max.z + pad);
+  const zStart = new THREE.Vector3(bounds.max.x + pad, bounds.min.y - pad, bounds.min.z);
+  const zEnd = new THREE.Vector3(bounds.max.x + pad, bounds.min.y - pad, bounds.max.z);
+
+  return (
+    <group>
+      <DebugBoundsBox bounds={bounds} color="#67e8f9" />
+      {referenceBounds && (
+        <DebugBoundsBox bounds={referenceBounds} color="#fbbf24" />
+      )}
+      <axesHelper args={[Math.max(maxDim * 0.34, 24)]} position={[center.x, center.y, center.z]} />
+      <DebugLine start={xStart} end={xEnd} color="#f87171" />
+      <DebugLine start={yStart} end={yEnd} color="#4ade80" />
+      <DebugLine start={zStart} end={zEnd} color="#60a5fa" />
+      <DebugLabel position={new THREE.Vector3(center.x, bounds.max.y + pad, bounds.max.z + pad)} color="#67e8f9">
+        {label}: W {formatMm(size.x)} / H {formatMm(size.y)} / D {formatMm(size.z)}
+      </DebugLabel>
+      <DebugLabel position={new THREE.Vector3((xStart.x + xEnd.x) / 2, xStart.y, xStart.z)} color="#f87171">
+        X {formatMm(size.x)}
+      </DebugLabel>
+      <DebugLabel position={new THREE.Vector3(yStart.x, (yStart.y + yEnd.y) / 2, yStart.z)} color="#4ade80">
+        Y {formatMm(size.y)}
+      </DebugLabel>
+      <DebugLabel position={new THREE.Vector3(zStart.x, zStart.y, (zStart.z + zEnd.z) / 2)} color="#60a5fa">
+        Z {formatMm(size.z)}
+      </DebugLabel>
+      {referenceSize && (
+        <DebugLabel position={new THREE.Vector3(center.x, bounds.min.y - pad * 2, bounds.max.z + pad)} color="#fbbf24">
+          Target body: W {formatMm(referenceSize.x)} / H {formatMm(referenceSize.y)} / D {formatMm(referenceSize.z)}
+        </DebugLabel>
+      )}
+      {dims && (
+        <DebugLabel position={new THREE.Vector3(bounds.min.x - pad, center.y, bounds.max.z + pad)} color="#e5e7eb">
+          Template: OD {formatMm(dims.diameterMm)} / total {formatMm(dims.overallHeightMm)} / print {formatMm(dims.printableHeightMm)}
+        </DebugLabel>
+      )}
+    </group>
+  );
 }
 
 function buildCanonicalHandleGeometry(args: {
@@ -1437,6 +1799,8 @@ export function CanonicalAlignmentTumbler({
   onReady?: OnReady;
 }) {
   const ref = useRef<THREE.Group>(null);
+  const onReadyRef = useRef(onReady);
+  const lastReadySignatureRef = useRef<string | null>(null);
   const resolvedBodyTint = useMemo(() => new THREE.Color(bodyTintColor ?? "#93aa9b"), [bodyTintColor]);
   const fullBodyColor = useMemo(
     () => `#${resolvedBodyTint.clone().offsetHSL(0, -0.01, 0.005).getHexString()}`,
@@ -1448,13 +1812,16 @@ export function CanonicalAlignmentTumbler({
   );
   const bodyGeometry = useMemo(
     () => (
-      previewMode === "alignment-model"
-        ? buildRegistrationShellGeometry({
+      buildCanonicalBodyGeometry(bodyProfile, calibration.totalHeightMm) ??
+      (
+        previewMode === "alignment-model"
+          ? buildRegistrationShellGeometry({
             svgPath: bodyProfile.svgPath,
             viewBoxMm: calibration.svgFrontViewBoxMm,
             extrusionDepthMm: 1.4,
           })
-        : buildCanonicalBodyGeometry(bodyProfile, calibration.totalHeightMm)
+          : null
+      )
     ),
     [bodyProfile, calibration.svgFrontViewBoxMm, calibration.totalHeightMm, previewMode],
   );
@@ -1587,9 +1954,48 @@ export function CanonicalAlignmentTumbler({
     wrapTexture,
   ]);
 
+  const readySignature = useMemo(() => {
+    const viewBox = calibration.svgFrontViewBoxMm;
+    const handleSignature = editableHandlePreview
+      ? JSON.stringify(editableHandlePreview)
+      : handleProfile
+        ? JSON.stringify(handleProfile)
+        : "none";
+    return [
+      "canonical",
+      previewMode,
+      calibration.totalHeightMm,
+      viewBox.x,
+      viewBox.y,
+      viewBox.width,
+      viewBox.height,
+      bodyProfile.svgPath,
+      handleRenderMode,
+      handleSignature,
+    ].join("|");
+  }, [
+    bodyProfile.svgPath,
+    calibration.svgFrontViewBoxMm.height,
+    calibration.svgFrontViewBoxMm.width,
+    calibration.svgFrontViewBoxMm.x,
+    calibration.svgFrontViewBoxMm.y,
+    calibration.totalHeightMm,
+    editableHandlePreview,
+    handleProfile,
+    handleRenderMode,
+    previewMode,
+  ]);
+
   useEffect(() => {
-    if (ref.current) onReady?.(ref.current);
-  }, [onReady, bodyGeometry, handleGeometryData]);
+    onReadyRef.current = onReady;
+  }, [onReady]);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    if (lastReadySignatureRef.current === readySignature) return;
+    lastReadySignatureRef.current = readySignature;
+    onReadyRef.current?.(ref.current);
+  }, [readySignature]);
 
   useEffect(() => () => {
     bodyGeometry?.dispose();
@@ -1659,7 +2065,10 @@ export function CanonicalAlignmentTumbler({
 // Format-specific mesh components — each applies physical scaling
 // ---------------------------------------------------------------------------
 
-type OnReady = (obj: THREE.Object3D) => void;
+type OnReady = (obj: THREE.Object3D, options?: {
+  previewBounds?: THREE.Box3;
+  boundsUnits?: LoadedSceneBoundsUnits;
+}) => void;
 
 function StlMesh({
   url, dims, onReady,
@@ -1674,9 +2083,19 @@ function StlMesh({
   }, [geometry, dims]);
 
   const ref = useRef<THREE.Group>(null);
+  const onReadyRef = useRef(onReady);
+  const lastReadySignatureRef = useRef<string | null>(null);
+  const transformSignature = `${transform.scale}|${transform.rotation[0]},${transform.rotation[1]},${transform.rotation[2]}|${transform.position[0]},${transform.position[1]},${transform.position[2]}`;
   useEffect(() => {
-    if (ref.current) onReady?.(ref.current);
-  }, [onReady, geometry]);
+    onReadyRef.current = onReady;
+  }, [onReady]);
+  useEffect(() => {
+    if (!ref.current) return;
+    const stableSignature = buildModelReadySignature(url, transform);
+    if (lastReadySignatureRef.current === stableSignature) return;
+    lastReadySignatureRef.current = stableSignature;
+    onReadyRef.current?.(ref.current);
+  }, [geometry, transformSignature, url]);
 
   return (
     <group ref={ref} scale={transform.scale} rotation={transform.rotation} position={transform.position}>
@@ -1698,9 +2117,19 @@ function ObjMesh({
   }, [obj, dims]);
 
   const ref = useRef<THREE.Group>(null);
+  const onReadyRef = useRef(onReady);
+  const lastReadySignatureRef = useRef<string | null>(null);
+  const transformSignature = `${transform.scale}|${transform.rotation[0]},${transform.rotation[1]},${transform.rotation[2]}|${transform.position[0]},${transform.position[1]},${transform.position[2]}`;
   useEffect(() => {
-    if (ref.current) onReady?.(ref.current);
-  }, [onReady, obj]);
+    onReadyRef.current = onReady;
+  }, [onReady]);
+  useEffect(() => {
+    if (!ref.current) return;
+    const stableSignature = buildModelReadySignature(url, transform);
+    if (lastReadySignatureRef.current === stableSignature) return;
+    lastReadySignatureRef.current = stableSignature;
+    onReadyRef.current?.(ref.current);
+  }, [obj, transformSignature, url]);
 
   return (
     <group ref={ref} scale={transform.scale} rotation={transform.rotation} position={transform.position}>
@@ -1711,7 +2140,8 @@ function ObjMesh({
 
 
 function GltfMesh({
-  url, dims, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, lidTintColor, rimTintColor, generatedTumblerTrace, previewModelMode, onReady,
+  url, dims, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, lidTintColor, rimTintColor, generatedTumblerTrace, preserveSourceUnits, previewModelMode, onReady,
+  showDebugOverlays,
 }: {
   url: string;
   dims?: TumblerDimensions | null;
@@ -1724,7 +2154,9 @@ function GltfMesh({
   lidTintColor?: string;
   rimTintColor?: string;
   generatedTumblerTrace?: boolean;
-  previewModelMode?: "alignment-model" | "full-model" | "source-traced";
+  preserveSourceUnits?: boolean;
+  previewModelMode?: PreviewModelMode;
+  showDebugOverlays?: boolean;
   onReady?: OnReady;
 }) {
   void lidTintColor;
@@ -1737,8 +2169,10 @@ function GltfMesh({
   // We render the mesh explicitly (not via <primitive>) so Decals can be children.
   const bodyMeshData = useMemo(() => {
     let foundGeometry: THREE.BufferGeometry | null = null;
+    let foundGeometryName: string | null = null;
     let foundMaterial: THREE.Material | THREE.Material[] | null = null;
     let foundMesh: THREE.Mesh | null = null;
+    let foundMeshName: string | null = null;
     const otherObjects: THREE.Object3D[] = [];
 
     gltf.scene.updateMatrixWorld(true);
@@ -1746,8 +2180,10 @@ function GltfMesh({
     gltf.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !foundGeometry) {
         foundGeometry = obj.geometry;
+        foundGeometryName = obj.geometry.name?.trim() || null;
         foundMaterial = obj.material;
         foundMesh = obj;
+        foundMeshName = obj.name?.trim() || null;
       }
     });
 
@@ -1786,6 +2222,7 @@ function GltfMesh({
       geometry: foundGeometry,
       material: cloneOpaqueMaterial(foundMaterial),
       bodyMesh: foundMesh,
+      bodyMeshName: foundMeshName ?? foundGeometryName ?? "body_mesh",
       bodyTransform,
       otherObjects,
     };
@@ -1793,10 +2230,23 @@ function GltfMesh({
 
   // ── Scale to physical mm ──
   const transform = useMemo(() => {
+    if (preserveSourceUnits) {
+      gltf.scene.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(gltf.scene);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const centeredVertically = !box.isEmpty()
+        && Math.abs(center.y) <= Math.max(0.5, size.y * 0.08);
+      return {
+        scale: 1,
+        rotation: [0, 0, 0] as [number, number, number],
+        position: [0, box.isEmpty() ? 0 : (centeredVertically ? 0 : -box.min.y), 0] as [number, number, number],
+      };
+    }
     gltf.scene.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(gltf.scene);
     return computeModelTransform(box, dims);
-  }, [gltf.scene, dims]);
+  }, [gltf.scene, dims, preserveSourceUnits]);
 
   // ── Per-item Three.js textures (keyed by item ID) ──
   const threeTextures = useMemo(() => {
@@ -1857,9 +2307,67 @@ function GltfMesh({
       });
   }, [dims, placedItems, bedWidthMm, bedHeightMm, tumblerMapping?.frontFaceRotation, tumblerMapping?.handleArcDeg, transform.scale]);
 
+  const onReadyRef = useRef(onReady);
+  const lastReadySignatureRef = useRef<string | null>(null);
+  const stablePreviewBounds = useMemo(() => {
+    gltf.scene.updateMatrixWorld(true);
+    const nextBounds = new THREE.Box3().setFromObject(gltf.scene);
+    if (nextBounds.isEmpty()) return nextBounds;
+    const rotation = new THREE.Euler(transform.rotation[0], transform.rotation[1], transform.rotation[2]);
+    const matrix = new THREE.Matrix4().compose(
+      new THREE.Vector3(transform.position[0], transform.position[1], transform.position[2]),
+      new THREE.Quaternion().setFromEuler(rotation),
+      new THREE.Vector3(transform.scale, transform.scale, transform.scale),
+    );
+    return nextBounds.applyMatrix4(matrix);
+  }, [gltf.scene, transform.position, transform.rotation, transform.scale]);
+  const stablePreviewBoundsSignature = useMemo(
+    () => getQuantizedBox3Signature(stablePreviewBounds),
+    [stablePreviewBounds],
+  );
+  const bodyEdgeGeometry = useMemo(() => {
+    if (!bodyMeshData.geometry || (previewModelMode !== "full-model" && previewModelMode !== "body-cutout-qa") || !preserveSourceUnits || !showDebugOverlays) {
+      return null;
+    }
+    return new THREE.EdgesGeometry(bodyMeshData.geometry, 1);
+  }, [bodyMeshData.geometry, preserveSourceUnits, previewModelMode, showDebugOverlays]);
+  const showReviewedBodyWireframe =
+    (previewModelMode === "full-model" || previewModelMode === "body-cutout-qa") &&
+    preserveSourceUnits &&
+    Boolean(showDebugOverlays);
+  const readySignature = useMemo(
+    () => [
+      url,
+      generatedTumblerTrace ? "trace" : "full",
+      preserveSourceUnits ? "preserve-units" : "scaled-to-dims",
+      dims?.overallHeightMm ?? "",
+      dims?.diameterMm ?? "",
+      dims?.topDiameterMm ?? "",
+      dims?.bottomDiameterMm ?? "",
+    ].join("|"),
+    [
+      dims?.bottomDiameterMm,
+      dims?.diameterMm,
+      dims?.overallHeightMm,
+      dims?.topDiameterMm,
+      generatedTumblerTrace,
+      preserveSourceUnits,
+      url,
+    ],
+  );
   useEffect(() => {
-    if (ref.current) onReady?.(ref.current);
-  }, [onReady, gltf.scene]);
+    onReadyRef.current = onReady;
+  }, [onReady]);
+  useEffect(() => {
+    if (!ref.current) return;
+
+    if (lastReadySignatureRef.current === readySignature) return;
+    lastReadySignatureRef.current = readySignature;
+    onReadyRef.current?.(ref.current, { previewBounds: stablePreviewBounds.clone() });
+  }, [readySignature, stablePreviewBoundsSignature]);
+  useEffect(() => () => {
+    bodyEdgeGeometry?.dispose();
+  }, [bodyEdgeGeometry]);
 
   if (generatedTumblerTrace) {
     return (
@@ -1873,47 +2381,72 @@ function GltfMesh({
     <group ref={ref} scale={transform.scale} rotation={transform.rotation} position={transform.position}>
       {/* Body mesh rendered explicitly so Decals can be direct children */}
       {bodyMeshData.geometry && (
-        <mesh
-          ref={bodyRef}
-          geometry={bodyMeshData.geometry}
-          material={(!bodyTintColor || previewModelMode === "full-model") ? (bodyMeshData.material ?? undefined) : undefined}
+        <group
           position={bodyMeshData.bodyTransform.position}
           quaternion={bodyMeshData.bodyTransform.quaternion}
           scale={bodyMeshData.bodyTransform.scale}
-          castShadow
-          receiveShadow
         >
-          {bodyTintColor && previewModelMode !== "full-model" && (
-            <meshStandardMaterial
-              color={bodyTintColor}
-              metalness={0.35}
-              roughness={0.55}
-              transparent={false}
-              opacity={1}
-            />
+          <mesh
+            ref={bodyRef}
+            name={bodyMeshData.bodyMeshName}
+            geometry={bodyMeshData.geometry}
+            material={(!bodyTintColor || previewModelMode === "full-model" || previewModelMode === "body-cutout-qa") ? (bodyMeshData.material ?? undefined) : undefined}
+            castShadow
+            receiveShadow
+          >
+            {bodyTintColor && previewModelMode !== "full-model" && previewModelMode !== "body-cutout-qa" && (
+              <meshStandardMaterial
+                color={bodyTintColor}
+                metalness={0.35}
+                roughness={0.55}
+                transparent={false}
+                opacity={1}
+              />
+            )}
+            {decalConfigs.map((cfg) => {
+              const tex = threeTextures.get(cfg.itemId);
+              if (!tex) return null;
+              return (
+                <Decal
+                  key={cfg.itemId}
+                  position={cfg.position}
+                  rotation={cfg.rotation}
+                  scale={cfg.scale}
+                >
+                  <meshBasicMaterial
+                    map={tex}
+                    transparent
+                    depthTest
+                    depthWrite={false}
+                    polygonOffset
+                    polygonOffsetFactor={-10}
+                  />
+                </Decal>
+              );
+            })}
+          </mesh>
+          {showReviewedBodyWireframe && (
+            <mesh geometry={bodyMeshData.geometry} renderOrder={10} scale={[1.0015, 1.0015, 1.0015]}>
+              <meshBasicMaterial
+                color="#ffd18a"
+                wireframe
+                transparent
+                opacity={0.22}
+                depthTest={false}
+              />
+            </mesh>
           )}
-          {decalConfigs.map((cfg) => {
-            const tex = threeTextures.get(cfg.itemId);
-            if (!tex) return null;
-            return (
-              <Decal
-                key={cfg.itemId}
-                position={cfg.position}
-                rotation={cfg.rotation}
-                scale={cfg.scale}
-              >
-                <meshBasicMaterial
-                  map={tex}
-                  transparent
-                  depthTest
-                  depthWrite={false}
-                  polygonOffset
-                  polygonOffsetFactor={-10}
-                />
-              </Decal>
-            );
-          })}
-        </mesh>
+          {bodyEdgeGeometry && (previewModelMode === "source-traced" || Boolean(showDebugOverlays)) && (
+            <lineSegments geometry={bodyEdgeGeometry} renderOrder={11}>
+              <lineBasicMaterial
+                color="#ffb35c"
+                transparent
+                opacity={0.82}
+                depthTest={false}
+              />
+            </lineSegments>
+          )}
+        </group>
       )}
       {/* Render any other scene objects (handle, lid, etc.) */}
       {bodyMeshData.otherObjects.map((obj, i) => (
@@ -2394,13 +2927,14 @@ const KNOWN_MODELS: { match: string; key: string }[] = [
 ];
 
 function ModelByExtension({
-  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, lidTintColor, rimTintColor, lidAssemblyPreset, previewModelMode, onReady,
+  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, lidTintColor, rimTintColor, lidAssemblyPreset, previewModelMode, sourceModelStatus, showDebugOverlays, onReady,
 }: {
   url: string; ext: string; dims?: TumblerDimensions | null; handleArcDeg?: number;
   placedItems?: PlacedItem[]; itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number; bedHeightMm?: number; glbPath?: string | null;
   sourceName?: string;
-  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; lidTintColor?: string; rimTintColor?: string; lidAssemblyPreset?: LidAssemblyPreset | null; previewModelMode?: "alignment-model" | "full-model" | "source-traced"; onReady?: OnReady;
+  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; lidTintColor?: string; rimTintColor?: string; lidAssemblyPreset?: LidAssemblyPreset | null; previewModelMode?: PreviewModelMode; sourceModelStatus?: ProductTemplate["glbStatus"] | null; onReady?: OnReady;
+  showDebugOverlays?: boolean;
 }) {
   if (ext === "stl") return <StlMesh url={url} dims={dims} onReady={onReady} />;
   if (ext === "obj") return <ObjMesh url={url} dims={dims} onReady={onReady} />;
@@ -2409,7 +2943,16 @@ function ModelByExtension({
     // Check if this is a known model with a dedicated component
     const modelHint = `${glbPath ?? ""} ${sourceName ?? ""}`.toLowerCase();
     const knownModel = KNOWN_MODELS.find((m) => modelHint.includes(m.match));
-    const generatedTumblerTrace = modelHint.includes("/models/generated/") || modelHint.includes("trace");
+    const isValidatedSourceModel =
+      sourceModelStatus === "generated-reviewed-model" ||
+      sourceModelStatus === "verified-product-model";
+    const generatedTumblerTrace =
+      !isValidatedSourceModel &&
+      (
+        isLegacyGeneratedModelPath(glbPath ?? null) ||
+        isGeneratedModelUrl(glbPath ?? null) ||
+        modelHint.includes("trace")
+      );
 
     if (knownModel?.key === "yeti40oz" && dims) {
       const decalItems = buildDecalItems(placedItems, itemTextures);
@@ -2448,7 +2991,9 @@ function ModelByExtension({
           lidTintColor={lidTintColor}
           rimTintColor={rimTintColor}
           generatedTumblerTrace={generatedTumblerTrace}
+          preserveSourceUnits={sourceModelStatus === "generated-reviewed-model"}
           previewModelMode={previewModelMode}
+          showDebugOverlays={showDebugOverlays}
           onReady={onReady} />
       </Suspense>
     );
@@ -2461,17 +3006,179 @@ function ModelByExtension({
   );
 }
 
+function buildReviewedBodyCompareData(args: {
+  outline?: EditableBodyOutline | null;
+  dims?: TumblerDimensions | null;
+}): {
+  contourPoints: THREE.Vector3[];
+  centerlinePoints: THREE.Vector3[];
+  ringSamples: Array<{ y: number; radius: number }>;
+} | null {
+  const contour = args.outline?.directContour;
+  const totalHeightMm = args.dims?.overallHeightMm ?? 0;
+  if (!contour || contour.length < 6 || totalHeightMm <= 0) return null;
+  const contourPoints = contour.map((point) => (
+    new THREE.Vector3(
+      point.x,
+      (totalHeightMm / 2) - point.y,
+      0,
+    )
+  ));
+  if (contourPoints.length < 3) return null;
+  contourPoints.push(contourPoints[0]!.clone());
+  const minY = Math.min(...contour.map((point) => point.y));
+  const maxY = Math.max(...contour.map((point) => point.y));
+  const rows = [...contour.reduce((map, point) => {
+    const y = round2(point.y);
+    const existing = map.get(y) ?? 0;
+    map.set(y, Math.max(existing, Math.abs(point.x)));
+    return map;
+  }, new Map<number, number>()).entries()]
+    .map(([y, radius]) => ({ y, radius }))
+    .filter((row) => row.radius > 0.5)
+    .sort((left, right) => left.y - right.y);
+  const ringIndexSet = new Set<number>();
+  const desiredSamples = Math.min(10, rows.length);
+  if (rows.length > 0 && desiredSamples > 0) {
+    for (let index = 0; index < desiredSamples; index += 1) {
+      const t = desiredSamples === 1 ? 0 : index / (desiredSamples - 1);
+      ringIndexSet.add(Math.round((rows.length - 1) * t));
+    }
+  }
+  const ringSamples = [...ringIndexSet]
+    .sort((left, right) => left - right)
+    .map((index) => rows[index]!)
+    .filter(Boolean);
+  const centerlinePoints = [
+    new THREE.Vector3(0, (totalHeightMm / 2) - minY, 0),
+    new THREE.Vector3(0, (totalHeightMm / 2) - maxY, 0),
+  ];
+  return { contourPoints, centerlinePoints, ringSamples };
+}
+
+function ReviewedBodySilhouetteCompare({
+  outline,
+  dims,
+}: {
+  outline?: EditableBodyOutline | null;
+  dims?: TumblerDimensions | null;
+}) {
+  const compareData = useMemo(
+    () => buildReviewedBodyCompareData({ outline, dims }),
+    [dims, outline],
+  );
+  const contourGeometry = useMemo(() => {
+    if (!compareData) return null;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setFromPoints(compareData.contourPoints);
+    return geometry;
+  }, [compareData]);
+  const centerGeometry = useMemo(() => {
+    if (!compareData) return null;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setFromPoints(compareData.centerlinePoints);
+    return geometry;
+  }, [compareData]);
+  const centerLine = useMemo(() => {
+    if (!centerGeometry) return null;
+    const material = new THREE.LineBasicMaterial({
+      color: "#ff8f3a",
+      transparent: true,
+      opacity: 0.58,
+      depthTest: false,
+    });
+    const line = new THREE.Line(centerGeometry, material);
+    line.renderOrder = 10;
+    return line;
+  }, [centerGeometry]);
+  const contourLine = useMemo(() => {
+    if (!contourGeometry) return null;
+    const material = new THREE.LineBasicMaterial({
+      color: "#ff8f3a",
+      transparent: true,
+      opacity: 0.98,
+      depthTest: false,
+    });
+    const line = new THREE.Line(contourGeometry, material);
+    line.renderOrder = 10;
+    return line;
+  }, [contourGeometry]);
+
+  useEffect(() => () => {
+    if (centerLine) {
+      centerLine.geometry.dispose();
+      (centerLine.material as THREE.Material).dispose();
+    }
+    if (contourLine) {
+      contourLine.geometry.dispose();
+      (contourLine.material as THREE.Material).dispose();
+    }
+    contourGeometry?.dispose();
+    centerGeometry?.dispose();
+  }, [centerGeometry, centerLine, contourGeometry, contourLine]);
+
+  if (!compareData || !centerLine || !contourLine) return null;
+
+  return (
+    <group position={[0, 0, 0.9]} renderOrder={10}>
+      <primitive object={centerLine} />
+      <primitive object={contourLine} />
+    </group>
+  );
+}
+
+function ReviewedBodyContourRings({
+  outline,
+  dims,
+}: {
+  outline?: EditableBodyOutline | null;
+  dims?: TumblerDimensions | null;
+}) {
+  const compareData = useMemo(
+    () => buildReviewedBodyCompareData({ outline, dims }),
+    [dims, outline],
+  );
+  if (!compareData || !dims || compareData.ringSamples.length === 0) return null;
+
+  return (
+    <group renderOrder={12}>
+      {compareData.ringSamples.map((sample, index) => (
+        <mesh
+          key={`reviewed-ring-${index}`}
+          position={[0, (dims.overallHeightMm / 2) - sample.y, 0]}
+          rotation={[Math.PI / 2, 0, 0]}
+          renderOrder={12}
+        >
+          <torusGeometry args={[sample.radius, 0.75, 16, 112]} />
+          <meshBasicMaterial
+            color="#ffb35c"
+            transparent
+            opacity={0.82}
+            depthTest={false}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Error boundary
 // ---------------------------------------------------------------------------
 
 class CanvasErrorBoundary extends Component<
-  { children: ReactNode },
+  { children: ReactNode; resetToken?: string },
   { hasError: boolean; message: string }
 > {
   state = { hasError: false, message: "" };
   static getDerivedStateFromError(err: Error) {
     return { hasError: true, message: err.message };
+  }
+  componentDidUpdate(prevProps: { resetToken?: string }) {
+    if (prevProps.resetToken === this.props.resetToken) return;
+    if (this.state.hasError) {
+      this.setState({ hasError: false, message: "" });
+    }
   }
   render() {
     if (this.state.hasError) {
@@ -2499,11 +3206,29 @@ class CanvasErrorBoundary extends Component<
 // ---------------------------------------------------------------------------
 
 export default function ModelViewer({
-  file, modelUrl, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, manufacturerLogoStamp, bodyTintColor, lidTintColor, rimTintColor, ringFinish, showTemplateSurfaceZones, dimensionCalibration, canonicalBodyProfile, canonicalHandleProfile, editableHandlePreview, previewModelMode, onPipelineStage, onPreviewStateChange,
+  file, modelUrl, flatPreview, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, manufacturerLogoStamp, bodyTintColor, lidTintColor, rimTintColor, ringFinish, lidAssemblyPreset, showTemplateSurfaceZones, dimensionCalibration, canonicalBodyProfile, canonicalHandleProfile, approvedBodyOutline, editableHandlePreview, previewModelMode, sourceModelStatus, sourceModelLabel, showModelDebug, onPipelineStage, onPreviewStateChange,
+  bodyGeometryContractSeed,
+  onBodyGeometryContractChange,
 }: ModelViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
   const modelBoundsRef = useRef<THREE.Box3 | null>(null);
+  const [sourceModelBounds, setSourceModelBounds] = useState<THREE.Box3 | null>(null);
+  const sourceModelBoundsRef = useRef<THREE.Box3 | null>(null);
+  const [loadedSceneInspectionState, setLoadedSceneInspectionState] = useState<LoadedSceneInspectionState>({
+    status: "idle",
+    source: "three-loaded-scene",
+  });
+  const [viewerRuntimeGlbHash, setViewerRuntimeGlbHash] = useState<string | null>(null);
+  const [viewerRuntimeSourceHash, setViewerRuntimeSourceHash] = useState<string | null>(null);
+  const [viewerRuntimeGlbAudit, setViewerRuntimeGlbAudit] = useState<ParsedBodyGeometryAuditArtifact | null>(null);
+  const [loadedAuditArtifactState, setLoadedAuditArtifactState] = useState<LoadedAuditArtifactState>({
+    status: "idle",
+    expectation: "none",
+  });
+  const lastCommittedBoundsSignatureRef = useRef<string | null>(null);
+  const lastCommittedBoundsSourceKeyRef = useRef<string | null>(null);
+  const lastReportedViewerSyncSignatureRef = useRef<string | null>(null);
   const [manufacturerLogoCanvas, setManufacturerLogoCanvas] = useState<HTMLCanvasElement | null>(null);
 
   // Auto-rotate: on by default for tumblers; pause on user interaction, resume after 4s
@@ -2513,9 +3238,15 @@ export default function ModelViewer({
     hasTumbler: Boolean(tumblerDims),
     showTemplateSurfaceZones,
   });
-  const reportPipelineStage = useCallback((stage: TemplatePipelineStageRecord) => {
+  const reportPipelineStage = useEffectEvent((stage: TemplatePipelineStageRecord) => {
     onPipelineStage?.(stage);
-  }, [onPipelineStage]);
+  });
+  const emitPreviewStateChange = useEffectEvent((state: TumblerPreviewModelState | null) => {
+    onPreviewStateChange?.(state);
+  });
+  const emitBodyGeometryContractChange = useEffectEvent((contract: BodyGeometryContract | null) => {
+    onBodyGeometryContractChange?.(contract);
+  });
 
   const handleOrbitStart = useCallback(() => {
     setIsAutoRotating(false);
@@ -2564,15 +3295,116 @@ export default function ModelViewer({
   }, [manufacturerLogoStamp?.dataUrl]);
 
   // Create blob URL inside useEffect — safe for React Strict Mode
+  const approvedBodyOutlineSignature = useMemo(
+    () => (approvedBodyOutline ? getStableStringHash(JSON.stringify(approvedBodyOutline)) : "none"),
+    [approvedBodyOutline],
+  );
+  const canonicalBodyProfileSignature = useMemo(
+    () => (canonicalBodyProfile ? getStableStringHash(JSON.stringify(canonicalBodyProfile)) : "none"),
+    [canonicalBodyProfile],
+  );
+  const canonicalHandleProfileSignature = useMemo(
+    () => (canonicalHandleProfile ? getStableStringHash(JSON.stringify(canonicalHandleProfile)) : "none"),
+    [canonicalHandleProfile],
+  );
+  const editableHandlePreviewSignature = useMemo(
+    () => (editableHandlePreview ? getStableStringHash(JSON.stringify(editableHandlePreview)) : "none"),
+    [editableHandlePreview],
+  );
+  const dimensionCalibrationSignature = useMemo(
+    () => (dimensionCalibration ? getStableStringHash(JSON.stringify(dimensionCalibration)) : "none"),
+    [dimensionCalibration],
+  );
+  const tumblerDimsSignature = useMemo(
+    () => (tumblerDims ? getStableStringHash(JSON.stringify(tumblerDims)) : "none"),
+    [tumblerDims],
+  );
+  const tumblerMappingSignature = useMemo(
+    () => (tumblerMapping ? getStableStringHash(JSON.stringify(tumblerMapping)) : "none"),
+    [tumblerMapping],
+  );
+  const modelSourceRevision = useMemo(
+    () => getStableStringHash(JSON.stringify({
+      modelUrl: modelUrl ?? null,
+      glbPath: glbPath ?? null,
+      sourceModelStatus: sourceModelStatus ?? null,
+      sourceModelLabel: sourceModelLabel ?? null,
+      previewModelMode: previewModelMode ?? null,
+      bedWidthMm: round2(bedWidthMm ?? 0),
+      bedHeightMm: round2(bedHeightMm ?? 0),
+      handleArcDeg: round2(handleArcDeg ?? 0),
+      bodyTintColor: bodyTintColor ?? null,
+      lidTintColor: lidTintColor ?? null,
+      rimTintColor: rimTintColor ?? null,
+      ringFinish: ringFinish ?? null,
+      lidAssemblyPreset: lidAssemblyPreset ?? null,
+      approvedBodyOutlineSignature,
+      canonicalBodyProfileSignature,
+      canonicalHandleProfileSignature,
+      editableHandlePreviewSignature,
+      dimensionCalibrationSignature,
+      tumblerDimsSignature,
+      tumblerMappingSignature,
+    })),
+    [
+      approvedBodyOutlineSignature,
+      bedHeightMm,
+      bedWidthMm,
+      bodyTintColor,
+      canonicalBodyProfileSignature,
+      canonicalHandleProfileSignature,
+      dimensionCalibrationSignature,
+      editableHandlePreviewSignature,
+      glbPath,
+      handleArcDeg,
+      lidAssemblyPreset,
+      lidTintColor,
+      modelUrl,
+      previewModelMode,
+      rimTintColor,
+      ringFinish,
+      sourceModelLabel,
+      sourceModelStatus,
+      tumblerDimsSignature,
+      tumblerMappingSignature,
+    ],
+  );
+  const sourceModelUrl = useMemo(
+    () => modelUrl ?? glbPath ?? null,
+    [glbPath, modelUrl],
+  );
+  const resolvedModelUrl = useMemo(() => {
+    if (!sourceModelUrl || file) return sourceModelUrl ?? null;
+    const separator = sourceModelUrl.includes("?") ? "&" : "?";
+    return `${sourceModelUrl}${separator}viewerRev=${modelSourceRevision}`;
+  }, [file, modelSourceRevision, sourceModelUrl]);
+  const generatedModelAuditRequestPlan = useMemo(
+    () => resolveGeneratedModelAuditRequestPlan({
+      modelUrl: sourceModelUrl,
+      sourceModelStatus,
+    }),
+    [sourceModelStatus, sourceModelUrl],
+  );
   useEffect(() => {
     const nextAutoRotate = Boolean(file)
       && autoRotateDefaultsRef.current.hasTumbler
       && !autoRotateDefaultsRef.current.showTemplateSurfaceZones;
     if (!file) {
       const frameId = window.requestAnimationFrame(() => {
-        setUrl((current) => (current === (modelUrl ?? null) ? current : (modelUrl ?? null)));
+        const nextUrl = resolvedModelUrl ?? null;
+        setUrl((current) => (current === nextUrl ? current : nextUrl));
         modelBoundsRef.current = null;
+        sourceModelBoundsRef.current = null;
+        lastCommittedBoundsSignatureRef.current = null;
+        lastCommittedBoundsSourceKeyRef.current = null;
+        lastReportedViewerSyncSignatureRef.current = null;
         setModelBounds((current) => (current === null ? current : null));
+        setSourceModelBounds((current) => (current === null ? current : null));
+        setLoadedSceneInspectionState(
+          nextUrl
+            ? { status: "pending", source: "three-loaded-scene", glbUrl: nextUrl }
+            : { status: "idle", source: "three-loaded-scene" },
+        );
         setIsAutoRotating((current) => (current === false ? current : false));
       });
       return () => window.cancelAnimationFrame(frameId);
@@ -2581,18 +3413,285 @@ export default function ModelViewer({
     const frameId = window.requestAnimationFrame(() => {
       setUrl(objectUrl);
       modelBoundsRef.current = null;
+      sourceModelBoundsRef.current = null;
+      lastCommittedBoundsSignatureRef.current = null;
+      lastCommittedBoundsSourceKeyRef.current = null;
+      lastReportedViewerSyncSignatureRef.current = null;
       setModelBounds((current) => (current === null ? current : null));
+      setSourceModelBounds((current) => (current === null ? current : null));
+      setLoadedSceneInspectionState({ status: "pending", source: "three-loaded-scene", glbUrl: objectUrl });
       setIsAutoRotating((current) => (current === nextAutoRotate ? current : nextAutoRotate));
     });
     return () => {
       window.cancelAnimationFrame(frameId);
       URL.revokeObjectURL(objectUrl);
     };
-  }, [file, modelUrl]);
+  }, [file, resolvedModelUrl]);
 
-  const handleModelReady = useCallback((obj: THREE.Object3D) => {
-    const box = computePreviewFitBounds(obj);
+  useEffect(() => {
+    let cancelled = false;
+    const shouldComputeRuntimeHash = Boolean(
+      showModelDebug ||
+      sourceModelStatus === "generated-reviewed-model" ||
+      BODY_CONTRACT_INSPECTOR_ENABLED,
+    );
+    if (!shouldComputeRuntimeHash) {
+      setViewerRuntimeGlbHash((current) => current === null ? current : null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setViewerRuntimeGlbHash((current) => current === null ? current : null);
+
+    const hashModelBinary = async () => {
+      try {
+        if (file) {
+          const nextHash = await hashFileSha256(file);
+          if (cancelled) return;
+          setViewerRuntimeGlbHash((current) => current === nextHash ? current : nextHash);
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[ModelViewer] loaded file SHA-256", { hash: nextHash, fileName: file.name });
+          }
+          return;
+        }
+        if (!url) {
+          if (cancelled) return;
+          setViewerRuntimeGlbHash((current) => current === null ? current : null);
+          return;
+        }
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`Failed to read model bytes for hashing: ${response.status}`);
+        }
+        const nextHash = await hashArrayBufferSha256(await response.arrayBuffer());
+        if (cancelled) return;
+        setViewerRuntimeGlbHash((current) => current === nextHash ? current : nextHash);
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[ModelViewer] loaded GLB SHA-256", { hash: nextHash, url });
+        }
+      } catch {
+        if (cancelled) return;
+        setViewerRuntimeGlbHash((current) => current === null ? current : null);
+      }
+    };
+
+    void hashModelBinary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [file, showModelDebug, sourceModelStatus, url]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const shouldComputeSourceHash = Boolean(
+      showModelDebug ||
+      sourceModelStatus === "generated-reviewed-model" ||
+      BODY_CONTRACT_INSPECTOR_ENABLED,
+    );
+    if (!shouldComputeSourceHash) {
+      setViewerRuntimeSourceHash((current) => current === null ? current : null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const sourceHashPayload = buildBodyGeometrySourceHashPayload(approvedBodyOutline ?? null);
+    if (!sourceHashPayload) {
+      setViewerRuntimeSourceHash((current) => current === null ? current : null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const hashSourceGeometry = async () => {
+      try {
+        const nextHash = await hashJsonSha256(sourceHashPayload);
+        if (cancelled) return;
+        setViewerRuntimeSourceHash((current) => current === nextHash ? current : nextHash);
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[ModelViewer] approved body contour SHA-256", { hash: nextHash });
+        }
+      } catch {
+        if (cancelled) return;
+        setViewerRuntimeSourceHash((current) => current === null ? current : null);
+      }
+    };
+
+    void hashSourceGeometry();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [approvedBodyOutline, showModelDebug, sourceModelStatus]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const auditUrl = generatedModelAuditRequestPlan.auditUrl;
+    if (file || !auditUrl || !generatedModelAuditRequestPlan.shouldFetch) {
+      setViewerRuntimeGlbAudit((current) => (current === null ? current : null));
+      setLoadedAuditArtifactState((current) => {
+        const nextState: LoadedAuditArtifactState = !file && auditUrl && generatedModelAuditRequestPlan.expectation === "optional"
+          ? {
+              status: "optional-missing",
+              auditUrl,
+              expectation: "optional",
+            }
+          : {
+              status: "idle",
+              auditUrl: auditUrl ?? undefined,
+              expectation: "none",
+            };
+        if (
+          current.status === nextState.status &&
+          current.auditUrl === nextState.auditUrl &&
+          current.expectation === nextState.expectation
+        ) {
+          return current;
+        }
+        return nextState;
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLoadedAuditArtifactState((current) => {
+      if (
+        current.status === "loading" &&
+        current.auditUrl === auditUrl &&
+        current.expectation === "required"
+      ) {
+        return current;
+      }
+      return {
+        status: "loading",
+        auditUrl,
+        expectation: "required",
+      };
+    });
+
+    const loadAuditArtifact = async () => {
+      try {
+        const response = await fetch(auditUrl, { cache: "no-store" });
+        if (!response.ok) {
+          if (response.status === 404) {
+            if (!cancelled) {
+              setViewerRuntimeGlbAudit((current) => (current === null ? current : null));
+              setLoadedAuditArtifactState({
+                status: "required-missing",
+                auditUrl,
+                expectation: "required",
+              });
+            }
+            return;
+          }
+          throw new Error(`Failed to load GLB audit: ${response.status}`);
+        }
+        const parsed = parseBodyGeometryAuditArtifact(await response.json());
+        if (cancelled) return;
+        if (!parsed) {
+          setViewerRuntimeGlbAudit((current) => (current === null ? current : null));
+          setLoadedAuditArtifactState({
+            status: "failed",
+            auditUrl,
+            expectation: "required",
+            error: "Generated audit sidecar payload could not be parsed.",
+          });
+          return;
+        }
+        setViewerRuntimeGlbAudit((current) => (
+          JSON.stringify(current) === JSON.stringify(parsed) ? current : parsed
+        ));
+        setLoadedAuditArtifactState({
+          status: "present",
+          auditUrl,
+          expectation: "required",
+        });
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[ModelViewer] loaded GLB audit artifact", {
+            auditUrl,
+            sourceHash: parsed.glb.sourceHash ?? parsed.source.hash ?? null,
+            glbHash: parsed.glb.hash ?? null,
+            freshRelativeToSource: parsed.glb.freshRelativeToSource ?? null,
+          });
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setViewerRuntimeGlbAudit((current) => (current === null ? current : null));
+        setLoadedAuditArtifactState({
+          status: "failed",
+          auditUrl,
+          expectation: "required",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+
+    void loadAuditArtifact();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [file, generatedModelAuditRequestPlan]);
+
+  const handleModelReady = useCallback((obj: THREE.Object3D, sourceKey = "default", options?: {
+    previewBounds?: THREE.Box3;
+    boundsUnits?: LoadedSceneBoundsUnits;
+  }) => {
+    let sceneInspection: LoadedGltfSceneInspection;
+    try {
+      sceneInspection = inspectLoadedGltfScene(obj, {
+        boundsUnits: options?.boundsUnits ?? "scene-units",
+      });
+      const inspectedAt = new Date().toISOString();
+      setLoadedSceneInspectionState((current) => {
+        const nextGlbUrl = url ?? sourceModelUrl ?? file?.name ?? current.glbUrl;
+        const nextBoundsSignature = sceneInspection.bounds.body
+          ? `${sceneInspection.bounds.body.width}:${sceneInspection.bounds.body.height}:${sceneInspection.bounds.body.depth}:${sceneInspection.bounds.body.minX}:${sceneInspection.bounds.body.minY}:${sceneInspection.bounds.body.minZ}`
+          : "none";
+        if (
+          current.status === "complete"
+          && current.sourceKey === sourceKey
+          && current.glbUrl === nextGlbUrl
+          && current.boundsSignature === nextBoundsSignature
+          && current.sceneInspection.meshNames.length === sceneInspection.meshNames.length
+          && current.sceneInspection.meshNames.every((name, index) => name === sceneInspection.meshNames[index])
+        ) {
+          return current;
+        }
+        return {
+          status: "complete",
+          source: "three-loaded-scene",
+          glbUrl: nextGlbUrl ?? undefined,
+          sourceKey,
+          boundsSignature: nextBoundsSignature,
+          inspectedAt,
+          sceneInspection,
+        };
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLoadedSceneInspectionState({
+        status: "failed",
+        source: "three-loaded-scene",
+        glbUrl: url ?? sourceModelUrl ?? file?.name ?? undefined,
+        sourceKey,
+        error: message,
+      });
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[ModelViewer] loaded scene inspection failed", {
+          sourceKey,
+          error: message,
+        });
+      }
+      return;
+    }
+    const box = options?.previewBounds?.clone() ?? computePreviewFitBounds(obj);
     if (box.isEmpty()) {
+      const stageSignature = "empty-bounds";
+      if (lastReportedViewerSyncSignatureRef.current === stageSignature) return;
+      lastReportedViewerSyncSignatureRef.current = stageSignature;
       reportPipelineStage({
         id: "viewer-sync",
         status: "skip",
@@ -2607,26 +3706,41 @@ export default function ModelViewer({
       });
       return;
     }
-    if (box3ApproximatelyEquals(modelBoundsRef.current, box)) {
-      reportPipelineStage({
-        id: "viewer-sync",
-        status: "skip",
-        authority: "model-viewer",
-        engine: "preview-bounds",
-        warnings: [],
-        errors: [],
-        artifacts: {
-          source: "model-bounds",
-          action: "skipped-no-change",
-          min: [box.min.x, box.min.y, box.min.z],
-          max: [box.max.x, box.max.y, box.max.z],
-        },
+    const boundsSignature = getQuantizedBox3Signature(box);
+    const commitKey = `${sourceKey}:${boundsSignature}`;
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[ModelViewer] loaded scene inspection", {
+        sourceKey,
+        boundsUnits: sceneInspection.bounds.units,
+        meshNames: sceneInspection.meshNames,
+        bodyMeshNames: sceneInspection.bodyMeshNames,
+        accessoryMeshNames: sceneInspection.accessoryMeshNames,
+        fallbackMeshNames: sceneInspection.fallbackMeshNames,
       });
+    }
+    if (lastCommittedBoundsSourceKeyRef.current === commitKey) return;
+    if (box3ApproximatelyEquals(modelBoundsRef.current, box)) {
+      lastCommittedBoundsSignatureRef.current = boundsSignature;
+      lastCommittedBoundsSourceKeyRef.current = commitKey;
+      return;
+    }
+    if (box3EqualsByQuantizedSignature(modelBoundsRef.current, box)) {
+      lastCommittedBoundsSignatureRef.current = boundsSignature;
+      lastCommittedBoundsSourceKeyRef.current = commitKey;
       return;
     }
     const nextBounds = box.clone();
+    lastCommittedBoundsSignatureRef.current = boundsSignature;
+    lastCommittedBoundsSourceKeyRef.current = commitKey;
+    if (sourceKey.startsWith("source:")) {
+      sourceModelBoundsRef.current = nextBounds.clone();
+      setSourceModelBounds((current) => (box3ApproximatelyEquals(current, nextBounds) ? current : nextBounds.clone()));
+    }
     modelBoundsRef.current = nextBounds;
     setModelBounds((current) => (box3ApproximatelyEquals(current, nextBounds) ? current : nextBounds));
+    const stageSignature = `applied:${commitKey}`;
+    if (lastReportedViewerSyncSignatureRef.current === stageSignature) return;
+    lastReportedViewerSyncSignatureRef.current = stageSignature;
     reportPipelineStage({
       id: "viewer-sync",
       status: "ready",
@@ -2641,12 +3755,11 @@ export default function ModelViewer({
         max: [nextBounds.max.x, nextBounds.max.y, nextBounds.max.z],
       },
     });
-  }, [reportPipelineStage]);
+  }, [file?.name, reportPipelineStage, sourceModelUrl, url]);
 
   const ext = file?.name.split(".").pop()?.toLowerCase() ??
-    modelUrl?.split("?")[0]?.split(".").pop()?.toLowerCase() ??
+    resolvedModelUrl?.split("?")[0]?.split(".").pop()?.toLowerCase() ??
     "";
-  const autoRotate = isAutoRotating && !showTemplateSurfaceZones;
   const hasCanonicalPreviewContext = Boolean(
     tumblerDims &&
     canonicalBodyProfile &&
@@ -2662,49 +3775,94 @@ export default function ModelViewer({
     () => deriveTumblerPreviewModelState({
       requestedMode: previewModelMode ?? "source-traced",
       hasCanonicalAlignmentModel: hasCanonicalPreviewContext,
-      hasSourceModel: Boolean(url),
-      sourceModelPath: glbPath ?? modelUrl ?? file?.name ?? null,
-      sourceBounds: box3ToPreviewBoundsSnapshot(modelBounds),
+      hasSourceModel: Boolean(url || resolvedModelUrl || sourceModelUrl || file),
+      sourceModelPath: glbPath ?? resolvedModelUrl ?? sourceModelUrl ?? file?.name ?? null,
+      sourceModelStatus: sourceModelStatus ?? null,
+      sourceBounds: box3ToPreviewBoundsSnapshot(sourceModelBounds),
       canonicalBounds: box3ToPreviewBoundsSnapshot(canonicalReferenceBounds),
     }),
     [
       previewModelMode,
       hasCanonicalPreviewContext,
       url,
+      resolvedModelUrl,
       glbPath,
       modelUrl,
+      sourceModelUrl,
       file?.name,
-      modelBounds,
+      file,
+      sourceModelStatus,
+      sourceModelBounds,
       canonicalReferenceBounds,
     ],
   );
   const effectivePreviewModelMode = previewModelState.effectiveMode;
+  const autoRotate =
+    isAutoRotating &&
+    !showTemplateSurfaceZones &&
+    effectivePreviewModelMode !== "full-model" &&
+    effectivePreviewModelMode !== "body-cutout-qa";
+  const reportedPreviewStateSignatureRef = useRef<string | null>(null);
   const canonicalBodyBounds = useMemo(
     () => (hasCanonicalPreviewContext && canonicalBodyProfile && dimensionCalibration
-      ? (
-          effectivePreviewModelMode === "alignment-model"
-            ? computeRegistrationShellBounds(dimensionCalibration.svgFrontViewBoxMm)
-            : computeCanonicalBodyBounds(canonicalBodyProfile, dimensionCalibration.totalHeightMm)
-        )
+      ? computeCanonicalBodyBounds(canonicalBodyProfile, dimensionCalibration.totalHeightMm)
       : null),
-    [canonicalBodyProfile, dimensionCalibration, effectivePreviewModelMode, hasCanonicalPreviewContext],
+    [canonicalBodyProfile, dimensionCalibration, hasCanonicalPreviewContext],
+  );
+  const debugReferenceBounds = useMemo(
+    () => (hasCanonicalPreviewContext && dimensionCalibration
+      ? computePhysicalBodyReferenceBounds(dimensionCalibration)
+      : null),
+    [dimensionCalibration, hasCanonicalPreviewContext],
   );
   useEffect(() => {
-    onPreviewStateChange?.(tumblerDims ? previewModelState : null);
-  }, [onPreviewStateChange, previewModelState, tumblerDims]);
+    const nextState = tumblerDims ? previewModelState : null;
+    const nextSignature = getTumblerPreviewModelStateSignature(nextState);
+    if (reportedPreviewStateSignatureRef.current === nextSignature) return;
+    reportedPreviewStateSignatureRef.current = nextSignature;
+    emitPreviewStateChange(nextState);
+  }, [emitPreviewStateChange, previewModelState, tumblerDims]);
   const useCanonicalAlignmentModel = Boolean(
     hasCanonicalPreviewContext &&
     (
       effectivePreviewModelMode === "alignment-model" ||
-      (!url && !flatPreview && effectivePreviewModelMode === "full-model")
+      (!url && !flatPreview && (effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "body-cutout-qa"))
     ),
   );
   const sourceCompareBounds = modelBounds;
+  const useReviewedGeneratedFullModelBounds = Boolean(
+    (effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "body-cutout-qa")
+    && sourceModelStatus === "generated-reviewed-model"
+    && modelBounds,
+  );
   const fullPreviewBounds = useMemo(() => {
-    if (effectivePreviewModelMode !== "full-model") return modelBounds ?? canonicalBodyBounds;
-    if (!modelBounds && !canonicalBodyBounds) return null;
+    if (effectivePreviewModelMode !== "full-model" && effectivePreviewModelMode !== "body-cutout-qa") {
+      return modelBounds ?? canonicalBodyBounds;
+    }
+    if (useReviewedGeneratedFullModelBounds) {
+      const reviewedBounds =
+        modelBounds?.clone()
+        ?? canonicalBodyBounds?.clone()
+        ?? null;
+      if (!reviewedBounds) {
+        return null;
+      }
+      const reviewedSize = reviewedBounds.getSize(new THREE.Vector3());
+      reviewedBounds.min.x -= Math.max(reviewedSize.x * 0.06, 3.5);
+      reviewedBounds.max.x += Math.max(reviewedSize.x * 0.06, 3.5);
+      reviewedBounds.min.y -= Math.max(reviewedSize.y * 0.085, 8);
+      reviewedBounds.max.y += Math.max(reviewedSize.y * 0.12, 10);
+      reviewedBounds.min.z -= Math.max(reviewedSize.z * 0.14, 6);
+      reviewedBounds.max.z += Math.max(reviewedSize.z * 0.18, 8);
+      return reviewedBounds;
+    }
+    if (!modelBounds && !canonicalBodyBounds) {
+      return null;
+    }
     const next = (canonicalBodyBounds ?? modelBounds)?.clone() ?? null;
-    if (!next) return null;
+    if (!next) {
+      return null;
+    }
     if (canonicalBodyBounds && modelBounds) {
       const canonicalSize = canonicalBodyBounds.getSize(new THREE.Vector3());
       const maxHandleAllowance = Math.max(canonicalSize.x * 0.74, 38);
@@ -2726,27 +3884,40 @@ export default function ModelViewer({
     next.min.z -= Math.max(size.z * 0.018, 0.8);
     next.max.z += Math.max(size.z * 0.028, 1.3);
     return next;
-  }, [canonicalBodyBounds, canonicalHandleProfile, editableHandlePreview, effectivePreviewModelMode, modelBounds]);
+  }, [canonicalBodyBounds, canonicalHandleProfile, editableHandlePreview, effectivePreviewModelMode, modelBounds, useReviewedGeneratedFullModelBounds]);
   const fullPreviewFocusCenter = useMemo(() => {
-    if (effectivePreviewModelMode !== "full-model") return null;
+    if (effectivePreviewModelMode !== "full-model" && effectivePreviewModelMode !== "body-cutout-qa") return null;
+    if (useReviewedGeneratedFullModelBounds) {
+      return (fullPreviewBounds ?? modelBounds)?.getCenter(new THREE.Vector3()) ?? null;
+    }
     const preferredBounds = canonicalBodyBounds ?? fullPreviewBounds ?? modelBounds;
     if (!preferredBounds) return null;
     return preferredBounds.getCenter(new THREE.Vector3());
-  }, [canonicalBodyBounds, effectivePreviewModelMode, fullPreviewBounds, modelBounds]);
+  }, [canonicalBodyBounds, effectivePreviewModelMode, fullPreviewBounds, modelBounds, useReviewedGeneratedFullModelBounds]);
   const alignmentBounds = hasCanonicalPreviewContext
     ? (
         effectivePreviewModelMode === "full-model"
           ? (fullPreviewBounds ?? canonicalBodyBounds)
+          : effectivePreviewModelMode === "body-cutout-qa"
+          ? (modelBounds ?? canonicalBodyBounds)
           : effectivePreviewModelMode === "source-traced"
           ? (canonicalBodyBounds ?? sourceCompareBounds)
           : (canonicalBodyBounds ?? modelBounds)
       )
     : modelBounds;
   const useAlignmentOrthoCamera = Boolean(
-    showTemplateSurfaceZones
-    && tumblerDims
-    && dimensionCalibration
-    && effectivePreviewModelMode === "alignment-model",
+    (
+      showTemplateSurfaceZones
+      && tumblerDims
+      && dimensionCalibration
+      && effectivePreviewModelMode === "alignment-model"
+    ) || (
+      tumblerDims
+      && (effectivePreviewModelMode === "source-traced" || effectivePreviewModelMode === "body-cutout-qa")
+      && sourceModelStatus === "generated-reviewed-model"
+      && approvedBodyOutline?.directContour
+      && approvedBodyOutline.directContour.length >= 6
+    ),
   );
   const useTemplatePreviewSurfaceZones = Boolean(
     tumblerDims
@@ -2757,6 +3928,254 @@ export default function ModelViewer({
   const viewKey = flatPreview
     ? `flat:${flatPreview.widthMm}:${flatPreview.heightMm}:${flatPreview.thicknessMm}:${flatPreview.familyKey ?? ""}:${flatPreview.label ?? ""}`
     : `${hasCanonicalPreviewContext ? effectivePreviewModelMode : "source-traced"}:${url ?? ""}`;
+  const showRuntimeDebugPanel = Boolean(showModelDebug || sourceModelStatus === "generated-reviewed-model");
+  const showBodyContractInspector = Boolean(
+    showModelDebug ||
+    BODY_CONTRACT_INSPECTOR_ENABLED,
+  );
+  const showBodyGeometryStatusBadge = Boolean(
+    tumblerDims ||
+    sourceModelStatus ||
+    approvedBodyOutline ||
+    canonicalBodyProfile,
+  );
+  const runtimeDebugSourcePath = glbPath ?? modelUrl ?? url ?? "n/a";
+  const runtimeInspectionGlbUrl = url ?? sourceModelUrl ?? file?.name ?? undefined;
+  const runtimeDebugSceneInspection =
+    loadedSceneInspectionState.status === "complete"
+      ? loadedSceneInspectionState.sceneInspection
+      : null;
+  const viewerRuntimeAuditContract = useMemo<BodyGeometryContract | null>(() => {
+    if (!viewerRuntimeGlbAudit) return null;
+    const emptyContract = createEmptyBodyGeometryContract();
+    return {
+      ...emptyContract,
+      contractVersion:
+        viewerRuntimeGlbAudit.contractVersion ??
+        emptyContract.contractVersion,
+      mode: viewerRuntimeGlbAudit.mode as BodyGeometryContract["mode"],
+      source: {
+        ...emptyContract.source,
+        ...viewerRuntimeGlbAudit.source,
+      },
+      glb: {
+        ...emptyContract.glb,
+        ...viewerRuntimeGlbAudit.glb,
+        generatedAt:
+          viewerRuntimeGlbAudit.glb.generatedAt ??
+          viewerRuntimeGlbAudit.generatedAt,
+      },
+      meshes: {
+        ...emptyContract.meshes,
+        ...viewerRuntimeGlbAudit.meshes,
+      },
+      dimensionsMm: {
+        ...emptyContract.dimensionsMm,
+        ...viewerRuntimeGlbAudit.dimensionsMm,
+      },
+      validation: {
+        ...emptyContract.validation,
+        ...viewerRuntimeGlbAudit.validation,
+      },
+      svgQuality: viewerRuntimeGlbAudit.svgQuality,
+    };
+  }, [viewerRuntimeGlbAudit]);
+  const viewerRuntimeBodyGeometryContract = useMemo<BodyGeometryContract | null>(() => {
+    const hasBodyGeometryContext = Boolean(
+      runtimeDebugSourcePath !== "n/a" ||
+      runtimeDebugSceneInspection ||
+      viewerRuntimeAuditContract ||
+      viewerRuntimeSourceHash ||
+      viewerRuntimeGlbHash ||
+      bodyGeometryContractSeed ||
+      approvedBodyOutline,
+    );
+    if (!hasBodyGeometryContext) return null;
+
+    const sourceViewport = approvedBodyOutline?.sourceContourViewport;
+    const sourceType = resolveViewerSourceType({
+      sourceModelStatus,
+      approvedBodyOutline,
+    });
+    const expectedBodyHeightMm =
+      dimensionCalibration?.bodyHeightMm ??
+      tumblerDims?.bodyHeightMm ??
+      dimensionCalibration?.totalHeightMm ??
+      tumblerDims?.overallHeightMm;
+    const glbSourceHash =
+      viewerRuntimeAuditContract?.glb.sourceHash ??
+      viewerRuntimeAuditContract?.source.hash ??
+      bodyGeometryContractSeed?.glb?.sourceHash;
+    const freshRelativeToSource = resolveLoadedGlbFreshRelativeToSource({
+      currentSourceHash: viewerRuntimeSourceHash,
+      glbSourceHash,
+      seededFreshRelativeToSource: bodyGeometryContractSeed?.glb?.freshRelativeToSource,
+    });
+    const runtimeValidationWarnings = [
+      ...(runtimeDebugSceneInspection?.warnings ?? []),
+      ...(loadedAuditArtifactState.status === "required-missing"
+        ? ["Expected generated audit sidecar is missing for this reviewed GLB."]
+        : []),
+      ...(loadedAuditArtifactState.status === "failed"
+        ? ["Failed to load required generated audit sidecar metadata."]
+        : []),
+    ];
+    const svgQuality = approvedBodyOutline
+      ? buildBodyReferenceSvgQualityReportFromOutline({
+          outline: approvedBodyOutline,
+          sourceHash: viewerRuntimeSourceHash ?? undefined,
+          label: sourceModelLabel ?? undefined,
+        })
+      : undefined;
+    const baseContract: BodyGeometryContract = {
+      ...createEmptyBodyGeometryContract(),
+      mode: effectivePreviewModelMode,
+      source: {
+        type: sourceType,
+        filename: file?.name ?? sourceModelLabel ?? viewerRuntimeAuditContract?.source.filename ?? undefined,
+        hash: viewerRuntimeSourceHash ?? undefined,
+        widthPx: sourceViewport?.width,
+        heightPx: sourceViewport?.height,
+        viewBox: sourceViewport
+          ? `${round2(sourceViewport.minX)} ${round2(sourceViewport.minY)} ${round2(sourceViewport.width)} ${round2(sourceViewport.height)}`
+          : undefined,
+        detectedBodyOnly: approvedBodyOutline?.sourceContourMode === "body-only",
+      },
+      glb: {
+        path: runtimeDebugSourcePath !== "n/a" ? runtimeDebugSourcePath : undefined,
+        hash: viewerRuntimeGlbHash ?? viewerRuntimeAuditContract?.glb.hash ?? undefined,
+        sourceHash: glbSourceHash ?? undefined,
+        generatedAt: viewerRuntimeAuditContract?.glb.generatedAt,
+        freshRelativeToSource,
+      },
+      meshes: {
+        names: runtimeDebugSceneInspection?.meshNames ?? [],
+        visibleMeshNames: runtimeDebugSceneInspection?.visibleMeshNames ?? [],
+        materialNames: runtimeDebugSceneInspection?.materialNames ?? [],
+        bodyMeshNames: runtimeDebugSceneInspection?.bodyMeshNames ?? [],
+        accessoryMeshNames: runtimeDebugSceneInspection?.accessoryMeshNames ?? [],
+        fallbackMeshNames: runtimeDebugSceneInspection?.fallbackMeshNames ?? [],
+        fallbackDetected: runtimeDebugSceneInspection?.fallbackDetected ?? false,
+        unexpectedMeshes: runtimeDebugSceneInspection?.unexpectedMeshNames ?? [],
+        totalVertexCount: runtimeDebugSceneInspection?.totalVertexCount ?? 0,
+        totalTriangleCount: runtimeDebugSceneInspection?.totalTriangleCount ?? 0,
+      },
+      dimensionsMm: {
+        bodyBounds: runtimeDebugSceneInspection?.bounds.units === "mm" && runtimeDebugSceneInspection.bounds.body
+          ? {
+              width: runtimeDebugSceneInspection.bounds.body.width,
+              height: runtimeDebugSceneInspection.bounds.body.height,
+              depth: runtimeDebugSceneInspection.bounds.body.depth,
+            }
+          : undefined,
+        bodyBoundsUnits: runtimeDebugSceneInspection?.bounds.units,
+        wrapDiameterMm: dimensionCalibration?.wrapDiameterMm ?? tumblerDims?.diameterMm,
+        wrapWidthMm: dimensionCalibration?.wrapWidthMm,
+        frontVisibleWidthMm: dimensionCalibration?.frontVisibleWidthMm,
+        expectedBodyWidthMm: dimensionCalibration?.frontVisibleWidthMm ?? tumblerDims?.diameterMm,
+        expectedBodyHeightMm,
+        scaleSource:
+          runtimeDebugSceneInspection?.bounds.units === "mm"
+            ? "mesh-bounds"
+            : dimensionCalibration
+              ? "physical-wrap"
+              : sourceViewport
+                ? "svg-viewbox"
+                : "unknown",
+      },
+      validation: {
+        status: "unknown",
+        errors: [],
+        warnings: runtimeValidationWarnings,
+      },
+      svgQuality,
+    };
+    return mergeAuditContractWithLoadedInspection({
+      auditContract: viewerRuntimeAuditContract,
+      loadedInspectionContract: baseContract,
+      metadataSeed: bodyGeometryContractSeed,
+      currentMode: effectivePreviewModelMode,
+      currentSourceHash: viewerRuntimeSourceHash,
+      loadedGlbHash: viewerRuntimeGlbHash,
+      runtimeInspection: {
+        status: loadedSceneInspectionState.status,
+        glbUrl:
+          runtimeInspectionGlbUrl ??
+          (runtimeDebugSourcePath !== "n/a" ? runtimeDebugSourcePath : undefined),
+        inspectedAt:
+          loadedSceneInspectionState.status === "complete"
+            ? loadedSceneInspectionState.inspectedAt
+            : undefined,
+        error:
+          loadedSceneInspectionState.status === "failed"
+            ? loadedSceneInspectionState.error
+            : undefined,
+        auditArtifactPresent: loadedAuditArtifactState.status === "present",
+        auditArtifactOptionalMissing: loadedAuditArtifactState.status === "optional-missing",
+        auditArtifactRequiredMissing: loadedAuditArtifactState.status === "required-missing",
+      },
+    });
+  }, [
+    approvedBodyOutline,
+    bodyGeometryContractSeed,
+    dimensionCalibration,
+    effectivePreviewModelMode,
+    file?.name,
+    loadedAuditArtifactState,
+    loadedSceneInspectionState,
+    runtimeDebugSourcePath,
+    runtimeDebugSceneInspection,
+    runtimeInspectionGlbUrl,
+    sourceModelLabel,
+    sourceModelStatus,
+    tumblerDims,
+    viewerRuntimeAuditContract,
+    viewerRuntimeGlbHash,
+    viewerRuntimeSourceHash,
+  ]);
+  const bodyCutoutQaGuardState = useMemo(
+    () => buildBodyCutoutQaGuardState({
+      mode: effectivePreviewModelMode,
+      contract: viewerRuntimeBodyGeometryContract,
+    }),
+    [effectivePreviewModelMode, viewerRuntimeBodyGeometryContract],
+  );
+  useEffect(() => {
+    emitBodyGeometryContractChange(viewerRuntimeBodyGeometryContract);
+  }, [emitBodyGeometryContractChange, viewerRuntimeBodyGeometryContract]);
+  useEffect(() => {
+    return () => {
+      onBodyGeometryContractChange?.(null);
+    };
+  }, [onBodyGeometryContractChange]);
+  const runtimeDebugRawBounds = sourceModelBounds ?? modelBounds;
+  const runtimeDebugEffectiveBounds =
+    effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "body-cutout-qa"
+      ? (fullPreviewBounds ?? alignmentBounds ?? modelBounds)
+      : (alignmentBounds ?? modelBounds);
+  const runtimeDebugMeshSummary = runtimeDebugSceneInspection?.meshNames.length
+    ? runtimeDebugSceneInspection.meshNames.join(", ")
+    : "none";
+  const runtimeDebugVisibleMeshSummary = runtimeDebugSceneInspection?.visibleMeshNames.length
+    ? runtimeDebugSceneInspection.visibleMeshNames.join(", ")
+    : "none";
+  const runtimeDebugMaterialSummary = runtimeDebugSceneInspection?.materialNames.length
+    ? runtimeDebugSceneInspection.materialNames.join(", ")
+    : "none";
+  const runtimeDebugBodyMeshSummary = runtimeDebugSceneInspection?.bodyMeshNames.length
+    ? runtimeDebugSceneInspection.bodyMeshNames.join(", ")
+    : "none";
+  const runtimeDebugAccessoryMeshSummary = runtimeDebugSceneInspection?.accessoryMeshNames.length
+    ? runtimeDebugSceneInspection.accessoryMeshNames.join(", ")
+    : "none";
+  const runtimeDebugFallbackMeshSummary = runtimeDebugSceneInspection?.fallbackMeshNames.length
+    ? runtimeDebugSceneInspection.fallbackMeshNames.join(", ")
+    : "none";
+  const runtimeDebugFullSceneBounds = runtimeDebugSceneInspection?.bounds.fullScene ?? null;
+  const runtimeDebugBodyMeshBounds = runtimeDebugSceneInspection?.bounds.body ?? null;
+  const runtimeDebugAccessoryBounds = runtimeDebugSceneInspection?.bounds.accessory ?? null;
+  const runtimeDebugFallbackBounds = runtimeDebugSceneInspection?.bounds.fallback ?? null;
+  const runtimeDebugBoundsUnits = runtimeDebugSceneInspection?.bounds.units ?? "scene-units";
 
   // ── Adaptive scene scale based on physical dimensions ──────────────────────
   const H = tumblerDims?.overallHeightMm ?? 200;
@@ -2818,12 +4237,27 @@ export default function ModelViewer({
     && effectivePreviewModelMode === "alignment-model"
     && !showTemplateSurfaceZones,
   );
+  const debugBounds = modelBounds ?? alignmentBounds;
+  const debugBoundsLabel = modelBounds ? "Rendered GLB" : "Alignment model";
 
   if (!url && !flatPreview && !useCanonicalAlignmentModel) return null;
 
+  // DEBUG: cutout overlay rendering conditions (remove after confirming)
+  if ((effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "body-cutout-qa") && sourceModelStatus === "generated-reviewed-model") {
+    console.log("[ModelViewer cutout debug]", {
+      mode: effectivePreviewModelMode,
+      status: sourceModelStatus,
+      hasOutline: !!approvedBodyOutline,
+      directContourLen: approvedBodyOutline?.directContour?.length ?? 0,
+      hasTumblerDims: !!tumblerDims,
+      overallHeightMm: tumblerDims?.overallHeightMm ?? 0,
+    });
+  }
+
   return (
-    <CanvasErrorBoundary>
-      <Canvas
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <CanvasErrorBoundary resetToken={url ?? modelUrl ?? glbPath ?? file?.name ?? "none"}>
+        <Canvas
         shadows={false}
         frameloop={previewHasItems ? "always" : "demand"}
         dpr={[1, 1.25]}
@@ -2852,7 +4286,10 @@ export default function ModelViewer({
                 bedWidthMm={bedWidthMm}
                 bedHeightMm={bedHeightMm}
                 bodyTintColor={bodyTintColor}
-                onReady={handleModelReady}
+                onReady={(obj, options) => handleModelReady(obj, "flat-preview", {
+                  ...options,
+                  boundsUnits: "mm",
+                })}
               />
             ) : useCanonicalAlignmentModel && tumblerDims && canonicalBodyProfile && dimensionCalibration ? (
               <CanonicalAlignmentTumbler
@@ -2866,7 +4303,11 @@ export default function ModelViewer({
                 lidTintColor={lidTintColor}
                 rimTintColor={rimTintColor}
                 ringFinish={ringFinish}
-                onReady={handleModelReady}
+                lidAssemblyPreset={lidAssemblyPreset}
+                onReady={(obj, options) => handleModelReady(obj, `canonical:${effectivePreviewModelMode}`, {
+                  ...options,
+                  boundsUnits: "mm",
+                })}
               />
             ) : url ? (
               <ModelByExtension
@@ -2885,9 +4326,34 @@ export default function ModelViewer({
                 lidTintColor={lidTintColor}
                 rimTintColor={rimTintColor}
                 previewModelMode={effectivePreviewModelMode}
-                onReady={handleModelReady}
+                sourceModelStatus={sourceModelStatus}
+                showDebugOverlays={showModelDebug}
+                onReady={(obj, options) => handleModelReady(obj, `source:${effectivePreviewModelMode}:${url ?? ""}`, {
+                  ...options,
+                  boundsUnits: tumblerDims || sourceModelStatus === "generated-reviewed-model" ? "mm" : "scene-units",
+                })}
               />
             ) : null}
+            {(effectivePreviewModelMode === "source-traced" || effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "body-cutout-qa")
+              && sourceModelStatus === "generated-reviewed-model"
+              && approvedBodyOutline?.directContour
+              && approvedBodyOutline.directContour.length >= 6
+              && tumblerDims && (
+                <ReviewedBodySilhouetteCompare
+                  outline={approvedBodyOutline}
+                  dims={tumblerDims}
+                />
+              )}
+            {effectivePreviewModelMode === "full-model"
+              && sourceModelStatus === "generated-reviewed-model"
+              && approvedBodyOutline?.directContour
+              && approvedBodyOutline.directContour.length >= 6
+              && tumblerDims && (
+                <ReviewedBodyContourRings
+                  outline={approvedBodyOutline}
+                  dims={tumblerDims}
+                />
+              )}
           </Suspense>
           {!useAlignmentOrthoCamera && !tumblerDims && <AutoFit url={viewKey} />}
         </Bounds>
@@ -2901,16 +4367,24 @@ export default function ModelViewer({
           modelBounds={
             effectivePreviewModelMode === "alignment-model"
               ? alignmentBounds
-              : effectivePreviewModelMode === "full-model"
+              : effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "body-cutout-qa"
                 ? (fullPreviewBounds ?? alignmentBounds)
                 : (modelBounds ?? alignmentBounds)
           }
-          focusCenter={effectivePreviewModelMode === "full-model" ? fullPreviewFocusCenter : null}
+          focusCenter={effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "body-cutout-qa" ? fullPreviewFocusCenter : null}
           previewMode={effectivePreviewModelMode}
+          reviewedBodyOnly={
+            sourceModelStatus === "generated-reviewed-model"
+            && (effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "body-cutout-qa")
+          }
         />
         <CalibratedFrontView
           enabled={false}
-          modelBounds={effectivePreviewModelMode === "alignment-model" ? canonicalBodyBounds : modelBounds}
+          modelBounds={
+            effectivePreviewModelMode === "alignment-model"
+              ? canonicalBodyBounds
+              : modelBounds
+          }
         />
 
         {/* Engravable zone highlight — shown when tumbler loaded, no items placed */}
@@ -2919,6 +4393,14 @@ export default function ModelViewer({
         )}
         {useEngravableZoneRing && (
           <EngravableZoneRing dims={tumblerDims!} modelBounds={alignmentBounds!} />
+        )}
+        {showModelDebug && debugBounds && (
+          <ModelDebugOverlay
+            bounds={debugBounds}
+            referenceBounds={debugReferenceBounds}
+            label={debugBoundsLabel}
+            dims={tumblerDims}
+          />
         )}
 
         <ContactShadows
@@ -2953,13 +4435,115 @@ export default function ModelViewer({
           maxDistance={maxDist}
           maxPolarAngle={Math.PI / 1.85}
           enablePan={false}
-          enableRotate={!showTemplateSurfaceZones || effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "source-traced"}
+          enableRotate={(
+            !showTemplateSurfaceZones || effectivePreviewModelMode === "full-model" || effectivePreviewModelMode === "body-cutout-qa" || effectivePreviewModelMode === "source-traced"
+          ) && !(effectivePreviewModelMode === "source-traced" && sourceModelStatus === "generated-reviewed-model")}
           onStart={handleOrbitStart}
           onEnd={handleOrbitEnd}
         />
-      </Canvas>
-    </CanvasErrorBoundary>
+        </Canvas>
+      </CanvasErrorBoundary>
+      {showRuntimeDebugPanel && (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: 12,
+            zIndex: 5,
+            maxWidth: 420,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(15, 17, 24, 0.9)",
+            border: "1px solid rgba(245, 158, 11, 0.45)",
+            color: "#f3f4f6",
+            fontSize: 12,
+            lineHeight: 1.45,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.28)",
+            pointerEvents: "none",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          <div style={{ color: "#f59e0b", fontWeight: 700, marginBottom: 6 }}>Viewer runtime debug</div>
+          <div>requested mode: {previewModelMode ?? "alignment-model"}</div>
+          <div>effective mode: {effectivePreviewModelMode}</div>
+          <div>preview status: {previewModelState.glbPreviewStatus}</div>
+          <div>preview reason: {previewModelState.reason}</div>
+          <div>source model status: {sourceModelStatus ?? "n/a"}</div>
+          <div>source path: {runtimeDebugSourcePath}</div>
+          <div>resolved url: {url ?? "n/a"}</div>
+          <div>approved source SHA-256: {viewerRuntimeSourceHash ?? "pending"}</div>
+          <div>loaded GLB SHA-256: {viewerRuntimeGlbHash ?? "pending"}</div>
+          <div>audit source SHA-256: {viewerRuntimeGlbAudit?.glb.sourceHash ?? viewerRuntimeGlbAudit?.source.hash ?? "n/a"}</div>
+          <div>audit state: {loadedAuditArtifactState.status}</div>
+          <div>audit freshness: {viewerRuntimeBodyGeometryContract?.glb.freshRelativeToSource == null ? "unknown" : viewerRuntimeBodyGeometryContract.glb.freshRelativeToSource ? "fresh" : "stale"}</div>
+          <div>inspection status: {loadedSceneInspectionState.status}</div>
+          <div>ready source key: {loadedSceneInspectionState.status === "complete" ? loadedSceneInspectionState.sourceKey : loadedSceneInspectionState.status === "failed" ? (loadedSceneInspectionState.sourceKey ?? "n/a") : "n/a"}</div>
+          <div>inspection error: {loadedSceneInspectionState.status === "failed" ? loadedSceneInspectionState.error : "none"}</div>
+          <div>inspection bounds units: {runtimeDebugBoundsUnits}</div>
+          <div>loaded mesh names: {runtimeDebugMeshSummary}</div>
+          <div>visible mesh names: {runtimeDebugVisibleMeshSummary}</div>
+          <div>material names: {runtimeDebugMaterialSummary}</div>
+          <div>body mesh names: {runtimeDebugBodyMeshSummary}</div>
+          <div>accessory mesh names: {runtimeDebugAccessoryMeshSummary}</div>
+          <div>fallback mesh names: {runtimeDebugFallbackMeshSummary}</div>
+          <div>full scene bounds: {formatBoundsSize(runtimeDebugFullSceneBounds)} / {formatBoundsMinMax(runtimeDebugFullSceneBounds)}</div>
+          <div>body candidate bounds: {formatBoundsSize(runtimeDebugBodyMeshBounds)} / {formatBoundsMinMax(runtimeDebugBodyMeshBounds)}</div>
+          <div>accessory bounds: {formatBoundsSize(runtimeDebugAccessoryBounds)} / {formatBoundsMinMax(runtimeDebugAccessoryBounds)}</div>
+          <div>fallback bounds: {formatBoundsSize(runtimeDebugFallbackBounds)} / {formatBoundsMinMax(runtimeDebugFallbackBounds)}</div>
+          <div>raw bounds size: {formatBoundsSize(runtimeDebugRawBounds)}</div>
+          <div>raw bounds extents: {formatBoundsMinMax(runtimeDebugRawBounds)}</div>
+          <div>effective bounds size: {formatBoundsSize(runtimeDebugEffectiveBounds)}</div>
+          <div>effective bounds extents: {formatBoundsMinMax(runtimeDebugEffectiveBounds)}</div>
+          <div>vertex count: {runtimeDebugSceneInspection?.totalVertexCount ?? "n/a"}</div>
+          <div>triangle count: {runtimeDebugSceneInspection?.totalTriangleCount ?? "n/a"}</div>
+          <div>contract status: {viewerRuntimeBodyGeometryContract?.validation.status ?? "unknown"}</div>
+          <div>contract warnings: {viewerRuntimeBodyGeometryContract?.validation.warnings.join(" | ") || "none"}</div>
+          <div>contract errors: {viewerRuntimeBodyGeometryContract?.validation.errors.join(" | ") || "none"}</div>
+        </div>
+      )}
+      {(showBodyGeometryStatusBadge || showBodyContractInspector) && (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            right: 12,
+            zIndex: 6,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-end",
+            gap: 10,
+            maxWidth: "min(440px, calc(100% - 24px))",
+          }}
+        >
+          {showBodyGeometryStatusBadge && (
+            <BodyGeometryStatusBadge
+              mode={effectivePreviewModelMode}
+              contract={viewerRuntimeBodyGeometryContract}
+            />
+          )}
+          {showBodyContractInspector && (
+            <BodyContractInspectorPanel
+              contract={viewerRuntimeBodyGeometryContract}
+              auditArtifact={viewerRuntimeGlbAudit}
+            />
+          )}
+        </div>
+      )}
+      {bodyCutoutQaGuardState && (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: 12,
+            zIndex: 6,
+            maxWidth: "min(460px, calc(100% - 24px))",
+          }}
+        >
+          <BodyCutoutQaGuardBanner state={bodyCutoutQaGuardState} />
+        </div>
+      )}
+    </div>
   );
 }
-
 

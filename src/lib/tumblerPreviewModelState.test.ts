@@ -44,7 +44,7 @@ test("deriveTumblerPreviewModelState degrades a generated Stanley trace profile 
   assert.equal(state.effectiveMode, "alignment-model");
   assert.equal(state.glbPreviewStatus, "degraded");
   assert.equal(state.reason, "generated-trace-profile");
-  assert.match(state.message ?? "", /workspace remains canonical/i);
+  assert.match(state.message ?? "", /saved printable geometry remain canonical/i);
 });
 
 test("deriveTumblerPreviewModelState degrades generated trace paths even when the mesh bounds look tumbler-like", () => {
@@ -100,6 +100,83 @@ test("deriveTumblerPreviewModelState degrades flat profile bounds even without a
   assert.equal(state.effectiveMode, "alignment-model");
   assert.equal(state.glbPreviewStatus, "degraded");
   assert.equal(state.reason, "flat-profile-bounds");
+});
+
+test("deriveTumblerPreviewModelState remaps reviewed generated models to BODY CUTOUT QA", () => {
+  const state = deriveTumblerPreviewModelState({
+    requestedMode: "full-model",
+    hasCanonicalAlignmentModel: true,
+    hasSourceModel: true,
+    sourceModelPath: "/api/admin/models/generated/stanley-cutout.glb",
+    sourceModelStatus: "generated-reviewed-model",
+    sourceBounds: {
+      widthMm: 99,
+      heightMm: 216,
+      depthMm: 98,
+    },
+    canonicalBounds,
+  });
+
+  assert.equal(state.effectiveMode, "body-cutout-qa");
+  assert.equal(state.glbPreviewStatus, "ready");
+  assert.equal(state.reason, "body-cutout-qa-ready");
+  assert.match(state.message ?? "", /body cutout qa/i);
+  assert.doesNotMatch(state.message ?? "", /preview-only fallback silhouette/i);
+});
+
+test("deriveTumblerPreviewModelState keeps BODY CUTOUT QA loading while reviewed bounds are unresolved", () => {
+  const state = deriveTumblerPreviewModelState({
+    requestedMode: "body-cutout-qa",
+    hasCanonicalAlignmentModel: true,
+    hasSourceModel: true,
+    sourceModelPath: "/api/admin/models/generated/stanley-cutout.glb",
+    sourceModelStatus: "generated-reviewed-model",
+    sourceBounds: null,
+    canonicalBounds,
+  });
+
+  assert.equal(state.effectiveMode, "body-cutout-qa");
+  assert.equal(state.glbPreviewStatus, "loading");
+  assert.equal(state.reason, "loading");
+  assert.equal(state.message, null);
+});
+
+test("deriveTumblerPreviewModelState reports BODY CUTOUT QA unavailable for non-reviewed sources", () => {
+  const state = deriveTumblerPreviewModelState({
+    requestedMode: "body-cutout-qa",
+    hasCanonicalAlignmentModel: true,
+    hasSourceModel: true,
+    sourceModelPath: "/models/templates/yeti-rambler-40oz.glb",
+    sourceModelStatus: "verified-product-model",
+    sourceBounds: {
+      widthMm: 103,
+      heightMm: 216,
+      depthMm: 98,
+    },
+    canonicalBounds,
+  });
+
+  assert.equal(state.effectiveMode, "alignment-model");
+  assert.equal(state.glbPreviewStatus, "unavailable");
+  assert.equal(state.reason, "qa-source-unavailable");
+  assert.match(state.message ?? "", /requires a generated reviewed body-only glb/i);
+});
+
+test("deriveTumblerPreviewModelState keeps verified product models on generated paths in full-model loading", () => {
+  const state = deriveTumblerPreviewModelState({
+    requestedMode: "full-model",
+    hasCanonicalAlignmentModel: true,
+    hasSourceModel: true,
+    sourceModelPath: "/models/generated/stanley-verified-product.glb",
+    sourceModelStatus: "verified-product-model",
+    sourceBounds: null,
+    canonicalBounds,
+  });
+
+  assert.equal(state.effectiveMode, "full-model");
+  assert.equal(state.glbPreviewStatus, "loading");
+  assert.equal(state.reason, "loading");
+  assert.equal(state.message, null);
 });
 
 test("deriveTumblerPreviewModelState reports unavailable full-model preview when no source model exists", () => {

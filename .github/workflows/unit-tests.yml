@@ -1,0 +1,122 @@
+name: Unit Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run typecheck
+        run: npx tsc --noEmit
+
+  domain-tests:
+    name: ${{ matrix.test.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - name: Printable surface and debug view
+            command: node --experimental-strip-types --test src/lib/printableSurface.test.ts src/lib/bodyReferenceDebugView.test.ts
+          - name: Body reference contract
+            command: npm run test:body-reference-contract
+          - name: Admin sections
+            command: npm run test:admin-sections
+          - name: Template pipeline diagnostics
+            command: npm run test:template-pipeline-diagnostics
+          - name: Tumbler auto-size
+            command: npm run test:tumbler-auto-size
+          - name: Tumbler guides
+            command: npm run test:tumbler-guides
+          - name: Tumbler identification
+            command: npm run test:tumbler-identification
+          - name: Tumbler export placement
+            command: npm run test:tumbler-export-placement
+          - name: Rotary mode
+            command: npm run test:rotary-mode
+          - name: Calibration export preview
+            command: npm run test:calibration-export-preview
+          - name: Rotary center
+            command: npm run test:rotary-center
+          - name: Admin calibration
+            command: npm run test:admin-calibration
+          - name: Calibration workspace state
+            command: npm run test:calibration-workspace-state
+          - name: Calibration modes
+            command: npm run test:calibration-modes
+          - name: Calibration bed reference
+            command: npm run test:calibration-bed-reference
+          - name: Staggered bed pattern
+            command: npm run test:staggered-bed-pattern
+          - name: LightBurn path settings
+            command: npm run test:lightburn-path-settings
+          - name: LightBurn path validation
+            command: npm run test:lightburn-path-validation
+          - name: Fiber color
+            command: npm run test:fiber-color
+          - name: Color profiles
+            command: npm run test:color-profiles
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ${{ matrix.test.name }}
+        run: ${{ matrix.test.command }}
+
+  gltf-validation:
+    name: glTF Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate reviewed sample GLBs
+        run: node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/server/tumbler/generateTumblerModel.test.ts
+
+      - name: Validate committed and generated glTF assets
+        run: npm run validate:gltf

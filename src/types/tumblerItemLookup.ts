@@ -8,6 +8,7 @@ export type TumblerItemLookupMode =
 
 export type TumblerModelStatus =
   | "verified-product-model"
+  | "generated-reviewed-model"
   | "placeholder-model"
   | "missing-model";
 

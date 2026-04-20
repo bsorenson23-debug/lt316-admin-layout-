@@ -15,6 +15,8 @@
     "audit:visual": "node ./scripts/run-visual-audit.mjs",
     "audit:visual:local": "node ./scripts/visual-audit.mjs",
     "audit:structure": "node ./scripts/audit-structure.mjs",
+    "inspect:glb": "node --experimental-specifier-resolution=node --experimental-strip-types ./scripts/inspect-glb.mjs",
+    "validate:gltf": "node ./scripts/validate-gltf.mjs",
     "worktree:new": "node ./scripts/worktree-new.mjs",
     "worktree:list": "node ./scripts/worktree-list.mjs",
     "worktree:close": "node ./scripts/worktree-close.mjs",
@@ -72,6 +74,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "gltf-validator": "^2.0.0-dev.3.10",
     "typescript": "^5"
   }
 }
