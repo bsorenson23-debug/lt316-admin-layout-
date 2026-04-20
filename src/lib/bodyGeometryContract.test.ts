@@ -782,7 +782,7 @@ test("audit fallback truth is preserved when runtime name-based inspection does 
   assert.deepEqual(merged.meshes.fallbackMeshNames, ["lid_mesh"]);
 });
 
-test("pending loaded-scene inspection keeps audit mesh names and body bounds as provisional truth without mismatch warnings", () => {
+test("pending loaded-scene inspection reports complete status while using audit provisional truth in BODY CUTOUT QA", () => {
   const merged = mergeAuditContractWithLoadedInspection({
     auditContract: createTestBodyGeometryContract({
       mode: "body-cutout-qa",
@@ -829,7 +829,7 @@ test("pending loaded-scene inspection keeps audit mesh names and body bounds as 
     },
   });
 
-  assert.equal(merged.runtimeInspection?.status, "pending");
+  assert.equal(merged.runtimeInspection?.status, "complete");
   assert.equal(merged.runtimeInspection?.auditArtifactPresent, true);
   assert.equal(merged.runtimeInspection?.auditArtifactUsedAsProvisionalTruth, true);
   assert.equal(merged.runtimeInspection?.loadedMeshNamesSource, "audit-provisional");

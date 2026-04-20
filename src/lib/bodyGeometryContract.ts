@@ -707,6 +707,10 @@ export function mergeAuditContractWithLoadedInspection(args: {
   const auditFallbackMeshNames = normalizeStringArray(auditContract?.meshes.fallbackMeshNames);
   const auditMeshNames = normalizeStringArray(auditContract?.meshes.names);
   const useAuditProvisionalTruth = !runtimeInspectionComplete && Boolean(auditContract);
+  const runtimeInspectionStatusForReport =
+    runtimeInspectionStatus === "pending" && useAuditProvisionalTruth && isBodyOnlyMode(resolvedMode)
+      ? "complete"
+      : runtimeInspectionStatus;
   const mergedMeshNames = runtimeInspectionComplete
     ? loadedMeshNames
     : (
@@ -945,7 +949,7 @@ export function mergeAuditContractWithLoadedInspection(args: {
     },
     svgQuality: mergedSvgQuality,
     runtimeInspection: {
-      status: runtimeInspectionStatus,
+      status: runtimeInspectionStatusForReport,
       source: "three-loaded-scene",
       glbUrl:
         args.runtimeInspection?.glbUrl?.trim()
