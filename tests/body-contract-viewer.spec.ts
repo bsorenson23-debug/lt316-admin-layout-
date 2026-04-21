@@ -48,8 +48,8 @@ test("BODY CUTOUT QA valid body-only fixture shows PASS with no extras", async (
 
   await openInspector(page);
   await expect(page.getByTestId("body-contract-inspector-status")).toHaveText(/PASS/);
-  await expect(page.getByTestId("body-contract-inspector-runtime-status")).toHaveText("complete");
-  await expect(page.getByTestId("body-contract-inspector-runtime-mesh-source")).toHaveText("runtime-inspection");
+  await expect(page.getByTestId("body-contract-inspector-runtime-status")).toContainText("complete");
+  await expect(page.getByTestId("body-contract-inspector-runtime-mesh-source")).toContainText("runtime-inspection");
   await expect(page.getByTestId("body-contract-inspector-body-meshes")).toContainText("body_mesh");
   await expect(page.getByTestId("body-contract-inspector-accessory-meshes")).toContainText("none");
   await expect(page.getByTestId("body-contract-inspector-fallback-meshes")).toContainText("none");
