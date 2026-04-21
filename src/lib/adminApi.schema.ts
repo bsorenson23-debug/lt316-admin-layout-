@@ -4,6 +4,35 @@ import type { BodyGeometryContract } from "./bodyGeometryContract.ts";
 
 const finiteNumber = z.number().finite();
 
+const bodyReferenceSvgQualityReportSchema = z.object({
+  status: z.enum(["pass", "warn", "fail"]),
+  contourSource: z.enum(["direct-contour", "source-contour", "profile-points", "path-svg", "unavailable"]),
+  boundsUnits: z.enum(["mm", "source-px", "unknown"]),
+  pointCount: z.number().int().nonnegative(),
+  segmentCount: z.number().int().nonnegative(),
+  closed: z.boolean(),
+  closeable: z.boolean(),
+  bounds: z.object({
+    minX: finiteNumber,
+    minY: finiteNumber,
+    maxX: finiteNumber,
+    maxY: finiteNumber,
+    width: finiteNumber,
+    height: finiteNumber,
+  }).optional(),
+  viewBox: z.string().optional(),
+  sourceHash: z.string().optional(),
+  duplicatePointCount: z.number().int().nonnegative(),
+  nearDuplicatePointCount: z.number().int().nonnegative(),
+  tinySegmentCount: z.number().int().nonnegative(),
+  suspiciousSpikeCount: z.number().int().nonnegative(),
+  suspiciousJumpCount: z.number().int().nonnegative(),
+  expectedBridgeSegmentCount: z.number().int().nonnegative(),
+  aspectRatio: finiteNumber.optional(),
+  warnings: z.array(z.string()),
+  errors: z.array(z.string()),
+});
+
 const bodyGeometryBoundsSchema = z.object({
   width: finiteNumber,
   height: finiteNumber,
@@ -72,6 +101,7 @@ export const bodyGeometryContractSchema = z.object({
     errors: z.array(z.string()),
     warnings: z.array(z.string()),
   }),
+  svgQuality: bodyReferenceSvgQualityReportSchema.optional(),
   runtimeInspection: bodyGeometryRuntimeInspectionSchema.optional(),
 }).passthrough();
 
@@ -121,6 +151,7 @@ export const bodyGeometryAuditArtifactSchema = z.object({
     errors: z.array(z.string()),
     warnings: z.array(z.string()),
   }),
+  svgQuality: bodyReferenceSvgQualityReportSchema.optional(),
 }).passthrough();
 
 export const bodyReferenceGlbResponseSchema = z.object({

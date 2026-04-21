@@ -53,6 +53,7 @@ export interface BodyGeometryAuditArtifact {
     errors: string[];
     warnings: string[];
   };
+  svgQuality?: BodyGeometryContract["svgQuality"];
 }
 
 function normalizeStringArray(values: readonly string[] | undefined): string[] {
@@ -124,6 +125,13 @@ export function buildBodyGeometryAuditArtifact(
       errors: normalizeStringArray(contract.validation.errors),
       warnings: normalizeStringArray(contract.validation.warnings),
     },
+    svgQuality: contract.svgQuality
+      ? {
+          ...contract.svgQuality,
+          warnings: normalizeStringArray(contract.svgQuality.warnings),
+          errors: normalizeStringArray(contract.svgQuality.errors),
+        }
+      : undefined,
   };
 }
 

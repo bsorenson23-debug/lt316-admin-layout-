@@ -32,6 +32,23 @@ test("buildBodyGeometryDebugReport bundles contract and audit metadata without S
       errors: [],
       warnings: [],
     },
+    svgQuality: {
+      status: "pass" as const,
+      contourSource: "direct-contour" as const,
+      boundsUnits: "mm" as const,
+      pointCount: 88,
+      segmentCount: 88,
+      closed: true,
+      closeable: false,
+      duplicatePointCount: 0,
+      nearDuplicatePointCount: 0,
+      tinySegmentCount: 0,
+      suspiciousSpikeCount: 0,
+      suspiciousJumpCount: 0,
+      expectedBridgeSegmentCount: 2,
+      warnings: [],
+      errors: [],
+    },
     runtimeInspection: {
       ...createEmptyBodyGeometryContract().runtimeInspection,
       status: "complete" as const,
@@ -73,6 +90,23 @@ test("buildBodyGeometryDebugReport bundles contract and audit metadata without S
         errors: [],
         warnings: [],
       },
+      svgQuality: {
+        status: "pass",
+        contourSource: "direct-contour",
+        boundsUnits: "mm",
+        pointCount: 88,
+        segmentCount: 88,
+        closed: true,
+        closeable: false,
+        duplicatePointCount: 0,
+        nearDuplicatePointCount: 0,
+        tinySegmentCount: 0,
+        suspiciousSpikeCount: 0,
+        suspiciousJumpCount: 0,
+        expectedBridgeSegmentCount: 2,
+        warnings: [],
+        errors: [],
+      },
     },
     exportedAt: "2026-04-20T13:00:00.000Z",
     environment: {
@@ -104,6 +138,8 @@ test("buildBodyGeometryDebugReport bundles contract and audit metadata without S
   assert.equal(report.summary.auditArtifactPresent, true);
   assert.equal(report.summary.auditArtifactOptionalMissing, false);
   assert.equal(report.summary.auditArtifactRequiredMissing, false);
+  assert.equal(report.contract?.svgQuality?.expectedBridgeSegmentCount, 2);
+  assert.equal(report.auditArtifact?.svgQuality?.expectedBridgeSegmentCount, 2);
   assert.equal(report.contract?.glb.hash, "sha256:glb");
   assert.equal(report.auditArtifact?.glb.sourceHash, "sha256:source");
   assert.equal("svgText" in (report.contract?.source ?? {}), false);

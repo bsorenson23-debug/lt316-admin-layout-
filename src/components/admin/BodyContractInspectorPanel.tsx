@@ -94,6 +94,18 @@ function formatBounds(
   return `${bounds.width} × ${bounds.height} × ${bounds.depth} ${suffix}`;
 }
 
+function formatSvgQualityBounds(
+  report: BodyGeometryContract["svgQuality"] | undefined,
+): string {
+  if (!report?.bounds) return "n/a";
+  const suffix = report.boundsUnits === "mm"
+    ? "mm"
+    : report.boundsUnits === "source-px"
+      ? "source px"
+      : "units";
+  return `${report.bounds.width} × ${report.bounds.height} ${suffix}`;
+}
+
 function getStatusLabel(status: BodyGeometryValidationStatus | undefined): string {
   switch (status) {
     case "pass":
@@ -272,6 +284,8 @@ export function BodyContractInspectorPanel({
   const showUnknownScaleSourceWarning = !contract?.dimensionsMm.scaleSource || contract.dimensionsMm.scaleSource === "unknown";
   const hasWarnings = (contract?.validation.warnings.length ?? 0) > 0;
   const hasErrors = (contract?.validation.errors.length ?? 0) > 0;
+  const hasSvgQualityWarnings = (contract?.svgQuality?.warnings.length ?? 0) > 0;
+  const hasSvgQualityErrors = (contract?.svgQuality?.errors.length ?? 0) > 0;
   const handleDownloadDebugReport = React.useCallback(() => {
     const fileName = buildBodyGeometryDebugReportFileName({ exportedAt });
     const blob = new Blob([rawJson], { type: "application/json;charset=utf-8" });
@@ -447,6 +461,114 @@ export function BodyContractInspectorPanel({
                       Scale source is unknown, so raw SVG width and physical dimensions cannot be compared confidently yet.
                     </div>
                   ) : null}
+                </div>
+              </details>
+
+              <details
+                className={styles.section}
+                open={hasSvgQualityWarnings || hasSvgQualityErrors}
+                data-testid="body-contract-inspector-svg-quality-section"
+              >
+                <summary className={styles.sectionSummary}>SVG / Cutout Quality</summary>
+                <div className={styles.sectionBody}>
+                  <div className={styles.fieldList}>
+                    <Field
+                      label="Status"
+                      value={contract.svgQuality ? getStatusLabel(contract.svgQuality.status) : "n/a"}
+                      testId="body-contract-inspector-svg-quality-status"
+                    />
+                    <Field
+                      label="Contour source"
+                      value={contract.svgQuality?.contourSource ?? "n/a"}
+                      testId="body-contract-inspector-svg-quality-source"
+                    />
+                    <Field
+                      label="Closed"
+                      value={contract.svgQuality ? formatBoolean(contract.svgQuality.closed) : "n/a"}
+                      testId="body-contract-inspector-svg-quality-closed"
+                    />
+                    <Field
+                      label="Closeable"
+                      value={contract.svgQuality ? formatBoolean(contract.svgQuality.closeable) : "n/a"}
+                      testId="body-contract-inspector-svg-quality-closeable"
+                    />
+                    <Field
+                      label="Point count"
+                      value={contract.svgQuality ? String(contract.svgQuality.pointCount) : "n/a"}
+                      testId="body-contract-inspector-svg-quality-point-count"
+                    />
+                    <Field
+                      label="Segment count"
+                      value={contract.svgQuality ? String(contract.svgQuality.segmentCount) : "n/a"}
+                      testId="body-contract-inspector-svg-quality-segment-count"
+                    />
+                    <Field
+                      label="Bounds"
+                      value={formatSvgQualityBounds(contract.svgQuality)}
+                      testId="body-contract-inspector-svg-quality-bounds"
+                    />
+                    <Field
+                      label="Bounds units"
+                      value={contract.svgQuality?.boundsUnits ?? "n/a"}
+                      testId="body-contract-inspector-svg-quality-bounds-units"
+                    />
+                    <Field
+                      label="Aspect ratio"
+                      value={formatNumber(contract.svgQuality?.aspectRatio)}
+                      testId="body-contract-inspector-svg-quality-aspect-ratio"
+                    />
+                    <Field
+                      label="Duplicate points"
+                      value={contract.svgQuality ? String(contract.svgQuality.duplicatePointCount) : "n/a"}
+                      testId="body-contract-inspector-svg-quality-duplicate-count"
+                    />
+                    <Field
+                      label="Near-duplicate points"
+                      value={contract.svgQuality ? String(contract.svgQuality.nearDuplicatePointCount) : "n/a"}
+                      testId="body-contract-inspector-svg-quality-near-duplicate-count"
+                    />
+                    <Field
+                      label="Tiny segments"
+                      value={contract.svgQuality ? String(contract.svgQuality.tinySegmentCount) : "n/a"}
+                      testId="body-contract-inspector-svg-quality-tiny-segment-count"
+                    />
+                    <Field
+                      label="Suspicious spikes"
+                      value={contract.svgQuality ? String(contract.svgQuality.suspiciousSpikeCount) : "n/a"}
+                      testId="body-contract-inspector-svg-quality-spike-count"
+                    />
+                    <Field
+                      label="Suspicious jumps"
+                      value={contract.svgQuality ? String(contract.svgQuality.suspiciousJumpCount) : "n/a"}
+                      testId="body-contract-inspector-svg-quality-jump-count"
+                    />
+                    {(contract.svgQuality?.expectedBridgeSegmentCount ?? 0) > 0 ? (
+                      <Field
+                        label="Expected bridge segments"
+                        value={String(contract.svgQuality?.expectedBridgeSegmentCount ?? 0)}
+                        testId="body-contract-inspector-svg-quality-expected-bridge-count"
+                      />
+                    ) : null}
+                  </div>
+                  <div className={styles.validationList} data-testid="body-contract-inspector-svg-quality-messages">
+                    {hasSvgQualityErrors ? contract.svgQuality?.errors.map((error) => (
+                      <div key={`svg-error-${error}`} className={`${styles.message} ${styles.messageError}`}>
+                        {error}
+                      </div>
+                    )) : null}
+                    {hasSvgQualityWarnings ? contract.svgQuality?.warnings.map((warning) => (
+                      <div key={`svg-warn-${warning}`} className={`${styles.message} ${styles.messageWarn}`}>
+                        {warning}
+                      </div>
+                    )) : null}
+                    {!contract.svgQuality ? (
+                      <div className={styles.note} data-testid="body-contract-inspector-svg-quality-none">
+                        SVG cutout quality is not available for this viewer state.
+                      </div>
+                    ) : (!hasSvgQualityErrors && !hasSvgQualityWarnings ? (
+                      <div className={styles.note}>No SVG cutout quality messages.</div>
+                    ) : null)}
+                  </div>
                 </div>
               </details>
 

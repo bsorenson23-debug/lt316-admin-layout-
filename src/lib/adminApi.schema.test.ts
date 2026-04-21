@@ -49,6 +49,23 @@ test("parseBodyReferenceGlbResponse accepts runtime-truth reviewed GLB payloads"
         errors: [],
         warnings: [],
       },
+      svgQuality: {
+        status: "pass",
+        contourSource: "direct-contour",
+        boundsUnits: "mm",
+        pointCount: 88,
+        segmentCount: 88,
+        closed: true,
+        closeable: false,
+        duplicatePointCount: 0,
+        nearDuplicatePointCount: 0,
+        tinySegmentCount: 0,
+        suspiciousSpikeCount: 0,
+        suspiciousJumpCount: 0,
+        expectedBridgeSegmentCount: 2,
+        warnings: [],
+        errors: [],
+      },
       runtimeInspection: {
         status: "complete",
         source: "three-loaded-scene",
@@ -61,6 +78,7 @@ test("parseBodyReferenceGlbResponse accepts runtime-truth reviewed GLB payloads"
   assert.equal(parsed?.renderMode, "body-cutout-qa");
   assert.equal(parsed?.bodyGeometryContract?.meshes.bodyMeshNames[0], "body_mesh");
   assert.equal(parsed?.bodyGeometryContract?.glb.freshRelativeToSource, true);
+  assert.equal(parsed?.bodyGeometryContract?.svgQuality?.expectedBridgeSegmentCount, 2);
 });
 
 test("parseBodyGeometryAuditArtifact accepts body-only audit artifacts", () => {
@@ -101,12 +119,30 @@ test("parseBodyGeometryAuditArtifact accepts body-only audit artifacts", () => {
       errors: [],
       warnings: [],
     },
+    svgQuality: {
+      status: "pass",
+      contourSource: "direct-contour",
+      boundsUnits: "mm",
+      pointCount: 88,
+      segmentCount: 88,
+      closed: true,
+      closeable: false,
+      duplicatePointCount: 0,
+      nearDuplicatePointCount: 0,
+      tinySegmentCount: 0,
+      suspiciousSpikeCount: 0,
+      suspiciousJumpCount: 0,
+      expectedBridgeSegmentCount: 2,
+      warnings: [],
+      errors: [],
+    },
   });
 
   assert.ok(parsed);
   assert.equal(parsed?.meshes.bodyMeshNames[0], "body_mesh");
   assert.equal(parsed?.meshes.fallbackDetected, false);
   assert.equal(parsed?.validation.status, "pass");
+  assert.equal(parsed?.svgQuality?.expectedBridgeSegmentCount, 2);
 });
 
 test("runtime-truth parsers reject missing required contract fields", () => {

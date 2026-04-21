@@ -24,12 +24,13 @@ import {
 import { buildBodyGeometryStatusBadgeState } from "./bodyGeometryStatusBadge.ts";
 
 type BodyGeometryContractOverrides =
-  Omit<Partial<BodyGeometryContract>, "source" | "glb" | "meshes" | "dimensionsMm" | "validation"> & {
+  Omit<Partial<BodyGeometryContract>, "source" | "glb" | "meshes" | "dimensionsMm" | "validation" | "svgQuality"> & {
     source?: Partial<BodyGeometryContract["source"]>;
     glb?: Partial<BodyGeometryContract["glb"]>;
     meshes?: Partial<BodyGeometryContract["meshes"]>;
     dimensionsMm?: Partial<BodyGeometryContract["dimensionsMm"]>;
     validation?: Partial<BodyGeometryContract["validation"]>;
+    svgQuality?: BodyGeometryContract["svgQuality"];
   };
 
 function createTestBodyGeometryContract(
@@ -59,6 +60,7 @@ function createTestBodyGeometryContract(
       ...emptyContract.validation,
       ...overrides.validation,
     },
+    svgQuality: overrides.svgQuality ?? emptyContract.svgQuality,
   };
 }
 
@@ -1216,6 +1218,91 @@ test("completed loaded-scene inspection uses actual loaded mesh names and bounds
     depth: 102.98,
   });
   assert.equal(merged.validation.status, "pass");
+});
+
+test("mergeAuditContractWithLoadedInspection preserves audit svgQuality metadata when runtime inspection is otherwise clean", () => {
+  const merged = mergeAuditContractWithLoadedInspection({
+    auditContract: createTestBodyGeometryContract({
+      mode: "body-cutout-qa",
+      source: {
+        type: "approved-svg",
+        hash: "sha256:source",
+      },
+      glb: {
+        path: "/api/admin/models/generated/example.glb",
+        hash: "sha256:glb",
+        sourceHash: "sha256:source",
+        freshRelativeToSource: true,
+      },
+      meshes: {
+        names: ["body_mesh"],
+        bodyMeshNames: ["body_mesh"],
+      },
+      dimensionsMm: {
+        bodyBounds: { width: 102.98, height: 245.8, depth: 102.98 },
+        bodyBoundsUnits: "mm",
+        expectedBodyWidthMm: 102.98,
+        expectedBodyHeightMm: 245.8,
+      },
+      validation: {
+        status: "pass",
+        errors: [],
+        warnings: [],
+      },
+      svgQuality: {
+        status: "pass",
+        contourSource: "direct-contour",
+        boundsUnits: "mm",
+        pointCount: 88,
+        segmentCount: 88,
+        closed: true,
+        closeable: false,
+        duplicatePointCount: 0,
+        nearDuplicatePointCount: 0,
+        tinySegmentCount: 0,
+        suspiciousSpikeCount: 0,
+        suspiciousJumpCount: 0,
+        expectedBridgeSegmentCount: 2,
+        warnings: [],
+        errors: [],
+      },
+    }),
+    loadedInspectionContract: createTestBodyGeometryContract({
+      mode: "body-cutout-qa",
+      source: {
+        type: "approved-svg",
+        hash: "sha256:source",
+      },
+      glb: {
+        path: "/api/admin/models/generated/example.glb",
+        hash: "sha256:glb",
+        sourceHash: "sha256:source",
+        freshRelativeToSource: true,
+      },
+      meshes: {
+        names: ["body_mesh"],
+        bodyMeshNames: ["body_mesh"],
+      },
+      dimensionsMm: {
+        bodyBounds: { width: 102.98, height: 245.8, depth: 102.98 },
+        bodyBoundsUnits: "mm",
+        expectedBodyWidthMm: 102.98,
+        expectedBodyHeightMm: 245.8,
+      },
+    }),
+    currentMode: "body-cutout-qa",
+    currentSourceHash: "sha256:source",
+    loadedGlbHash: "sha256:glb",
+    runtimeInspection: {
+      status: "complete",
+      glbUrl: "/api/admin/models/generated/example.glb",
+      inspectedAt: "2026-04-20T15:00:00.000Z",
+    },
+  });
+
+  assert.equal(merged.svgQuality?.status, "pass");
+  assert.equal(merged.svgQuality?.suspiciousJumpCount, 0);
+  assert.equal(merged.svgQuality?.expectedBridgeSegmentCount, 2);
 });
 
 test("completed loaded-scene inspection with an empty mesh list overrides audit provisional truth and fails BODY CUTOUT QA", () => {

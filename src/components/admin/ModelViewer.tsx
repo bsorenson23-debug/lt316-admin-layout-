@@ -1052,6 +1052,7 @@ export default function ModelViewer({
         ...emptyContract.validation,
         ...viewerRuntimeGlbAudit.validation,
       },
+      svgQuality: viewerRuntimeGlbAudit.svgQuality,
     });
   }, [viewerRuntimeGlbAudit]);
 

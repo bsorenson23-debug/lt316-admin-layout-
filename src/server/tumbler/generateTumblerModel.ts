@@ -23,6 +23,7 @@ import {
   updateContractValidation,
   type BodyGeometryContract,
 } from "../../lib/bodyGeometryContract.ts";
+import { buildBodyReferenceSvgQualityReportFromOutline } from "../../lib/bodyReferenceSvgQuality.ts";
 import { hashArrayBufferSha256Node, hashJsonSha256Node } from "../../lib/hashSha256.node.ts";
 import { getGeneratedModelWriteAbsolutePath, writeGeneratedModelGlb } from "../models/generatedModelStorage.ts";
 import { writeBodyGeometryAuditArtifact } from "../models/bodyGeometryAuditArtifact.ts";
@@ -1008,6 +1009,11 @@ function buildBodyReferenceBodyGeometryContract(args: {
     args.input.canonicalDimensionCalibration.bodyBottomMm -
     args.input.canonicalDimensionCalibration.lidBodyLineMm,
   );
+  const svgQuality = buildBodyReferenceSvgQualityReportFromOutline({
+    outline: args.input.bodyOutline,
+    sourceHash: args.sourceHash,
+    label: args.input.templateName ?? args.input.matchedProfileId ?? undefined,
+  });
 
   return updateContractValidation({
     ...createEmptyBodyGeometryContract(),
@@ -1064,6 +1070,7 @@ function buildBodyReferenceBodyGeometryContract(args: {
       errors: [],
       warnings: [],
     },
+    svgQuality,
   });
 }
 
