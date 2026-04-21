@@ -2,11 +2,30 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import * as THREE from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { getTumblerProfileById, type TumblerProfile } from "@/data/tumblerProfiles";
+import type { TumblerProfile } from "../../data/tumblerProfiles.ts";
+import type {
+  CanonicalBodyProfile,
+  CanonicalDimensionCalibration,
+  EditableBodyOutline,
+} from "../../types/productTemplate.ts";
 import type {
   TumblerItemLookupFitDebug,
   TumblerItemLookupFitProfilePoint,
-} from "@/types/tumblerItemLookup";
+} from "../../types/tumblerItemLookup.ts";
+import {
+  buildBodyReferenceGlbSourcePayload,
+  buildBodyReferenceGlbSourceSignature,
+  type BodyReferenceGlbRenderMode,
+} from "../../lib/bodyReferenceGlbSource.ts";
+import {
+  buildBodyGeometrySourceHashPayload,
+  createEmptyBodyGeometryContract,
+  updateContractValidation,
+  type BodyGeometryContract,
+} from "../../lib/bodyGeometryContract.ts";
+import { hashArrayBufferSha256Node, hashJsonSha256Node } from "../../lib/hashSha256.node.ts";
+import { getGeneratedModelWriteAbsolutePath, writeGeneratedModelGlb } from "../models/generatedModelStorage.ts";
+import { writeBodyGeometryAuditArtifact } from "../models/bodyGeometryAuditArtifact.ts";
 
 const GENERATED_PUBLIC_PREFIX = "/models/generated";
 const GENERATED_DIR = path.join(process.cwd(), "public", "models", "generated");
@@ -803,6 +822,7 @@ export async function ensureGeneratedTumblerGlb(
     return { glbPath: "", fitDebug: null };
   }
 
+  const { getTumblerProfileById } = await import("../../data/tumblerProfiles.ts");
   const profile = getTumblerProfileById(profileId);
   if (!profile) return { glbPath: "", fitDebug: null };
 
@@ -828,5 +848,283 @@ export async function ensureGeneratedTumblerGlb(
   return {
     glbPath: await writeGeneratedGlb(fileName, buildStanleyIceFlow30Scene(profile, fit)),
     fitDebug: fit.fitDebug ?? null,
+  };
+}
+
+export interface GenerateBodyReferenceGlbInput {
+  renderMode?: BodyReferenceGlbRenderMode | null;
+  templateName?: string | null;
+  matchedProfileId?: string | null;
+  bodyOutlineSourceMode?: EditableBodyOutline["sourceContourMode"] | null;
+  bodyOutline: EditableBodyOutline | null;
+  canonicalBodyProfile: CanonicalBodyProfile;
+  canonicalDimensionCalibration: CanonicalDimensionCalibration;
+  bodyColorHex?: string | null;
+  rimColorHex?: string | null;
+}
+
+export interface GeneratedBodyReferenceMeshBounds {
+  minMm: { x: number; y: number; z: number };
+  maxMm: { x: number; y: number; z: number };
+  sizeMm: { x: number; y: number; z: number };
+}
+
+export interface GeneratedBodyReferenceGlbResult {
+  glbPath: string;
+  auditJsonPath: string | null;
+  fitDebug: null;
+  modelStatus: "generated-reviewed-model";
+  renderMode: BodyReferenceGlbRenderMode;
+  generatedSourceSignature: string;
+  modelSourceLabel: string;
+  bodyColorHex: string | null;
+  rimColorHex: string | null;
+  meshNames: string[];
+  fallbackMeshNames: string[];
+  bodyMeshBounds: GeneratedBodyReferenceMeshBounds | null;
+  bodyGeometryContract: BodyGeometryContract;
+}
+
+function slugifyFileStem(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "body-reference";
+}
+
+function overallYToBottomAnchoredModelY(totalHeightMm: number, yOverallMm: number): number {
+  return round2(totalHeightMm - yOverallMm);
+}
+
+function buildBodyReferenceFileStem(
+  input: GenerateBodyReferenceGlbInput,
+  sourceHash: string,
+): string {
+  const base = slugifyFileStem(input.templateName ?? input.matchedProfileId ?? "body-reference");
+  return `${base}-cutout-${sourceHash.slice(0, 10)}`;
+}
+
+function createCanonicalBodyProfileMesh(args: {
+  canonicalBodyProfile: CanonicalBodyProfile;
+  totalHeightMm: number;
+  color: string;
+}): THREE.Mesh {
+  const lathePoints = args.canonicalBodyProfile.samples
+    .map((sample) => new THREE.Vector2(
+      Math.max(0.5, sample.radiusMm),
+      overallYToBottomAnchoredModelY(args.totalHeightMm, sample.yMm),
+    ))
+    .sort((left, right) => right.y - left.y);
+  const bottomY = lathePoints[lathePoints.length - 1]?.y ?? 0;
+  lathePoints.push(new THREE.Vector2(0, bottomY));
+
+  const geometry = new THREE.LatheGeometry(lathePoints, 96);
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(
+    geometry,
+    makeStandardMaterial(args.color, { metalness: 0.18, roughness: 0.72 }),
+  );
+  mesh.name = "body_mesh";
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function buildGeneratedBodyMeshBounds(mesh: THREE.Object3D): GeneratedBodyReferenceMeshBounds | null {
+  const bounds = new THREE.Box3().setFromObject(mesh);
+  if (bounds.isEmpty()) return null;
+  const size = bounds.getSize(new THREE.Vector3());
+  return {
+    minMm: {
+      x: round2(bounds.min.x),
+      y: round2(bounds.min.y),
+      z: round2(bounds.min.z),
+    },
+    maxMm: {
+      x: round2(bounds.max.x),
+      y: round2(bounds.max.y),
+      z: round2(bounds.max.z),
+    },
+    sizeMm: {
+      x: round2(size.x),
+      y: round2(size.y),
+      z: round2(size.z),
+    },
+  };
+}
+
+function buildBodyReferenceScene(input: GenerateBodyReferenceGlbInput): {
+  scene: THREE.Scene;
+  meshNames: string[];
+  bodyMeshBounds: GeneratedBodyReferenceMeshBounds | null;
+} {
+  const scene = new THREE.Scene();
+  scene.name = "reviewed_body_reference_generated";
+  const bodyMesh = createCanonicalBodyProfileMesh({
+    canonicalBodyProfile: input.canonicalBodyProfile,
+    totalHeightMm: input.canonicalDimensionCalibration.totalHeightMm,
+    color: input.bodyColorHex ?? "#b0b8c4",
+  });
+  scene.add(bodyMesh);
+  return {
+    scene,
+    meshNames: ["body_mesh"],
+    bodyMeshBounds: buildGeneratedBodyMeshBounds(bodyMesh),
+  };
+}
+
+async function writeReviewedBodyReferenceGlb(
+  fileName: string,
+  scene: THREE.Scene,
+): Promise<{
+  glbPath: string;
+  glbAbsolutePath: string;
+  glbHash: string;
+  generatedAt: string;
+}> {
+  const arrayBuffer = await exportSceneToGlb(scene);
+  return {
+    glbPath: await writeGeneratedModelGlb(fileName, arrayBuffer),
+    glbAbsolutePath: getGeneratedModelWriteAbsolutePath(fileName),
+    glbHash: hashArrayBufferSha256Node(arrayBuffer),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function buildBodyReferenceBodyGeometryContract(args: {
+  input: GenerateBodyReferenceGlbInput;
+  sourceHash: string;
+  generatedGlb: {
+    glbPath: string;
+    glbHash: string;
+    generatedAt: string;
+  };
+  meshNames: string[];
+  bodyMeshBounds: GeneratedBodyReferenceMeshBounds | null;
+}): BodyGeometryContract {
+  const sourceViewport = args.input.bodyOutline?.sourceContourViewport ?? null;
+  const bodyHeightMm = round2(
+    args.input.canonicalDimensionCalibration.bodyBottomMm -
+    args.input.canonicalDimensionCalibration.lidBodyLineMm,
+  );
+
+  return updateContractValidation({
+    ...createEmptyBodyGeometryContract(),
+    mode: args.input.renderMode ?? "body-cutout-qa",
+    source: {
+      type: "approved-svg",
+      filename: `${args.input.templateName ?? args.input.matchedProfileId ?? "body-reference"}.approved.svg`,
+      hash: args.sourceHash,
+      widthPx: sourceViewport?.width ? round2(sourceViewport.width) : undefined,
+      heightPx: sourceViewport?.height ? round2(sourceViewport.height) : undefined,
+      viewBox: sourceViewport
+        ? `${round2(sourceViewport.minX)} ${round2(sourceViewport.minY)} ${round2(sourceViewport.width)} ${round2(sourceViewport.height)}`
+        : undefined,
+      detectedBodyOnly:
+        args.input.bodyOutlineSourceMode === "body-only" ||
+        args.input.bodyOutline?.sourceContourMode === "body-only" ||
+        (args.input.renderMode ?? "body-cutout-qa") === "body-cutout-qa",
+    },
+    glb: {
+      path: args.generatedGlb.glbPath,
+      hash: args.generatedGlb.glbHash,
+      sourceHash: args.sourceHash,
+      generatedAt: args.generatedGlb.generatedAt,
+      freshRelativeToSource: true,
+    },
+    meshes: {
+      names: args.meshNames,
+      bodyMeshNames: ["body_mesh"],
+      accessoryMeshNames: [],
+      fallbackMeshNames: [],
+      fallbackDetected: false,
+      unexpectedMeshes: [],
+    },
+    dimensionsMm: {
+      bodyBounds: args.bodyMeshBounds
+        ? {
+            width: args.bodyMeshBounds.sizeMm.x,
+            height: args.bodyMeshBounds.sizeMm.y,
+            depth: args.bodyMeshBounds.sizeMm.z,
+          }
+        : undefined,
+      bodyBoundsUnits: args.bodyMeshBounds ? "mm" : undefined,
+      wrapDiameterMm: round2(args.input.canonicalDimensionCalibration.wrapDiameterMm),
+      wrapWidthMm: round2(args.input.canonicalDimensionCalibration.wrapWidthMm),
+      frontVisibleWidthMm: round2(args.input.canonicalDimensionCalibration.frontVisibleWidthMm),
+      expectedBodyWidthMm: round2(args.input.canonicalDimensionCalibration.frontVisibleWidthMm),
+      expectedBodyHeightMm: bodyHeightMm,
+      printableTopMm: args.input.canonicalDimensionCalibration.printableSurfaceContract?.printableTopMm,
+      printableBottomMm: args.input.canonicalDimensionCalibration.printableSurfaceContract?.printableBottomMm,
+      scaleSource: args.bodyMeshBounds ? "mesh-bounds" : "physical-wrap",
+    },
+    validation: {
+      status: "unknown",
+      errors: [],
+      warnings: [],
+    },
+  });
+}
+
+export async function generateBodyReferenceGlb(
+  input: GenerateBodyReferenceGlbInput,
+): Promise<GeneratedBodyReferenceGlbResult> {
+  if (!input.bodyOutline) {
+    throw new Error("Approved BODY REFERENCE outline is required before generating a reviewed GLB.");
+  }
+
+  const sourceHashPayload = buildBodyGeometrySourceHashPayload({
+    outline: input.bodyOutline,
+    canonicalBodyProfile: input.canonicalBodyProfile,
+    canonicalDimensionCalibration: input.canonicalDimensionCalibration,
+  }) ?? buildBodyReferenceGlbSourcePayload({
+    renderMode: input.renderMode ?? "body-cutout-qa",
+    matchedProfileId: input.matchedProfileId ?? null,
+    bodyOutline: input.bodyOutline,
+    canonicalBodyProfile: input.canonicalBodyProfile,
+    canonicalDimensionCalibration: input.canonicalDimensionCalibration,
+    bodyColorHex: input.bodyColorHex ?? null,
+    rimColorHex: input.rimColorHex ?? null,
+  });
+  const sourceHash = hashJsonSha256Node(sourceHashPayload);
+  const fileStem = buildBodyReferenceFileStem(input, sourceHash);
+  const generatedSourceSignature = buildBodyReferenceGlbSourceSignature({
+    renderMode: input.renderMode ?? "body-cutout-qa",
+    matchedProfileId: input.matchedProfileId ?? null,
+    bodyOutline: input.bodyOutline,
+    canonicalBodyProfile: input.canonicalBodyProfile,
+    canonicalDimensionCalibration: input.canonicalDimensionCalibration,
+    bodyColorHex: input.bodyColorHex ?? null,
+    rimColorHex: input.rimColorHex ?? null,
+  });
+  const built = buildBodyReferenceScene(input);
+  const generatedGlb = await writeReviewedBodyReferenceGlb(`${fileStem}.glb`, built.scene);
+  const bodyGeometryContract = buildBodyReferenceBodyGeometryContract({
+    input,
+    sourceHash,
+    generatedGlb,
+    meshNames: built.meshNames,
+    bodyMeshBounds: built.bodyMeshBounds,
+  });
+  const auditArtifact = await writeBodyGeometryAuditArtifact({
+    glbAbsolutePath: generatedGlb.glbAbsolutePath,
+    contract: bodyGeometryContract,
+  });
+
+  return {
+    glbPath: generatedGlb.glbPath,
+    auditJsonPath: auditArtifact.auditAbsolutePath,
+    fitDebug: null,
+    modelStatus: "generated-reviewed-model",
+    renderMode: input.renderMode ?? "body-cutout-qa",
+    generatedSourceSignature,
+    modelSourceLabel: "Generated from accepted BODY REFERENCE cutout",
+    bodyColorHex: input.bodyColorHex ?? null,
+    rimColorHex: input.rimColorHex ?? null,
+    meshNames: built.meshNames,
+    fallbackMeshNames: [],
+    bodyMeshBounds: built.bodyMeshBounds,
+    bodyGeometryContract,
   };
 }
