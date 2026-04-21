@@ -18,6 +18,13 @@ export interface TemplateCreateWorkflowStepState {
   detail: string;
 }
 
+export interface TemplateCreateSourceReadiness {
+  sourceReady: boolean;
+  detectReady: boolean;
+  missing: Array<"productType" | "productImage">;
+  blockedReason?: string;
+}
+
 export interface TemplateCreateReviewProjectionInput {
   lidBodyLineMm: number;
   bodyBottomMm: number;
@@ -42,6 +49,42 @@ export function isTemplateCreateReviewFlowProductType(
   productType: string | null | undefined,
 ): boolean {
   return productType !== "flat";
+}
+
+export function getTemplateCreateSourceReadiness(
+  input: Pick<TemplateCreateWorkflowInput, "productType" | "hasProductImage">,
+): TemplateCreateSourceReadiness {
+  if (!input.productType) {
+    return {
+      sourceReady: false,
+      detectReady: false,
+      missing: ["productType"],
+      blockedReason: "Choose a drinkware product type in Source first.",
+    };
+  }
+
+  if (!isTemplateCreateReviewFlowProductType(input.productType)) {
+    return {
+      sourceReady: true,
+      detectReady: false,
+      missing: [],
+    };
+  }
+
+  if (!input.hasProductImage) {
+    return {
+      sourceReady: false,
+      detectReady: false,
+      missing: ["productImage"],
+      blockedReason: "Upload a product image in Source before detection.",
+    };
+  }
+
+  return {
+    sourceReady: true,
+    detectReady: true,
+    missing: [],
+  };
 }
 
 export function deriveTemplateCreateWorkflowStep(
@@ -94,17 +137,18 @@ export function buildTemplateCreateWorkflowSteps(
 ): TemplateCreateWorkflowStepState[] {
   const reviewFlow = isTemplateCreateReviewFlowProductType(input.productType);
   const productTypeChosen = Boolean(input.productType);
+  const sourceReadiness = getTemplateCreateSourceReadiness(input);
 
   return [
     {
       step: "source",
       label: "Source",
       status:
-        input.productType && (!reviewFlow || input.hasProductImage)
+        input.productType && (!reviewFlow || sourceReadiness.sourceReady)
           ? "ready"
           : "action",
       detail: input.productType
-        ? input.hasProductImage
+        ? !reviewFlow || sourceReadiness.sourceReady
           ? "Product type and source imagery are ready."
           : "Add a product image before detection."
         : "Choose a product type and load source material.",
@@ -127,9 +171,9 @@ export function buildTemplateCreateWorkflowSteps(
             ? "Detection proposal is ready for review."
             : input.hasAcceptedReview
               ? "Detected body reference has been accepted."
-              : input.hasProductImage
+              : sourceReadiness.detectReady
                 ? "Run auto-detect to stage a body reference proposal."
-                : "Add a product image first.",
+                : (sourceReadiness.blockedReason ?? "Add a product image first."),
     },
     {
       step: "review",

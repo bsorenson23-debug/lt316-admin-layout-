@@ -5,6 +5,7 @@ import {
   buildTemplateCreateReviewProjection,
   buildTemplateCreateWorkflowSteps,
   deriveTemplateCreateWorkflowStep,
+  getTemplateCreateSourceReadiness,
   getTemplateCreateSaveGateReason,
 } from "./templateCreateFlow.ts";
 
@@ -66,6 +67,51 @@ test("template create workflow clears the save gate after review is accepted", (
 
   const steps = buildTemplateCreateWorkflowSteps(input);
   assert.equal(steps[2]?.status, "ready");
+});
+
+test("source and detect readiness stay blocked until a detectable product image exists", () => {
+  const readiness = getTemplateCreateSourceReadiness({
+    productType: "tumbler",
+    hasProductImage: false,
+  });
+
+  assert.equal(readiness.sourceReady, false);
+  assert.equal(readiness.detectReady, false);
+  assert.deepEqual(readiness.missing, ["productImage"]);
+  assert.equal(readiness.blockedReason, "Upload a product image in Source before detection.");
+});
+
+test("source and detect readiness agree once a detectable product image exists", () => {
+  const readiness = getTemplateCreateSourceReadiness({
+    productType: "tumbler",
+    hasProductImage: true,
+  });
+
+  assert.equal(readiness.sourceReady, true);
+  assert.equal(readiness.detectReady, true);
+  assert.deepEqual(readiness.missing, []);
+  assert.equal(readiness.blockedReason, undefined);
+});
+
+test("review and save remain blocked until body reference acceptance", () => {
+  const input = {
+    productType: "tumbler",
+    hasProductImage: true,
+    hasStagedDetectResult: false,
+    hasAcceptedReview: false,
+    hasCanonicalBodyProfile: true,
+    hasCanonicalDimensionCalibration: true,
+  } as const;
+
+  assert.equal(
+    getTemplateCreateSaveGateReason(input),
+    "Review and accept the body reference before saving.",
+  );
+
+  const steps = buildTemplateCreateWorkflowSteps(input);
+  assert.equal(steps[0]?.status, "ready");
+  assert.equal(steps[1]?.status, "action");
+  assert.equal(steps[2]?.status, "review");
 });
 
 test("review projection keeps operator fields separate from advanced diagnostics", () => {

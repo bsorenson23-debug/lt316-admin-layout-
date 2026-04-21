@@ -61,6 +61,7 @@ import {
 } from "@/lib/printableSurface";
 import {
   buildTemplateCreateReviewProjection,
+  getTemplateCreateSourceReadiness,
   isTemplateCreateReviewFlowProductType,
   type TemplateCreateWorkflowStep,
 } from "@/lib/templateCreateFlow";
@@ -4969,17 +4970,18 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   );
 
   const usesGuidedReviewFlow = isTemplateCreateReviewFlowProductType(productType);
-  const hasTemplateSourceImage = Boolean(
-    productImageFile ||
-    productPhotoFullUrl ||
-    frontPhotoDataUrl ||
-    activeDisplayReferencePhotoDataUrl,
+  const templateCreateSourceReadiness = React.useMemo(
+    () => getTemplateCreateSourceReadiness({
+      productType,
+      hasProductImage: Boolean(productImageFile),
+    }),
+    [productImageFile, productType],
   );
   const templateEditorWorkflow = React.useMemo(
     () => selectTemplateEditorWorkflowState(templateEditorState, {
       open: true,
       productType,
-      hasProductImage: hasTemplateSourceImage,
+      hasProductImage: templateCreateSourceReadiness.detectReady,
       hasCanonicalBodyProfile: Boolean(activeCanonicalBodyProfile),
       hasCanonicalDimensionCalibration: Boolean(activeCanonicalDimensionCalibration),
       runId: null,
@@ -4990,9 +4992,9 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     [
       activeCanonicalBodyProfile,
       activeCanonicalDimensionCalibration,
-      hasTemplateSourceImage,
       productType,
       templateEditorState,
+      templateCreateSourceReadiness.detectReady,
     ],
   );
   const workflowSteps = templateEditorWorkflow.workflowSteps;
@@ -5533,7 +5535,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     () => selectTemplateEditorSectionState(templateEditorState, {
       open: true,
       productType,
-      hasProductImage: hasTemplateSourceImage,
+      hasProductImage: templateCreateSourceReadiness.detectReady,
       hasCanonicalBodyProfile: Boolean(activeCanonicalBodyProfile),
       hasCanonicalDimensionCalibration: Boolean(activeCanonicalDimensionCalibration),
       runId: pipelineDiagnostics.runId ?? null,
@@ -5549,13 +5551,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     [
       activeCanonicalBodyProfile,
       activeCanonicalDimensionCalibration,
-      hasTemplateSourceImage,
       pipelineDiagnostics.inputFingerprints,
       pipelineDiagnostics.runId,
       pipelineDiagnostics.warnings,
       productType,
       saveBlockingIssues,
       templateEditorState,
+      templateCreateSourceReadiness.detectReady,
     ],
   );
 
@@ -5951,7 +5953,21 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       await handleProductImage(primaryProductImageFile);
       setLookupDebugImageUrl("");
     }
-    if (!files.frontPhotoFile && preferredFrontPhotoUrl && draft.productType && draft.productType !== "flat") {
+    if (!primaryProductImageFile && preferredFrontPhotoUrl && draft.productType && draft.productType !== "flat") {
+      try {
+        const resolved = await applyResolvedProductPhotoUrl(
+          preferredFrontPhotoUrl,
+          preferredFrontBodyReferenceImage
+            ? draft.productPhotoLabel ?? `Lookup ${preferredFrontBodyReferenceImage.viewClass} reference`
+            : canonicalFrontReferenceImage
+              ? draft.productPhotoLabel ?? "Canonical front reference"
+              : draft.productPhotoLabel ?? null,
+        );
+        resolvedLookupPhotoFile = resolved.file;
+      } catch {
+        // Non-fatal: dimensions and categorization should still be applied.
+      }
+    } else if (!files.frontPhotoFile && preferredFrontPhotoUrl && draft.productType && draft.productType !== "flat") {
       try {
         const resolvedFront = await resolveLookupPhotoUrl(preferredFrontPhotoUrl);
         resolvedLookupPhotoFile = resolvedFront.file;
@@ -5963,20 +5979,6 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               : draft.productPhotoLabel ?? "Lookup product photo",
         );
         setLookupDebugImageUrl(resolvedFront.dataUrl);
-      } catch {
-        // Non-fatal: dimensions and categorization should still be applied.
-      }
-    } else if (!primaryProductImageFile && preferredFrontPhotoUrl) {
-      try {
-        const resolved = await applyResolvedProductPhotoUrl(
-          preferredFrontPhotoUrl,
-          preferredFrontBodyReferenceImage
-            ? draft.productPhotoLabel ?? `Lookup ${preferredFrontBodyReferenceImage.viewClass} reference`
-            : canonicalFrontReferenceImage
-              ? draft.productPhotoLabel ?? "Canonical front reference"
-              : draft.productPhotoLabel ?? null,
-        );
-        resolvedLookupPhotoFile = resolved.file;
       } catch {
         // Non-fatal: dimensions and categorization should still be applied.
       }
@@ -7395,14 +7397,12 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     effectiveWorkflowStep === "review";
   const showDetectStepContent = usesGuidedReviewFlow && effectiveWorkflowStep === "detect";
   const showReviewStepContent = !usesGuidedReviewFlow || effectiveWorkflowStep === "review";
-  const canRunAutoDetect = Boolean(productImageFile && productType && productType !== "flat");
+  const canRunAutoDetect = templateCreateSourceReadiness.detectReady;
   const detectStepMessage = !productType
     ? "Choose a drinkware product type in Source first."
     : productType === "flat"
       ? "Detection is not required for flat templates."
-      : !productImageFile
-        ? "Upload a product image in Source before detection."
-        : "Run auto-detect to stage a BODY REFERENCE proposal for review.";
+      : templateCreateSourceReadiness.blockedReason ?? "Run auto-detect to stage a BODY REFERENCE proposal for review.";
   const reviewReadinessMessage = stagedDetectionPending
     ? "Detection is staged locally. Accept or discard it before saving."
     : reviewAccepted
@@ -7427,7 +7427,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                   effectiveWorkflowStep === step.step ? styles.workflowStepActive : "",
                 ].filter(Boolean).join(" ")}
                 onClick={() => {
-                  if (step.step === "detect" && !hasTemplateSourceImage) return;
+                  if (step.step === "detect" && !templateCreateSourceReadiness.detectReady) return;
                   if (
                     step.step === "review" &&
                     !stagedDetectionPending &&
@@ -7586,7 +7586,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               setDetectDraftSnapshot(null);
               setReviewAccepted(nextProductType === "flat");
               setWorkflowStep(
-                nextProductType && nextProductType !== "flat" && hasTemplateSourceImage
+                getTemplateCreateSourceReadiness({
+                  productType: nextProductType,
+                  hasProductImage: Boolean(productImageFile),
+                }).detectReady
                   ? "detect"
                   : "source",
               );
@@ -10040,8 +10043,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 type="button"
                 className={styles.detectBtn}
                 onClick={() => setWorkflowStep("detect")}
-                disabled={!hasTemplateSourceImage || !productType}
-                title={!productType ? "Choose a product type first." : (!hasTemplateSourceImage ? "Add a product image first." : undefined)}
+                disabled={!templateCreateSourceReadiness.detectReady}
+                title={!templateCreateSourceReadiness.detectReady ? detectStepMessage : undefined}
               >
                 Continue to detect
               </button>
