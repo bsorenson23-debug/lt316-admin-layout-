@@ -89,22 +89,49 @@ export function getGeneratedModelAuditUrlFromModelUrl(value: string | null | und
 
 export interface GeneratedModelAuditRequestPlan {
   auditUrl: string | null;
-  expectation: "required" | "none";
+  expectation: "required" | "optional" | "none";
   shouldFetch: boolean;
+}
+
+function isReviewedCutoutGeneratedModelPath(pathname: string): boolean {
+  const fileName = pathname.split("/").pop()?.toLowerCase() ?? "";
+  return fileName.includes("-cutout-") || fileName.endsWith("-cutout.glb");
+}
+
+function isReviewedCutoutGeneratedModelLabel(sourceModelLabel: string | null | undefined): boolean {
+  const normalized = sourceModelLabel?.trim().toLowerCase() ?? "";
+  return normalized.includes("accepted body reference cutout") || normalized.includes("body cutout qa");
+}
+
+export function inferGeneratedModelStatusFromSource(args: {
+  modelUrl?: string | null;
+  sourceModelLabel?: string | null;
+}): "generated-reviewed-model" | "verified-product-model" | null {
+  if (typeof args.modelUrl !== "string" || !args.modelUrl.trim()) {
+    return null;
+  }
+
+  const pathname = getPathname(args.modelUrl);
+  const isGeneratedPath = isGeneratedModelUrl(pathname) || isLegacyGeneratedModelPath(pathname);
+  if (!isGeneratedPath) {
+    return null;
+  }
+
+  if (
+    isReviewedCutoutGeneratedModelPath(pathname) ||
+    isReviewedCutoutGeneratedModelLabel(args.sourceModelLabel)
+  ) {
+    return "generated-reviewed-model";
+  }
+
+  return "verified-product-model";
 }
 
 export function resolveGeneratedModelAuditRequestPlan(args: {
   modelUrl?: string | null;
   sourceModelStatus?: ProductTemplate["glbStatus"] | null;
+  sourceModelLabel?: string | null;
 }): GeneratedModelAuditRequestPlan {
-  if (args.sourceModelStatus !== "generated-reviewed-model") {
-    return {
-      auditUrl: null,
-      expectation: "none",
-      shouldFetch: false,
-    };
-  }
-
   const auditUrl = getGeneratedModelAuditUrlFromModelUrl(args.modelUrl);
   if (!auditUrl) {
     return {
@@ -114,9 +141,30 @@ export function resolveGeneratedModelAuditRequestPlan(args: {
     };
   }
 
+  const sourceModelStatus = args.sourceModelStatus ?? inferGeneratedModelStatusFromSource({
+    modelUrl: args.modelUrl,
+    sourceModelLabel: args.sourceModelLabel,
+  });
+
+  if (sourceModelStatus === "generated-reviewed-model") {
+    return {
+      auditUrl,
+      expectation: "required",
+      shouldFetch: true,
+    };
+  }
+
+  if (!sourceModelStatus) {
+    return {
+      auditUrl: null,
+      expectation: "none",
+      shouldFetch: false,
+    };
+  }
+
   return {
     auditUrl,
-    expectation: "required",
-    shouldFetch: true,
+    expectation: "optional",
+    shouldFetch: false,
   };
 }

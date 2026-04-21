@@ -161,9 +161,10 @@ type LoadedSceneInspectionState =
   | { status: "failed"; glbUrl?: string; error: string };
 
 type LoadedAuditArtifactState =
-  | { status: "idle"; expectation: "required" | "none"; auditUrl?: string; error?: string }
-  | { status: "loading"; expectation: "required" | "none"; auditUrl?: string; error?: string }
+  | { status: "idle"; expectation: "required" | "optional" | "none"; auditUrl?: string; error?: string }
+  | { status: "loading"; expectation: "required" | "optional" | "none"; auditUrl?: string; error?: string }
   | { status: "present"; expectation: "required"; auditUrl: string }
+  | { status: "optional-missing"; expectation: "optional"; auditUrl: string }
   | { status: "required-missing"; expectation: "required"; auditUrl: string }
   | { status: "failed"; expectation: "required"; auditUrl: string; error: string };
 
@@ -750,6 +751,13 @@ export default function ModelViewer({
   });
   const [isAutoRotating, setIsAutoRotating] = useState(!!tumblerDims);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const auditRequestTrackerRef = useRef<{
+    auditUrl: string | null;
+    status: "idle" | "loading" | "present" | "required-missing" | "failed";
+  }>({
+    auditUrl: null,
+    status: "idle",
+  });
 
   const handleOrbitStart = useCallback(() => {
     setIsAutoRotating(false);
@@ -802,8 +810,9 @@ export default function ModelViewer({
     () => resolveGeneratedModelAuditRequestPlan({
       modelUrl: sourceModelUrl,
       sourceModelStatus,
+      sourceModelLabel,
     }),
-    [sourceModelStatus, sourceModelUrl],
+    [sourceModelLabel, sourceModelStatus, sourceModelUrl],
   );
 
   useEffect(() => {
@@ -942,17 +951,45 @@ export default function ModelViewer({
     const auditUrl = generatedModelAuditRequestPlan.auditUrl;
 
     if (file || !auditUrl || !generatedModelAuditRequestPlan.shouldFetch) {
-      setViewerRuntimeGlbAudit(null);
-      setLoadedAuditArtifactState({
+      auditRequestTrackerRef.current = {
+        auditUrl: auditUrl ?? null,
         status: "idle",
-        expectation: "none",
-        auditUrl: auditUrl ?? undefined,
-      });
+      };
+      setViewerRuntimeGlbAudit(null);
+      setLoadedAuditArtifactState(
+        !file && auditUrl && generatedModelAuditRequestPlan.expectation === "optional"
+          ? {
+              status: "optional-missing",
+              expectation: "optional",
+              auditUrl,
+            }
+          : {
+              status: "idle",
+              expectation: generatedModelAuditRequestPlan.expectation,
+              auditUrl: auditUrl ?? undefined,
+            },
+      );
       return () => {
         cancelled = true;
       };
     }
 
+    if (
+      auditRequestTrackerRef.current.auditUrl === auditUrl &&
+      (
+        auditRequestTrackerRef.current.status === "loading" ||
+        auditRequestTrackerRef.current.status === "present"
+      )
+    ) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    auditRequestTrackerRef.current = {
+      auditUrl,
+      status: "loading",
+    };
     setLoadedAuditArtifactState({
       status: "loading",
       expectation: "required",
@@ -965,6 +1002,10 @@ export default function ModelViewer({
         if (!response.ok) {
           if (response.status === 404) {
             if (!cancelled) {
+              auditRequestTrackerRef.current = {
+                auditUrl,
+                status: "required-missing",
+              };
               setViewerRuntimeGlbAudit(null);
               setLoadedAuditArtifactState({
                 status: "required-missing",
@@ -980,6 +1021,10 @@ export default function ModelViewer({
         const parsed = parseBodyGeometryAuditArtifact(await response.json());
         if (!parsed) {
           if (!cancelled) {
+            auditRequestTrackerRef.current = {
+              auditUrl,
+              status: "failed",
+            };
             setViewerRuntimeGlbAudit(null);
             setLoadedAuditArtifactState({
               status: "failed",
@@ -992,6 +1037,10 @@ export default function ModelViewer({
         }
 
         if (!cancelled) {
+          auditRequestTrackerRef.current = {
+            auditUrl,
+            status: "present",
+          };
           setViewerRuntimeGlbAudit(parsed);
           setLoadedAuditArtifactState({
             status: "present",
@@ -1001,6 +1050,10 @@ export default function ModelViewer({
         }
       } catch (error) {
         if (!cancelled) {
+          auditRequestTrackerRef.current = {
+            auditUrl,
+            status: "failed",
+          };
           setViewerRuntimeGlbAudit(null);
           setLoadedAuditArtifactState({
             status: "failed",
@@ -1175,6 +1228,7 @@ export default function ModelViewer({
             ? loadedSceneInspectionState.error
             : undefined,
         auditArtifactPresent: loadedAuditArtifactState.status === "present",
+        auditArtifactOptionalMissing: loadedAuditArtifactState.status === "optional-missing",
         auditArtifactRequiredMissing: loadedAuditArtifactState.status === "required-missing",
       },
     });
