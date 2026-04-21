@@ -44,6 +44,7 @@ import { importCatalogTemplates } from "@/lib/catalogBatchImport";
 import { FLAT_BED_ITEMS, type FlatBedItem } from "@/data/flatBedItems";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
 import { getMaterialProfileById } from "@/data/materialProfiles";
+import { inferGeneratedModelStatusFromSource } from "@/lib/generatedModelUrl";
 import { saveTemplate, updateTemplate } from "@/lib/templateStorage";
 import { generateThumbnail } from "@/lib/generateThumbnail";
 import {
@@ -1616,6 +1617,14 @@ function inferDrinkwareGlbStatus(args: {
 } | null {
   if (!args.productType || args.productType === "flat") return null;
   const trimmedPath = args.glbPath.trim();
+  const inferGeneratedPathStatus = (
+    sourceLabel?: string | null,
+  ): "generated-reviewed-model" | "verified-product-model" | null => (
+    inferGeneratedModelStatusFromSource({
+      modelUrl: trimmedPath,
+      sourceModelLabel: sourceLabel,
+    })
+  );
   if (!trimmedPath) {
     if (args.lookupResult?.modelStatus === "placeholder-model") {
       return {
@@ -1653,22 +1662,18 @@ function inferDrinkwareGlbStatus(args: {
 
   if (args.lookupResult?.glbPath?.trim() === trimmedPath) {
     return {
-      status: args.lookupResult.modelStatus ?? (
-        trimmedPath.startsWith("/api/admin/models/generated/")
-          ? "generated-reviewed-model"
-          : "verified-product-model"
-      ),
+      status: args.lookupResult.modelStatus ??
+        inferGeneratedPathStatus(args.lookupResult.modelSourceLabel) ??
+        "verified-product-model",
       sourceLabel: args.lookupResult.modelSourceLabel ?? null,
     };
   }
 
   if (args.editingTemplate?.glbPath?.trim() === trimmedPath) {
     return {
-      status: args.editingTemplate.glbStatus ?? (
-        trimmedPath.startsWith("/api/admin/models/generated/")
-          ? "generated-reviewed-model"
-          : "verified-product-model"
-      ),
+      status: args.editingTemplate.glbStatus ??
+        inferGeneratedPathStatus(args.editingTemplate.glbSourceLabel) ??
+        "verified-product-model",
       sourceLabel: args.editingTemplate.glbSourceLabel ?? null,
     };
   }
@@ -1680,15 +1685,18 @@ function inferDrinkwareGlbStatus(args: {
     };
   }
 
+  const inferredFallbackStatus = inferGeneratedPathStatus(null);
+  const generatedPathFallback = inferredFallbackStatus ??
+    (trimmedPath.startsWith("/models/generated/") || trimmedPath.startsWith("/api/admin/models/generated/")
+      ? "verified-product-model"
+      : null);
   return {
-    status: trimmedPath.startsWith("/models/generated/")
-      ? "generated-reviewed-model"
-      : trimmedPath.startsWith("/api/admin/models/generated/")
-        ? "generated-reviewed-model"
-      : "verified-product-model",
-    sourceLabel: trimmedPath.startsWith("/models/generated/") || trimmedPath.startsWith("/api/admin/models/generated/")
+    status: generatedPathFallback ?? "verified-product-model",
+    sourceLabel: generatedPathFallback === "generated-reviewed-model"
       ? "Generated from accepted BODY REFERENCE cutout"
-      : "Resolved model file",
+      : generatedPathFallback === "verified-product-model"
+        ? "Generated preview model"
+        : "Resolved model file",
   };
 }
 

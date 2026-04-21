@@ -93,9 +93,41 @@ export interface GeneratedModelAuditRequestPlan {
   shouldFetch: boolean;
 }
 
+function isReviewedCutoutGeneratedModelPath(pathname: string): boolean {
+  const fileName = pathname.split("/").pop()?.toLowerCase() ?? "";
+  return fileName.includes("-cutout-") || fileName.endsWith("-cutout.glb");
+}
+
+function isReviewedCutoutGeneratedModelLabel(sourceModelLabel: string | null | undefined): boolean {
+  const normalized = sourceModelLabel?.trim().toLowerCase() ?? "";
+  return normalized.includes("accepted body reference cutout") || normalized.includes("body cutout qa mode");
+}
+
+export function inferGeneratedModelStatusFromSource(args: {
+  modelUrl?: string | null;
+  sourceModelLabel?: string | null;
+}): "generated-reviewed-model" | "verified-product-model" | null {
+  if (typeof args.modelUrl !== "string" || !args.modelUrl.trim()) {
+    return null;
+  }
+  const pathname = getPathname(args.modelUrl);
+  const isGeneratedPath = isGeneratedModelUrl(pathname) || isLegacyGeneratedModelPath(pathname);
+  if (!isGeneratedPath) {
+    return null;
+  }
+  if (
+    isReviewedCutoutGeneratedModelLabel(args.sourceModelLabel) ||
+    isReviewedCutoutGeneratedModelPath(pathname)
+  ) {
+    return "generated-reviewed-model";
+  }
+  return "verified-product-model";
+}
+
 export function resolveGeneratedModelAuditRequestPlan(args: {
   modelUrl?: string | null;
   sourceModelStatus?: ProductTemplate["glbStatus"] | null;
+  sourceModelLabel?: string | null;
 }): GeneratedModelAuditRequestPlan {
   const auditUrl = getGeneratedModelAuditUrlFromModelUrl(args.modelUrl);
   if (!auditUrl) {
@@ -106,7 +138,12 @@ export function resolveGeneratedModelAuditRequestPlan(args: {
     };
   }
 
-  if (args.sourceModelStatus === "generated-reviewed-model") {
+  const sourceModelStatus = args.sourceModelStatus ?? inferGeneratedModelStatusFromSource({
+    modelUrl: args.modelUrl,
+    sourceModelLabel: args.sourceModelLabel,
+  });
+
+  if (sourceModelStatus === "generated-reviewed-model") {
     return {
       auditUrl,
       expectation: "required",

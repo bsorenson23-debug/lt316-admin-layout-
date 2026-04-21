@@ -64,6 +64,19 @@ test("product template schema accepts a valid template envelope", () => {
   assert.equal(parsed?.dimensions.printableSurfaceContract?.printableTopMm, 28);
 });
 
+test("product template schema preserves reviewed generated GLB status across storage reload", () => {
+  const parsed = parseProductTemplate({
+    ...createTemplateCandidate(),
+    glbPath: "/api/admin/models/generated/unknown-unknown-20oz-cutout-c99ba851f2f6.glb",
+    glbStatus: "generated-reviewed-model",
+    glbSourceLabel: "Generated from accepted BODY REFERENCE cutout",
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed?.glbStatus, "generated-reviewed-model");
+  assert.equal(parsed?.glbSourceLabel, "Generated from accepted BODY REFERENCE cutout");
+});
+
 test("product template schema filters malformed legacy array entries", () => {
   const parsed = parseProductTemplateArray([
     createTemplateCandidate(),
