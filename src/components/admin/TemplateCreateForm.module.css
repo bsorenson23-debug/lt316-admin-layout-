@@ -401,6 +401,12 @@
   background: var(--accent-dim);
 }
 
+.detectBtnActive {
+  border-color: var(--info);
+  background: var(--info-bg);
+  color: var(--info);
+}
+
 .detectBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -451,6 +457,230 @@
   border: 1px solid var(--error-border);
   font-size: 12px;
   color: var(--error);
+}
+
+.workflowScaffold {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.workflowStepRow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workflowStepCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+}
+
+.workflowStepReady {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+}
+
+.workflowStepAction {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+
+.workflowStepReview {
+  border-color: var(--border-normal);
+  background: var(--bg-input);
+}
+
+.workflowStepCurrent {
+  box-shadow: inset 0 0 0 1px var(--info);
+}
+
+.workflowStepLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.workflowStepDetail {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.workflowReadinessRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.workflowReadinessReady,
+.workflowReadinessPending,
+.workflowReadinessCurrent {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.workflowReadinessReady {
+  color: var(--success);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+}
+
+.workflowReadinessPending {
+  color: var(--warning);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+}
+
+.workflowReadinessCurrent {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+}
+
+.workflowBlockedNote {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warning);
+}
+
+.reviewScaffoldCard,
+.previewScaffold {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.reviewScaffoldHeader,
+.previewScaffoldHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.reviewScaffoldTitle,
+.previewScaffoldTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.reviewScaffoldHint,
+.previewScaffoldHint {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.reviewStatusReady,
+.reviewStatusPending,
+.previewScaffoldBadge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.reviewStatusReady {
+  color: var(--success);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+}
+
+.reviewStatusPending {
+  color: var(--warning);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+}
+
+.previewScaffoldBadge {
+  color: var(--info);
+  background: var(--info-bg);
+  border: 1px solid var(--info-border);
+}
+
+.reviewScaffoldActions,
+.previewModeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reviewScaffoldMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reviewScaffoldNote,
+.previewPlaceholderNote {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.reviewScaffoldInlineMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.reviewScaffoldInlineMeta span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-hover);
+}
+
+.previewSurface {
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+.previewViewerWrap {
+  width: 100%;
+  height: 280px;
+}
+
+.previewSurfacePlaceholder {
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0)),
+    var(--bg-base);
 }
 
 /* ── Error ─────────────────────────────────────────────────────── */

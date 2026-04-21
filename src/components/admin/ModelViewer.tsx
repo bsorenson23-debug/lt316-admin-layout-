@@ -26,6 +26,14 @@ import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as THREE from "three";
 import type { PlacedItem } from "@/types/admin";
+import type { ProductTemplate } from "@/types/productTemplate";
+import type { PreviewModelMode } from "@/lib/tumblerPreviewModelState";
+import {
+  getBodyReferencePreviewModeHint,
+  getBodyReferencePreviewModeLabel,
+  getDrinkwareGlbStatusLabel,
+  isBodyCutoutQaPreviewAvailable,
+} from "@/lib/bodyReferencePreviewIntent";
 import { YetiRambler40oz } from "./models/YetiRambler40oz";
 import type { DecalItem } from "./models/YetiRambler40oz";
 import { getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
@@ -77,7 +85,8 @@ export interface ItemTexture {
 }
 
 export interface ModelViewerProps {
-  file: File;
+  file?: File | null;
+  modelUrl?: string | null;
   placedItems?: PlacedItem[];
   itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number;
@@ -94,6 +103,24 @@ export interface ModelViewerProps {
   rimTintColor?: string;
   /** Show template surface guide zones on supported tumbler templates */
   showTemplateSurfaceZones?: boolean;
+  /** Review preview scaffold mode used by later BODY REFERENCE flows */
+  previewModelMode?: PreviewModelMode;
+  /** Review preview scaffold source model status */
+  sourceModelStatus?: ProductTemplate["glbStatus"] | null;
+  /** Optional operator-facing source label for scaffold overlays */
+  sourceModelLabel?: string | null;
+}
+
+function getModelSourceName(file?: File | null, modelUrl?: string | null): string {
+  if (file?.name) return file.name;
+  if (!modelUrl) return "";
+  try {
+    const parsed = new URL(modelUrl, "http://localhost");
+    return parsed.pathname.split("/").pop() ?? "";
+  } catch {
+    const [pathPart] = modelUrl.split("?");
+    return pathPart.split("/").pop() ?? "";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -605,7 +632,22 @@ class CanvasErrorBoundary extends Component<
 // ---------------------------------------------------------------------------
 
 export default function ModelViewer({
-  file, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerDims, handleArcDeg, glbPath, tumblerMapping, bodyTintColor, rimTintColor, showTemplateSurfaceZones,
+  file,
+  modelUrl,
+  placedItems,
+  itemTextures,
+  bedWidthMm,
+  bedHeightMm,
+  tumblerDims,
+  handleArcDeg,
+  glbPath,
+  tumblerMapping,
+  bodyTintColor,
+  rimTintColor,
+  showTemplateSurfaceZones,
+  previewModelMode,
+  sourceModelStatus,
+  sourceModelLabel,
 }: ModelViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
@@ -630,24 +672,57 @@ export default function ModelViewer({
 
   // Create blob URL inside useEffect — safe for React Strict Mode
   useEffect(() => {
-    const objectUrl = URL.createObjectURL(file);
-    // Syncing state to a new file load is intentional here.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setUrl(objectUrl);
+    let objectUrl: string | null = null;
+    if (file) {
+      objectUrl = URL.createObjectURL(file);
+      // Syncing state to a new file load is intentional here.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setUrl(objectUrl);
+    } else if (modelUrl) {
+      // Syncing state to a new URL load is intentional here.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setUrl(modelUrl);
+    } else {
+      // Syncing state to a cleared source is intentional here.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setUrl(null);
+    }
     setModelBounds(null);
     setIsAutoRotating(!!tumblerDims);
     return () => {
-      URL.revokeObjectURL(objectUrl);
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
       setUrl(null);
     };
-  }, [file, tumblerDims]);
+  }, [file, modelUrl, tumblerDims]);
 
   const handleModelReady = useCallback((obj: THREE.Object3D) => {
     const box = new THREE.Box3().setFromObject(obj);
     if (!box.isEmpty()) setModelBounds(box);
   }, []);
 
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const sourceName = getModelSourceName(file, modelUrl);
+  const ext = sourceName.split(".").pop()?.toLowerCase() ?? "";
+  const reviewProductType = tumblerDims ? "tumbler" : null;
+  const previewModeLabel = previewModelMode
+    ? getBodyReferencePreviewModeLabel({
+        productType: reviewProductType,
+        mode: previewModelMode,
+        glbStatus: sourceModelStatus,
+      })
+    : null;
+  const previewModeHint = previewModelMode
+    ? getBodyReferencePreviewModeHint({
+        productType: reviewProductType,
+        mode: previewModelMode,
+      })
+    : null;
+  const statusLabel = sourceModelLabel ?? getDrinkwareGlbStatusLabel(sourceModelStatus);
+  const qaReservedNote = previewModelMode === "body-cutout-qa" && !isBodyCutoutQaPreviewAvailable(sourceModelStatus)
+    ? "BODY CUTOUT QA slot reserved until a reviewed body-only GLB exists."
+    : null;
+  const showScaffoldOverlay = Boolean(previewModeLabel || statusLabel || qaReservedNote);
 
   // ── Adaptive scene scale based on physical dimensions ──────────────────────
   const H = tumblerDims?.overallHeightMm ?? 200;
@@ -663,94 +738,141 @@ export default function ModelViewer({
   const shadowScale= isMmScale ? H * 4     : 20;
   const shadowFar  = isMmScale ? H * 0.7   : 5;
 
-  if (!url) return null;
+  if (!url || !ext) return null;
 
   const hasItems = !!placedItems?.length && !!itemTextures?.size;
 
   return (
-    <CanvasErrorBoundary>
-      <Canvas
-        shadows={false}
-        frameloop={hasItems ? "always" : "demand"}
-        dpr={[1, 1.25]}
-        camera={{ fov: 35, near: nearClip, far: farClip }}
-        gl={{
-          antialias: true,
-          powerPreference: "low-power",
-          stencil: false,
-          toneMapping: THREE.NeutralToneMapping,
-          toneMappingExposure: 1.0,
-          alpha: false,
-        }}
-        style={{ width: "100%", height: "100%" }}
-      >
-        <color attach="background" args={["#1a1a22"]} />
+    <div
+      data-body-reference-viewer-scaffold={showScaffoldOverlay ? "present" : "absent"}
+      style={{ position: "relative", width: "100%", height: "100%" }}
+    >
+      {showScaffoldOverlay && (
+        <div
+          data-body-reference-viewer-scaffold-slot="top-right"
+          style={{
+            position: "absolute",
+            top: 10,
+            right: 10,
+            zIndex: 2,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            maxWidth: 280,
+            padding: "8px 10px",
+            borderRadius: 8,
+            border: "1px solid rgba(148, 163, 184, 0.28)",
+            background: "rgba(15, 23, 42, 0.78)",
+            color: "var(--text-primary)",
+            pointerEvents: "none",
+          }}
+        >
+          {previewModeLabel && (
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              {previewModeLabel}
+            </div>
+          )}
+          {statusLabel && (
+            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+              {statusLabel}
+            </div>
+          )}
+          {previewModeHint && (
+            <div style={{ fontSize: 10, lineHeight: 1.4, color: "var(--text-dim)" }}>
+              {previewModeHint}
+            </div>
+          )}
+          {qaReservedNote && (
+            <div style={{ fontSize: 10, lineHeight: 1.4, color: "var(--warning)" }}>
+              {qaReservedNote}
+            </div>
+          )}
+        </div>
+      )}
+      <CanvasErrorBoundary>
+        <Canvas
+          shadows={false}
+          frameloop={hasItems ? "always" : "demand"}
+          dpr={[1, 1.25]}
+          camera={{ fov: 35, near: nearClip, far: farClip }}
+          gl={{
+            antialias: true,
+            powerPreference: "low-power",
+            stencil: false,
+            toneMapping: THREE.NeutralToneMapping,
+            toneMappingExposure: 1.0,
+            alpha: false,
+          }}
+          style={{ width: "100%", height: "100%" }}
+        >
+          <color attach="background" args={["#1a1a22"]} />
 
-        <StudioLights />
+          <StudioLights />
 
-        <Bounds observe={false} margin={4.4}>
-          <Suspense fallback={<LoadingIndicator />}>
-            <ModelByExtension
-              url={url} ext={ext}
-              dims={tumblerDims}
-              handleArcDeg={handleArcDeg}
-              placedItems={placedItems}
-              itemTextures={itemTextures}
-              bedWidthMm={bedWidthMm}
-              bedHeightMm={bedHeightMm}
-              glbPath={glbPath}
-              sourceName={file.name}
-              tumblerMapping={tumblerMapping}
-              bodyTintColor={bodyTintColor}
-              rimTintColor={rimTintColor}
-              showTemplateSurfaceZones={showTemplateSurfaceZones}
-              onReady={handleModelReady}
-            />
-          </Suspense>
-          <AutoFit url={url} />
-        </Bounds>
+          <Bounds observe={false} margin={4.4}>
+            <Suspense fallback={<LoadingIndicator />}>
+              <ModelByExtension
+                url={url} ext={ext}
+                dims={tumblerDims}
+                handleArcDeg={handleArcDeg}
+                placedItems={placedItems}
+                itemTextures={itemTextures}
+                bedWidthMm={bedWidthMm}
+                bedHeightMm={bedHeightMm}
+                glbPath={glbPath}
+                sourceName={sourceName}
+                tumblerMapping={tumblerMapping}
+                bodyTintColor={bodyTintColor}
+                rimTintColor={rimTintColor}
+                showTemplateSurfaceZones={showTemplateSurfaceZones}
+                onReady={handleModelReady}
+              />
+            </Suspense>
+            <AutoFit url={url} />
+          </Bounds>
 
-        {/* Engravable zone highlight — shown when tumbler loaded, no items placed */}
-        {tumblerDims && modelBounds && !hasItems && (
-          <EngravableZoneRing dims={tumblerDims} modelBounds={modelBounds} />
-        )}
+          {/* Engravable zone highlight — shown when tumbler loaded, no items placed */}
+          {tumblerDims && modelBounds && !hasItems && (
+            <EngravableZoneRing dims={tumblerDims} modelBounds={modelBounds} />
+          )}
 
-        <ContactShadows
-          position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}
-          opacity={0.4}
-          scale={shadowScale}
-          blur={3}
-          far={shadowFar}
-          color="#000018"
-        />
+          <ContactShadows
+            position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}
+            opacity={0.4}
+            scale={shadowScale}
+            blur={3}
+            far={shadowFar}
+            color="#000018"
+          />
 
-        <Grid
-          position={[0, modelBounds ? modelBounds.min.y - 1 : -0.011, 0]}
-          infiniteGrid
-          cellSize={gridCell}
-          cellThickness={0.4}
-          cellColor="#333344"
-          sectionSize={gridSection}
-          sectionThickness={0.7}
-          sectionColor="#444466"
-          fadeDistance={gridFade}
-          fadeStrength={2.5}
-        />
+          <Grid
+            position={[0, modelBounds ? modelBounds.min.y - 1 : -0.011, 0]}
+            infiniteGrid
+            cellSize={gridCell}
+            cellThickness={0.4}
+            cellColor="#333344"
+            sectionSize={gridSection}
+            sectionThickness={0.7}
+            sectionColor="#444466"
+            fadeDistance={gridFade}
+            fadeStrength={2.5}
+          />
 
-        <OrbitControls
-          makeDefault
-          enableDamping
-          dampingFactor={0.05}
-          autoRotate={isAutoRotating}
-          autoRotateSpeed={0.7}
-          minDistance={minDist}
-          maxDistance={maxDist}
-          maxPolarAngle={Math.PI / 1.85}
-          enablePan={false}
-          onStart={handleOrbitStart}
-          onEnd={handleOrbitEnd}
-        />
-      </Canvas>
-    </CanvasErrorBoundary>
+          <OrbitControls
+            makeDefault
+            enableDamping
+            dampingFactor={0.05}
+            autoRotate={isAutoRotating}
+            autoRotateSpeed={0.7}
+            minDistance={minDist}
+            maxDistance={maxDist}
+            maxPolarAngle={Math.PI / 1.85}
+            enablePan={false}
+            onStart={handleOrbitStart}
+            onEnd={handleOrbitEnd}
+          />
+        </Canvas>
+      </CanvasErrorBoundary>
+    </div>
   );
 }

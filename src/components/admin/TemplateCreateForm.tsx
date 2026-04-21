@@ -1,9 +1,11 @@
 "use client";
 
 import React from "react";
+import dynamic from "next/dynamic";
 import type { ProductTemplate, TumblerMapping } from "@/types/productTemplate";
 import type { AutoDetectResult } from "@/lib/autoDetect";
 import type { TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
+import type { PreviewModelMode } from "@/lib/tumblerPreviewModelState";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
 import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
@@ -13,11 +15,29 @@ import { generateThumbnail } from "@/lib/generateThumbnail";
 import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHandleArcDeg } from "@/data/tumblerProfiles";
 import { getDefaultLaserSettings } from "@/lib/scopedDefaults";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
+import {
+  buildTemplateCreateWorkflowSteps,
+  deriveTemplateCreateWorkflowStep,
+  getTemplateCreateSaveGateReason,
+  getTemplateCreateSourceReadiness,
+} from "@/lib/templateCreateFlow";
+import {
+  getBodyReferencePreviewModeHint,
+  getBodyReferencePreviewModeLabel,
+  getDrinkwareGlbStatusLabel,
+  isBodyCutoutQaPreviewAvailable,
+} from "@/lib/bodyReferencePreviewIntent";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
 import { EngravableZoneEditor } from "./EngravableZoneEditor";
 import { TumblerLookupDebugPanel } from "./TumblerLookupDebugPanel";
+import type { ModelViewerProps, TumblerDimensions } from "./ModelViewer";
 import styles from "./TemplateCreateForm.module.css";
+
+const ModelViewer = dynamic<ModelViewerProps>(
+  () => import("./ModelViewer"),
+  { ssr: false },
+);
 
 interface Props {
   onSave: (template: ProductTemplate) => void;
@@ -115,6 +135,38 @@ function formatLookupMeasurement(value: number | null | undefined): string | nul
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? `${round2(value)} mm`
     : null;
+}
+
+function resolveDefaultPreviewModelMode(args: {
+  glbPath: string;
+  glbStatus?: ProductTemplate["glbStatus"] | null;
+}): PreviewModelMode {
+  if (args.glbStatus === "generated-reviewed-model") {
+    return "body-cutout-qa";
+  }
+  if (args.glbPath.trim()) {
+    return "full-model";
+  }
+  return "alignment-model";
+}
+
+function buildPreviewTumblerDimensions(args: {
+  productType: ProductTemplate["productType"];
+  diameterMm: number;
+  printHeightMm: number;
+  overallHeightMm: number;
+}): TumblerDimensions | null {
+  if (args.productType === "flat") return null;
+  if (!Number.isFinite(args.diameterMm) || args.diameterMm <= 0) return null;
+  if (!Number.isFinite(args.printHeightMm) || args.printHeightMm <= 0) return null;
+  return {
+    overallHeightMm:
+      Number.isFinite(args.overallHeightMm) && args.overallHeightMm > 0
+        ? args.overallHeightMm
+        : args.printHeightMm,
+    diameterMm: args.diameterMm,
+    printableHeightMm: args.printHeightMm,
+  };
 }
 
 export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props) {
@@ -310,6 +362,18 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [frontUseOriginal, setFrontUseOriginal] = React.useState(false);
   const [backUseOriginal, setBackUseOriginal] = React.useState(false);
   const [mirrorForBack, setMirrorForBack] = React.useState(true);
+  const [hasAcceptedBodyReferenceReview, setHasAcceptedBodyReferenceReview] = React.useState(
+    () => Boolean(
+      editingTemplate?.dimensions.canonicalBodyProfile
+      && editingTemplate?.dimensions.canonicalDimensionCalibration,
+    ),
+  );
+  const [previewModelMode, setPreviewModelMode] = React.useState<PreviewModelMode>(
+    () => resolveDefaultPreviewModelMode({
+      glbPath: editingTemplate?.glbPath ?? "",
+      glbStatus: editingTemplate?.glbStatus,
+    }),
+  );
 
   // Auto-mirror front photo as back when mirrorForBack is enabled
   React.useEffect(() => {
@@ -324,11 +388,91 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     return () => { cancelled = true; };
   }, [mirrorForBack, frontPhotoDataUrl]);
 
+  const activeDrinkwareGlbStatus = React.useMemo<ProductTemplate["glbStatus"] | null>(() => {
+    if (lookupResult?.modelStatus) return lookupResult.modelStatus;
+    if (editingTemplate?.glbPath?.trim() === glbPath.trim() && editingTemplate.glbStatus) {
+      return editingTemplate.glbStatus;
+    }
+    if (!glbPath.trim()) return "missing-model";
+    return "verified-product-model";
+  }, [editingTemplate?.glbPath, editingTemplate?.glbStatus, glbPath, lookupResult?.modelStatus]);
+
+  const activeDrinkwareGlbSourceLabel = React.useMemo(() => {
+    return lookupResult?.modelSourceLabel ?? editingTemplate?.glbSourceLabel ?? null;
+  }, [editingTemplate?.glbSourceLabel, lookupResult?.modelSourceLabel]);
+
+  const previewTumblerDims = React.useMemo(
+    () => buildPreviewTumblerDimensions({
+      productType,
+      diameterMm,
+      printHeightMm,
+      overallHeightMm,
+    }),
+    [diameterMm, overallHeightMm, printHeightMm, productType],
+  );
+
+  const workflowInput = React.useMemo(
+    () => ({
+      productType,
+      hasProductImage: Boolean(productImageFile || productPhotoFullUrl),
+      hasStagedDetectResult: Boolean(detectResult || lookupResult),
+      hasAcceptedReview: hasAcceptedBodyReferenceReview,
+      hasCanonicalBodyProfile: Boolean(editingTemplate?.dimensions.canonicalBodyProfile),
+      hasCanonicalDimensionCalibration: Boolean(editingTemplate?.dimensions.canonicalDimensionCalibration),
+    }),
+    [
+      detectResult,
+      editingTemplate?.dimensions.canonicalBodyProfile,
+      editingTemplate?.dimensions.canonicalDimensionCalibration,
+      hasAcceptedBodyReferenceReview,
+      lookupResult,
+      productImageFile,
+      productPhotoFullUrl,
+      productType,
+    ],
+  );
+
+  const templateCreateSourceReadiness = React.useMemo(
+    () => getTemplateCreateSourceReadiness(workflowInput),
+    [workflowInput],
+  );
+  const workflowSteps = React.useMemo(
+    () => buildTemplateCreateWorkflowSteps(workflowInput),
+    [workflowInput],
+  );
+  const workflowCurrentStep = React.useMemo(
+    () => deriveTemplateCreateWorkflowStep(workflowInput),
+    [workflowInput],
+  );
+  const saveGateReason = React.useMemo(
+    () => getTemplateCreateSaveGateReason(workflowInput),
+    [workflowInput],
+  );
+
+  React.useEffect(() => {
+    if (previewModelMode !== "body-cutout-qa") return;
+    if (!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)) {
+      setPreviewModelMode(resolveDefaultPreviewModelMode({
+        glbPath,
+        glbStatus: activeDrinkwareGlbStatus,
+      }));
+    }
+  }, [activeDrinkwareGlbStatus, glbPath, previewModelMode]);
+
   // ── Validation ───────────────────────────────────────────────────
   const [errors, setErrors] = React.useState<string[]>([]);
 
+  const resetBodyReferenceReviewScaffold = React.useCallback(() => {
+    setHasAcceptedBodyReferenceReview(false);
+    setPreviewModelMode(resolveDefaultPreviewModelMode({
+      glbPath,
+      glbStatus: activeDrinkwareGlbStatus,
+    }));
+  }, [activeDrinkwareGlbStatus, glbPath]);
+
   /** Handle product image selection — store file for auto-detect, generate thumbnail + full-res */
   const handleProductImage = async (file: File) => {
+    resetBodyReferenceReviewScaffold();
     setProductImageFile(file);
     setProductImageLabel(file.name);
     setDetectResult(null);
@@ -342,13 +486,14 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   };
 
   const clearProductImage = React.useCallback(() => {
+    resetBodyReferenceReviewScaffold();
     setProductImageFile(null);
     setProductImageLabel(null);
     setThumbDataUrl("");
     setProductPhotoFullUrl("");
     setDetectResult(null);
     setDetectError(null);
-  }, []);
+  }, [resetBodyReferenceReviewScaffold]);
 
   const applyProfileOrDimensions = React.useCallback((args: {
     brand: string | null | undefined;
@@ -419,6 +564,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     const raw = lookupInput.trim();
     if (!raw) return;
 
+    resetBodyReferenceReviewScaffold();
     setLookingUpItem(true);
     setLookupError(null);
     setLookupResult(null);
@@ -491,6 +637,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   /** Run auto-detect on the uploaded product image */
   const handleAutoDetect = async () => {
     if (!productImageFile) return;
+    resetBodyReferenceReviewScaffold();
     setDetecting(true);
     setDetectError(null);
     setDetectResult(null);
@@ -901,6 +1048,239 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           </div>
         )}
       </div>
+
+      {productType !== "flat" && (
+        <div className={styles.section} data-body-reference-review-scaffold="present">
+          <div className={styles.sectionTitle}>BODY REFERENCE review scaffold</div>
+
+          <div className={styles.workflowScaffold}>
+            <div className={styles.workflowStepRow}>
+              {workflowSteps.map((step) => (
+                <div
+                  key={step.step}
+                  className={[
+                    styles.workflowStepCard,
+                    step.status === "ready"
+                      ? styles.workflowStepReady
+                      : step.status === "action"
+                        ? styles.workflowStepAction
+                        : styles.workflowStepReview,
+                    workflowCurrentStep === step.step ? styles.workflowStepCurrent : "",
+                  ].join(" ")}
+                >
+                  <div className={styles.workflowStepLabel}>{step.label}</div>
+                  <div className={styles.workflowStepDetail}>{step.detail}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className={styles.workflowReadinessRow}>
+              <span
+                className={
+                  templateCreateSourceReadiness.sourceReady
+                    ? styles.workflowReadinessReady
+                    : styles.workflowReadinessPending
+                }
+              >
+                {templateCreateSourceReadiness.sourceReady ? "Source ready" : "Source pending"}
+              </span>
+              <span
+                className={
+                  templateCreateSourceReadiness.detectReady
+                    ? styles.workflowReadinessReady
+                    : styles.workflowReadinessPending
+                }
+              >
+                {templateCreateSourceReadiness.detectReady ? "Detect actionable" : "Detect blocked"}
+              </span>
+              <span className={styles.workflowReadinessCurrent}>
+                Current step: {workflowCurrentStep}
+              </span>
+            </div>
+
+            {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
+              <div className={styles.workflowBlockedNote}>
+                {templateCreateSourceReadiness.blockedReason}
+              </div>
+            )}
+          </div>
+
+          <div className={styles.reviewScaffoldCard}>
+            <div className={styles.reviewScaffoldHeader}>
+              <div>
+                <div className={styles.reviewScaffoldTitle}>Review handoff</div>
+                <div className={styles.reviewScaffoldHint}>
+                  This branch adds the review/viewer seam only. Later BODY CUTOUT QA runtime-truth and cutout work will attach to these controls.
+                </div>
+              </div>
+              <span
+                className={
+                  hasAcceptedBodyReferenceReview
+                    ? styles.reviewStatusReady
+                    : styles.reviewStatusPending
+                }
+              >
+                {hasAcceptedBodyReferenceReview ? "Accepted" : "Pending review"}
+              </span>
+            </div>
+
+            <div className={styles.reviewScaffoldActions}>
+              <button
+                type="button"
+                className={styles.detectBtn}
+                disabled={!workflowInput.hasStagedDetectResult || hasAcceptedBodyReferenceReview}
+                onClick={() => {
+                  setHasAcceptedBodyReferenceReview(true);
+                  setPreviewModelMode(resolveDefaultPreviewModelMode({
+                    glbPath,
+                    glbStatus: activeDrinkwareGlbStatus,
+                  }));
+                }}
+              >
+                {hasAcceptedBodyReferenceReview ? "BODY REFERENCE accepted" : "Accept BODY REFERENCE review"}
+              </button>
+              <button
+                type="button"
+                className={styles.detectBtn}
+                disabled
+              >
+                Generate BODY CUTOUT QA GLB
+              </button>
+            </div>
+
+            <div className={styles.reviewScaffoldMeta}>
+              {!workflowInput.hasStagedDetectResult && (
+                <div className={styles.reviewScaffoldNote}>
+                  Run auto-detect or lookup first so the later BODY REFERENCE review state has something to accept.
+                </div>
+              )}
+              {workflowInput.hasStagedDetectResult && !hasAcceptedBodyReferenceReview && (
+                <div className={styles.reviewScaffoldNote}>
+                  Detection is staged. Accepting BODY REFERENCE review here creates the clean handoff point for later fine-tune and lineage work.
+                </div>
+              )}
+              {hasAcceptedBodyReferenceReview && (
+                <div className={styles.reviewScaffoldNote}>
+                  Reviewed GLB generation and BODY CUTOUT QA stay scaffolded in this PR. The later runtime-truth layer will wire these actions to the authoritative reviewed cutout.
+                </div>
+              )}
+              {saveGateReason && (
+                <div className={styles.reviewScaffoldNote}>
+                  Save gate preview: {saveGateReason}
+                </div>
+              )}
+              {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
+                <div className={styles.reviewScaffoldInlineMeta}>
+                  <span>{getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)}</span>
+                  {activeDrinkwareGlbSourceLabel && (
+                    <span>{activeDrinkwareGlbSourceLabel}</span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className={styles.previewScaffold} data-body-reference-preview-scaffold="present">
+              <div className={styles.previewScaffoldHeader}>
+                <div>
+                  <div className={styles.previewScaffoldTitle}>
+                    {getBodyReferencePreviewModeLabel({
+                      productType,
+                      mode: previewModelMode,
+                      glbStatus: activeDrinkwareGlbStatus,
+                    })}
+                  </div>
+                  <div className={styles.previewScaffoldHint}>
+                    {getBodyReferencePreviewModeHint({
+                      productType,
+                      mode: previewModelMode,
+                    })}
+                  </div>
+                </div>
+                {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
+                  <span className={styles.previewScaffoldBadge}>
+                    {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)}
+                  </span>
+                )}
+              </div>
+
+              <div className={styles.previewModeRow}>
+                <button
+                  type="button"
+                  className={`${styles.detectBtn} ${previewModelMode === "alignment-model" ? styles.detectBtnActive : ""}`}
+                  aria-pressed={previewModelMode === "alignment-model"}
+                  onClick={() => setPreviewModelMode("alignment-model")}
+                >
+                  Alignment
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.detectBtn} ${previewModelMode === "full-model" ? styles.detectBtnActive : ""}`}
+                  disabled={!glbPath.trim()}
+                  aria-pressed={previewModelMode === "full-model"}
+                  onClick={() => setPreviewModelMode("full-model")}
+                >
+                  Full model
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.detectBtn} ${previewModelMode === "body-cutout-qa" ? styles.detectBtnActive : ""}`}
+                  disabled={!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)}
+                  aria-pressed={previewModelMode === "body-cutout-qa"}
+                  onClick={() => setPreviewModelMode("body-cutout-qa")}
+                >
+                  Body cutout QA
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.detectBtn} ${previewModelMode === "source-traced" ? styles.detectBtnActive : ""}`}
+                  disabled={!glbPath.trim()}
+                  aria-pressed={previewModelMode === "source-traced"}
+                  onClick={() => setPreviewModelMode("source-traced")}
+                >
+                  Source compare
+                </button>
+              </div>
+
+              {!glbPath.trim() && (
+                <div className={styles.previewPlaceholderNote}>
+                  Load or resolve a source model to surface the reviewed model preview in this review flow.
+                </div>
+              )}
+              {!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus) && (
+                <div className={styles.previewPlaceholderNote}>
+                  BODY CUTOUT QA stays reserved until a reviewed body-only GLB exists.
+                </div>
+              )}
+
+              <div className={styles.previewSurface}>
+                {glbPath.trim() && previewTumblerDims ? (
+                  <div className={styles.previewViewerWrap}>
+                    <ModelViewer
+                      modelUrl={glbPath}
+                      glbPath={glbPath}
+                      bedWidthMm={templateWidthMm > 0 ? templateWidthMm : undefined}
+                      bedHeightMm={printHeightMm > 0 ? printHeightMm : undefined}
+                      tumblerDims={previewTumblerDims}
+                      handleArcDeg={handleArcDeg}
+                      tumblerMapping={tumblerMapping}
+                      bodyTintColor={bodyColorHex}
+                      rimTintColor={rimColorHex}
+                      showTemplateSurfaceZones={previewModelMode === "alignment-model"}
+                      previewModelMode={previewModelMode}
+                      sourceModelStatus={activeDrinkwareGlbStatus}
+                      sourceModelLabel={activeDrinkwareGlbSourceLabel}
+                    />
+                  </div>
+                ) : (
+                  <div className={styles.previewSurfacePlaceholder}>
+                    Reviewed model preview mounts here once a drinkware model path is available.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Front / Back face photos ─────────────────────────────── */}
       {productType !== "flat" && (
