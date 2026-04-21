@@ -514,6 +514,63 @@ test("generated body-only BODY REFERENCE QA GLB omits lid and ring fallback mesh
   assertNear(bodyBounds.max.y, bodyTopYmm, 0.08, "Body mesh should preserve the reviewed cutout shell top");
 });
 
+test("generated BODY CUTOUT QA lineage hash tracks canonical authority changes even when the approved outline snapshot is unchanged", async () => {
+  const editedCalibration: CanonicalDimensionCalibration = {
+    ...UNKNOWN_20OZ_DIMENSIONS,
+    bodyHeightMm: 141.67,
+    lidBodyLineMm: 31.05,
+    printableSurfaceContract: {
+      ...UNKNOWN_20OZ_DIMENSIONS.printableSurfaceContract!,
+      printableTopMm: 42.96,
+      printableHeightMm: 129.76,
+    },
+  };
+  const editedProfile: CanonicalBodyProfile = {
+    ...UNKNOWN_20OZ_BODY_PROFILE,
+    axis: {
+      ...UNKNOWN_20OZ_BODY_PROFILE.axis,
+      yTop: round2(UNKNOWN_20OZ_BODY_PROFILE.axis.yTop - 0.51),
+    },
+    samples: UNKNOWN_20OZ_BODY_PROFILE.samples.map((sample, index, samples) => ({
+      ...sample,
+      yMm: round2(
+        index === 0
+          ? editedCalibration.lidBodyLineMm
+          : index === samples.length - 1
+            ? sample.yMm
+            : sample.yMm + 0.04,
+      ),
+    })),
+  };
+  const before = await generateBodyReferenceGlb({
+    ...UNKNOWN_20OZ_INPUT,
+    renderMode: "body-cutout-qa",
+    bodyOutlineSourceMode: "body-only",
+  });
+  const after = await generateBodyReferenceGlb({
+    ...UNKNOWN_20OZ_INPUT,
+    renderMode: "body-cutout-qa",
+    bodyOutlineSourceMode: "body-only",
+    canonicalBodyProfile: editedProfile,
+    canonicalDimensionCalibration: editedCalibration,
+  });
+
+  assert.notEqual(before.generatedSourceSignature, after.generatedSourceSignature);
+  assert.notEqual(before.bodyGeometryContract.source.hash, after.bodyGeometryContract.source.hash);
+  assert.equal(after.bodyGeometryContract.source.hash, after.bodyGeometryContract.glb.sourceHash);
+  assert.equal(after.bodyGeometryContract.validation.status, "pass");
+  assert.ok(after.auditJsonPath);
+
+  const auditArtifact = JSON.parse(await readFile(after.auditJsonPath ?? "", "utf8")) as {
+    source: { hash?: string };
+    glb: { sourceHash?: string };
+    validation: { status: string };
+  };
+  assert.equal(auditArtifact.source.hash, after.bodyGeometryContract.source.hash);
+  assert.equal(auditArtifact.glb.sourceHash, after.bodyGeometryContract.glb.sourceHash);
+  assert.equal(auditArtifact.validation.status, "pass");
+});
+
 test("generated body-only BODY REFERENCE hybrid-preview mode still reports preview fallback geometry", async () => {
   const result = await generateBodyReferenceGlb({
     ...CONTAMINATED_UNKNOWN_20OZ_INPUT,

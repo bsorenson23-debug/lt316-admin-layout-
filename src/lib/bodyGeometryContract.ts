@@ -1,6 +1,13 @@
-import type { BodyReferenceGlbRenderMode } from "./bodyReferenceGlbSource.ts";
+import {
+  buildBodyReferenceGlbSourcePayload,
+  type BodyReferenceGlbRenderMode,
+} from "./bodyReferenceGlbSource.ts";
 import type { PreviewModelMode } from "./tumblerPreviewModelState.ts";
-import type { EditableBodyOutline } from "../types/productTemplate.ts";
+import type {
+  CanonicalBodyProfile,
+  CanonicalDimensionCalibration,
+  EditableBodyOutline,
+} from "../types/productTemplate.ts";
 import type { BodyReferenceSvgQualityReport } from "./bodyReferenceSvgQuality.ts";
 import { resolveEditableBodyOutlineDirectContour } from "./editableBodyOutline.ts";
 
@@ -120,6 +127,27 @@ export interface BodyGeometryLoadedInspectionMergeState {
   auditArtifactPresent?: boolean;
   auditArtifactOptionalMissing?: boolean;
   auditArtifactRequiredMissing?: boolean;
+}
+
+export interface BodyGeometrySourceHashAuthority {
+  outline?: EditableBodyOutline | null;
+  canonicalBodyProfile?: CanonicalBodyProfile | null;
+  canonicalDimensionCalibration?: CanonicalDimensionCalibration | null;
+}
+
+function isBodyGeometrySourceHashAuthority(
+  value: EditableBodyOutline | BodyGeometrySourceHashAuthority | null | undefined,
+): value is BodyGeometrySourceHashAuthority {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (
+      "outline" in value ||
+      "canonicalBodyProfile" in value ||
+      "canonicalDimensionCalibration" in value
+    ),
+  );
 }
 
 export const BODY_MESH_NAME_MARKERS = [
@@ -254,11 +282,14 @@ function hasMeaningfulContractData(contract: BodyGeometryContract): boolean {
 }
 
 export function buildBodyGeometrySourceHashPayload(
-  outline: EditableBodyOutline | null | undefined,
+  input: EditableBodyOutline | BodyGeometrySourceHashAuthority | null | undefined,
 ): Record<string, unknown> | null {
+  const outline: EditableBodyOutline | null = isBodyGeometrySourceHashAuthority(input)
+    ? (input.outline ?? null)
+    : (input ?? null);
   if (!outline) return null;
   const directContour = resolveEditableBodyOutlineDirectContour(outline);
-  return {
+  const outlinePayload = {
     closed: outline.closed,
     version: outline.version ?? 1,
     sourceContourMode: outline.sourceContourMode ?? null,
@@ -300,6 +331,21 @@ export function buildBodyGeometrySourceHashPayload(
           height: round2(outline.sourceContourViewport.height),
         }
       : null,
+  };
+  const authorityInput = isBodyGeometrySourceHashAuthority(input) ? input : null;
+  if (!authorityInput?.canonicalBodyProfile || !authorityInput.canonicalDimensionCalibration) {
+    return outlinePayload;
+  }
+  const normalizedAuthorityPayload = buildBodyReferenceGlbSourcePayload({
+    bodyOutline: outline,
+    canonicalBodyProfile: authorityInput.canonicalBodyProfile,
+    canonicalDimensionCalibration: authorityInput.canonicalDimensionCalibration,
+  });
+  return {
+    version: 2,
+    outline: outlinePayload,
+    canonicalBodyProfile: normalizedAuthorityPayload.canonicalBodyProfile,
+    canonicalDimensionCalibration: normalizedAuthorityPayload.canonicalDimensionCalibration,
   };
 }
 

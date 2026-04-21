@@ -2014,7 +2014,11 @@ function buildBodyReferenceBodyGeometryContract(args: {
   generatedAt: string;
   silhouetteAudit: BodyReferenceSilhouetteAuditReport | null;
 }): BodyGeometryContract {
-  const sourceHashPayload = buildBodyGeometrySourceHashPayload(args.input.bodyOutline);
+  const sourceHashPayload = buildBodyGeometrySourceHashPayload({
+    outline: args.input.bodyOutline,
+    canonicalBodyProfile: args.input.canonicalBodyProfile,
+    canonicalDimensionCalibration: args.input.canonicalDimensionCalibration,
+  });
   const sourceContourViewport = args.input.bodyOutline?.sourceContourViewport ?? null;
   const sourceType = args.input.bodyOutline ? "approved-svg" : "unknown";
   const contract = createEmptyBodyGeometryContract();

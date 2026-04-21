@@ -3496,7 +3496,11 @@ export default function ModelViewer({
       };
     }
 
-    const sourceHashPayload = buildBodyGeometrySourceHashPayload(approvedBodyOutline ?? null);
+    const sourceHashPayload = buildBodyGeometrySourceHashPayload({
+      outline: approvedBodyOutline ?? null,
+      canonicalBodyProfile: canonicalBodyProfile ?? null,
+      canonicalDimensionCalibration: dimensionCalibration ?? null,
+    });
     if (!sourceHashPayload) {
       setViewerRuntimeSourceHash((current) => current === null ? current : null);
       return () => {
@@ -3523,7 +3527,7 @@ export default function ModelViewer({
     return () => {
       cancelled = true;
     };
-  }, [approvedBodyOutline, showModelDebug, sourceModelStatus]);
+  }, [approvedBodyOutline, canonicalBodyProfile, dimensionCalibration, showModelDebug, sourceModelStatus]);
 
   useEffect(() => {
     let cancelled = false;

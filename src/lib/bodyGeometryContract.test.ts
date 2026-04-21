@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type {
+  CanonicalBodyProfile,
+  CanonicalDimensionCalibration,
+  EditableBodyOutline,
+} from "../types/productTemplate.ts";
+import { hashJsonSha256Node } from "./hashSha256.node.ts";
 import {
   buildBodyGeometrySourceHashPayload,
   createEmptyBodyGeometryContract,
@@ -54,6 +60,89 @@ function createTestBodyGeometryContract(
       ...overrides.validation,
     },
   };
+}
+
+function createCanonicalAuthorityFixture() {
+  const outline: EditableBodyOutline = {
+    closed: true,
+    version: 1,
+    sourceContourMode: "body-only" as const,
+    points: [
+      { id: "top", x: 43.2, y: 15.5, role: "topOuter" as const, pointType: "corner" as const, inHandle: null, outHandle: null },
+      { id: "mid", x: 43.2, y: 88.4, role: "body" as const, pointType: "smooth" as const, inHandle: null, outHandle: null },
+      { id: "base", x: 43.2, y: 157.2, role: "base" as const, pointType: "corner" as const, inHandle: null, outHandle: null },
+    ],
+    directContour: [
+      { x: 43.2, y: 15.5 },
+      { x: 43.2, y: 88.4 },
+      { x: 43.2, y: 157.2 },
+      { x: -43.2, y: 157.2 },
+      { x: -43.2, y: 88.4 },
+      { x: -43.2, y: 15.5 },
+    ],
+  };
+  const canonicalBodyProfile: CanonicalBodyProfile = {
+    symmetrySource: "left",
+    mirroredFromSymmetrySource: true,
+    mirroredRightFromLeft: true,
+    axis: {
+      xTop: 0,
+      yTop: 15.5,
+      xBottom: 0,
+      yBottom: 157.2,
+    },
+    samples: [
+      { sNorm: 0, yMm: 15.5, yPx: 28.2, xLeft: -43.2, radiusPx: 43.2, radiusMm: 43.2 },
+      { sNorm: 0.5, yMm: 88.4, yPx: 92.4, xLeft: -43.2, radiusPx: 43.2, radiusMm: 43.2 },
+      { sNorm: 1, yMm: 157.2, yPx: 156.6, xLeft: -43.2, radiusPx: 43.2, radiusMm: 43.2 },
+    ],
+    svgPath: "",
+  };
+  const canonicalDimensionCalibration: CanonicalDimensionCalibration = {
+    units: "mm",
+    totalHeightMm: 172.72,
+    bodyHeightMm: 141.7,
+    lidBodyLineMm: 15.5,
+    bodyBottomMm: 157.2,
+    wrapDiameterMm: 86.4,
+    baseDiameterMm: 86.4,
+    wrapWidthMm: 271.43,
+    frontVisibleWidthMm: 86.4,
+    frontAxisPx: {
+      xTop: 0,
+      yTop: 28.2,
+      xBottom: 0,
+      yBottom: 156.6,
+    },
+    photoToFrontTransform: {
+      type: "affine",
+      matrix: [1, 0, 0, 0, 1.2245, -19.03],
+    },
+    svgFrontViewBoxMm: {
+      x: -43.2,
+      y: 0,
+      width: 86.4,
+      height: 172.72,
+    },
+    wrapMappingMm: {
+      frontMeridianMm: 135.72,
+      backMeridianMm: 0,
+      leftQuarterMm: 67.86,
+      rightQuarterMm: 203.58,
+    },
+    axialSurfaceBands: undefined,
+    printableSurfaceContract: {
+      printableTopMm: 15.5,
+      printableBottomMm: 172.72,
+      printableHeightMm: 157.22,
+      axialExclusions: [],
+      circumferentialExclusions: [],
+    },
+    glbScale: {
+      unitsPerMm: 1,
+    },
+  };
+  return { outline, canonicalBodyProfile, canonicalDimensionCalibration };
 }
 
 test("createEmptyBodyGeometryContract starts as an unknown passive metadata shell", () => {
@@ -151,6 +240,60 @@ test("buildBodyGeometrySourceHashPayload captures effective outline geometry fie
     width: 300.79,
     height: 600.99,
   });
+});
+
+test("buildBodyGeometrySourceHashPayload includes canonical body authority when present", () => {
+  const authority = createCanonicalAuthorityFixture();
+  const payload = buildBodyGeometrySourceHashPayload({
+    outline: authority.outline,
+    canonicalBodyProfile: authority.canonicalBodyProfile,
+    canonicalDimensionCalibration: authority.canonicalDimensionCalibration,
+  }) as {
+    version: number;
+    outline: ReturnType<typeof buildBodyGeometrySourceHashPayload>;
+    canonicalBodyProfile: { samples: Array<{ yMm: number }> };
+    canonicalDimensionCalibration: { wrapDiameterMm: number };
+  };
+
+  assert.ok(payload);
+  assert.equal(payload.version, 2);
+  assert.deepEqual(payload.outline, buildBodyGeometrySourceHashPayload(authority.outline));
+  assert.equal(payload.canonicalDimensionCalibration.wrapDiameterMm, 86.4);
+  assert.equal(payload.canonicalBodyProfile.samples[1]?.yMm, 88.4);
+});
+
+test("buildBodyGeometrySourceHashPayload changes when canonical authority changes even if outline is unchanged", () => {
+  const authority = createCanonicalAuthorityFixture();
+  const editedCalibration: CanonicalDimensionCalibration = {
+    ...authority.canonicalDimensionCalibration,
+    bodyHeightMm: 141.74,
+    wrapDiameterMm: 86.44,
+    wrapWidthMm: 271.55,
+    printableSurfaceContract: {
+      ...authority.canonicalDimensionCalibration.printableSurfaceContract!,
+      printableHeightMm: 157.26,
+    },
+  };
+  const editedProfile: CanonicalBodyProfile = {
+    ...authority.canonicalBodyProfile,
+    samples: authority.canonicalBodyProfile.samples.map((sample, index) => ({
+      ...sample,
+      yMm: index === 0 ? sample.yMm : sample.yMm + 0.04,
+    })),
+  };
+
+  const beforeHash = hashJsonSha256Node(buildBodyGeometrySourceHashPayload({
+    outline: authority.outline,
+    canonicalBodyProfile: authority.canonicalBodyProfile,
+    canonicalDimensionCalibration: authority.canonicalDimensionCalibration,
+  }));
+  const afterHash = hashJsonSha256Node(buildBodyGeometrySourceHashPayload({
+    outline: authority.outline,
+    canonicalBodyProfile: editedProfile,
+    canonicalDimensionCalibration: editedCalibration,
+  }));
+
+  assert.notEqual(beforeHash, afterHash);
 });
 
 test("detectBodyMeshes classifies common body, shell, and cutout mesh names", () => {
@@ -1417,6 +1560,73 @@ test("resolveLoadedGlbFreshRelativeToSource only falls back to seeded freshness 
     }),
     false,
   );
+});
+
+test("mergeAuditContractWithLoadedInspection marks reviewed GLBs stale when the accepted source hash changes after regeneration is required", () => {
+  const merged = mergeAuditContractWithLoadedInspection({
+    auditContract: createTestBodyGeometryContract({
+      mode: "body-cutout-qa",
+      source: {
+        type: "approved-svg",
+        hash: "sha256:source-before",
+      },
+      glb: {
+        path: "/api/admin/models/generated/example.glb",
+        hash: "sha256:glb-before",
+        sourceHash: "sha256:source-before",
+        freshRelativeToSource: true,
+      },
+      meshes: {
+        names: ["body_mesh"],
+        bodyMeshNames: ["body_mesh"],
+      },
+      dimensionsMm: {
+        bodyBounds: { width: 86.4, height: 157.18, depth: 86.4 },
+        bodyBoundsUnits: "mm",
+        expectedBodyWidthMm: 86.4,
+        expectedBodyHeightMm: 157.18,
+      },
+      validation: {
+        status: "pass",
+        errors: [],
+        warnings: [],
+      },
+    }),
+    loadedInspectionContract: createTestBodyGeometryContract({
+      mode: "body-cutout-qa",
+      source: {
+        type: "approved-svg",
+        hash: "sha256:source-after",
+      },
+      glb: {
+        path: "/api/admin/models/generated/example.glb",
+        hash: "sha256:glb-before",
+        sourceHash: "sha256:source-before",
+        freshRelativeToSource: true,
+      },
+      meshes: {
+        names: ["body_mesh"],
+        bodyMeshNames: ["body_mesh"],
+      },
+      dimensionsMm: {
+        expectedBodyWidthMm: 86.4,
+        expectedBodyHeightMm: 157.22,
+      },
+    }),
+    currentMode: "body-cutout-qa",
+    currentSourceHash: "sha256:source-after",
+    loadedGlbHash: "sha256:glb-before",
+    runtimeInspection: {
+      status: "pending",
+      glbUrl: "/api/admin/models/generated/example.glb",
+    },
+  });
+
+  assert.equal(merged.source.hash, "sha256:source-after");
+  assert.equal(merged.glb.sourceHash, "sha256:source-before");
+  assert.equal(merged.glb.freshRelativeToSource, false);
+  assert.equal(merged.validation.status, "fail");
+  assert.match(merged.validation.errors.join(" "), /stale relative to the current source contour/i);
 });
 
 test("contracts with only a valid body mesh and matching dimensions pass cleanly", () => {

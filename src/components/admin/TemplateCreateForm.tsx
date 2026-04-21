@@ -2100,6 +2100,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const [bodyReferenceFineTuneModeEnabled, setBodyReferenceFineTuneModeEnabled] = React.useState(false);
   const [bodyReferenceFineTuneDraftOutline, setBodyReferenceFineTuneDraftOutline] = React.useState<EditableBodyOutline | undefined>(undefined);
   const [bodyReferenceFineTuneDetectedBaselineOutline, setBodyReferenceFineTuneDetectedBaselineOutline] = React.useState<EditableBodyOutline | null>(null);
+  const [bodyReferenceFineTuneApprovedCanonicalBodyProfileSnapshot, setBodyReferenceFineTuneApprovedCanonicalBodyProfileSnapshot] = React.useState<CanonicalBodyProfile | null>(null);
+  const [bodyReferenceFineTuneApprovedCanonicalDimensionCalibrationSnapshot, setBodyReferenceFineTuneApprovedCanonicalDimensionCalibrationSnapshot] = React.useState<CanonicalDimensionCalibration | null>(null);
   const [referencePaths, setReferencePaths] = React.useState<ReferencePaths>(
     resolveReferencePaths(editingTemplate?.dimensions),
   );
@@ -3063,6 +3065,30 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     activeBodyReferencePipeline?.canonicalBodyProfile ?? null;
   const activeCanonicalDimensionCalibration =
     activeBodyReferencePipeline?.canonicalDimensionCalibration ?? null;
+  const bodyCutoutQaAuthorityCanonicalBodyProfile = React.useMemo(
+    () => (
+      bodyReferenceFineTuneModeEnabled
+        ? (bodyReferenceFineTuneApprovedCanonicalBodyProfileSnapshot ?? activeCanonicalBodyProfile)
+        : activeCanonicalBodyProfile
+    ),
+    [
+      activeCanonicalBodyProfile,
+      bodyReferenceFineTuneApprovedCanonicalBodyProfileSnapshot,
+      bodyReferenceFineTuneModeEnabled,
+    ],
+  );
+  const bodyCutoutQaAuthorityCanonicalDimensionCalibration = React.useMemo(
+    () => (
+      bodyReferenceFineTuneModeEnabled
+        ? (bodyReferenceFineTuneApprovedCanonicalDimensionCalibrationSnapshot ?? activeCanonicalDimensionCalibration)
+        : activeCanonicalDimensionCalibration
+    ),
+    [
+      activeCanonicalDimensionCalibration,
+      bodyReferenceFineTuneApprovedCanonicalDimensionCalibrationSnapshot,
+      bodyReferenceFineTuneModeEnabled,
+    ],
+  );
   const resolvedApprovedBodyReferenceOutlineForGlb = React.useMemo(
     () => buildApprovedBodyOutline(bodyReferencePipelineOutline ?? calibrationBodyOutline, {
       bodyTopMm: activeCanonicalDimensionCalibration?.lidBodyLineMm ?? committedBodyReferenceAuthority?.bodyTopMm ?? null,
@@ -3137,8 +3163,8 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const canGenerateReviewedBodyReferenceGlb = Boolean(
     productType !== "flat" &&
     approvedBodyReferenceOutlineForGlb &&
-    activeCanonicalBodyProfile &&
-    activeCanonicalDimensionCalibration,
+    bodyCutoutQaAuthorityCanonicalBodyProfile &&
+    bodyCutoutQaAuthorityCanonicalDimensionCalibration,
   );
   const activeBodyReferenceFineTuneOutline = bodyReferenceFineTuneModeEnabled
     ? (bodyReferenceFineTuneDraftOutline ?? approvedBodyReferenceOutlineForGlb ?? undefined)
@@ -3177,16 +3203,16 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     if (
       !canGenerateReviewedBodyReferenceGlb ||
       !approvedBodyReferenceOutlineForGlb ||
-      !activeCanonicalBodyProfile ||
-      !activeCanonicalDimensionCalibration
+      !bodyCutoutQaAuthorityCanonicalBodyProfile ||
+      !bodyCutoutQaAuthorityCanonicalDimensionCalibration
     ) {
       return null;
     }
     return buildBodyReferenceGlbSourceSignature({
       renderMode: "body-cutout-qa",
       matchedProfileId: lookupResult?.matchedProfileId ?? null,
-      canonicalBodyProfile: activeCanonicalBodyProfile,
-      canonicalDimensionCalibration: activeCanonicalDimensionCalibration,
+      canonicalBodyProfile: bodyCutoutQaAuthorityCanonicalBodyProfile,
+      canonicalDimensionCalibration: bodyCutoutQaAuthorityCanonicalDimensionCalibration,
       bodyOutline: approvedBodyReferenceOutlineForGlb,
       lidProfile: referencePaths.lidProfile ?? null,
       silverProfile: referencePaths.silverProfile ?? null,
@@ -3198,10 +3224,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
       topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : null,
     });
   }, [
-    activeCanonicalBodyProfile,
-    activeCanonicalDimensionCalibration,
     approvedBodyReferenceOutlineForGlb,
     bodyColorHex,
+    bodyCutoutQaAuthorityCanonicalBodyProfile,
+    bodyCutoutQaAuthorityCanonicalDimensionCalibration,
     canGenerateReviewedBodyReferenceGlb,
     lidColorHex,
     lookupResult?.matchedProfileId,
@@ -6902,13 +6928,29 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     const approvedSnapshot = cloneEditableBodyOutline(approvedBodyReferenceOutlineForGlb);
     setBodyReferenceFineTuneModeEnabled(true);
     setBodyReferenceFineTuneDraftOutline(approvedSnapshot ?? undefined);
+    setBodyReferenceFineTuneApprovedCanonicalBodyProfileSnapshot(
+      activeCanonicalBodyProfile
+        ? JSON.parse(JSON.stringify(activeCanonicalBodyProfile)) as CanonicalBodyProfile
+        : null,
+    );
+    setBodyReferenceFineTuneApprovedCanonicalDimensionCalibrationSnapshot(
+      activeCanonicalDimensionCalibration
+        ? JSON.parse(JSON.stringify(activeCanonicalDimensionCalibration)) as CanonicalDimensionCalibration
+        : null,
+    );
     const detectedBaseline = bodyReferencePipelineOutline?.sourceContourMode === "body-only"
       ? cloneEditableBodyOutline(bodyReferencePipelineOutline)
       : (approvedBodyReferenceOutlineForGlb.sourceContourMode === "body-only"
         ? cloneEditableBodyOutline(approvedBodyReferenceOutlineForGlb)
         : null);
     setBodyReferenceFineTuneDetectedBaselineOutline(detectedBaseline ?? null);
-  }, [approvedBodyReferenceOutlineForGlb, bodyReferencePipelineOutline, productType]);
+  }, [
+    activeCanonicalBodyProfile,
+    activeCanonicalDimensionCalibration,
+    approvedBodyReferenceOutlineForGlb,
+    bodyReferencePipelineOutline,
+    productType,
+  ]);
 
   const handleResetFineTuneDraftToApproved = React.useCallback(() => {
     if (!approvedBodyReferenceOutlineForGlb) return;
@@ -6923,17 +6965,13 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
   const handleDiscardBodyReferenceFineTuneDraft = React.useCallback(() => {
     setBodyReferenceFineTuneModeEnabled(false);
     setBodyReferenceFineTuneDraftOutline(undefined);
+    setBodyReferenceFineTuneApprovedCanonicalBodyProfileSnapshot(null);
+    setBodyReferenceFineTuneApprovedCanonicalDimensionCalibrationSnapshot(null);
   }, []);
 
-  const handleAcceptBodyReferenceFineTuneDraft = React.useCallback(() => {
-    if (!activeBodyReferenceFineTuneOutline || !bodyReferenceFineTuneDraftHasChanges) return;
-    commitBodyOutlineProfile(activeBodyReferenceFineTuneOutline);
-    commitReferencePaths(createReferencePaths({
-      bodyOutline: activeBodyReferenceFineTuneOutline,
-      lidProfile: referencePaths.lidProfile,
-      silverProfile: referencePaths.silverProfile,
-    }));
-    const derived = deriveDimensionsFromEditableBodyOutline(activeBodyReferenceFineTuneOutline);
+  const commitAcceptedBodyReferenceDerivedDimensions = React.useCallback((outline: EditableBodyOutline | null | undefined) => {
+    if (!outline) return;
+    const derived = deriveDimensionsFromEditableBodyOutline(outline);
     if (typeof derived.bodyTopFromOverallMm === "number") {
       setBodyTopFromOverallMm(round2(derived.bodyTopFromOverallMm));
     }
@@ -6961,14 +6999,27 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     if (typeof derived.bevelDiameterMm === "number") {
       setBevelDiameterMm(round2(derived.bevelDiameterMm));
     }
+  }, [advancedGeometryOverridesUnlocked]);
+
+  const handleAcceptBodyReferenceFineTuneDraft = React.useCallback(() => {
+    if (!activeBodyReferenceFineTuneOutline || !bodyReferenceFineTuneDraftHasChanges) return;
+    commitBodyOutlineProfile(activeBodyReferenceFineTuneOutline);
+    commitReferencePaths(createReferencePaths({
+      bodyOutline: activeBodyReferenceFineTuneOutline,
+      lidProfile: referencePaths.lidProfile,
+      silverProfile: referencePaths.silverProfile,
+    }));
+    commitAcceptedBodyReferenceDerivedDimensions(activeBodyReferenceFineTuneOutline);
     setReviewedBodyCutoutQaOutlineSnapshot(null);
     setBodyReferenceFineTuneModeEnabled(false);
     setBodyReferenceFineTuneDraftOutline(undefined);
+    setBodyReferenceFineTuneApprovedCanonicalBodyProfileSnapshot(null);
+    setBodyReferenceFineTuneApprovedCanonicalDimensionCalibrationSnapshot(null);
     setBodyReferenceOutlineSeedMode("saved-outline");
   }, [
     activeBodyReferenceFineTuneOutline,
-    advancedGeometryOverridesUnlocked,
     bodyReferenceFineTuneDraftHasChanges,
+    commitAcceptedBodyReferenceDerivedDimensions,
     commitBodyOutlineProfile,
     commitReferencePaths,
     referencePaths.lidProfile,
@@ -8444,19 +8495,25 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                         productType === "flat"
                           ? undefined
                           : (
+                              effectivePreviewModelMode === "body-cutout-qa"
+                                ? bodyCutoutQaAuthorityCanonicalDimensionCalibration
+                                : (
                               effectivePreviewModelMode === "full-model"
                                 ? (fullPreviewCanonicalDimensionCalibration ?? activeCanonicalDimensionCalibration)
                                 : activeCanonicalDimensionCalibration
-                            )
+                            ))
                       }
                       canonicalBodyProfile={
                         productType === "flat"
                           ? undefined
                           : (
+                              effectivePreviewModelMode === "body-cutout-qa"
+                                ? bodyCutoutQaAuthorityCanonicalBodyProfile
+                                : (
                               effectivePreviewModelMode === "full-model"
                                 ? (fullPreviewCanonicalBodyProfile ?? activeCanonicalBodyProfile)
                                 : activeCanonicalBodyProfile
-                            )
+                            ))
                       }
                       canonicalHandleProfile={productType === "flat" ? undefined : normalizedCanonicalHandleProfile}
                       approvedBodyOutline={productType === "flat" ? undefined : bodyCutoutQaApprovedOutline}
@@ -9752,6 +9809,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             printableTopOverrideMm={printableTopOverrideMm}
             printableBottomOverrideMm={printableBottomOverrideMm}
             onChange={(bodyTop, bodyBottom) => {
+              if (bodyReferenceFineTuneModeEnabled) return;
               setBodyTopFromOverallMm(bodyTop);
               setBodyBottomFromOverallMm(bodyBottom);
             }}
@@ -9805,10 +9863,22 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             onHandleOuterTopChange={undefined}
             onHandleOuterBottomChange={undefined}
             onHandleTubeDiameterChange={setHandleTubeDiameterMm}
-            onShoulderDiameterChange={setShoulderDiameterMm}
-            onTaperUpperDiameterChange={setTaperUpperDiameterMm}
-            onTaperLowerDiameterChange={setTaperLowerDiameterMm}
-            onBevelDiameterChange={setBevelDiameterMm}
+            onShoulderDiameterChange={(nextDiameter) => {
+              if (bodyReferenceFineTuneModeEnabled) return;
+              setShoulderDiameterMm(nextDiameter);
+            }}
+            onTaperUpperDiameterChange={(nextDiameter) => {
+              if (bodyReferenceFineTuneModeEnabled) return;
+              setTaperUpperDiameterMm(nextDiameter);
+            }}
+            onTaperLowerDiameterChange={(nextDiameter) => {
+              if (bodyReferenceFineTuneModeEnabled) return;
+              setTaperLowerDiameterMm(nextDiameter);
+            }}
+            onBevelDiameterChange={(nextDiameter) => {
+              if (bodyReferenceFineTuneModeEnabled) return;
+              setBevelDiameterMm(nextDiameter);
+            }}
             onPhotoWidthScaleChange={setReferencePhotoWidthScalePct}
             onPhotoHeightScaleChange={setReferencePhotoHeightScalePct}
             onPhotoLockAspectChange={setReferencePhotoLockAspect}
@@ -9819,6 +9889,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             colorResampleRequestKey={appearanceResampleRequestKey}
             onColorsChange={handleApplyAppearanceSample}
             onDiameterChange={(nextDiameter) => {
+              if (bodyReferenceFineTuneModeEnabled) return;
               if (advancedGeometryOverridesUnlocked) {
                 setDiameterMm(round2(nextDiameter));
                 return;
@@ -9826,12 +9897,15 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               setWrapWidthInputMm(round2(Math.PI * nextDiameter));
             }}
             onTopOuterDiameterChange={(nextDiameter) => {
+              if (bodyReferenceFineTuneModeEnabled) return;
               setTopOuterDiameterMm(round2(nextDiameter));
             }}
             onBaseDiameterChange={(nextDiameter) => {
+              if (bodyReferenceFineTuneModeEnabled) return;
               setBaseDiameterMm(round2(nextDiameter));
             }}
             onBaseDiameterDerived={(nextDiameter) => {
+              if (bodyReferenceFineTuneModeEnabled) return;
               setBaseDiameterMm(round2(nextDiameter));
             }}
             onOutlineProfileChange={(nextProfile) => {
@@ -9841,36 +9915,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               }
               setReviewedBodyCutoutQaOutlineSnapshot(null);
               commitBodyOutlineProfile(nextProfile);
-              const derived = deriveDimensionsFromEditableBodyOutline(nextProfile);
-              if (typeof derived.bodyTopFromOverallMm === "number") {
-                setBodyTopFromOverallMm(round2(derived.bodyTopFromOverallMm));
-              }
-              if (typeof derived.bodyBottomFromOverallMm === "number") {
-                setBodyBottomFromOverallMm(round2(derived.bodyBottomFromOverallMm));
-              }
-              if (typeof derived.diameterMm === "number") {
-                if (advancedGeometryOverridesUnlocked) {
-                  setDiameterMm(round2(derived.diameterMm));
-                }
-              }
-              if (typeof derived.topOuterDiameterMm === "number") {
-                setTopOuterDiameterMm(round2(derived.topOuterDiameterMm));
-              }
-              if (typeof derived.baseDiameterMm === "number") {
-                setBaseDiameterMm(round2(derived.baseDiameterMm));
-              }
-              if (typeof derived.shoulderDiameterMm === "number") {
-                setShoulderDiameterMm(round2(derived.shoulderDiameterMm));
-              }
-              if (typeof derived.taperUpperDiameterMm === "number") {
-                setTaperUpperDiameterMm(round2(derived.taperUpperDiameterMm));
-              }
-              if (typeof derived.taperLowerDiameterMm === "number") {
-                setTaperLowerDiameterMm(round2(derived.taperLowerDiameterMm));
-              }
-              if (typeof derived.bevelDiameterMm === "number") {
-                setBevelDiameterMm(round2(derived.bevelDiameterMm));
-              }
+              commitAcceptedBodyReferenceDerivedDimensions(nextProfile);
             }}
             onReferencePathsChange={(nextPaths) => {
               if (bodyReferenceFineTuneModeEnabled) {
