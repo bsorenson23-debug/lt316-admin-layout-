@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint src/",
+    "test:body-reference-contract": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/lib/bodyReferencePipeline.test.ts src/lib/editableBodyOutline.test.ts",
     "test:tumbler-auto-size": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/tumblerAutoSize.test.ts",
     "test:tumbler-guides": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/tumblerGuides.test.ts",
     "test:tumbler-identification": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/server/tumbler/identifyTumblerBrand.test.ts",
