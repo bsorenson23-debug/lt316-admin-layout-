@@ -67,7 +67,7 @@ test("createEmptyBodyGeometryContract starts as an unknown passive metadata shel
   assert.equal(contract.validation.status, "unknown");
 });
 
-test("buildBodyGeometrySourceHashPayload captures exact stored outline geometry fields", () => {
+test("buildBodyGeometrySourceHashPayload captures effective outline geometry fields", () => {
   const payload = buildBodyGeometrySourceHashPayload({
     closed: true,
     version: 1,
@@ -108,44 +108,48 @@ test("buildBodyGeometrySourceHashPayload captures exact stored outline geometry 
     sourceContourMode: "body-only",
   });
 
-  assert.deepEqual(payload, {
-    closed: true,
-    version: 1,
-    sourceContourMode: "body-only",
-    points: [
-      {
-        x: 1.23,
-        y: 5.68,
-        role: "body",
-        pointType: "corner",
-        inHandle: null,
-        outHandle: null,
-      },
-      {
-        x: 9.88,
-        y: 4.32,
-        role: "base",
-        pointType: "smooth",
-        inHandle: { x: 8.77, y: 4.11 },
-        outHandle: { x: 10.11, y: 4.56 },
-      },
-    ],
-    directContour: [{ x: 1.11, y: 2.22 }],
-    sourceContour: [{ x: 3.33, y: 4.44 }],
-    sourceContourBounds: {
-      minX: 0,
-      minY: 0,
-      maxX: 12.35,
-      maxY: 45.68,
-      width: 12.35,
-      height: 45.68,
+  assert.ok(payload);
+  assert.deepEqual(payload.points, [
+    {
+      x: 1.23,
+      y: 5.68,
+      role: "body",
+      pointType: "corner",
+      inHandle: null,
+      outHandle: null,
     },
-    sourceContourViewport: {
-      minX: 100.12,
-      minY: 50.46,
-      width: 300.79,
-      height: 600.99,
+    {
+      x: 9.88,
+      y: 4.32,
+      role: "base",
+      pointType: "smooth",
+      inHandle: { x: 8.77, y: 4.11 },
+      outHandle: { x: 10.11, y: 4.56 },
     },
+  ]);
+  assert.equal(payload.closed, true);
+  assert.equal(payload.version, 1);
+  assert.equal(payload.sourceContourMode, "body-only");
+  // A one-point source contour is not usable as geometry authority, so the hash
+  // payload resolves the effective contour from the saved manual points instead.
+  const directContour = payload.directContour as Array<{ x: number; y: number }> | null | undefined;
+  assert.ok((directContour?.length ?? 0) > 8);
+  assert.deepEqual(directContour?.[0], { x: 9.9, y: 4.3 });
+  assert.deepEqual(directContour?.at(-1), { x: -9.9, y: 4.3 });
+  assert.deepEqual(payload.sourceContour, [{ x: 3.33, y: 4.44 }]);
+  assert.deepEqual(payload.sourceContourBounds, {
+    minX: 0,
+    minY: 0,
+    maxX: 12.35,
+    maxY: 45.68,
+    width: 12.35,
+    height: 45.68,
+  });
+  assert.deepEqual(payload.sourceContourViewport, {
+    minX: 100.12,
+    minY: 50.46,
+    width: 300.79,
+    height: 600.99,
   });
 });
 

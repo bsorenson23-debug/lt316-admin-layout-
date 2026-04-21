@@ -110,6 +110,14 @@ import {
   isTrustedBodyReferenceSourceTrust,
   resolveBodyReferenceTrust,
 } from "@/lib/bodyReferenceTrust";
+import { buildBodyReferenceSvgQualityReportFromOutline } from "@/lib/bodyReferenceSvgQuality";
+import { buildBodyReferenceGlbSourceSignature } from "@/lib/bodyReferenceGlbSource";
+import {
+  hasFineTuneDraftChanges,
+  resolveFineTuneGlbReviewState,
+  resolveOutlineBounds,
+  resolveOutlinePointCount,
+} from "@/lib/bodyReferenceFineTune";
 import {
   deriveTumblerPreviewModelState,
   type TumblerPreviewModelState,
@@ -2088,6 +2096,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     resolveReferencePaths(editingTemplate?.dimensions).bodyOutline ?? undefined,
   );
   const [reviewedBodyCutoutQaOutlineSnapshot, setReviewedBodyCutoutQaOutlineSnapshot] = React.useState<EditableBodyOutline | null>(null);
+  const [reviewedBodyCutoutQaGeneratedSourceSignature, setReviewedBodyCutoutQaGeneratedSourceSignature] = React.useState<string | null>(null);
+  const [bodyReferenceFineTuneModeEnabled, setBodyReferenceFineTuneModeEnabled] = React.useState(false);
+  const [bodyReferenceFineTuneDraftOutline, setBodyReferenceFineTuneDraftOutline] = React.useState<EditableBodyOutline | undefined>(undefined);
+  const [bodyReferenceFineTuneDetectedBaselineOutline, setBodyReferenceFineTuneDetectedBaselineOutline] = React.useState<EditableBodyOutline | null>(null);
   const [referencePaths, setReferencePaths] = React.useState<ReferencePaths>(
     resolveReferencePaths(editingTemplate?.dimensions),
   );
@@ -3128,6 +3140,93 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     activeCanonicalBodyProfile &&
     activeCanonicalDimensionCalibration,
   );
+  const activeBodyReferenceFineTuneOutline = bodyReferenceFineTuneModeEnabled
+    ? (bodyReferenceFineTuneDraftOutline ?? approvedBodyReferenceOutlineForGlb ?? undefined)
+    : undefined;
+  const bodyReferenceFineTuneDraftHasChanges = hasFineTuneDraftChanges({
+    approved: approvedBodyReferenceOutlineForGlb,
+    draft: activeBodyReferenceFineTuneOutline,
+  });
+  const bodyReferenceFineTuneDraftPendingAcceptance =
+    bodyReferenceFineTuneModeEnabled && bodyReferenceFineTuneDraftHasChanges;
+  const bodyReferenceApprovedQualityReport = React.useMemo(
+    () => buildBodyReferenceSvgQualityReportFromOutline({
+      outline: approvedBodyReferenceOutlineForGlb,
+      label: "approved-body-reference-outline",
+    }),
+    [approvedBodyReferenceOutlineForGlb],
+  );
+  const bodyReferenceDraftQualityReport = React.useMemo(
+    () => buildBodyReferenceSvgQualityReportFromOutline({
+      outline: activeBodyReferenceFineTuneOutline ?? null,
+      label: "draft-body-reference-outline",
+    }),
+    [activeBodyReferenceFineTuneOutline],
+  );
+  const approvedBodyReferenceOutlineBounds = React.useMemo(
+    () => resolveOutlineBounds(approvedBodyReferenceOutlineForGlb),
+    [approvedBodyReferenceOutlineForGlb],
+  );
+  const draftBodyReferenceOutlineBounds = React.useMemo(
+    () => resolveOutlineBounds(activeBodyReferenceFineTuneOutline),
+    [activeBodyReferenceFineTuneOutline],
+  );
+  const approvedBodyReferencePointCount = resolveOutlinePointCount(approvedBodyReferenceOutlineForGlb);
+  const draftBodyReferencePointCount = resolveOutlinePointCount(activeBodyReferenceFineTuneOutline);
+  const currentReviewedBodyReferenceSourceSignature = React.useMemo(() => {
+    if (
+      !canGenerateReviewedBodyReferenceGlb ||
+      !approvedBodyReferenceOutlineForGlb ||
+      !activeCanonicalBodyProfile ||
+      !activeCanonicalDimensionCalibration
+    ) {
+      return null;
+    }
+    return buildBodyReferenceGlbSourceSignature({
+      renderMode: "body-cutout-qa",
+      matchedProfileId: lookupResult?.matchedProfileId ?? null,
+      canonicalBodyProfile: activeCanonicalBodyProfile,
+      canonicalDimensionCalibration: activeCanonicalDimensionCalibration,
+      bodyOutline: approvedBodyReferenceOutlineForGlb,
+      lidProfile: referencePaths.lidProfile ?? null,
+      silverProfile: referencePaths.silverProfile ?? null,
+      bodyColorHex: bodyColorHex ?? null,
+      lidColorHex: lidColorHex ?? null,
+      rimColorHex: rimColorHex ?? null,
+      lidSeamFromOverallMm: resolvedLidSeamForPersistence ?? null,
+      silverBandBottomFromOverallMm: resolvedSilverBandBottomForPersistence ?? null,
+      topOuterDiameterMm: topOuterDiameterMm > 0 ? topOuterDiameterMm : null,
+    });
+  }, [
+    activeCanonicalBodyProfile,
+    activeCanonicalDimensionCalibration,
+    approvedBodyReferenceOutlineForGlb,
+    bodyColorHex,
+    canGenerateReviewedBodyReferenceGlb,
+    lidColorHex,
+    lookupResult?.matchedProfileId,
+    referencePaths.lidProfile,
+    referencePaths.silverProfile,
+    resolvedLidSeamForPersistence,
+    resolvedSilverBandBottomForPersistence,
+    rimColorHex,
+    topOuterDiameterMm,
+  ]);
+  const reviewedBodyReferenceGlbFreshness = resolveFineTuneGlbReviewState({
+    canGenerate: canGenerateReviewedBodyReferenceGlb,
+    hasGeneratedArtifact: activeDrinkwareGlbStatus?.status === "generated-reviewed-model",
+    currentSourceSignature: currentReviewedBodyReferenceSourceSignature,
+    generatedSourceSignature: reviewedBodyCutoutQaGeneratedSourceSignature,
+    hasPendingSourceDraft: bodyReferenceFineTuneDraftPendingAcceptance,
+  });
+  const reviewedBodyReferenceGlbFreshnessLabel =
+    reviewedBodyReferenceGlbFreshness.status === "current"
+      ? "Reviewed GLB is fresh against accepted cutout"
+      : reviewedBodyReferenceGlbFreshness.status === "stale"
+        ? "Reviewed GLB is stale and should be regenerated"
+        : reviewedBodyReferenceGlbFreshness.status === "draft-pending"
+          ? "Draft edits pending acceptance"
+          : "Reviewed GLB freshness unavailable";
   const previewPrintableSurfaceContract =
     activePrintableSurfaceResolution?.printableSurfaceContract ??
     activeCanonicalDimensionCalibration?.printableSurfaceContract ??
@@ -6548,6 +6647,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     }
     setDetectDraftSnapshot(null);
     setReviewedBodyCutoutQaOutlineSnapshot(null);
+    setReviewedBodyCutoutQaGeneratedSourceSignature(null);
+    setBodyReferenceFineTuneModeEnabled(false);
+    setBodyReferenceFineTuneDraftOutline(undefined);
+    setBodyReferenceFineTuneDetectedBaselineOutline(null);
     setReviewAccepted(true);
     setWorkflowStep("review");
   }, [stagedDetectResult]);
@@ -6560,6 +6663,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setDetectDraftSnapshot(null);
     setDetectError(null);
     setReviewedBodyCutoutQaOutlineSnapshot(null);
+    setReviewedBodyCutoutQaGeneratedSourceSignature(null);
+    setBodyReferenceFineTuneModeEnabled(false);
+    setBodyReferenceFineTuneDraftOutline(undefined);
+    setBodyReferenceFineTuneDetectedBaselineOutline(null);
   }, [detectDraftSnapshot, restoreDetectDraftSnapshot]);
 
   /** Run auto-detect on the uploaded product image */
@@ -6568,6 +6675,10 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     setDetecting(true);
     setDetectError(null);
     setReviewedBodyCutoutQaOutlineSnapshot(null);
+    setReviewedBodyCutoutQaGeneratedSourceSignature(null);
+    setBodyReferenceFineTuneModeEnabled(false);
+    setBodyReferenceFineTuneDraftOutline(undefined);
+    setBodyReferenceFineTuneDetectedBaselineOutline(null);
     if (!detectDraftSnapshot || reviewAccepted) {
       setDetectDraftSnapshot(createDetectDraftSnapshot());
     }
@@ -6761,6 +6872,7 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
           }
         : current);
       setReviewedBodyCutoutQaOutlineSnapshot(approvedOutlineSnapshot);
+      setReviewedBodyCutoutQaGeneratedSourceSignature(generated.generatedSourceSignature ?? null);
     } catch (error) {
       setGlbUploadError(error instanceof Error ? error.message : "Failed to generate the reviewed BODY REFERENCE GLB.");
     } finally {
@@ -6783,6 +6895,84 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
     resolvedSilverBandBottomForPersistence,
     rimColorHex,
     topOuterDiameterMm,
+  ]);
+
+  const handleStartBodyReferenceFineTune = React.useCallback(() => {
+    if (productType === "flat" || !approvedBodyReferenceOutlineForGlb) return;
+    const approvedSnapshot = cloneEditableBodyOutline(approvedBodyReferenceOutlineForGlb);
+    setBodyReferenceFineTuneModeEnabled(true);
+    setBodyReferenceFineTuneDraftOutline(approvedSnapshot ?? undefined);
+    const detectedBaseline = bodyReferencePipelineOutline?.sourceContourMode === "body-only"
+      ? cloneEditableBodyOutline(bodyReferencePipelineOutline)
+      : (approvedBodyReferenceOutlineForGlb.sourceContourMode === "body-only"
+        ? cloneEditableBodyOutline(approvedBodyReferenceOutlineForGlb)
+        : null);
+    setBodyReferenceFineTuneDetectedBaselineOutline(detectedBaseline ?? null);
+  }, [approvedBodyReferenceOutlineForGlb, bodyReferencePipelineOutline, productType]);
+
+  const handleResetFineTuneDraftToApproved = React.useCallback(() => {
+    if (!approvedBodyReferenceOutlineForGlb) return;
+    setBodyReferenceFineTuneDraftOutline(cloneEditableBodyOutline(approvedBodyReferenceOutlineForGlb) ?? undefined);
+  }, [approvedBodyReferenceOutlineForGlb]);
+
+  const handleResetFineTuneDraftToDetected = React.useCallback(() => {
+    if (!bodyReferenceFineTuneDetectedBaselineOutline) return;
+    setBodyReferenceFineTuneDraftOutline(cloneEditableBodyOutline(bodyReferenceFineTuneDetectedBaselineOutline) ?? undefined);
+  }, [bodyReferenceFineTuneDetectedBaselineOutline]);
+
+  const handleDiscardBodyReferenceFineTuneDraft = React.useCallback(() => {
+    setBodyReferenceFineTuneModeEnabled(false);
+    setBodyReferenceFineTuneDraftOutline(undefined);
+  }, []);
+
+  const handleAcceptBodyReferenceFineTuneDraft = React.useCallback(() => {
+    if (!activeBodyReferenceFineTuneOutline || !bodyReferenceFineTuneDraftHasChanges) return;
+    commitBodyOutlineProfile(activeBodyReferenceFineTuneOutline);
+    commitReferencePaths(createReferencePaths({
+      bodyOutline: activeBodyReferenceFineTuneOutline,
+      lidProfile: referencePaths.lidProfile,
+      silverProfile: referencePaths.silverProfile,
+    }));
+    const derived = deriveDimensionsFromEditableBodyOutline(activeBodyReferenceFineTuneOutline);
+    if (typeof derived.bodyTopFromOverallMm === "number") {
+      setBodyTopFromOverallMm(round2(derived.bodyTopFromOverallMm));
+    }
+    if (typeof derived.bodyBottomFromOverallMm === "number") {
+      setBodyBottomFromOverallMm(round2(derived.bodyBottomFromOverallMm));
+    }
+    if (typeof derived.diameterMm === "number" && advancedGeometryOverridesUnlocked) {
+      setDiameterMm(round2(derived.diameterMm));
+    }
+    if (typeof derived.topOuterDiameterMm === "number") {
+      setTopOuterDiameterMm(round2(derived.topOuterDiameterMm));
+    }
+    if (typeof derived.baseDiameterMm === "number") {
+      setBaseDiameterMm(round2(derived.baseDiameterMm));
+    }
+    if (typeof derived.shoulderDiameterMm === "number") {
+      setShoulderDiameterMm(round2(derived.shoulderDiameterMm));
+    }
+    if (typeof derived.taperUpperDiameterMm === "number") {
+      setTaperUpperDiameterMm(round2(derived.taperUpperDiameterMm));
+    }
+    if (typeof derived.taperLowerDiameterMm === "number") {
+      setTaperLowerDiameterMm(round2(derived.taperLowerDiameterMm));
+    }
+    if (typeof derived.bevelDiameterMm === "number") {
+      setBevelDiameterMm(round2(derived.bevelDiameterMm));
+    }
+    setReviewedBodyCutoutQaOutlineSnapshot(null);
+    setBodyReferenceFineTuneModeEnabled(false);
+    setBodyReferenceFineTuneDraftOutline(undefined);
+    setBodyReferenceOutlineSeedMode("saved-outline");
+  }, [
+    activeBodyReferenceFineTuneOutline,
+    advancedGeometryOverridesUnlocked,
+    bodyReferenceFineTuneDraftHasChanges,
+    commitBodyOutlineProfile,
+    commitReferencePaths,
+    referencePaths.lidProfile,
+    referencePaths.silverProfile,
   ]);
 
   const handleSave = React.useCallback(async () => {
@@ -8081,7 +8271,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 <button
                   type="button"
                   className={styles.detectBtn}
-                  disabled={!canGenerateReviewedBodyReferenceGlb || generatingReviewedBodyReferenceGlb}
+                  disabled={
+                    !canGenerateReviewedBodyReferenceGlb
+                    || generatingReviewedBodyReferenceGlb
+                    || bodyReferenceFineTuneDraftPendingAcceptance
+                  }
                   onClick={() => {
                     void handleGenerateReviewedBodyReferenceGlb();
                   }}
@@ -8091,6 +8285,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
                 {!canGenerateReviewedBodyReferenceGlb && (
                   <span className={styles.fieldHint}>
                     BODY CUTOUT QA generation unlocks after canonical body profile, calibration, and reviewed BODY REFERENCE outline are ready.
+                  </span>
+                )}
+                {bodyReferenceFineTuneDraftPendingAcceptance && (
+                  <span className={styles.fieldHint}>
+                    Accept corrected cutout before generating BODY CUTOUT QA GLB.
                   </span>
                 )}
               </div>
@@ -9385,6 +9584,132 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               </div>
             </div>
           )}
+          {approvedBodyReferenceOutlineForGlb && (
+            <div className={styles.surfaceContractSummary}>
+              <div className={styles.surfaceContractSummaryGrid}>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Fine-tune source</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {bodyReferenceFineTuneModeEnabled ? "draft contour" : "approved contour"}
+                  </div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Approved points</div>
+                  <div className={styles.surfaceContractMetricValue}>{approvedBodyReferencePointCount}</div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Draft points</div>
+                  <div className={styles.surfaceContractMetricValue}>{draftBodyReferencePointCount}</div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Approved quality</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {bodyReferenceApprovedQualityReport.status}
+                    {typeof bodyReferenceApprovedQualityReport.expectedBridgeSegmentCount === "number"
+                      ? ` / bridges ${bodyReferenceApprovedQualityReport.expectedBridgeSegmentCount}`
+                      : ""}
+                  </div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Draft quality</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {bodyReferenceDraftQualityReport.status}
+                    {typeof bodyReferenceDraftQualityReport.expectedBridgeSegmentCount === "number"
+                      ? ` / bridges ${bodyReferenceDraftQualityReport.expectedBridgeSegmentCount}`
+                      : ""}
+                  </div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Reviewed GLB freshness</div>
+                  <div className={styles.surfaceContractMetricValue}>{reviewedBodyReferenceGlbFreshness.status}</div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Approved bounds</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {approvedBodyReferenceOutlineBounds
+                      ? `${approvedBodyReferenceOutlineBounds.width} x ${approvedBodyReferenceOutlineBounds.height}`
+                      : "n/a"}
+                  </div>
+                </div>
+                <div>
+                  <div className={styles.surfaceContractMetricLabel}>Draft bounds</div>
+                  <div className={styles.surfaceContractMetricValue}>
+                    {draftBodyReferenceOutlineBounds
+                      ? `${draftBodyReferenceOutlineBounds.width} x ${draftBodyReferenceOutlineBounds.height}`
+                      : "n/a"}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  onClick={handleStartBodyReferenceFineTune}
+                  disabled={bodyReferenceFineTuneModeEnabled}
+                >
+                  Edit contour
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  onClick={handleAcceptBodyReferenceFineTuneDraft}
+                  disabled={!bodyReferenceFineTuneDraftPendingAcceptance}
+                >
+                  Accept corrected cutout
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  onClick={handleResetFineTuneDraftToApproved}
+                  disabled={!bodyReferenceFineTuneModeEnabled}
+                >
+                  Reset to approved
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  onClick={handleResetFineTuneDraftToDetected}
+                  disabled={!bodyReferenceFineTuneModeEnabled || !bodyReferenceFineTuneDetectedBaselineOutline}
+                >
+                  Reset to detected contour
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  onClick={handleDiscardBodyReferenceFineTuneDraft}
+                  disabled={!bodyReferenceFineTuneModeEnabled}
+                >
+                  Discard draft
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  disabled={
+                    !canGenerateReviewedBodyReferenceGlb
+                    || generatingReviewedBodyReferenceGlb
+                    || bodyReferenceFineTuneDraftPendingAcceptance
+                    || !reviewedBodyReferenceGlbFreshness.canRequestGeneration
+                  }
+                  onClick={() => {
+                    void handleGenerateReviewedBodyReferenceGlb();
+                  }}
+                >
+                  {generatingReviewedBodyReferenceGlb
+                    ? "Regenerating reviewed GLB..."
+                    : "Regenerate reviewed GLB from corrected cutout"}
+                </button>
+              </div>
+              <div className={styles.surfaceContractSummaryNote}>
+                {reviewedBodyReferenceGlbFreshnessLabel}
+                {bodyReferenceFineTuneDraftPendingAcceptance
+                  ? " Accept corrected cutout before regenerating the reviewed GLB."
+                  : ""}
+              </div>
+              <div className={styles.surfaceContractSummaryNote}>
+                Use the editor below for point select/move, add point, delete point, undo, and reset. Draft edits stay non-authoritative until accepted.
+              </div>
+            </div>
+          )}
           <EngravableZoneEditor
             photoDataUrl={activeDisplayReferencePhotoDataUrl}
             overallHeightMm={activeCanonicalDimensionCalibration?.totalHeightMm ?? overallHeightMm}
@@ -9410,8 +9735,14 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
             allowFitDebugPhotoCrop={allowFitDebugPhotoCrop}
             canonicalHandleProfile={normalizedCanonicalHandleProfile ?? null}
             canonicalBodySvgPath={activeCanonicalBodyProfile?.svgPath ?? null}
-            outlineProfile={bodyOutlineProfile}
-            referencePaths={referencePaths}
+            outlineProfile={bodyReferenceFineTuneModeEnabled ? activeBodyReferenceFineTuneOutline : bodyOutlineProfile}
+            referencePaths={bodyReferenceFineTuneModeEnabled
+              ? createReferencePaths({
+                  bodyOutline: activeBodyReferenceFineTuneOutline,
+                  lidProfile: referencePaths.lidProfile,
+                  silverProfile: referencePaths.silverProfile,
+                })
+              : referencePaths}
             referenceLayerState={referenceLayerState}
             dimensionCalibration={activeCanonicalDimensionCalibration ?? undefined}
             printableSurfaceContract={activePrintableSurfaceResolution?.printableSurfaceContract ?? null}
@@ -9504,6 +9835,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               setBaseDiameterMm(round2(nextDiameter));
             }}
             onOutlineProfileChange={(nextProfile) => {
+              if (bodyReferenceFineTuneModeEnabled) {
+                setBodyReferenceFineTuneDraftOutline(cloneEditableBodyOutline(nextProfile) ?? undefined);
+                return;
+              }
+              setReviewedBodyCutoutQaOutlineSnapshot(null);
               commitBodyOutlineProfile(nextProfile);
               const derived = deriveDimensionsFromEditableBodyOutline(nextProfile);
               if (typeof derived.bodyTopFromOverallMm === "number") {
@@ -9537,6 +9873,11 @@ export const TemplateCreateForm = React.forwardRef<TemplateCreateFormHandle, Pro
               }
             }}
             onReferencePathsChange={(nextPaths) => {
+              if (bodyReferenceFineTuneModeEnabled) {
+                setBodyReferenceFineTuneDraftOutline(cloneEditableBodyOutline(nextPaths.bodyOutline) ?? undefined);
+                return;
+              }
+              setReviewedBodyCutoutQaOutlineSnapshot(null);
               commitReferencePaths(nextPaths);
               commitBodyOutlineProfile(nextPaths.bodyOutline ?? undefined);
             }}

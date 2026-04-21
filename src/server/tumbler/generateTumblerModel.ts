@@ -34,6 +34,7 @@ import {
   buildBodyReferenceGlbSourceSignature,
   type BodyReferenceGlbRenderMode,
 } from "../../lib/bodyReferenceGlbSource.ts";
+import { resolveEditableBodyOutlineDirectContour } from "../../lib/editableBodyOutline.ts";
 import {
   buildBodyGeometrySourceHashPayload,
   createEmptyBodyGeometryContract,
@@ -338,6 +339,9 @@ function slugifyFileStem(value: string): string {
 }
 
 function buildBodyReferenceFileStem(input: GenerateBodyReferenceGlbInput): string {
+  const bodyOutlineContour = resolveEditableBodyOutlineDirectContour(input.bodyOutline);
+  const lidProfileContour = resolveEditableBodyOutlineDirectContour(input.lidProfile);
+  const silverProfileContour = resolveEditableBodyOutlineDirectContour(input.silverProfile);
   const hash = createHash("sha1")
     .update(JSON.stringify({
       bodyReferenceGlbFitVersion: 9,
@@ -352,15 +356,15 @@ function buildBodyReferenceFileStem(input: GenerateBodyReferenceGlbInput): strin
       silverBandBottomFromOverallMm: input.silverBandBottomFromOverallMm ?? null,
       topOuterDiameterMm: input.topOuterDiameterMm ?? null,
       bodyOutline:
-        input.bodyOutline?.directContour?.map((point) => [round2(point.x), round2(point.y)]) ??
+        bodyOutlineContour?.map((point) => [round2(point.x), round2(point.y)]) ??
         input.bodyOutline?.points?.map((point) => [round2(point.x), round2(point.y)]) ??
         null,
       bodyColorHex: input.bodyColorHex ?? null,
       lidColorHex: input.lidColorHex ?? null,
       rimColorHex: input.rimColorHex ?? null,
       samples: input.canonicalBodyProfile.samples.map((sample) => [round2(sample.yMm), round2(sample.radiusMm)]),
-      lidProfile: input.lidProfile?.directContour?.map((point) => [round2(point.x), round2(point.y)]) ?? null,
-      silverProfile: input.silverProfile?.directContour?.map((point) => [round2(point.x), round2(point.y)]) ?? null,
+      lidProfile: lidProfileContour?.map((point) => [round2(point.x), round2(point.y)]) ?? null,
+      silverProfile: silverProfileContour?.map((point) => [round2(point.x), round2(point.y)]) ?? null,
     }))
     .digest("hex")
     .slice(0, 12);
@@ -402,8 +406,9 @@ function resolveOutlineHalfProfilePointsMm(
 function resolveOutlineContourMm(
   outline: EditableBodyOutline | null | undefined,
 ): OutlineContourPointMm[] | null {
-  if (outline?.directContour && outline.directContour.length >= 3) {
-    return outline.directContour
+  const directContour = resolveEditableBodyOutlineDirectContour(outline);
+  if (directContour && directContour.length >= 3) {
+    return directContour
       .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
       .map((point) => ({ x: round2(point.x), y: round2(point.y) }));
   }
@@ -1911,7 +1916,7 @@ function resolveOutlineGeometrySource(
   outline: EditableBodyOutline | null | undefined,
   fallbackLabel: string,
 ): string {
-  const hasDirectContour = Boolean(outline?.directContour && outline.directContour.length >= 3);
+  const hasDirectContour = Boolean(resolveEditableBodyOutlineDirectContour(outline)?.length);
   const hasPointProfile = Boolean(outline?.points && outline.points.length >= 2);
   if (hasDirectContour || hasPointProfile) {
     return "reviewed outline";

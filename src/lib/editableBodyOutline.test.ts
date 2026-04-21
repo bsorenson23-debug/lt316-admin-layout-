@@ -135,7 +135,7 @@ const noisyTraceDebug: FlatItemLookupTraceDebug = {
   ],
 };
 
-test("trace-debug outline stores a body-only mirrored contour instead of the raw noisy silhouette", () => {
+test("trace-debug outline stores a deterministic body-only contour instead of the raw noisy silhouette", () => {
   const outline = createEditableBodyOutlineFromTraceDebug({
     traceDebug: noisyTraceDebug,
     overallHeightMm: 300,
@@ -147,7 +147,9 @@ test("trace-debug outline stores a body-only mirrored contour instead of the raw
 
   const byRole = new Map(outline.points.map((point) => [point.role, point]));
   assert.ok((outline.sourceContour?.length ?? 0) >= 40);
-  assert.equal(outline.directContour?.length, outline.sourceContour?.length);
+  // Keep the high-fidelity traced band for provenance, but use the simpler
+  // mirrored contour for deterministic editing and downstream generation.
+  assert.ok((outline.directContour?.length ?? 0) < (outline.sourceContour?.length ?? 0));
   assert.ok((outline.sourceContourBounds?.minY ?? 0) > 80);
   assert.ok((outline.sourceContourBounds?.maxY ?? 999) < 660);
   assert.ok(widthAtY(outline.sourceContour ?? [], 380) > 70);
@@ -178,7 +180,7 @@ test("trace-debug outline ignores implausibly tiny top-outer seeds", () => {
   );
 });
 
-test("body-only imported outline does not get cropped a second time", () => {
+test("body-only imported outline stays aligned with the auto body-band fit", () => {
   const source = {
     svgText: "",
     pathData: "",
@@ -233,9 +235,12 @@ test("body-only imported outline does not get cropped a second time", () => {
   const bodyOnlyByRole = new Map(bodyOnlyOutline.points.map((point) => [point.role, point]));
 
   assert.equal(bodyOnlyByRole.get("topOuter")?.x, autoByRole.get("topOuter")?.x);
-  assert.ok((bodyOnlyByRole.get("upperTaper")?.x ?? 999) < (autoByRole.get("upperTaper")?.x ?? 0));
-  assert.ok((bodyOnlyByRole.get("lowerTaper")?.x ?? 999) < (autoByRole.get("lowerTaper")?.x ?? 0));
-  assert.ok((bodyOnlyByRole.get("base")?.x ?? 999) < (autoByRole.get("base")?.x ?? 0));
+  for (const role of ["upperTaper", "lowerTaper", "bevel", "base"] as const) {
+    assert.ok(
+      Math.abs((bodyOnlyByRole.get(role)?.x ?? 0) - (autoByRole.get(role)?.x ?? 0)) <= 0.3,
+      `expected ${role} to stay within body-band fit tolerance, got auto=${autoByRole.get(role)?.x} bodyOnly=${bodyOnlyByRole.get(role)?.x}`,
+    );
+  }
 });
 
 test("body-only imported outline trims narrow top protrusions before scaling the shell", () => {
@@ -292,7 +297,7 @@ test("body-only imported outline trims narrow top protrusions before scaling the
   assert.ok(Math.abs((byRole.get("body")?.x ?? 0) - 53) < 1);
 });
 
-test("body-only measurement contour preserves the traced contour without re-mirroring it", () => {
+test("body-only measurement contour crops to the body band without re-mirroring it", () => {
   const tracedContour = [
     { x: 220, y: 100 },
     { x: 220, y: 360 },
@@ -318,6 +323,9 @@ test("body-only measurement contour preserves the traced contour without re-mirr
 
   assert.ok(normalized);
   assert.equal(normalized?.mirrored, false);
-  assert.equal(normalized?.bodyOnly, false);
-  assert.deepEqual(normalized?.contour, tracedContour);
+  assert.equal(normalized?.bodyOnly, true);
+  assert.ok((normalized?.contour.length ?? 0) > tracedContour.length);
+  assert.ok((normalized?.bounds.minX ?? 0) >= 220);
+  assert.ok((normalized?.bounds.maxX ?? 0) <= 462);
+  assert.ok((normalized?.contour.some((point) => point.x > 400) ?? false));
 });

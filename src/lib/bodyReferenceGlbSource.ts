@@ -5,6 +5,7 @@ import type {
   ReferencePaths,
 } from "../types/productTemplate.ts";
 import { fingerprintJson } from "./templatePipelineDiagnostics.ts";
+import { resolveEditableBodyOutlineDirectContour } from "./editableBodyOutline.ts";
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -23,6 +24,7 @@ function normalizePoint(point: { x: number; y: number }) {
 
 function normalizeOutline(outline: EditableBodyOutline | null | undefined) {
   if (!outline) return null;
+  const directContour = resolveEditableBodyOutlineDirectContour(outline);
   return {
     closed: outline.closed,
     version: outline.version ?? 1,
@@ -34,7 +36,7 @@ function normalizeOutline(outline: EditableBodyOutline | null | undefined) {
       inHandle: point.inHandle ? normalizePoint(point.inHandle) : null,
       outHandle: point.outHandle ? normalizePoint(point.outHandle) : null,
     })),
-    directContour: outline.directContour?.map(normalizePoint) ?? null,
+    directContour: directContour?.map(normalizePoint) ?? null,
     sourceContourMode: outline.sourceContourMode ?? null,
   };
 }

@@ -2,6 +2,7 @@ import type { BodyReferenceGlbRenderMode } from "./bodyReferenceGlbSource.ts";
 import type { PreviewModelMode } from "./tumblerPreviewModelState.ts";
 import type { EditableBodyOutline } from "../types/productTemplate.ts";
 import type { BodyReferenceSvgQualityReport } from "./bodyReferenceSvgQuality.ts";
+import { resolveEditableBodyOutlineDirectContour } from "./editableBodyOutline.ts";
 
 export const BODY_GEOMETRY_CONTRACT_VERSION = "2026-04-20-v1";
 
@@ -256,6 +257,7 @@ export function buildBodyGeometrySourceHashPayload(
   outline: EditableBodyOutline | null | undefined,
 ): Record<string, unknown> | null {
   if (!outline) return null;
+  const directContour = resolveEditableBodyOutlineDirectContour(outline);
   return {
     closed: outline.closed,
     version: outline.version ?? 1,
@@ -272,7 +274,7 @@ export function buildBodyGeometrySourceHashPayload(
         ? { x: round2(point.outHandle.x), y: round2(point.outHandle.y) }
         : null,
     })),
-    directContour: outline.directContour?.map((point) => ({
+    directContour: directContour?.map((point) => ({
       x: round2(point.x),
       y: round2(point.y),
     })) ?? null,

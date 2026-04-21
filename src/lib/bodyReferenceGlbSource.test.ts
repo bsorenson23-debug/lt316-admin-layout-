@@ -144,6 +144,55 @@ test("BODY REFERENCE GLB source signature changes when approved contour geometry
   );
 });
 
+test("BODY REFERENCE GLB source signature resolves stale cached manual contours from points", () => {
+  const manualOutlineWithStaleContour: EditableBodyOutline = {
+    closed: true,
+    version: 1,
+    sourceContourMode: "body-only",
+    points: [
+      { id: "top", x: 54, y: 31.09, role: "topOuter", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "mid", x: 54, y: 100, role: "body", pointType: "smooth", inHandle: null, outHandle: null },
+      { id: "bottom", x: 38.1, y: 172.72, role: "base", pointType: "corner", inHandle: null, outHandle: null },
+    ],
+    directContour: [
+      { x: 43.18, y: 31.09 },
+      { x: 43.18, y: 100 },
+      { x: 38.1, y: 172.72 },
+      { x: -38.1, y: 172.72 },
+      { x: -43.18, y: 100 },
+      { x: -43.18, y: 31.09 },
+    ],
+  };
+  const rebuiltManualOutline: EditableBodyOutline = {
+    ...manualOutlineWithStaleContour,
+    directContour: [
+      { x: 54, y: 31.09 },
+      { x: 54, y: 100 },
+      { x: 38.1, y: 172.72 },
+      { x: -38.1, y: 172.72 },
+      { x: -54, y: 100 },
+      { x: -54, y: 31.09 },
+    ],
+  };
+
+  assert.equal(
+    signature({
+      referencePaths: {
+        bodyOutline: manualOutlineWithStaleContour,
+        lidProfile: null,
+        silverProfile: null,
+      },
+    }),
+    signature({
+      referencePaths: {
+        bodyOutline: rebuiltManualOutline,
+        lidProfile: null,
+        silverProfile: null,
+      },
+    }),
+  );
+});
+
 test("BODY REFERENCE GLB source signature changes when render mode changes", () => {
   assert.notEqual(
     signature(),

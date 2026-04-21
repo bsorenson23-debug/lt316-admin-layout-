@@ -2,6 +2,7 @@ import { getWrapFrontCenter } from "../utils/tumblerWrapLayout.ts";
 import {
   buildContourSvgPath,
   normalizeMeasurementContour,
+  resolveEditableBodyOutlineDirectContour,
   sortEditableOutlinePoints,
 } from "./editableBodyOutline.ts";
 import type {
@@ -146,8 +147,8 @@ function estimateAxisXFromContour(contour: ContourPoint[]): number {
 }
 
 function interpolateRadiusMm(outline: EditableBodyOutline, yMm: number): number {
-  const tracedContour = outline.sourceContourMode === "body-only" && outline.directContour && outline.directContour.length >= 3
-    ? outline.directContour
+  const tracedContour = outline.sourceContourMode === "body-only"
+    ? resolveEditableBodyOutlineDirectContour(outline)
     : null;
   if (tracedContour) {
     const tracedHalfWidthMm = findHalfWidthPxAtRow(tracedContour, 0, yMm);
@@ -458,8 +459,11 @@ function deriveCanonicalSamples(args: {
 
   const leftPoints = samples.map((sample) => ({ x: -sample.radiusMm, y: sample.yMm }));
   const rightPoints = [...samples].reverse().map((sample) => ({ x: sample.radiusMm, y: sample.yMm }));
-  const tracedSvgPath = outline.sourceContourMode === "body-only" && outline.directContour && outline.directContour.length >= 3
-    ? buildContourSvgPath(outline.directContour.map((point) => ({ x: point.x, y: point.y })))
+  const resolvedDirectContour = outline.sourceContourMode === "body-only"
+    ? resolveEditableBodyOutlineDirectContour(outline)
+    : null;
+  const tracedSvgPath = resolvedDirectContour && resolvedDirectContour.length >= 3
+    ? buildContourSvgPath(resolvedDirectContour.map((point) => ({ x: point.x, y: point.y })))
     : null;
   const svgPath = tracedSvgPath ?? buildContourSvgPath([...leftPoints, ...rightPoints]) ?? "";
   const wrapWidthMm = round2(Math.PI * Math.max(args.wrapDiameterMm ?? args.bodyDiameterMm ?? frontVisibleWidthMm, 0));

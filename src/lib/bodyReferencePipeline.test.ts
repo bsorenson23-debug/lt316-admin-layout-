@@ -215,8 +215,8 @@ test("straight-wall fallback uses outline-only authority when no measurement con
   );
 });
 
-test("handle-left inputs switch shell sampling authority to the clean right side", () => {
-  const pipeline = deriveBodyReferencePipeline({
+test("handle-left fit-debug inputs keep centered body-band sampling stable", () => {
+  const leftPipeline = deriveBodyReferencePipeline({
     outline: buildStanleyOutline("left"),
     overallHeightMm: 273.8,
     bodyTopFromOverallMm: 28,
@@ -228,11 +228,32 @@ test("handle-left inputs switch shell sampling authority to the clean right side
     printableTopOverrideMm: 45,
     printableBottomOverrideMm: 220,
   });
+  const rightPipeline = deriveBodyReferencePipeline({
+    outline: buildStanleyOutline("right"),
+    overallHeightMm: 273.8,
+    bodyTopFromOverallMm: 28,
+    bodyBottomFromOverallMm: 244,
+    wrapDiameterMm: 99.82,
+    baseDiameterMm: 78.7,
+    handleArcDeg: 90,
+    handleSide: "right",
+    printableTopOverrideMm: 45,
+    printableBottomOverrideMm: 220,
+  });
 
-  assert.ok(pipeline);
-  assert.equal(pipeline?.canonicalBodyProfile.symmetrySource, "right");
-  assert.equal(pipeline?.qa.pass, true);
-  assert.ok(Math.abs((pipeline?.canonicalDimensionCalibration.frontVisibleWidthMm ?? 0) - 99.82) <= 0.75);
+  assert.ok(leftPipeline);
+  assert.ok(rightPipeline);
+  assert.equal(leftPipeline?.canonicalBodyProfile.symmetrySource, "left");
+  assert.equal(leftPipeline?.canonicalBodyProfile.mirroredFromSymmetrySource, false);
+  assert.equal(leftPipeline?.qa.pass, true);
+  assert.ok(Math.abs((leftPipeline?.canonicalDimensionCalibration.frontVisibleWidthMm ?? 0) - 99.82) <= 0.75);
+  // Body-only sampling now recenters on the traced band, so handle-side metadata
+  // should not flip the canonical shell or perturb the transform.
+  assert.deepEqual(leftPipeline?.canonicalBodyProfile.axis, rightPipeline?.canonicalBodyProfile.axis);
+  assert.deepEqual(
+    leftPipeline?.canonicalDimensionCalibration.photoToFrontTransform.matrix,
+    rightPipeline?.canonicalDimensionCalibration.photoToFrontTransform.matrix,
+  );
 });
 
 test("cleaned noisy trace starts the cutout at the body band instead of the contaminated top hardware", () => {

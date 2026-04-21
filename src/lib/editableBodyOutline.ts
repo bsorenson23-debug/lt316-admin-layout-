@@ -609,6 +609,23 @@ function buildSmoothedContourFromProfile(
   return [...rightSide, ...leftSide];
 }
 
+export function resolveEditableBodyOutlineDirectContour(
+  outline: EditableBodyOutline | null | undefined,
+): EditableBodyOutlineContourPoint[] | null {
+  if (!outline) return null;
+  const hasSourceContour = Boolean(outline.sourceContour && outline.sourceContour.length >= 3);
+  if (!hasSourceContour && outline.points.length >= 2) {
+    return buildSmoothedContourFromProfile(outline.points);
+  }
+  if (outline.directContour && outline.directContour.length >= 3) {
+    return outline.directContour;
+  }
+  if (outline.points.length >= 2) {
+    return buildSmoothedContourFromProfile(outline.points);
+  }
+  return null;
+}
+
 function interpolateFitDebugRadius(
   profilePoints: TumblerItemLookupFitDebug["profilePoints"],
   yMm: number,
@@ -1708,12 +1725,11 @@ export function normalizeMeasurementContour(args: {
   bodyTopFromOverallMm: number;
   bodyBottomFromOverallMm: number;
 }): NormalizedMeasurementContour | null {
+  const resolvedDirectContour = resolveEditableBodyOutlineDirectContour(args.outline);
   const baseContour =
     args.outline?.sourceContour && args.outline.sourceContour.length >= 3
       ? args.outline.sourceContour
-      : (args.outline?.directContour && args.outline.directContour.length >= 3
-          ? args.outline.directContour
-          : null);
+      : resolvedDirectContour;
   if (!baseContour || baseContour.length < 3) return null;
 
   const usesBodyOnlyContour = args.outline?.sourceContourMode === "body-only";
