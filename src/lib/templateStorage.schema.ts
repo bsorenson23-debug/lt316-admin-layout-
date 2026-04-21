@@ -145,7 +145,7 @@ export const productTemplateSchema = z.object({
   thumbnailDataUrl: z.string(),
   productPhotoFullUrl: z.string().optional(),
   glbPath: z.string(),
-  glbStatus: z.enum(["verified-product-model", "placeholder-model", "missing-model"]).optional(),
+  glbStatus: z.enum(["verified-product-model", "generated-reviewed-model", "placeholder-model", "missing-model"]).optional(),
   glbSourceLabel: z.string().optional(),
   dimensions: productTemplateDimensionsSchema,
   laserSettings: productTemplateLaserSettingsSchema,

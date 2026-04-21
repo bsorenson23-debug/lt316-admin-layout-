@@ -3382,8 +3382,9 @@ export default function ModelViewer({
     () => resolveGeneratedModelAuditRequestPlan({
       modelUrl: sourceModelUrl,
       sourceModelStatus,
+      sourceModelLabel,
     }),
-    [sourceModelStatus, sourceModelUrl],
+    [sourceModelLabel, sourceModelStatus, sourceModelUrl],
   );
   useEffect(() => {
     const nextAutoRotate = Boolean(file)
