@@ -22,6 +22,7 @@ import {
   updateContractValidation,
 } from "./bodyGeometryContract.ts";
 import { buildBodyGeometryStatusBadgeState } from "./bodyGeometryStatusBadge.ts";
+import { createFinishBandReference } from "./productAppearanceReferenceLayers.ts";
 
 type BodyGeometryContractOverrides =
   Omit<Partial<BodyGeometryContract>, "source" | "glb" | "meshes" | "dimensionsMm" | "validation" | "svgQuality"> & {
@@ -1757,6 +1758,65 @@ test("contracts with only a valid body mesh and matching dimensions pass cleanly
       warnings: [],
     },
   });
+
+  assert.equal(contract.validation.status, "pass");
+  assert.equal(isContractPassing(contract), true);
+});
+
+test("BODY CUTOUT QA validation ignores reference-only appearance layers attached out of band", () => {
+  const contractWithAppearance = {
+    ...createEmptyBodyGeometryContract(),
+    mode: "body-cutout-qa",
+    source: {
+      type: "approved-svg" as const,
+      hash: "json:source",
+      detectedBodyOnly: true,
+    },
+    glb: {
+      path: "/api/admin/models/generated/body-only.glb",
+      hash: "json:glb",
+      sourceHash: "json:source",
+      freshRelativeToSource: true,
+    },
+    meshes: {
+      names: ["body_mesh"],
+      bodyMeshNames: [],
+      accessoryMeshNames: [],
+      fallbackMeshNames: [],
+      fallbackDetected: false,
+      unexpectedMeshes: [],
+    },
+    dimensionsMm: {
+      bodyBounds: {
+        width: 88.98,
+        height: 225,
+        depth: 88.98,
+      },
+      bodyBoundsUnits: "mm" as const,
+      expectedBodyWidthMm: 88.98,
+      expectedBodyHeightMm: 225,
+      wrapDiameterMm: 86.36,
+      wrapWidthMm: 271.31,
+      frontVisibleWidthMm: 88.98,
+    },
+    validation: {
+      status: "unknown" as const,
+      errors: [],
+      warnings: [],
+    },
+    appearanceReferenceLayers: [
+      createFinishBandReference({
+        id: "top-band",
+        kind: "top-finish-band",
+        yMm: 0,
+        heightMm: 10,
+      }),
+    ],
+  } as BodyGeometryContract & {
+    appearanceReferenceLayers: ReturnType<typeof createFinishBandReference>[];
+  };
+
+  const contract = updateContractValidation(contractWithAppearance);
 
   assert.equal(contract.validation.status, "pass");
   assert.equal(isContractPassing(contract), true);
