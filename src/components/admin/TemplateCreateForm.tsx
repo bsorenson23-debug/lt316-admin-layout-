@@ -53,6 +53,7 @@ import {
 import { buildBodyReferenceGlbSourceSignature } from "@/lib/bodyReferenceGlbSource";
 import { parseBodyReferenceGlbResponse } from "@/lib/adminApi.schema";
 import type { BodyGeometryContract } from "@/lib/bodyGeometryContract";
+import { inferGeneratedModelStatusFromSource } from "@/lib/generatedModelUrl";
 import { BodyReferenceFineTuneEditor } from "./BodyReferenceFineTuneEditor";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -171,8 +172,13 @@ function formatLookupMeasurement(value: number | null | undefined): string | nul
 function resolveDefaultPreviewModelMode(args: {
   glbPath: string;
   glbStatus?: ProductTemplate["glbStatus"] | null;
+  glbSourceLabel?: string | null;
 }): PreviewModelMode {
-  if (args.glbStatus === "generated-reviewed-model") {
+  const glbStatus = args.glbStatus ?? inferGeneratedModelStatusFromSource({
+    modelUrl: args.glbPath,
+    sourceModelLabel: args.glbSourceLabel,
+  });
+  if (glbStatus === "generated-reviewed-model") {
     return "body-cutout-qa";
   }
   if (args.glbPath.trim()) {
@@ -446,6 +452,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     () => resolveDefaultPreviewModelMode({
       glbPath: editingTemplate?.glbPath ?? "",
       glbStatus: editingTemplate?.glbStatus,
+      glbSourceLabel: editingTemplate?.glbSourceLabel,
     }),
   );
 
@@ -479,12 +486,19 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     if (editingTemplate?.glbPath?.trim() === glbPath.trim() && editingTemplate.glbStatus) {
       return editingTemplate.glbStatus;
     }
+    const inferredStatus = inferGeneratedModelStatusFromSource({
+      modelUrl: glbPath,
+      sourceModelLabel: lookupResult?.modelSourceLabel ?? editingTemplate?.glbSourceLabel ?? null,
+    });
+    if (inferredStatus) return inferredStatus;
     if (!glbPath.trim()) return "missing-model";
     return "verified-product-model";
   }, [
     editingTemplate?.glbPath,
+    editingTemplate?.glbSourceLabel,
     editingTemplate?.glbStatus,
     glbPath,
+    lookupResult?.modelSourceLabel,
     lookupResult?.modelStatus,
     reviewedGeneratedModelState?.glbPath,
     reviewedGeneratedModelState?.status,
