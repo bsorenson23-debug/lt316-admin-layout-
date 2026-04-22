@@ -27,13 +27,13 @@ export function getBodyReferencePreviewModeLabel(args: {
     return "SOURCE MODEL";
   }
   if (args.mode === "alignment-model") {
-    return "ALIGNMENT MODEL · REVIEW SCAFFOLD";
+    return "ALIGNMENT MODEL · REVIEW";
   }
   if (args.mode === "body-cutout-qa") {
-    return "BODY CUTOUT QA · RESERVED";
+    return "BODY CUTOUT QA · BODY ONLY";
   }
   if (args.mode === "full-model") {
-    return "FULL MODEL · REVIEW SCAFFOLD";
+    return "FULL MODEL · GEOMETRY REFERENCE";
   }
   if (args.glbStatus === "generated-reviewed-model") {
     return "REVIEWED MODEL · SOURCE COMPARE";
@@ -52,15 +52,15 @@ export function getBodyReferencePreviewModeHint(args: {
     return null;
   }
   if (args.mode === "alignment-model") {
-    return "Alignment is the stable scaffold mount for the later canonical BODY REFERENCE preview.";
+    return "Alignment keeps the source-model review visible while BODY REFERENCE approval and BODY CUTOUT QA stay separate.";
   }
   if (args.mode === "body-cutout-qa") {
-    return "BODY CUTOUT QA is reserved here for the later reviewed body-only GLB and runtime-truth checks.";
+    return "BODY CUTOUT QA renders the reviewed body-only GLB and validates the loaded geometry against audit/runtime truth.";
   }
   if (args.mode === "full-model") {
-    return "Full model remains a scaffold seam in this PR; later runtime-truth work will attach geometry-aware review state here.";
+    return "Full model keeps the product preview available alongside BODY CUTOUT QA without treating it as body-only proof.";
   }
-  return "Source compare stays available as a review seam for later traced or reviewed BODY REFERENCE previews.";
+  return "Source compare keeps the reviewed model flow anchored to the current product source.";
 }
 
 export function isBodyCutoutQaPreviewAvailable(

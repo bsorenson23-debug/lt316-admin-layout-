@@ -1,0 +1,89 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { buildBodyGeometryStatusBadgeState } from "./bodyGeometryStatusBadge.ts";
+import { createEmptyBodyGeometryContract, updateContractValidation } from "./bodyGeometryContract.ts";
+
+test("body-cutout QA badge passes for clean body-only contract", () => {
+  const contract = updateContractValidation({
+    ...createEmptyBodyGeometryContract(),
+    mode: "body-cutout-qa",
+    source: {
+      type: "approved-svg",
+      hash: "source-hash",
+    },
+    glb: {
+      path: "/api/admin/models/generated/demo.glb",
+      hash: "glb-hash",
+      sourceHash: "source-hash",
+      freshRelativeToSource: true,
+    },
+    meshes: {
+      ...createEmptyBodyGeometryContract().meshes,
+      names: ["body_mesh"],
+      bodyMeshNames: ["body_mesh"],
+    },
+    dimensionsMm: {
+      bodyBounds: { width: 88.9, height: 225, depth: 88.9 },
+      bodyBoundsUnits: "mm",
+      expectedBodyWidthMm: 88.9,
+      expectedBodyHeightMm: 225,
+    },
+    validation: { status: "unknown", errors: [], warnings: [] },
+  });
+
+  const state = buildBodyGeometryStatusBadgeState({
+    mode: "body-cutout-qa",
+    contract,
+  });
+
+  assert.equal(state.title, "BODY CUTOUT QA");
+  assert.equal(state.status, "pass");
+  assert.equal(state.geometryLabel, "Body only");
+  assert.equal(state.fallbackLabel, "Disabled");
+  assert.equal(state.glbLabel, "Fresh");
+  assert.equal(state.qaLabel, "Valid for body contour QA");
+  assert.equal(state.validForBodyQa, true);
+});
+
+test("non-QA badge reports full model preview as not valid for body QA", () => {
+  const contract = updateContractValidation({
+    ...createEmptyBodyGeometryContract(),
+    mode: "full-model",
+    source: {
+      type: "generated",
+    },
+    meshes: {
+      ...createEmptyBodyGeometryContract().meshes,
+      names: ["body_mesh", "lid_mesh"],
+      bodyMeshNames: ["body_mesh"],
+      accessoryMeshNames: ["lid_mesh"],
+    },
+    validation: { status: "unknown", errors: [], warnings: [] },
+  });
+
+  const state = buildBodyGeometryStatusBadgeState({
+    mode: "full-model",
+    contract,
+  });
+
+  assert.equal(state.title, "FULL MODEL PREVIEW");
+  assert.equal(state.geometryLabel, "Body + extras");
+  assert.equal(state.qaLabel, "Not valid for body contour QA");
+  assert.equal(state.validForBodyQa, false);
+});
+
+test("unknown QA state reports unknown freshness and QA status", () => {
+  const state = buildBodyGeometryStatusBadgeState({
+    mode: "body-cutout-qa",
+    contract: null,
+  });
+
+  assert.equal(state.status, "unknown");
+  assert.equal(state.sourceLabel, "Unknown");
+  assert.equal(state.geometryLabel, "Unknown");
+  assert.equal(state.fallbackLabel, "Unknown");
+  assert.equal(state.glbLabel, "Unknown");
+  assert.equal(state.qaLabel, "QA status unknown");
+  assert.equal(state.validForBodyQa, null);
+});

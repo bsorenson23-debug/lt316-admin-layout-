@@ -2,35 +2,67 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  buildGeneratedModelUrl,
-  isGeneratedModelUrl,
-  isLegacyGeneratedModelPath,
-  sanitizeGeneratedModelFileName,
+  buildGeneratedModelAuditUrl,
+  getGeneratedModelAuditUrlFromModelUrl,
+  resolveGeneratedModelAuditRequestPlan,
 } from "./generatedModelUrl.ts";
 
-test("sanitizeGeneratedModelFileName accepts safe generated model names", () => {
-  assert.equal(sanitizeGeneratedModelFileName("stanley-cutout.glb"), "stanley-cutout.glb");
+test("buildGeneratedModelAuditUrl builds the generated-model audit route", () => {
   assert.equal(
-    sanitizeGeneratedModelFileName("/models/generated/stanley-cutout.glb"),
-    "stanley-cutout.glb",
+    buildGeneratedModelAuditUrl("stanley-cutout.glb"),
+    "/api/admin/models/generated-audit/stanley-cutout.glb",
   );
 });
 
-test("sanitizeGeneratedModelFileName rejects unsafe names", () => {
-  assert.equal(sanitizeGeneratedModelFileName("../stanley-cutout.glb"), "stanley-cutout.glb");
-  assert.equal(sanitizeGeneratedModelFileName(""), null);
-});
-
-test("buildGeneratedModelUrl builds the generated-model route", () => {
+test("getGeneratedModelAuditUrlFromModelUrl resolves generated and legacy audit sidecar URLs", () => {
   assert.equal(
-    buildGeneratedModelUrl("stanley-cutout.glb"),
-    "/api/admin/models/generated/stanley-cutout.glb",
+    getGeneratedModelAuditUrlFromModelUrl("/api/admin/models/generated/stanley-cutout.glb?viewerRev=abc123"),
+    "/api/admin/models/generated-audit/stanley-cutout.glb",
+  );
+  assert.equal(
+    getGeneratedModelAuditUrlFromModelUrl("/models/generated/stanley-cutout.glb?viewerRev=abc123"),
+    "/models/generated/stanley-cutout.audit.json",
+  );
+  assert.equal(
+    getGeneratedModelAuditUrlFromModelUrl("/models/templates/yeti-rambler-40oz.glb"),
+    null,
   );
 });
 
-test("generated model path helpers distinguish api and legacy paths", () => {
-  assert.equal(isGeneratedModelUrl("/api/admin/models/generated/stanley-cutout.glb"), true);
-  assert.equal(isGeneratedModelUrl("/models/generated/stanley-cutout.glb"), false);
-  assert.equal(isLegacyGeneratedModelPath("/models/generated/stanley-cutout.glb"), true);
-  assert.equal(isLegacyGeneratedModelPath("/models/templates/yeti-rambler-40oz.glb"), false);
+test("resolveGeneratedModelAuditRequestPlan requires audit fetches for reviewed generated GLBs only", () => {
+  assert.deepEqual(
+    resolveGeneratedModelAuditRequestPlan({
+      modelUrl: "/api/admin/models/generated/stanley-cutout.glb?viewerRev=abc123",
+      sourceModelStatus: "generated-reviewed-model",
+    }),
+    {
+      auditUrl: "/api/admin/models/generated-audit/stanley-cutout.glb",
+      expectation: "required",
+      shouldFetch: true,
+    },
+  );
+
+  assert.deepEqual(
+    resolveGeneratedModelAuditRequestPlan({
+      modelUrl: "/api/admin/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb?viewerRev=abc123",
+      sourceModelStatus: "verified-product-model",
+    }),
+    {
+      auditUrl: null,
+      expectation: "none",
+      shouldFetch: false,
+    },
+  );
+
+  assert.deepEqual(
+    resolveGeneratedModelAuditRequestPlan({
+      modelUrl: "/models/templates/yeti-rambler-40oz.glb",
+      sourceModelStatus: "verified-product-model",
+    }),
+    {
+      auditUrl: null,
+      expectation: "none",
+      shouldFetch: false,
+    },
+  );
 });

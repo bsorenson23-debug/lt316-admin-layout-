@@ -23,7 +23,9 @@
     "test:lightburn-path-settings": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/lightBurnPathSettings.test.ts",
     "test:lightburn-path-validation": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/server/lightburn/validateLightBurnPaths.test.ts",
     "test:fiber-color": "node --experimental-specifier-resolution=node --test --test-concurrency=1 --test-isolation=none --experimental-strip-types src/utils/fiberColorCalc.test.ts",
-    "audit:visual": "node scripts/visual-audit.mjs"
+    "audit:visual": "node scripts/visual-audit.mjs",
+    "inspect:glb": "node scripts/inspect-glb.mjs",
+    "validate:gltf": "node scripts/validate-gltf.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

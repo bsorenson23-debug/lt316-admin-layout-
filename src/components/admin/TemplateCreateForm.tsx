@@ -2,7 +2,14 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
-import type { ProductTemplate, TumblerMapping } from "@/types/productTemplate";
+import type {
+  BodyReferenceQAContract,
+  CanonicalBodyProfile,
+  CanonicalDimensionCalibration,
+  EditableBodyOutline,
+  ProductTemplate,
+  TumblerMapping,
+} from "@/types/productTemplate";
 import type { AutoDetectResult } from "@/lib/autoDetect";
 import type { TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
 import type { PreviewModelMode } from "@/lib/tumblerPreviewModelState";
@@ -22,11 +29,18 @@ import {
   getTemplateCreateSourceReadiness,
 } from "@/lib/templateCreateFlow";
 import {
+  BODY_REFERENCE_CONTRACT_VERSION,
+  deriveBodyReferencePipeline,
+} from "@/lib/bodyReferencePipeline";
+import { createEditableBodyOutline } from "@/lib/editableBodyOutline";
+import {
   getBodyReferencePreviewModeHint,
   getBodyReferencePreviewModeLabel,
   getDrinkwareGlbStatusLabel,
   isBodyCutoutQaPreviewAvailable,
 } from "@/lib/bodyReferencePreviewIntent";
+import { parseBodyReferenceGlbResponse } from "@/lib/adminApi.schema";
+import type { BodyGeometryContract } from "@/lib/bodyGeometryContract";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
 import { EngravableZoneEditor } from "./EngravableZoneEditor";
@@ -47,6 +61,10 @@ interface Props {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+function cloneSerializable<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 /** Convert an image file to a data URL (max 480px on longest side for face photos) */
@@ -362,10 +380,50 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [frontUseOriginal, setFrontUseOriginal] = React.useState(false);
   const [backUseOriginal, setBackUseOriginal] = React.useState(false);
   const [mirrorForBack, setMirrorForBack] = React.useState(true);
+  const [approvedBodyOutline, setApprovedBodyOutline] = React.useState<EditableBodyOutline | null>(
+    () => editingTemplate?.dimensions.bodyOutlineProfile
+      ? cloneSerializable(editingTemplate.dimensions.bodyOutlineProfile)
+      : null,
+  );
+  const [approvedCanonicalBodyProfile, setApprovedCanonicalBodyProfile] = React.useState<CanonicalBodyProfile | null>(
+    () => editingTemplate?.dimensions.canonicalBodyProfile
+      ? cloneSerializable(editingTemplate.dimensions.canonicalBodyProfile)
+      : null,
+  );
+  const [approvedCanonicalDimensionCalibration, setApprovedCanonicalDimensionCalibration] = React.useState<CanonicalDimensionCalibration | null>(
+    () => editingTemplate?.dimensions.canonicalDimensionCalibration
+      ? cloneSerializable(editingTemplate.dimensions.canonicalDimensionCalibration)
+      : null,
+  );
+  const [approvedBodyReferenceQa, setApprovedBodyReferenceQa] = React.useState<BodyReferenceQAContract | null>(
+    () => editingTemplate?.dimensions.bodyReferenceQA
+      ? cloneSerializable(editingTemplate.dimensions.bodyReferenceQA)
+      : null,
+  );
+  const [approvedBodyReferenceWarnings, setApprovedBodyReferenceWarnings] = React.useState<string[]>(
+    () => [...(editingTemplate?.dimensions.bodyReferenceWarnings ?? [])],
+  );
+  const [reviewedBodyCutoutQaGeneratedSourceSignature, setReviewedBodyCutoutQaGeneratedSourceSignature] = React.useState<string | null>(null);
+  const [generatedReviewedBodyGeometryContract, setGeneratedReviewedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
+  const [loadedBodyGeometryContract, setLoadedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
+  const [reviewedGeneratedModelState, setReviewedGeneratedModelState] = React.useState<{
+    glbPath: string;
+    status: "generated-reviewed-model";
+    sourceLabel: string | null;
+  } | null>(() => (
+    editingTemplate?.glbStatus === "generated-reviewed-model" && editingTemplate.glbPath.trim()
+      ? {
+          glbPath: editingTemplate.glbPath.trim(),
+          status: "generated-reviewed-model",
+          sourceLabel: editingTemplate.glbSourceLabel ?? null,
+        }
+      : null
+  ));
+  const [generatingReviewedBodyReferenceGlb, setGeneratingReviewedBodyReferenceGlb] = React.useState(false);
   const [hasAcceptedBodyReferenceReview, setHasAcceptedBodyReferenceReview] = React.useState(
     () => Boolean(
-      editingTemplate?.dimensions.canonicalBodyProfile
-      && editingTemplate?.dimensions.canonicalDimensionCalibration,
+      editingTemplate?.dimensions.canonicalBodyProfile &&
+      editingTemplate?.dimensions.canonicalDimensionCalibration,
     ),
   );
   const [previewModelMode, setPreviewModelMode] = React.useState<PreviewModelMode>(
@@ -389,17 +447,131 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   }, [mirrorForBack, frontPhotoDataUrl]);
 
   const activeDrinkwareGlbStatus = React.useMemo<ProductTemplate["glbStatus"] | null>(() => {
+    if (
+      reviewedGeneratedModelState?.glbPath &&
+      reviewedGeneratedModelState.glbPath.trim() === glbPath.trim()
+    ) {
+      return reviewedGeneratedModelState.status;
+    }
     if (lookupResult?.modelStatus) return lookupResult.modelStatus;
     if (editingTemplate?.glbPath?.trim() === glbPath.trim() && editingTemplate.glbStatus) {
       return editingTemplate.glbStatus;
     }
     if (!glbPath.trim()) return "missing-model";
     return "verified-product-model";
-  }, [editingTemplate?.glbPath, editingTemplate?.glbStatus, glbPath, lookupResult?.modelStatus]);
+  }, [
+    editingTemplate?.glbPath,
+    editingTemplate?.glbStatus,
+    glbPath,
+    lookupResult?.modelStatus,
+    reviewedGeneratedModelState?.glbPath,
+    reviewedGeneratedModelState?.status,
+  ]);
 
   const activeDrinkwareGlbSourceLabel = React.useMemo(() => {
+    if (
+      reviewedGeneratedModelState?.glbPath &&
+      reviewedGeneratedModelState.glbPath.trim() === glbPath.trim()
+    ) {
+      return reviewedGeneratedModelState.sourceLabel;
+    }
     return lookupResult?.modelSourceLabel ?? editingTemplate?.glbSourceLabel ?? null;
-  }, [editingTemplate?.glbSourceLabel, lookupResult?.modelSourceLabel]);
+  }, [
+    editingTemplate?.glbSourceLabel,
+    glbPath,
+    lookupResult?.modelSourceLabel,
+    reviewedGeneratedModelState?.glbPath,
+    reviewedGeneratedModelState?.sourceLabel,
+  ]);
+
+  const resolvedMatchedProfileId = React.useMemo(() => {
+    if (lookupResult?.matchedProfileId) return lookupResult.matchedProfileId;
+    const suggestion = detectResult?.response.suggestion;
+    return findTumblerProfileIdForBrandModel({
+      brand: lookupResult?.brand ?? suggestion?.brand ?? brand,
+      model: lookupResult?.model ?? suggestion?.model ?? null,
+      capacityOz: lookupResult?.capacityOz ?? suggestion?.capacityOz ?? null,
+    });
+  }, [
+    brand,
+    detectResult?.response.suggestion,
+    lookupResult?.brand,
+    lookupResult?.capacityOz,
+    lookupResult?.matchedProfileId,
+    lookupResult?.model,
+  ]);
+
+  const resolvedMatchedProfile = React.useMemo(
+    () => (resolvedMatchedProfileId ? getTumblerProfileById(resolvedMatchedProfileId) : null),
+    [resolvedMatchedProfileId],
+  );
+
+  const liveBodyReferenceOutline = React.useMemo(() => {
+    if (productType === "flat") return null;
+    if (!Number.isFinite(overallHeightMm) || overallHeightMm <= 0) return null;
+    if (!Number.isFinite(diameterMm) || diameterMm <= 0) return null;
+    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
+    const bodyBottomFromOverallMm = round2(Math.max(bodyTopFromOverallMm + 1, overallHeightMm - Math.max(0, bottomMarginMm)));
+    if (bodyBottomFromOverallMm <= bodyTopFromOverallMm) return null;
+    return createEditableBodyOutline({
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      diameterMm,
+      matchedProfileId: resolvedMatchedProfileId ?? undefined,
+      topOuterDiameterMm:
+        resolvedMatchedProfile?.topDiameterMm ??
+        resolvedMatchedProfile?.outsideDiameterMm ??
+        null,
+      baseDiameterMm:
+        resolvedMatchedProfile?.bottomDiameterMm ??
+        resolvedMatchedProfile?.outsideDiameterMm ??
+        null,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    });
+  }, [
+    bottomMarginMm,
+    diameterMm,
+    lookupResult?.fitDebug,
+    overallHeightMm,
+    productType,
+    resolvedMatchedProfile?.bottomDiameterMm,
+    resolvedMatchedProfile?.outsideDiameterMm,
+    resolvedMatchedProfile?.topDiameterMm,
+    resolvedMatchedProfileId,
+    topMarginMm,
+  ]);
+
+  const liveBodyReferencePipeline = React.useMemo(() => {
+    if (!liveBodyReferenceOutline || productType === "flat") return null;
+    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
+    const bodyBottomFromOverallMm = round2(Math.max(bodyTopFromOverallMm + 1, overallHeightMm - Math.max(0, bottomMarginMm)));
+    if (bodyBottomFromOverallMm <= bodyTopFromOverallMm) return null;
+    return deriveBodyReferencePipeline({
+      outline: liveBodyReferenceOutline,
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      wrapDiameterMm: diameterMm,
+      baseDiameterMm:
+        resolvedMatchedProfile?.bottomDiameterMm ??
+        resolvedMatchedProfile?.outsideDiameterMm ??
+        diameterMm,
+      handleArcDeg,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    });
+  }, [
+    bottomMarginMm,
+    diameterMm,
+    handleArcDeg,
+    liveBodyReferenceOutline,
+    lookupResult?.fitDebug,
+    overallHeightMm,
+    productType,
+    resolvedMatchedProfile?.bottomDiameterMm,
+    resolvedMatchedProfile?.outsideDiameterMm,
+    topMarginMm,
+  ]);
 
   const previewTumblerDims = React.useMemo(
     () => buildPreviewTumblerDimensions({
@@ -417,13 +589,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       hasProductImage: Boolean(productImageFile || productPhotoFullUrl),
       hasStagedDetectResult: Boolean(detectResult || lookupResult),
       hasAcceptedReview: hasAcceptedBodyReferenceReview,
-      hasCanonicalBodyProfile: Boolean(editingTemplate?.dimensions.canonicalBodyProfile),
-      hasCanonicalDimensionCalibration: Boolean(editingTemplate?.dimensions.canonicalDimensionCalibration),
+      hasCanonicalBodyProfile: Boolean(approvedCanonicalBodyProfile),
+      hasCanonicalDimensionCalibration: Boolean(approvedCanonicalDimensionCalibration),
     }),
     [
+      approvedCanonicalBodyProfile,
+      approvedCanonicalDimensionCalibration,
       detectResult,
-      editingTemplate?.dimensions.canonicalBodyProfile,
-      editingTemplate?.dimensions.canonicalDimensionCalibration,
       hasAcceptedBodyReferenceReview,
       lookupResult,
       productImageFile,
@@ -464,6 +636,15 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
   const resetBodyReferenceReviewScaffold = React.useCallback(() => {
     setHasAcceptedBodyReferenceReview(false);
+    setApprovedBodyOutline(null);
+    setApprovedCanonicalBodyProfile(null);
+    setApprovedCanonicalDimensionCalibration(null);
+    setApprovedBodyReferenceQa(null);
+    setApprovedBodyReferenceWarnings([]);
+    setGeneratedReviewedBodyGeometryContract(null);
+    setLoadedBodyGeometryContract(null);
+    setReviewedBodyCutoutQaGeneratedSourceSignature(null);
+    setReviewedGeneratedModelState(null);
     setPreviewModelMode(resolveDefaultPreviewModelMode({
       glbPath,
       glbStatus: activeDrinkwareGlbStatus,
@@ -738,6 +919,9 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   };
 
   const handleGlbFile = async (file: File) => {
+    setReviewedGeneratedModelState(null);
+    setGeneratedReviewedBodyGeometryContract(null);
+    setLoadedBodyGeometryContract(null);
     setGlbFileName(file.name);
     setGlbUploading(true);
     setGlbUploadError(null);
@@ -760,6 +944,90 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       setGlbUploading(false);
     }
   };
+
+  const canGenerateReviewedBodyReferenceGlb = Boolean(
+    productType !== "flat" &&
+    hasAcceptedBodyReferenceReview &&
+    approvedBodyOutline &&
+    approvedCanonicalBodyProfile &&
+    approvedCanonicalDimensionCalibration,
+  );
+
+  const handleGenerateReviewedBodyReferenceGlb = React.useCallback(async () => {
+    if (
+      productType === "flat" ||
+      !approvedBodyOutline ||
+      !approvedCanonicalBodyProfile ||
+      !approvedCanonicalDimensionCalibration
+    ) {
+      return;
+    }
+
+    setGeneratingReviewedBodyReferenceGlb(true);
+    setGlbUploadError(null);
+
+    try {
+      const response = await fetch("/api/admin/tumbler/generate-body-reference-glb", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          templateName: name.trim() || null,
+          renderMode: "body-cutout-qa",
+          matchedProfileId: resolvedMatchedProfileId ?? null,
+          bodyOutline: approvedBodyOutline,
+          bodyOutlineSourceMode: approvedBodyOutline.sourceContourMode ?? null,
+          canonicalBodyProfile: approvedCanonicalBodyProfile,
+          canonicalDimensionCalibration: approvedCanonicalDimensionCalibration,
+          bodyColorHex: bodyColorHex || null,
+          rimColorHex: rimColorHex || null,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          typeof payload?.error === "string"
+            ? payload.error
+            : "Failed to generate the reviewed BODY REFERENCE GLB.",
+        );
+      }
+
+      const generated = parseBodyReferenceGlbResponse(payload);
+      if (!generated) {
+        throw new Error("Reviewed BODY REFERENCE GLB response could not be parsed.");
+      }
+
+      setGlbPath(generated.glbPath);
+      setGlbFileName(generated.glbPath.split("/").pop() ?? null);
+      setPreviewModelMode("body-cutout-qa");
+      setGeneratedReviewedBodyGeometryContract(generated.bodyGeometryContract ?? null);
+      setLoadedBodyGeometryContract(null);
+      setReviewedBodyCutoutQaGeneratedSourceSignature(generated.generatedSourceSignature ?? null);
+      setReviewedGeneratedModelState({
+        glbPath: generated.glbPath,
+        status: "generated-reviewed-model",
+        sourceLabel: generated.modelSourceLabel ?? "Generated from accepted BODY REFERENCE cutout",
+      });
+    } catch (error) {
+      setGlbUploadError(
+        error instanceof Error
+          ? error.message
+          : "Failed to generate the reviewed BODY REFERENCE GLB.",
+      );
+    } finally {
+      setGeneratingReviewedBodyReferenceGlb(false);
+    }
+  }, [
+    approvedBodyOutline,
+    approvedCanonicalBodyProfile,
+    approvedCanonicalDimensionCalibration,
+    bodyColorHex,
+    name,
+    productType,
+    resolvedMatchedProfileId,
+    rimColorHex,
+  ]);
 
   const handleSave = async () => {
     const errs: string[] = [];
@@ -787,6 +1055,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       thumbnailDataUrl: thumbDataUrl,
       productPhotoFullUrl: productPhotoFullUrl || undefined,
       glbPath,
+      glbStatus: activeDrinkwareGlbStatus ?? undefined,
+      glbSourceLabel: activeDrinkwareGlbSourceLabel ?? undefined,
       dimensions: {
         diameterMm,
         printHeightMm,
@@ -801,6 +1071,15 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         referencePhotoAnchorY,
         bodyColorHex: bodyColorHex || undefined,
         rimColorHex: rimColorHex || undefined,
+        canonicalBodyProfile: approvedCanonicalBodyProfile ?? undefined,
+        canonicalDimensionCalibration: approvedCanonicalDimensionCalibration ?? undefined,
+        bodyReferenceQA: approvedBodyReferenceQa ?? undefined,
+        bodyReferenceWarnings: approvedBodyReferenceWarnings.length > 0 ? approvedBodyReferenceWarnings : undefined,
+        bodyReferenceContractVersion:
+          approvedCanonicalBodyProfile && approvedCanonicalDimensionCalibration
+            ? BODY_REFERENCE_CONTRACT_VERSION
+            : undefined,
+        bodyOutlineProfile: approvedBodyOutline ?? undefined,
       },
       laserSettings: {
         power,
@@ -1110,7 +1389,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               <div>
                 <div className={styles.reviewScaffoldTitle}>Review handoff</div>
                 <div className={styles.reviewScaffoldHint}>
-                  This branch adds the review/viewer seam only. Later BODY CUTOUT QA runtime-truth and cutout work will attach to these controls.
+                  Accept the current BODY REFERENCE snapshot, then generate a reviewed body-only GLB for BODY CUTOUT QA.
                 </div>
               </div>
               <span
@@ -1128,13 +1407,28 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               <button
                 type="button"
                 className={styles.detectBtn}
-                disabled={!workflowInput.hasStagedDetectResult || hasAcceptedBodyReferenceReview}
+                disabled={!liveBodyReferencePipeline || hasAcceptedBodyReferenceReview}
                 onClick={() => {
+                  if (!liveBodyReferencePipeline) return;
+                  setApprovedBodyOutline(
+                    liveBodyReferencePipeline.outline
+                      ? cloneSerializable(liveBodyReferencePipeline.outline)
+                      : null,
+                  );
+                  setApprovedCanonicalBodyProfile(
+                    cloneSerializable(liveBodyReferencePipeline.canonicalBodyProfile),
+                  );
+                  setApprovedCanonicalDimensionCalibration(
+                    cloneSerializable(liveBodyReferencePipeline.canonicalDimensionCalibration),
+                  );
+                  setApprovedBodyReferenceQa(cloneSerializable(liveBodyReferencePipeline.qa));
+                  setApprovedBodyReferenceWarnings([...liveBodyReferencePipeline.warnings]);
+                  setGeneratedReviewedBodyGeometryContract(null);
+                  setLoadedBodyGeometryContract(null);
+                  setReviewedBodyCutoutQaGeneratedSourceSignature(null);
+                  setReviewedGeneratedModelState(null);
                   setHasAcceptedBodyReferenceReview(true);
-                  setPreviewModelMode(resolveDefaultPreviewModelMode({
-                    glbPath,
-                    glbStatus: activeDrinkwareGlbStatus,
-                  }));
+                  setPreviewModelMode("alignment-model");
                 }}
               >
                 {hasAcceptedBodyReferenceReview ? "BODY REFERENCE accepted" : "Accept BODY REFERENCE review"}
@@ -1142,26 +1436,53 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               <button
                 type="button"
                 className={styles.detectBtn}
-                disabled
+                disabled={!canGenerateReviewedBodyReferenceGlb || generatingReviewedBodyReferenceGlb}
+                onClick={() => {
+                  void handleGenerateReviewedBodyReferenceGlb();
+                }}
               >
-                Generate BODY CUTOUT QA GLB
+                {generatingReviewedBodyReferenceGlb ? "Generating BODY CUTOUT QA GLB…" : "Generate BODY CUTOUT QA GLB"}
               </button>
             </div>
 
             <div className={styles.reviewScaffoldMeta}>
-              {!workflowInput.hasStagedDetectResult && (
+              {!workflowInput.hasStagedDetectResult && !liveBodyReferencePipeline && (
                 <div className={styles.reviewScaffoldNote}>
-                  Run auto-detect or lookup first so the later BODY REFERENCE review state has something to accept.
+                  Run auto-detect or lookup first so BODY REFERENCE review has a real canonical contour to accept.
                 </div>
               )}
-              {workflowInput.hasStagedDetectResult && !hasAcceptedBodyReferenceReview && (
+              {workflowInput.hasStagedDetectResult && !hasAcceptedBodyReferenceReview && liveBodyReferencePipeline && (
                 <div className={styles.reviewScaffoldNote}>
-                  Detection is staged. Accepting BODY REFERENCE review here creates the clean handoff point for later fine-tune and lineage work.
+                  Detection is staged. Accepting BODY REFERENCE review snapshots the current outline, canonical body profile, and calibration as the QA source of truth.
                 </div>
               )}
               {hasAcceptedBodyReferenceReview && (
                 <div className={styles.reviewScaffoldNote}>
-                  Reviewed GLB generation and BODY CUTOUT QA stay scaffolded in this PR. The later runtime-truth layer will wire these actions to the authoritative reviewed cutout.
+                  BODY REFERENCE review is accepted. Generate the reviewed GLB to switch the viewer into body-only QA proof mode.
+                </div>
+              )}
+              {approvedBodyReferenceQa && (
+                <div className={styles.reviewScaffoldInlineMeta}>
+                  <span>QA {approvedBodyReferenceQa.severity}</span>
+                  <span>{approvedBodyReferenceQa.shellAuthority}</span>
+                  <span>{approvedBodyReferenceQa.scaleAuthority}</span>
+                </div>
+              )}
+              {approvedBodyReferenceWarnings.length > 0 && (
+                <div className={styles.reviewScaffoldNote}>
+                  {approvedBodyReferenceWarnings[0]}
+                </div>
+              )}
+              {loadedBodyGeometryContract && (
+                <div className={styles.reviewScaffoldInlineMeta}>
+                  <span>Runtime {loadedBodyGeometryContract.validation.status}</span>
+                  <span>
+                    {loadedBodyGeometryContract.glb.freshRelativeToSource === true
+                      ? "GLB fresh"
+                      : loadedBodyGeometryContract.glb.freshRelativeToSource === false
+                        ? "GLB stale"
+                        : "GLB freshness unknown"}
+                  </span>
                 </div>
               )}
               {saveGateReason && (
@@ -1248,7 +1569,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               )}
               {!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus) && (
                 <div className={styles.previewPlaceholderNote}>
-                  BODY CUTOUT QA stays reserved until a reviewed body-only GLB exists.
+                  BODY CUTOUT QA unlocks after generating the reviewed body-only GLB from the accepted BODY REFERENCE.
                 </div>
               )}
 
@@ -1269,6 +1590,11 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                       previewModelMode={previewModelMode}
                       sourceModelStatus={activeDrinkwareGlbStatus}
                       sourceModelLabel={activeDrinkwareGlbSourceLabel}
+                      approvedBodyOutline={approvedBodyOutline}
+                      canonicalBodyProfile={approvedCanonicalBodyProfile}
+                      canonicalDimensionCalibration={approvedCanonicalDimensionCalibration}
+                      bodyGeometryContractSeed={generatedReviewedBodyGeometryContract}
+                      onBodyGeometryContractChange={setLoadedBodyGeometryContract}
                     />
                   </div>
                 ) : (

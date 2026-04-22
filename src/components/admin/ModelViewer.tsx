@@ -26,7 +26,12 @@ import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as THREE from "three";
 import type { PlacedItem } from "@/types/admin";
-import type { ProductTemplate } from "@/types/productTemplate";
+import type {
+  CanonicalBodyProfile,
+  CanonicalDimensionCalibration,
+  EditableBodyOutline,
+  ProductTemplate,
+} from "@/types/productTemplate";
 import type { PreviewModelMode } from "@/lib/tumblerPreviewModelState";
 import {
   getBodyReferencePreviewModeHint,
@@ -34,6 +39,26 @@ import {
   getDrinkwareGlbStatusLabel,
   isBodyCutoutQaPreviewAvailable,
 } from "@/lib/bodyReferencePreviewIntent";
+import { resolveGeneratedModelAuditRequestPlan } from "@/lib/generatedModelUrl";
+import { parseBodyGeometryAuditArtifact } from "@/lib/adminApi.schema";
+import type {
+  BodyGeometryContract,
+  BodyGeometryContractSeed,
+} from "@/lib/bodyGeometryContract";
+import {
+  buildBodyGeometrySourceHashPayload,
+  createEmptyBodyGeometryContract,
+  mergeAuditContractWithLoadedInspection,
+  updateContractValidation,
+} from "@/lib/bodyGeometryContract";
+import { buildBodyCutoutQaGuardState } from "@/lib/bodyCutoutQaGuard";
+import type { BodyGeometryAuditArtifactLike } from "@/lib/bodyGeometryDebugReport";
+import { hashArrayBufferSha256, hashFileSha256, hashJsonSha256 } from "@/lib/hashSha256";
+import type { LoadedGltfSceneInspection, LoadedSceneBoundsUnits } from "@/lib/inspectLoadedGltfScene";
+import { inspectLoadedGltfScene } from "@/lib/inspectLoadedGltfScene";
+import { BodyCutoutQaGuardBanner } from "./BodyCutoutQaGuardBanner";
+import { BodyContractInspectorPanel } from "./BodyContractInspectorPanel";
+import { BodyGeometryStatusBadge } from "./BodyGeometryStatusBadge";
 import { YetiRambler40oz } from "./models/YetiRambler40oz";
 import type { DecalItem } from "./models/YetiRambler40oz";
 import { getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
@@ -109,6 +134,12 @@ export interface ModelViewerProps {
   sourceModelStatus?: ProductTemplate["glbStatus"] | null;
   /** Optional operator-facing source label for scaffold overlays */
   sourceModelLabel?: string | null;
+  approvedBodyOutline?: EditableBodyOutline | null;
+  canonicalBodyProfile?: CanonicalBodyProfile | null;
+  canonicalDimensionCalibration?: CanonicalDimensionCalibration | null;
+  bodyGeometryContractSeed?: BodyGeometryContractSeed | null;
+  showModelDebug?: boolean;
+  onBodyGeometryContractChange?: (contract: BodyGeometryContract | null) => void;
 }
 
 function getModelSourceName(file?: File | null, modelUrl?: string | null): string {
@@ -121,6 +152,47 @@ function getModelSourceName(file?: File | null, modelUrl?: string | null): strin
     const [pathPart] = modelUrl.split("?");
     return pathPart.split("/").pop() ?? "";
   }
+}
+
+type LoadedSceneInspectionState =
+  | { status: "idle"; glbUrl?: string }
+  | { status: "pending"; glbUrl?: string }
+  | { status: "complete"; glbUrl?: string; inspectedAt: string; sceneInspection: LoadedGltfSceneInspection }
+  | { status: "failed"; glbUrl?: string; error: string };
+
+type LoadedAuditArtifactState =
+  | { status: "idle"; expectation: "required" | "none"; auditUrl?: string; error?: string }
+  | { status: "loading"; expectation: "required" | "none"; auditUrl?: string; error?: string }
+  | { status: "present"; expectation: "required"; auditUrl: string }
+  | { status: "required-missing"; expectation: "required"; auditUrl: string }
+  | { status: "failed"; expectation: "required"; auditUrl: string; error: string };
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function toBodyBounds(
+  bounds: LoadedGltfSceneInspection["bounds"]["body"] | null | undefined,
+): BodyGeometryContract["dimensionsMm"]["bodyBounds"] | undefined {
+  if (!bounds) return undefined;
+  return {
+    width: round2(bounds.width),
+    height: round2(bounds.height),
+    depth: round2(bounds.depth),
+  };
+}
+
+const BODY_CONTRACT_INSPECTOR_ENABLED =
+  process.env.NEXT_PUBLIC_ADMIN_DEBUG === "1" ||
+  process.env.NEXT_PUBLIC_SHOW_BODY_CONTRACT_INSPECTOR === "1";
+
+function resolveViewerSourceType(args: {
+  sourceModelStatus?: ProductTemplate["glbStatus"] | null;
+  approvedBodyOutline?: EditableBodyOutline | null;
+}): BodyGeometryContract["source"]["type"] {
+  if (args.approvedBodyOutline) return "approved-svg";
+  if (args.sourceModelStatus === "generated-reviewed-model") return "generated";
+  return "unknown";
 }
 
 // ---------------------------------------------------------------------------
@@ -151,8 +223,13 @@ function computeDecalDepthMm(itemWidthMm: number, radiusMm: number): number {
 function computeModelTransform(
   rawSize: THREE.Vector3,
   dims: TumblerDimensions | null | undefined,
+  scaleTargetHeightMm?: number | null,
 ): ModelTransform {
-  if (!dims || dims.overallHeightMm <= 0) {
+  const targetHeightMm =
+    typeof scaleTargetHeightMm === "number" && Number.isFinite(scaleTargetHeightMm) && scaleTargetHeightMm > 0
+      ? scaleTargetHeightMm
+      : dims?.overallHeightMm;
+  if (!targetHeightMm || targetHeightMm <= 0) {
     return { scale: 1, rotation: [0, 0, 0] };
   }
 
@@ -169,7 +246,7 @@ function computeModelTransform(
   }
 
   const scale = heightInNativeUnits > 0
-    ? dims.overallHeightMm / heightInNativeUnits
+    ? targetHeightMm / heightInNativeUnits
     : 1;
 
   return { scale, rotation };
@@ -290,8 +367,8 @@ function EngravableZoneRing({
 type OnReady = (obj: THREE.Object3D) => void;
 
 function StlMesh({
-  url, dims, onReady,
-}: { url: string; dims?: TumblerDimensions | null; onReady?: OnReady }) {
+  url, dims, scaleTargetHeightMm, onReady,
+}: { url: string; dims?: TumblerDimensions | null; scaleTargetHeightMm?: number | null; onReady?: OnReady }) {
   const geometry = useLoader(STLLoader, url);
   geometry.computeVertexNormals();
 
@@ -300,8 +377,8 @@ function StlMesh({
     const bb = geometry.boundingBox ?? new THREE.Box3();
     const size = new THREE.Vector3();
     bb.getSize(size);
-    return computeModelTransform(size, dims);
-  }, [geometry, dims]);
+    return computeModelTransform(size, dims, scaleTargetHeightMm);
+  }, [geometry, dims, scaleTargetHeightMm]);
 
   const ref = useRef<THREE.Group>(null);
   useEffect(() => {
@@ -318,16 +395,16 @@ function StlMesh({
 }
 
 function ObjMesh({
-  url, dims, onReady,
-}: { url: string; dims?: TumblerDimensions | null; onReady?: OnReady }) {
+  url, dims, scaleTargetHeightMm, onReady,
+}: { url: string; dims?: TumblerDimensions | null; scaleTargetHeightMm?: number | null; onReady?: OnReady }) {
   const obj = useLoader(OBJLoader, url);
 
   const transform = useMemo(() => {
     const box = new THREE.Box3().setFromObject(obj);
     const size = new THREE.Vector3();
     box.getSize(size);
-    return computeModelTransform(size, dims);
-  }, [obj, dims]);
+    return computeModelTransform(size, dims, scaleTargetHeightMm);
+  }, [obj, dims, scaleTargetHeightMm]);
 
   const ref = useRef<THREE.Group>(null);
   useEffect(() => {
@@ -343,10 +420,11 @@ function ObjMesh({
 
 
 function GltfMesh({
-  url, dims, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, rimTintColor, onReady,
+  url, dims, scaleTargetHeightMm, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, rimTintColor, onReady,
 }: {
   url: string;
   dims?: TumblerDimensions | null;
+  scaleTargetHeightMm?: number | null;
   placedItems?: PlacedItem[];
   itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number;
@@ -390,8 +468,8 @@ function GltfMesh({
     scaleReference.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(scaleReference);
     const rawSize = box.getSize(new THREE.Vector3());
-    return computeModelTransform(rawSize, dims);
-  }, [bodyMeshData.bodyMesh, gltf.scene, dims]);
+    return computeModelTransform(rawSize, dims, scaleTargetHeightMm);
+  }, [bodyMeshData.bodyMesh, gltf.scene, dims, scaleTargetHeightMm]);
 
   // ── Per-item Three.js textures (keyed by item ID) ──
   const threeTextures = useMemo(() => {
@@ -462,6 +540,7 @@ function GltfMesh({
       {/* Body mesh rendered explicitly so Decals can be direct children */}
       {bodyMeshData.geometry && (
         <mesh
+          name={(bodyMeshData.bodyMesh as THREE.Mesh | null)?.name ?? "body_mesh"}
           geometry={bodyMeshData.geometry}
           material={!bodyTintColor ? (bodyMeshData.material ?? undefined) : undefined}
           castShadow
@@ -529,16 +608,17 @@ const KNOWN_MODELS: { match: string; key: string }[] = [
 ];
 
 function ModelByExtension({
-  url, ext, dims, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, rimTintColor, showTemplateSurfaceZones, onReady,
+  url, ext, dims, scaleTargetHeightMm, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, rimTintColor, showTemplateSurfaceZones, onReady,
 }: {
   url: string; ext: string; dims?: TumblerDimensions | null; handleArcDeg?: number;
+  scaleTargetHeightMm?: number | null;
   placedItems?: PlacedItem[]; itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number; bedHeightMm?: number; glbPath?: string | null;
   sourceName?: string;
   tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; rimTintColor?: string; showTemplateSurfaceZones?: boolean; onReady?: OnReady;
 }) {
-  if (ext === "stl") return <StlMesh url={url} dims={dims} onReady={onReady} />;
-  if (ext === "obj") return <ObjMesh url={url} dims={dims} onReady={onReady} />;
+  if (ext === "stl") return <StlMesh url={url} dims={dims} scaleTargetHeightMm={scaleTargetHeightMm} onReady={onReady} />;
+  if (ext === "obj") return <ObjMesh url={url} dims={dims} scaleTargetHeightMm={scaleTargetHeightMm} onReady={onReady} />;
 
   if (ext === "glb" || ext === "gltf") {
     // Check if this is a known model with a dedicated component
@@ -577,6 +657,7 @@ function ModelByExtension({
     return (
       <Suspense fallback={null}>
         <GltfMesh url={url} dims={dims}
+          scaleTargetHeightMm={scaleTargetHeightMm}
           placedItems={placedItems} itemTextures={itemTextures}
           bedWidthMm={bedWidthMm} bedHeightMm={bedHeightMm}
           tumblerMapping={tumblerMapping}
@@ -648,9 +729,755 @@ export default function ModelViewer({
   previewModelMode,
   sourceModelStatus,
   sourceModelLabel,
+  approvedBodyOutline = null,
+  canonicalBodyProfile = null,
+  canonicalDimensionCalibration = null,
+  bodyGeometryContractSeed = null,
+  showModelDebug = false,
+  onBodyGeometryContractChange,
 }: ModelViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
+  const [loadedSceneInspectionState, setLoadedSceneInspectionState] = useState<LoadedSceneInspectionState>({
+    status: "idle",
+  });
+  const [viewerRuntimeGlbHash, setViewerRuntimeGlbHash] = useState<string | null>(null);
+  const [viewerRuntimeSourceHash, setViewerRuntimeSourceHash] = useState<string | null>(null);
+  const [viewerRuntimeGlbAudit, setViewerRuntimeGlbAudit] = useState<BodyGeometryAuditArtifactLike | null>(null);
+  const [loadedAuditArtifactState, setLoadedAuditArtifactState] = useState<LoadedAuditArtifactState>({
+    status: "idle",
+    expectation: "none",
+  });
+  const [isAutoRotating, setIsAutoRotating] = useState(!!tumblerDims);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleOrbitStart = useCallback(() => {
+    setIsAutoRotating(false);
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+  }, []);
+
+  const handleOrbitEnd = useCallback(() => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => setIsAutoRotating(true), 4000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, []);
+
+  const reviewProductType = tumblerDims ? "tumbler" : null;
+  const sourceModelUrl = modelUrl ?? glbPath ?? null;
+  const sourceName = getModelSourceName(file, sourceModelUrl);
+  const ext = sourceName.split(".").pop()?.toLowerCase() ?? "";
+  const previewModeLabel = previewModelMode
+    ? getBodyReferencePreviewModeLabel({
+        productType: reviewProductType,
+        mode: previewModelMode,
+        glbStatus: sourceModelStatus,
+      })
+    : null;
+  const previewModeHint = previewModelMode
+    ? getBodyReferencePreviewModeHint({
+        productType: reviewProductType,
+        mode: previewModelMode,
+      })
+    : null;
+  const statusLabel = sourceModelLabel ?? getDrinkwareGlbStatusLabel(sourceModelStatus);
+  const qaReservedNote = previewModelMode === "body-cutout-qa" && !isBodyCutoutQaPreviewAvailable(sourceModelStatus)
+    ? "BODY CUTOUT QA slot reserved until a reviewed body-only GLB exists."
+    : null;
+  const scaleTargetHeightMm =
+    previewModelMode === "body-cutout-qa"
+      ? (
+          tumblerDims?.bodyHeightMm ??
+          canonicalDimensionCalibration?.bodyHeightMm ??
+          tumblerDims?.printableHeightMm ??
+          null
+        )
+      : null;
+  const showScaffoldOverlay = Boolean(previewModeLabel || statusLabel || qaReservedNote);
+  const generatedModelAuditRequestPlan = useMemo(
+    () => resolveGeneratedModelAuditRequestPlan({
+      modelUrl: sourceModelUrl,
+      sourceModelStatus,
+    }),
+    [sourceModelStatus, sourceModelUrl],
+  );
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    if (file) {
+      objectUrl = URL.createObjectURL(file);
+      setUrl(objectUrl);
+    } else if (sourceModelUrl) {
+      setUrl(sourceModelUrl);
+    } else {
+      setUrl(null);
+    }
+    setModelBounds(null);
+    setLoadedSceneInspectionState(
+      file || sourceModelUrl
+        ? {
+            status: "pending",
+            glbUrl: objectUrl ?? sourceModelUrl ?? undefined,
+          }
+        : { status: "idle" },
+    );
+    setIsAutoRotating(!!tumblerDims);
+    return () => {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+      setUrl(null);
+    };
+  }, [file, sourceModelUrl, tumblerDims]);
+
+  const handleModelReady = useCallback((obj: THREE.Object3D) => {
+    const box = new THREE.Box3().setFromObject(obj);
+    if (!box.isEmpty()) {
+      setModelBounds(box);
+    }
+
+    try {
+      const sceneInspection = inspectLoadedGltfScene(obj, {
+        boundsUnits: tumblerDims ? "mm" : "scene-units",
+      });
+      setLoadedSceneInspectionState({
+        status: "complete",
+        glbUrl: url ?? sourceModelUrl ?? file?.name ?? undefined,
+        inspectedAt: new Date().toISOString(),
+        sceneInspection,
+      });
+    } catch (error) {
+      setLoadedSceneInspectionState({
+        status: "failed",
+        glbUrl: url ?? sourceModelUrl ?? file?.name ?? undefined,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [file?.name, sourceModelUrl, tumblerDims, url]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const shouldTrackRuntimeTruth = Boolean(
+      showModelDebug ||
+      previewModelMode === "body-cutout-qa" ||
+      sourceModelStatus === "generated-reviewed-model" ||
+      BODY_CONTRACT_INSPECTOR_ENABLED,
+    );
+
+    if (!shouldTrackRuntimeTruth) {
+      setViewerRuntimeGlbHash(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const hashModelBinary = async () => {
+      try {
+        if (file) {
+          const nextHash = await hashFileSha256(file);
+          if (!cancelled) setViewerRuntimeGlbHash(nextHash);
+          return;
+        }
+
+        if (!url) {
+          if (!cancelled) setViewerRuntimeGlbHash(null);
+          return;
+        }
+
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`Failed to read model bytes for hashing: ${response.status}`);
+        }
+        const nextHash = await hashArrayBufferSha256(await response.arrayBuffer());
+        if (!cancelled) setViewerRuntimeGlbHash(nextHash);
+      } catch {
+        if (!cancelled) setViewerRuntimeGlbHash(null);
+      }
+    };
+
+    void hashModelBinary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [file, previewModelMode, showModelDebug, sourceModelStatus, url]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const sourceHashPayload = buildBodyGeometrySourceHashPayload({
+      outline: approvedBodyOutline ?? null,
+      canonicalBodyProfile: canonicalBodyProfile ?? null,
+      canonicalDimensionCalibration: canonicalDimensionCalibration ?? null,
+    });
+
+    if (!sourceHashPayload) {
+      setViewerRuntimeSourceHash(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const hashSourceGeometry = async () => {
+      try {
+        const nextHash = await hashJsonSha256(sourceHashPayload);
+        if (!cancelled) setViewerRuntimeSourceHash(nextHash);
+      } catch {
+        if (!cancelled) setViewerRuntimeSourceHash(null);
+      }
+    };
+
+    void hashSourceGeometry();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [approvedBodyOutline, canonicalBodyProfile, canonicalDimensionCalibration]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const auditUrl = generatedModelAuditRequestPlan.auditUrl;
+
+    if (file || !auditUrl || !generatedModelAuditRequestPlan.shouldFetch) {
+      setViewerRuntimeGlbAudit(null);
+      setLoadedAuditArtifactState({
+        status: "idle",
+        expectation: "none",
+        auditUrl: auditUrl ?? undefined,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLoadedAuditArtifactState({
+      status: "loading",
+      expectation: "required",
+      auditUrl,
+    });
+
+    const loadAuditArtifact = async () => {
+      try {
+        const response = await fetch(auditUrl, { cache: "no-store" });
+        if (!response.ok) {
+          if (response.status === 404) {
+            if (!cancelled) {
+              setViewerRuntimeGlbAudit(null);
+              setLoadedAuditArtifactState({
+                status: "required-missing",
+                expectation: "required",
+                auditUrl,
+              });
+            }
+            return;
+          }
+          throw new Error(`Failed to load GLB audit: ${response.status}`);
+        }
+
+        const parsed = parseBodyGeometryAuditArtifact(await response.json());
+        if (!parsed) {
+          if (!cancelled) {
+            setViewerRuntimeGlbAudit(null);
+            setLoadedAuditArtifactState({
+              status: "failed",
+              expectation: "required",
+              auditUrl,
+              error: "Generated audit sidecar payload could not be parsed.",
+            });
+          }
+          return;
+        }
+
+        if (!cancelled) {
+          setViewerRuntimeGlbAudit(parsed);
+          setLoadedAuditArtifactState({
+            status: "present",
+            expectation: "required",
+            auditUrl,
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setViewerRuntimeGlbAudit(null);
+          setLoadedAuditArtifactState({
+            status: "failed",
+            expectation: "required",
+            auditUrl,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    };
+
+    void loadAuditArtifact();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [file, generatedModelAuditRequestPlan]);
+
+  const runtimeDebugSceneInspection =
+    loadedSceneInspectionState.status === "complete"
+      ? loadedSceneInspectionState.sceneInspection
+      : null;
+
+  const viewerRuntimeAuditContract = useMemo<BodyGeometryContract | null>(() => {
+    if (!viewerRuntimeGlbAudit) return null;
+    const emptyContract = createEmptyBodyGeometryContract();
+    return updateContractValidation({
+      ...emptyContract,
+      contractVersion: viewerRuntimeGlbAudit.contractVersion ?? emptyContract.contractVersion,
+      mode: viewerRuntimeGlbAudit.mode as BodyGeometryContract["mode"],
+      source: {
+        ...emptyContract.source,
+        ...viewerRuntimeGlbAudit.source,
+      },
+      glb: {
+        ...emptyContract.glb,
+        ...viewerRuntimeGlbAudit.glb,
+        generatedAt: viewerRuntimeGlbAudit.glb.generatedAt ?? viewerRuntimeGlbAudit.generatedAt,
+      },
+      meshes: {
+        ...emptyContract.meshes,
+        ...viewerRuntimeGlbAudit.meshes,
+      },
+      dimensionsMm: {
+        ...emptyContract.dimensionsMm,
+        ...viewerRuntimeGlbAudit.dimensionsMm,
+      },
+      validation: {
+        ...emptyContract.validation,
+        ...viewerRuntimeGlbAudit.validation,
+      },
+    });
+  }, [viewerRuntimeGlbAudit]);
+
+  const viewerRuntimeBodyGeometryContract = useMemo<BodyGeometryContract | null>(() => {
+    const hasBodyGeometryContext = Boolean(
+      runtimeDebugSceneInspection ||
+      viewerRuntimeAuditContract ||
+      bodyGeometryContractSeed ||
+      viewerRuntimeSourceHash ||
+      viewerRuntimeGlbHash ||
+      approvedBodyOutline ||
+      sourceModelUrl ||
+      file,
+    );
+    if (!hasBodyGeometryContext) {
+      return null;
+    }
+
+    const sourceViewport = approvedBodyOutline?.sourceContourViewport;
+    const expectedBodyHeightMm =
+      canonicalDimensionCalibration?.bodyHeightMm ??
+      tumblerDims?.bodyHeightMm ??
+      canonicalDimensionCalibration?.totalHeightMm ??
+      tumblerDims?.overallHeightMm;
+    const expectedBodyWidthMm =
+      canonicalDimensionCalibration?.frontVisibleWidthMm ??
+      canonicalDimensionCalibration?.wrapDiameterMm ??
+      tumblerDims?.diameterMm;
+    const glbSourceHash =
+      viewerRuntimeAuditContract?.glb.sourceHash ??
+      viewerRuntimeAuditContract?.source.hash ??
+      bodyGeometryContractSeed?.glb?.sourceHash ??
+      bodyGeometryContractSeed?.source?.hash;
+    const runtimeValidationWarnings = [
+      ...(runtimeDebugSceneInspection?.warnings ?? []),
+      ...(loadedAuditArtifactState.status === "required-missing"
+        ? ["Expected generated audit sidecar is missing for this reviewed GLB."]
+        : []),
+      ...(loadedAuditArtifactState.status === "failed"
+        ? ["Failed to load required generated audit sidecar metadata."]
+        : []),
+    ];
+
+    const baseContract: BodyGeometryContract = {
+      ...createEmptyBodyGeometryContract(),
+      mode: previewModelMode ?? "unknown",
+      source: {
+        type: resolveViewerSourceType({
+          sourceModelStatus,
+          approvedBodyOutline,
+        }),
+        hash: viewerRuntimeSourceHash ?? undefined,
+        widthPx: sourceViewport?.width,
+        heightPx: sourceViewport?.height,
+        viewBox: sourceViewport
+          ? `${round2(sourceViewport.minX)} ${round2(sourceViewport.minY)} ${round2(sourceViewport.width)} ${round2(sourceViewport.height)}`
+          : undefined,
+        detectedBodyOnly: approvedBodyOutline?.sourceContourMode === "body-only",
+      },
+      glb: {
+        path: glbPath ?? modelUrl ?? file?.name ?? undefined,
+        hash: viewerRuntimeGlbHash ?? undefined,
+        sourceHash: glbSourceHash ?? undefined,
+        generatedAt: viewerRuntimeAuditContract?.glb.generatedAt,
+      },
+      meshes: {
+        names: runtimeDebugSceneInspection?.meshNames ?? [],
+        visibleMeshNames: runtimeDebugSceneInspection?.visibleMeshNames ?? [],
+        materialNames: runtimeDebugSceneInspection?.materialNames ?? [],
+        bodyMeshNames: runtimeDebugSceneInspection?.bodyMeshNames ?? [],
+        accessoryMeshNames: runtimeDebugSceneInspection?.accessoryMeshNames ?? [],
+        fallbackMeshNames: runtimeDebugSceneInspection?.fallbackMeshNames ?? [],
+        fallbackDetected: runtimeDebugSceneInspection?.fallbackDetected ?? false,
+        unexpectedMeshes: runtimeDebugSceneInspection?.unexpectedMeshNames ?? [],
+        totalVertexCount: runtimeDebugSceneInspection?.totalVertexCount ?? 0,
+        totalTriangleCount: runtimeDebugSceneInspection?.totalTriangleCount ?? 0,
+      },
+      dimensionsMm: {
+        bodyBounds: toBodyBounds(runtimeDebugSceneInspection?.bounds.body),
+        bodyBoundsUnits: runtimeDebugSceneInspection?.bounds.units,
+        wrapDiameterMm: canonicalDimensionCalibration?.wrapDiameterMm ?? tumblerDims?.diameterMm,
+        wrapWidthMm: canonicalDimensionCalibration?.wrapWidthMm ?? bedWidthMm,
+        frontVisibleWidthMm: canonicalDimensionCalibration?.frontVisibleWidthMm,
+        expectedBodyWidthMm,
+        expectedBodyHeightMm,
+        printableTopMm: canonicalDimensionCalibration?.lidBodyLineMm,
+        printableBottomMm: canonicalDimensionCalibration?.bodyBottomMm,
+        scaleSource:
+          runtimeDebugSceneInspection?.bounds.units === "mm"
+            ? "mesh-bounds"
+            : canonicalDimensionCalibration
+              ? "physical-wrap"
+              : sourceViewport
+                ? "svg-viewbox"
+                : "unknown",
+      },
+      validation: {
+        status: "unknown",
+        errors: [],
+        warnings: runtimeValidationWarnings,
+      },
+    };
+
+    return mergeAuditContractWithLoadedInspection({
+      auditContract: viewerRuntimeAuditContract,
+      loadedInspectionContract: baseContract,
+      metadataSeed: bodyGeometryContractSeed,
+      currentMode: previewModelMode ?? "unknown",
+      currentSourceHash: viewerRuntimeSourceHash,
+      loadedGlbHash: viewerRuntimeGlbHash,
+      runtimeInspection: {
+        status: loadedSceneInspectionState.status,
+        glbUrl: url ?? sourceModelUrl ?? file?.name ?? undefined,
+        inspectedAt:
+          loadedSceneInspectionState.status === "complete"
+            ? loadedSceneInspectionState.inspectedAt
+            : undefined,
+        error:
+          loadedSceneInspectionState.status === "failed"
+            ? loadedSceneInspectionState.error
+            : undefined,
+        auditArtifactPresent: loadedAuditArtifactState.status === "present",
+        auditArtifactRequiredMissing: loadedAuditArtifactState.status === "required-missing",
+      },
+    });
+  }, [
+    approvedBodyOutline,
+    bedWidthMm,
+    bodyGeometryContractSeed,
+    canonicalDimensionCalibration,
+    file,
+    glbPath,
+    loadedAuditArtifactState.status,
+    loadedSceneInspectionState,
+    modelUrl,
+    previewModelMode,
+    runtimeDebugSceneInspection,
+    sourceModelStatus,
+    sourceModelUrl,
+    tumblerDims,
+    url,
+    viewerRuntimeAuditContract,
+    viewerRuntimeGlbHash,
+    viewerRuntimeSourceHash,
+  ]);
+
+  const bodyCutoutQaGuardState = useMemo(
+    () => buildBodyCutoutQaGuardState({
+      mode: previewModelMode ?? null,
+      contract: viewerRuntimeBodyGeometryContract,
+    }),
+    [previewModelMode, viewerRuntimeBodyGeometryContract],
+  );
+
+  useEffect(() => {
+    onBodyGeometryContractChange?.(viewerRuntimeBodyGeometryContract ?? null);
+  }, [onBodyGeometryContractChange, viewerRuntimeBodyGeometryContract]);
+
+  useEffect(() => {
+    return () => {
+      onBodyGeometryContractChange?.(null);
+    };
+  }, [onBodyGeometryContractChange]);
+
+  const showBodyGeometryStatusBadge = Boolean(
+    viewerRuntimeBodyGeometryContract ||
+    previewModelMode ||
+    sourceModelStatus ||
+    approvedBodyOutline,
+  );
+  const showBodyContractInspector = Boolean(showModelDebug || BODY_CONTRACT_INSPECTOR_ENABLED);
+
+  const H = tumblerDims?.overallHeightMm ?? 200;
+  const isMmScale = !!tumblerDims;
+  const nearClip   = isMmScale ? 1       : 0.01;
+  const farClip    = isMmScale ? 8000    : 300;
+  const minDist    = isMmScale ? 20      : 0.05;
+  const maxDist    = isMmScale ? H * 10  : 200;
+  const gridCell   = isMmScale ? H * 0.05  : 0.5;
+  const gridSection= isMmScale ? H * 0.25  : 2.5;
+  const gridFade   = isMmScale ? H * 3.5   : 28;
+  const shadowScale= isMmScale ? H * 4     : 20;
+  const shadowFar  = isMmScale ? H * 0.7   : 5;
+
+  if (!url || !ext) return null;
+
+  const hasItems = !!placedItems?.length && !!itemTextures?.size;
+
+  return (
+    <div
+      data-body-reference-viewer-scaffold={showScaffoldOverlay ? "present" : "absent"}
+      style={{ position: "relative", width: "100%", height: "100%" }}
+    >
+      {showScaffoldOverlay && (
+        <div
+          data-body-reference-viewer-scaffold-slot="top-right"
+          style={{
+            position: "absolute",
+            top: 10,
+            right: 10,
+            zIndex: 2,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            maxWidth: 280,
+            padding: "8px 10px",
+            borderRadius: 8,
+            border: "1px solid rgba(148, 163, 184, 0.28)",
+            background: "rgba(15, 23, 42, 0.78)",
+            color: "var(--text-primary)",
+            pointerEvents: "none",
+          }}
+        >
+          {previewModeLabel && (
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              {previewModeLabel}
+            </div>
+          )}
+          {statusLabel && (
+            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+              {statusLabel}
+            </div>
+          )}
+          {previewModeHint && (
+            <div style={{ fontSize: 10, lineHeight: 1.4, color: "var(--text-dim)" }}>
+              {previewModeHint}
+            </div>
+          )}
+          {qaReservedNote && (
+            <div style={{ fontSize: 10, lineHeight: 1.4, color: "var(--warning)" }}>
+              {qaReservedNote}
+            </div>
+          )}
+        </div>
+      )}
+      {(bodyCutoutQaGuardState || showBodyGeometryStatusBadge || showBodyContractInspector) && (
+        <div
+          style={{
+            position: "absolute",
+            top: 10,
+            left: 10,
+            zIndex: 2,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            maxWidth: 420,
+            pointerEvents: "none",
+          }}
+        >
+          {bodyCutoutQaGuardState && (
+            <div style={{ pointerEvents: "auto" }}>
+              <BodyCutoutQaGuardBanner state={bodyCutoutQaGuardState} />
+            </div>
+          )}
+          {showBodyGeometryStatusBadge && (
+            <div style={{ pointerEvents: "auto" }}>
+              <BodyGeometryStatusBadge
+                mode={previewModelMode ?? null}
+                contract={viewerRuntimeBodyGeometryContract}
+              />
+            </div>
+          )}
+          {showBodyContractInspector && (
+            <div style={{ pointerEvents: "auto" }}>
+              <BodyContractInspectorPanel
+                contract={viewerRuntimeBodyGeometryContract}
+                auditArtifact={viewerRuntimeGlbAudit}
+              />
+            </div>
+          )}
+        </div>
+      )}
+      <CanvasErrorBoundary>
+        <Canvas
+          shadows={false}
+          frameloop={hasItems ? "always" : "demand"}
+          dpr={[1, 1.25]}
+          camera={{ fov: 35, near: nearClip, far: farClip }}
+          gl={{
+            antialias: true,
+            powerPreference: "low-power",
+            stencil: false,
+            toneMapping: THREE.NeutralToneMapping,
+            toneMappingExposure: 1.0,
+            alpha: false,
+          }}
+          style={{ width: "100%", height: "100%" }}
+        >
+          <color attach="background" args={["#1a1a22"]} />
+
+          <StudioLights />
+
+          <Bounds observe={false} margin={4.4}>
+            <Suspense fallback={<LoadingIndicator />}>
+              <ModelByExtension
+                url={url}
+                ext={ext}
+                dims={tumblerDims}
+                scaleTargetHeightMm={scaleTargetHeightMm}
+                handleArcDeg={handleArcDeg}
+                placedItems={placedItems}
+                itemTextures={itemTextures}
+                bedWidthMm={bedWidthMm}
+                bedHeightMm={bedHeightMm}
+                glbPath={glbPath}
+                sourceName={sourceName}
+                tumblerMapping={tumblerMapping}
+                bodyTintColor={bodyTintColor}
+                rimTintColor={rimTintColor}
+                showTemplateSurfaceZones={showTemplateSurfaceZones}
+                onReady={handleModelReady}
+              />
+            </Suspense>
+            <AutoFit url={url} />
+          </Bounds>
+
+          {tumblerDims && modelBounds && !hasItems && (
+            <EngravableZoneRing dims={tumblerDims} modelBounds={modelBounds} />
+          )}
+
+          <ContactShadows
+            position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}
+            opacity={0.4}
+            scale={shadowScale}
+            blur={3}
+            far={shadowFar}
+            color="#000018"
+          />
+
+          <Grid
+            position={[0, modelBounds ? modelBounds.min.y - 1 : -0.011, 0]}
+            infiniteGrid
+            cellSize={gridCell}
+            cellThickness={0.4}
+            cellColor="#333344"
+            sectionSize={gridSection}
+            sectionThickness={0.7}
+            sectionColor="#444466"
+            fadeDistance={gridFade}
+            fadeStrength={2.5}
+          />
+
+          <OrbitControls
+            makeDefault
+            enableDamping
+            dampingFactor={0.05}
+            autoRotate={isAutoRotating}
+            autoRotateSpeed={0.7}
+            minDistance={minDist}
+            maxDistance={maxDist}
+            maxPolarAngle={Math.PI / 1.85}
+            enablePan={false}
+            onStart={handleOrbitStart}
+            onEnd={handleOrbitEnd}
+          />
+        </Canvas>
+      </CanvasErrorBoundary>
+      {showModelDebug && (
+        <div
+          style={{
+            position: "absolute",
+            right: 10,
+            bottom: 10,
+            zIndex: 2,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            maxWidth: 320,
+            padding: "8px 10px",
+            borderRadius: 8,
+            border: "1px solid rgba(51, 65, 85, 0.8)",
+            background: "rgba(2, 6, 23, 0.84)",
+            color: "var(--text-secondary)",
+            fontFamily: "monospace",
+            fontSize: 10,
+            lineHeight: 1.45,
+            pointerEvents: "none",
+          }}
+        >
+          <div>runtime inspection: {loadedSceneInspectionState.status}</div>
+          <div>audit state: {loadedAuditArtifactState.status}</div>
+          <div>approved source SHA-256: {viewerRuntimeSourceHash ?? "pending"}</div>
+          <div>loaded GLB SHA-256: {viewerRuntimeGlbHash ?? "pending"}</div>
+          <div>audit source SHA-256: {viewerRuntimeGlbAudit?.glb.sourceHash ?? viewerRuntimeGlbAudit?.source.hash ?? "n/a"}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LegacyScaffoldModelViewer({
+  file,
+  modelUrl,
+  placedItems,
+  itemTextures,
+  bedWidthMm,
+  bedHeightMm,
+  tumblerDims,
+  handleArcDeg,
+  glbPath,
+  tumblerMapping,
+  bodyTintColor,
+  rimTintColor,
+  showTemplateSurfaceZones,
+  previewModelMode,
+  sourceModelStatus,
+  sourceModelLabel,
+  approvedBodyOutline = null,
+  canonicalBodyProfile = null,
+  canonicalDimensionCalibration = null,
+  bodyGeometryContractSeed = null,
+  showModelDebug = false,
+  onBodyGeometryContractChange,
+}: ModelViewerProps) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
+  const [loadedSceneInspectionState, setLoadedSceneInspectionState] = useState<LoadedSceneInspectionState>({
+    status: "idle",
+  });
+  const [viewerRuntimeGlbHash, setViewerRuntimeGlbHash] = useState<string | null>(null);
+  const [viewerRuntimeSourceHash, setViewerRuntimeSourceHash] = useState<string | null>(null);
+  const [viewerRuntimeGlbAudit, setViewerRuntimeGlbAudit] = useState<BodyGeometryAuditArtifactLike | null>(null);
+  const [loadedAuditArtifactState, setLoadedAuditArtifactState] = useState<LoadedAuditArtifactState>({
+    status: "idle",
+    expectation: "none",
+  });
 
   // Auto-rotate: on by default for tumblers; pause on user interaction, resume after 4s
   const [isAutoRotating, setIsAutoRotating] = useState(!!tumblerDims);
@@ -722,6 +1549,10 @@ export default function ModelViewer({
   const qaReservedNote = previewModelMode === "body-cutout-qa" && !isBodyCutoutQaPreviewAvailable(sourceModelStatus)
     ? "BODY CUTOUT QA slot reserved until a reviewed body-only GLB exists."
     : null;
+  const scaleTargetHeightMm =
+    previewModelMode === "body-cutout-qa"
+      ? (tumblerDims?.bodyHeightMm ?? tumblerDims?.printableHeightMm ?? null)
+      : null;
   const showScaffoldOverlay = Boolean(previewModeLabel || statusLabel || qaReservedNote);
 
   // ── Adaptive scene scale based on physical dimensions ──────────────────────
@@ -814,6 +1645,7 @@ export default function ModelViewer({
               <ModelByExtension
                 url={url} ext={ext}
                 dims={tumblerDims}
+                scaleTargetHeightMm={scaleTargetHeightMm}
                 handleArcDeg={handleArcDeg}
                 placedItems={placedItems}
                 itemTextures={itemTextures}
