@@ -569,6 +569,10 @@ async function fitStanleyIceFlow30FromImage(
   const overallTopYmm = profile.overallHeightMm / 2;
   const rimTopYmm = round2(overallTopYmm - (rimTop - fullTop) * profileFit.mmPerPxY);
   const rimBottomYmm = round2(overallTopYmm - (rimBottom - fullTop) * profileFit.mmPerPxY);
+  const referenceBandCenterYPx = Math.round(bodyTop + ((bodyBottom - bodyTop) * 0.22));
+  const referenceBandHeightPx = Math.max(12, Math.round((bodyBottom - bodyTop + 1) * 0.12));
+  const referenceBandTopPx = Math.max(bodyTop, referenceBandCenterYPx - Math.floor(referenceBandHeightPx / 2));
+  const referenceBandBottomPx = Math.min(bodyBottom, referenceBandTopPx + referenceBandHeightPx - 1);
   const centerOffsetScore = normalizeScore(1 - Math.abs(centerX - width / 2) / Math.max(1, width * 0.18));
   const portraitRatio = width / Math.max(1, height);
   const portraitScore = normalizeScore(1 - Math.abs(portraitRatio - 0.44) / 0.32);
@@ -607,6 +611,10 @@ async function fitStanleyIceFlow30FromImage(
     bodyBottomPx: bodyBottom,
     rimTopPx: rimTop,
     rimBottomPx: rimBottom,
+    referenceBandTopPx,
+    referenceBandBottomPx,
+    referenceBandCenterYPx,
+    referenceBandWidthPx: round2(maxCenterWidth),
     maxCenterWidthPx: round2(maxCenterWidth),
     referenceHalfWidthPx: round2(rimHalfWidthPx > 0 ? rimHalfWidthPx : maxCenterWidth / 2),
     fitScore,
