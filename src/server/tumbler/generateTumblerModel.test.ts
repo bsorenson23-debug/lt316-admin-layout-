@@ -74,6 +74,7 @@ const DIMENSION_CALIBRATION: CanonicalDimensionCalibration = {
 };
 
 function createOutline(widthMm = 44.45): EditableBodyOutline {
+  const scale = widthMm / 49.9;
   return {
     closed: true,
     version: 1,
@@ -84,12 +85,30 @@ function createOutline(widthMm = 44.45): EditableBodyOutline {
       { id: "bottom", x: widthMm, y: 245.8, role: "base", pointType: "corner", inHandle: null, outHandle: null },
     ],
     directContour: [
-      { x: widthMm, y: 31.09 },
-      { x: widthMm, y: 138.45 },
-      { x: widthMm, y: 245.8 },
-      { x: -widthMm, y: 245.8 },
-      { x: -widthMm, y: 138.45 },
-      { x: -widthMm, y: 31.09 },
+      { x: 49.9 * scale, y: 28 },
+      { x: 49.9 * scale, y: 31.1 },
+      { x: 49.9 * scale, y: 45 },
+      { x: 49 * scale, y: 70 },
+      { x: 48 * scale, y: 100 },
+      { x: 46 * scale, y: 130 },
+      { x: 44 * scale, y: 160 },
+      { x: 42 * scale, y: 190 },
+      { x: 40 * scale, y: 220 },
+      { x: 38 * scale, y: 250 },
+      { x: 37.4 * scale, y: 272.3 },
+      { x: 37.4 * scale, y: 273.8 },
+      { x: -37.4 * scale, y: 273.8 },
+      { x: -37.4 * scale, y: 272.3 },
+      { x: -38 * scale, y: 250 },
+      { x: -40 * scale, y: 220 },
+      { x: -42 * scale, y: 190 },
+      { x: -44 * scale, y: 160 },
+      { x: -46 * scale, y: 130 },
+      { x: -48 * scale, y: 100 },
+      { x: -49 * scale, y: 70 },
+      { x: -49.9 * scale, y: 45 },
+      { x: -49.9 * scale, y: 31.1 },
+      { x: -49.9 * scale, y: 28 },
     ],
   };
 }
@@ -156,6 +175,9 @@ test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth
   assert.deepEqual(result.bodyGeometryContract.meshes.bodyMeshNames, ["body_mesh"]);
   assert.deepEqual(result.bodyGeometryContract.meshes.accessoryMeshNames, []);
   assert.equal(result.bodyGeometryContract.validation.status, "pass");
+  assert.equal(result.bodyGeometryContract.svgQuality?.status, "pass");
+  assert.equal(result.bodyGeometryContract.svgQuality?.suspiciousJumpCount, 0);
+  assert.equal(result.bodyGeometryContract.svgQuality?.expectedBridgeSegmentCount, 2);
   assert.equal(result.modelSourceLabel, "Generated from accepted BODY REFERENCE cutout");
   assert.ok(result.auditJsonPath);
   assert.equal(result.auditJsonPath, generatedAuditFilePath(result.glbPath));
@@ -174,6 +196,7 @@ test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth
     source: { hash?: string };
     meshes: { names: string[]; bodyMeshNames: string[]; accessoryMeshNames: string[]; fallbackDetected: boolean };
     validation: { status: string };
+    svgQuality?: { status: string; suspiciousJumpCount: number; expectedBridgeSegmentCount: number };
   };
   assert.equal(auditArtifact.glb.hash, result.bodyGeometryContract.glb.hash);
   assert.equal(auditArtifact.glb.sourceHash, result.bodyGeometryContract.glb.sourceHash);
@@ -183,6 +206,9 @@ test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth
   assert.deepEqual(auditArtifact.meshes.accessoryMeshNames, []);
   assert.equal(auditArtifact.meshes.fallbackDetected, false);
   assert.equal(auditArtifact.validation.status, "pass");
+  assert.equal(auditArtifact.svgQuality?.status, "pass");
+  assert.equal(auditArtifact.svgQuality?.suspiciousJumpCount, 0);
+  assert.equal(auditArtifact.svgQuality?.expectedBridgeSegmentCount, 2);
 });
 
 test("generateBodyReferenceGlb changes source lineage when the approved outline changes", async () => {

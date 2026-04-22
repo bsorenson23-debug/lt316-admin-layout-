@@ -3,6 +3,7 @@ import {
   type BodyReferenceGlbRenderMode,
 } from "./bodyReferenceGlbSource.ts";
 import type { PreviewModelMode } from "./tumblerPreviewModelState.ts";
+import type { BodyReferenceSvgQualityReport } from "./bodyReferenceSvgQuality.ts";
 import type {
   CanonicalBodyProfile,
   CanonicalDimensionCalibration,
@@ -104,6 +105,7 @@ export interface BodyGeometryContract {
     errors: string[];
     warnings: string[];
   };
+  svgQuality?: BodyReferenceSvgQualityReport;
   runtimeInspection?: BodyGeometryRuntimeInspection;
 }
 
@@ -114,6 +116,7 @@ export interface BodyGeometryContractSeed {
   meshes?: Partial<BodyGeometryContract["meshes"]>;
   dimensionsMm?: Partial<BodyGeometryContract["dimensionsMm"]>;
   validation?: Partial<BodyGeometryContract["validation"]>;
+  svgQuality?: BodyReferenceSvgQualityReport;
 }
 
 export interface BodyGeometryLoadedInspectionMergeState {
@@ -705,6 +708,7 @@ export function mergeBodyGeometryContractSeed(
       errors: mergeNames(contract.validation.errors, seed.validation?.errors),
       warnings: mergeNames(contract.validation.warnings, seed.validation?.warnings),
     },
+    svgQuality: seed.svgQuality ?? contract.svgQuality,
   };
 }
 
@@ -898,6 +902,17 @@ export function mergeAuditContractWithLoadedInspection(args: {
           ? normalizeStringArray(auditContract?.meshes.materialNames)
           : normalizeStringArray(seededContract.meshes.materialNames)
       );
+  const mergedSvgQuality = seededContract.svgQuality
+    ? {
+        ...(auditContract?.svgQuality ?? {}),
+        ...seededContract.svgQuality,
+        bounds: seededContract.svgQuality.bounds ?? auditContract?.svgQuality?.bounds,
+        viewBox: seededContract.svgQuality.viewBox ?? auditContract?.svgQuality?.viewBox,
+        sourceHash: seededContract.svgQuality.sourceHash ?? auditContract?.svgQuality?.sourceHash,
+        warnings: mergeNames(auditContract?.svgQuality?.warnings, seededContract.svgQuality.warnings),
+        errors: mergeNames(auditContract?.svgQuality?.errors, seededContract.svgQuality.errors),
+      }
+    : auditContract?.svgQuality;
   return updateContractValidation({
     ...seededContract,
     mode: resolvedMode,
@@ -979,6 +994,7 @@ export function mergeAuditContractWithLoadedInspection(args: {
       errors,
       warnings,
     },
+    svgQuality: mergedSvgQuality,
     runtimeInspection: {
       status: runtimeInspectionStatusForReport,
       source: "three-loaded-scene",
