@@ -77,3 +77,33 @@ test("inspectLoadedGltfScene warns when only scene units are known", () => {
   assert.equal(inspection.bounds.units, "scene-units");
   assert.match(inspection.warnings.join(" "), /scene units/i);
 });
+
+test("inspectLoadedGltfScene ignores preview-only overlay meshes marked out of body-contract inspection", () => {
+  const scene = new THREE.Group();
+
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(44.45, 44.45, 225, 24),
+    new THREE.MeshStandardMaterial({ name: "body-material" }),
+  );
+  body.name = "body_mesh";
+  scene.add(body);
+
+  const overlay = new THREE.Mesh(
+    new THREE.PlaneGeometry(20, 12),
+    new THREE.MeshBasicMaterial({ name: "overlay-material" }),
+  );
+  overlay.name = "engraving_overlay_preview";
+  overlay.userData.bodyContractIgnore = true;
+  overlay.position.set(0, 40, 45);
+  scene.add(overlay);
+
+  const inspection = inspectLoadedGltfScene(scene, { boundsUnits: "mm" });
+
+  assert.deepEqual(inspection.meshNames, ["body_mesh"]);
+  assert.deepEqual(inspection.visibleMeshNames, ["body_mesh"]);
+  assert.deepEqual(inspection.materialNames, ["body-material"]);
+  assert.deepEqual(inspection.bodyMeshNames, ["body_mesh"]);
+  assert.deepEqual(inspection.accessoryMeshNames, []);
+  assert.equal(inspection.totalVertexCount > 0, true);
+  assert.equal(inspection.totalTriangleCount > 0, true);
+});

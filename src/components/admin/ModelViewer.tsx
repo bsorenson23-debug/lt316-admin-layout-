@@ -517,6 +517,7 @@ function GltfMesh({
         const artCenterX = (item.x + item.width / 2) - frontX;
         const artCenterY = (printHeight / 2) - (item.y + item.height / 2);
         const angleRad = (artCenterX / radius) + frontRotation;
+        const itemRotationRad = THREE.MathUtils.degToRad(item.rotation ?? 0);
         const depthMm = computeDecalDepthMm(item.width, radius);
         const outwardMm = THREE.MathUtils.clamp(depthMm * 0.08, 2, 8);
         const surfaceRadius = radius + outwardMm;
@@ -528,7 +529,7 @@ function GltfMesh({
         return {
           itemId: item.id,
           position: [posX / s, posY / s, posZ / s] as [number, number, number],
-          rotation: [0, -angleRad, 0] as [number, number, number],
+          rotation: [0, -angleRad, itemRotationRad] as [number, number, number],
           scale: [item.width / s, item.height / s, depthMm / s] as [number, number, number],
         };
       });
@@ -559,9 +560,11 @@ function GltfMesh({
             return (
               <Decal
                 key={cfg.itemId}
+                name={`engraving_overlay_preview_${cfg.itemId}`}
                 position={cfg.position}
                 rotation={cfg.rotation}
                 scale={cfg.scale}
+                userData={{ bodyContractIgnore: true, engravingOverlayPreview: true }}
               >
                 <meshBasicMaterial
                   map={tex}
@@ -1384,6 +1387,8 @@ export default function ModelViewer({
   return (
     <div
       data-body-reference-viewer-scaffold={showScaffoldOverlay ? "present" : "absent"}
+      data-engraving-overlay-preview={hasItems ? "present" : "absent"}
+      data-engraving-overlay-count={placedItems?.length ?? 0}
       style={{ position: "relative", width: "100%", height: "100%" }}
     >
       {showScaffoldOverlay && (
@@ -1741,6 +1746,8 @@ function LegacyScaffoldModelViewer({
   return (
     <div
       data-body-reference-viewer-scaffold={showScaffoldOverlay ? "present" : "absent"}
+      data-engraving-overlay-preview={hasItems ? "present" : "absent"}
+      data-engraving-overlay-count={placedItems?.length ?? 0}
       style={{ position: "relative", width: "100%", height: "100%" }}
     >
       {showScaffoldOverlay && (
