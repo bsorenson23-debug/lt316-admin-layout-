@@ -58,6 +58,7 @@ import { FiberColorCalibrationPanel } from "./FiberColorCalibrationPanel";
 import { TemplateGallery } from "./TemplateGallery";
 import { TemplateCreateForm } from "./TemplateCreateForm";
 import type { ProductTemplate } from "@/types/productTemplate";
+import type { LaserBedArtworkPlacement } from "@/lib/laserBedSurfaceMapping";
 import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import { getTumblerWrapLayout, getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
@@ -65,6 +66,108 @@ import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
   return process.env.NODE_ENV !== "production";
+}
+
+function clonePlacementBounds(
+  bounds: { x: number; y: number; width: number; height: number } | null | undefined,
+) {
+  if (
+    !bounds ||
+    !Number.isFinite(bounds.x) ||
+    !Number.isFinite(bounds.y) ||
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height)
+  ) {
+    return null;
+  }
+  return {
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+  };
+}
+
+function serializePlacedItemsToLaserBedArtworkPlacements(
+  placedItems: readonly PlacedItem[],
+): LaserBedArtworkPlacement[] {
+  return placedItems.map((item) => ({
+    id: item.id,
+    assetId: item.assetId,
+    svgAssetId: item.assetId,
+    name: item.name,
+    xMm: item.x,
+    yMm: item.y,
+    widthMm: item.width,
+    heightMm: item.height,
+    rotationDeg: item.rotation,
+    visible: item.visible,
+    assetSnapshot: {
+      svgText: item.svgText,
+      sourceSvgText: item.sourceSvgText,
+      documentBounds: clonePlacementBounds(item.documentBounds) ?? undefined,
+      artworkBounds: clonePlacementBounds(item.artworkBounds) ?? undefined,
+    },
+  }));
+}
+
+function restorePlacedItemsFromLaserBedArtworkPlacements(
+  placements: readonly LaserBedArtworkPlacement[] | null | undefined,
+  svgAssets: readonly SvgAsset[],
+): PlacedItem[] {
+  if (!placements) return [];
+  const assetsById = new Map(svgAssets.map((asset) => [asset.id, asset]));
+  return placements.flatMap((placement) => {
+    const assetId = placement.assetId ?? placement.svgAssetId ?? placement.id;
+    const asset = assetsById.get(assetId);
+    const snapshot = placement.assetSnapshot;
+    const documentBounds =
+      clonePlacementBounds(snapshot?.documentBounds) ?? clonePlacementBounds(asset?.documentBounds);
+    const artworkBounds =
+      clonePlacementBounds(snapshot?.artworkBounds) ?? clonePlacementBounds(asset?.artworkBounds);
+    const svgText = snapshot?.svgText ?? asset?.content;
+    const sourceSvgText = snapshot?.sourceSvgText ?? svgText;
+    const x = placement.xMm;
+    const y = placement.yMm;
+    const width = placement.widthMm;
+    const height = placement.heightMm;
+    const rotation =
+      typeof placement.rotationDeg === "number" && Number.isFinite(placement.rotationDeg)
+        ? placement.rotationDeg
+        : 0;
+
+    if (
+      !svgText ||
+      !sourceSvgText ||
+      !documentBounds ||
+      !artworkBounds ||
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      !Number.isFinite(width) ||
+      width <= 0 ||
+      !Number.isFinite(height) ||
+      height <= 0
+    ) {
+      return [];
+    }
+
+    return [{
+      id: placement.id,
+      assetId,
+      name: placement.name ?? asset?.name ?? "Saved artwork",
+      svgText,
+      sourceSvgText,
+      documentBounds,
+      artworkBounds,
+      x,
+      y,
+      width,
+      height,
+      rotation,
+      defaults: { x, y, width, height, rotation },
+      visible: placement.visible,
+    }];
+  });
 }
 
 export function AdminLayoutShell() {
@@ -738,6 +841,14 @@ export function AdminLayoutShell() {
     setShowTemplateGallery(false);
     setShowCreateForm(false);
     setBgRemovalStatus("idle");
+    const templateArtworkPlacements =
+      template.artworkPlacements ?? template.engravingPreviewState?.placements;
+    if (templateArtworkPlacements !== undefined) {
+      setPlacedItems(
+        restorePlacedItemsFromLaserBedArtworkPlacements(templateArtworkPlacements, svgAssets),
+      );
+      setSelectedItemId(null);
+    }
 
       // Compute engravable safe zone for rotary products
       if (isRotary) {
@@ -766,7 +877,7 @@ export function AdminLayoutShell() {
     // Show toast
     setToastMessage(`${template.name} loaded \u2014 place your artwork`);
     setTimeout(() => setToastMessage(null), 2200);
-  }, []);
+  }, [svgAssets]);
 
   const handleUpdateCalibration = useCallback((offsetX: number, offsetY: number, rotation: number) => {
     if (!selectedTemplate) return;
@@ -792,6 +903,10 @@ export function AdminLayoutShell() {
   }, [selectedTemplate, bedConfig.width, bedConfig.height]);
 
   const previewTemplates = loadTemplates().slice(0, 4);
+  const workspaceArtworkPlacements = React.useMemo(
+    () => serializePlacedItemsToLaserBedArtworkPlacements(placedItems),
+    [placedItems],
+  );
 
   return (
     <div className={styles.shell}>
@@ -1592,6 +1707,13 @@ export function AdminLayoutShell() {
               {showCreateForm ? (
                 <TemplateCreateForm
                   editingTemplate={editingTemplate ?? undefined}
+                  workspaceArtworkPlacements={
+                    !editingTemplate
+                      ? workspaceArtworkPlacements
+                      : editingTemplate && selectedTemplate?.id === editingTemplate.id
+                      ? workspaceArtworkPlacements
+                      : null
+                  }
                   onSave={(t) => {
                     setTemplateRefreshNonce((n) => n + 1);
                     // If the edited template is the active one, re-select to sync workspace
