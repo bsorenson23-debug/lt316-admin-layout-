@@ -104,6 +104,12 @@ export function BodyGeometryStatusBadge({
           <span className={styles.label}>GLB</span>
           <span className={styles.value}>{state.glbLabel}</span>
         </div>
+        {state.mappingLabel ? (
+          <div className={styles.row} data-testid="body-geometry-status-badge-mapping">
+            <span className={styles.label}>Mapping</span>
+            <span className={styles.value}>{state.mappingLabel}</span>
+          </div>
+        ) : null}
       </div>
       <div
         className={`${styles.note} ${getNoteClass(state.status)}`}

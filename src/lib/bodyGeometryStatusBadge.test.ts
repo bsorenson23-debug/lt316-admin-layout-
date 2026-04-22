@@ -105,6 +105,51 @@ test("alignment preview badge stays non-QA even when the loaded geometry is only
   assert.equal(state.validForBodyQa, false);
 });
 
+test("wrap-export badge reports mapping readiness without treating the preview as BODY CUTOUT QA", () => {
+  const contract = updateContractValidation({
+    ...createEmptyBodyGeometryContract(),
+    mode: "wrap-export",
+    source: {
+      type: "approved-svg",
+      hash: "source-hash",
+    },
+    glb: {
+      path: "/api/admin/models/generated/demo-cutout.glb",
+      hash: "glb-hash",
+      sourceHash: "source-hash",
+      freshRelativeToSource: true,
+    },
+    meshes: {
+      ...createEmptyBodyGeometryContract().meshes,
+      names: ["body_mesh"],
+      bodyMeshNames: ["body_mesh"],
+    },
+    dimensionsMm: {
+      bodyBounds: { width: 88.9, height: 225, depth: 88.9 },
+      bodyBoundsUnits: "mm",
+      wrapDiameterMm: 88.9,
+      wrapWidthMm: 279.29,
+      expectedBodyWidthMm: 88.9,
+      expectedBodyHeightMm: 225,
+      printableTopMm: 12,
+      printableBottomMm: 237,
+      scaleSource: "mesh-bounds",
+    },
+    validation: { status: "unknown", errors: [], warnings: [] },
+  });
+
+  const state = buildBodyGeometryStatusBadgeState({
+    mode: "wrap-export",
+    contract,
+  });
+
+  assert.equal(state.title, "WRAP / EXPORT PREVIEW");
+  assert.equal(state.status, "pass");
+  assert.equal(state.mappingLabel, "Ready");
+  assert.equal(state.qaLabel, "Not BODY CUTOUT QA · Wrap/export preview ready");
+  assert.equal(state.validForBodyQa, false);
+});
+
 test("unknown QA state reports unknown freshness and QA status", () => {
   const state = buildBodyGeometryStatusBadgeState({
     mode: "body-cutout-qa",

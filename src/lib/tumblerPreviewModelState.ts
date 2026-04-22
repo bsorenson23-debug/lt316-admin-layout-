@@ -4,6 +4,7 @@ import { isGeneratedModelUrl, isLegacyGeneratedModelPath } from "./generatedMode
 export type PreviewModelMode =
   | "alignment-model"
   | "full-model"
+  | "wrap-export"
   | "source-traced"
   | "body-cutout-qa";
 
@@ -30,7 +31,8 @@ export interface TumblerPreviewModelState {
     | "generated-trace-profile"
     | "flat-profile-bounds"
     | "pathological-diameter"
-    | "full-model-ready";
+    | "full-model-ready"
+    | "wrap-export-ready";
   message: string | null;
 }
 
@@ -78,7 +80,11 @@ export function deriveTumblerPreviewModelState(
   const wantsBodyCutoutQa =
     args.requestedMode === "body-cutout-qa" ||
     (args.requestedMode === "full-model" && args.sourceModelStatus === "generated-reviewed-model");
-  if (args.requestedMode !== "full-model" && args.requestedMode !== "body-cutout-qa") {
+  if (
+    args.requestedMode !== "full-model" &&
+    args.requestedMode !== "wrap-export" &&
+    args.requestedMode !== "body-cutout-qa"
+  ) {
     return {
       requestedMode: args.requestedMode,
       effectiveMode: args.requestedMode,
@@ -129,6 +135,93 @@ export function deriveTumblerPreviewModelState(
       sourceModelPath: args.sourceModelPath ?? null,
       reason: "body-cutout-qa-ready",
       message: "BODY CUTOUT QA is using the generated reviewed body-only GLB. No fallback lid, ring, handle, or straw geometry is treated as authoritative in this mode.",
+    };
+  }
+
+  if (args.requestedMode === "wrap-export") {
+    if (!args.hasSourceModel) {
+      return {
+        requestedMode: args.requestedMode,
+        effectiveMode: "wrap-export",
+        glbPreviewStatus: "unavailable",
+        sourceModelPath: args.sourceModelPath ?? null,
+        reason: "missing-source-model",
+        message: "WRAP / EXPORT preview requires a current source model before it can show wrap geometry. It stays separate from BODY CUTOUT QA.",
+      };
+    }
+
+    const generatedTracePath = isGeneratedTracePath(args.sourceModelPath);
+
+    if (
+      args.hasCanonicalAlignmentModel &&
+      generatedTracePath &&
+      args.sourceModelStatus !== "verified-product-model" &&
+      args.sourceModelStatus !== "generated-reviewed-model"
+    ) {
+      return {
+        requestedMode: args.requestedMode,
+        effectiveMode: "wrap-export",
+        glbPreviewStatus: "degraded",
+        sourceModelPath: args.sourceModelPath ?? null,
+        reason: "generated-trace-profile",
+        message: "WRAP / EXPORT preview is using a generated trace profile. Exact placement stays provisional until a reviewed body-only GLB exists.",
+      };
+    }
+
+    if (!args.sourceBounds) {
+      return {
+        requestedMode: args.requestedMode,
+        effectiveMode: "wrap-export",
+        glbPreviewStatus: "loading",
+        sourceModelPath: args.sourceModelPath ?? null,
+        reason: "loading",
+        message: null,
+      };
+    }
+
+    const radialMax = Math.max(args.sourceBounds.widthMm, args.sourceBounds.depthMm);
+    const radialMin = Math.min(args.sourceBounds.widthMm, args.sourceBounds.depthMm);
+    const flatProfileBounds = radialMin <= Math.max(6, radialMax * 0.18);
+    const expectedDiameterMm = getExpectedDiameterMm(args.canonicalBounds);
+    const pathologicalDiameter = isFinitePositive(expectedDiameterMm)
+      ? (
+          radialMax < expectedDiameterMm * 0.58 ||
+          radialMax > expectedDiameterMm * 1.75 ||
+          radialMin < expectedDiameterMm * 0.22
+        )
+      : false;
+
+    if (flatProfileBounds) {
+      return {
+        requestedMode: args.requestedMode,
+        effectiveMode: "wrap-export",
+        glbPreviewStatus: "degraded",
+        sourceModelPath: args.sourceModelPath ?? null,
+        reason: "flat-profile-bounds",
+        message: "WRAP / EXPORT preview has wrap dimensions, but the current model bounds are too flat for exact placement proof.",
+      };
+    }
+
+    if (pathologicalDiameter) {
+      return {
+        requestedMode: args.requestedMode,
+        effectiveMode: "wrap-export",
+        glbPreviewStatus: "degraded",
+        sourceModelPath: args.sourceModelPath ?? null,
+        reason: "pathological-diameter",
+        message: "WRAP / EXPORT preview has wrap dimensions, but the current model diameter does not match the canonical tumbler closely enough for exact placement proof.",
+      };
+    }
+
+    return {
+      requestedMode: args.requestedMode,
+      effectiveMode: "wrap-export",
+      glbPreviewStatus: "ready",
+      sourceModelPath: args.sourceModelPath ?? null,
+      reason: "wrap-export-ready",
+      message: args.sourceModelStatus === "generated-reviewed-model"
+        ? "WRAP / EXPORT preview is using the reviewed body geometry to show printable-surface readiness. It is not BODY CUTOUT QA proof."
+        : "WRAP / EXPORT preview is using current product geometry. Exact placement stays provisional until a reviewed body-only GLB exists.",
     };
   }
 

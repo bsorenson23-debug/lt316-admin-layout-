@@ -12,6 +12,11 @@ import {
   buildBodyGeometryDebugReport,
   buildBodyGeometryDebugReportFileName,
 } from "@/lib/bodyGeometryDebugReport";
+import {
+  buildWrapExportPreviewState,
+  getWrapExportMappingStatusLabel,
+  getWrapExportPreviewStatusLabel,
+} from "@/lib/wrapExportPreviewState";
 import packageJson from "../../../package.json";
 import styles from "./BodyContractInspectorPanel.module.css";
 
@@ -278,7 +283,13 @@ export function BodyContractInspectorPanel({
     [auditArtifact, browserContext.href, browserContext.userAgent, contract, exportedAt, featureFlags, pathname],
   );
   const rawJson = React.useMemo(() => stringifyJson(debugReport), [debugReport]);
-  const validationStatus = contract?.validation.status ?? "unknown";
+  const wrapExportPreviewState = React.useMemo(
+    () => buildWrapExportPreviewState(contract),
+    [contract],
+  );
+  const validationStatus = contract?.mode === "wrap-export"
+    ? wrapExportPreviewState.status
+    : contract?.validation.status ?? "unknown";
   const bodyBoundsUnits = contract?.dimensionsMm.bodyBoundsUnits;
   const showBodyUnitsWarning = bodyBoundsUnits === "scene-units";
   const showUnknownScaleSourceWarning = !contract?.dimensionsMm.scaleSource || contract.dimensionsMm.scaleSource === "unknown";
@@ -286,6 +297,7 @@ export function BodyContractInspectorPanel({
   const hasErrors = (contract?.validation.errors.length ?? 0) > 0;
   const hasSvgQualityWarnings = (contract?.svgQuality?.warnings.length ?? 0) > 0;
   const hasSvgQualityErrors = (contract?.svgQuality?.errors.length ?? 0) > 0;
+  const showWrapExportSection = contract?.mode === "wrap-export";
   const handleDownloadDebugReport = React.useCallback(() => {
     const fileName = buildBodyGeometryDebugReportFileName({ exportedAt });
     const blob = new Blob([rawJson], { type: "application/json;charset=utf-8" });
@@ -314,6 +326,11 @@ export function BodyContractInspectorPanel({
               <span className={styles.badge}>source: {contract?.source.type ?? "unknown"}</span>
               <span className={styles.badge}>fresh: {formatFreshness(contract?.glb.freshRelativeToSource)}</span>
               <span className={styles.badge}>fallback: {formatBoolean(contract?.meshes.fallbackDetected)}</span>
+              {showWrapExportSection ? (
+                <span className={styles.badge}>
+                  mapping: {getWrapExportMappingStatusLabel(wrapExportPreviewState.mappingStatus).toLowerCase()}
+                </span>
+              ) : null}
             </div>
           </div>
           <div className={styles.chevron}>Open</div>
@@ -463,6 +480,117 @@ export function BodyContractInspectorPanel({
                   ) : null}
                 </div>
               </details>
+
+              {showWrapExportSection ? (
+                <details
+                  className={styles.section}
+                  open
+                  data-testid="body-contract-inspector-wrap-export-section"
+                >
+                  <summary className={styles.sectionSummary}>Wrap / Export</summary>
+                  <div className={styles.sectionBody}>
+                    <div className={styles.fieldList}>
+                      <Field
+                        label="Status"
+                        value={getWrapExportPreviewStatusLabel(wrapExportPreviewState.status)}
+                        testId="body-contract-inspector-wrap-export-status"
+                      />
+                      <Field
+                        label="Mapping status"
+                        value={getWrapExportMappingStatusLabel(wrapExportPreviewState.mappingStatus)}
+                        testId="body-contract-inspector-wrap-export-mapping-status"
+                      />
+                      <Field
+                        label="Ready for preview"
+                        value={formatBoolean(wrapExportPreviewState.readyForPreview)}
+                        testId="body-contract-inspector-wrap-export-ready-preview"
+                      />
+                      <Field
+                        label="Ready for exact placement"
+                        value={formatBoolean(wrapExportPreviewState.readyForExactPlacement)}
+                        testId="body-contract-inspector-wrap-export-ready-exact"
+                      />
+                      <Field
+                        label="Is BODY CUTOUT QA proof"
+                        value={formatBoolean(wrapExportPreviewState.isBodyCutoutQaProof)}
+                        testId="body-contract-inspector-wrap-export-is-qa-proof"
+                      />
+                      <Field
+                        label="Wrap diameter"
+                        value={formatNumber(wrapExportPreviewState.wrapDiameterMm)}
+                        testId="body-contract-inspector-wrap-export-diameter"
+                      />
+                      <Field
+                        label="Wrap width"
+                        value={formatNumber(wrapExportPreviewState.wrapWidthMm)}
+                        testId="body-contract-inspector-wrap-export-width"
+                      />
+                      <Field
+                        label="Printable top"
+                        value={formatNumber(wrapExportPreviewState.printableTopMm)}
+                        testId="body-contract-inspector-wrap-export-printable-top"
+                      />
+                      <Field
+                        label="Printable bottom"
+                        value={formatNumber(wrapExportPreviewState.printableBottomMm)}
+                        testId="body-contract-inspector-wrap-export-printable-bottom"
+                      />
+                      <Field
+                        label="Printable height"
+                        value={formatNumber(wrapExportPreviewState.printableHeightMm)}
+                        testId="body-contract-inspector-wrap-export-printable-height"
+                      />
+                      <Field
+                        label="Expected width"
+                        value={formatNumber(wrapExportPreviewState.expectedBodyWidthMm)}
+                        testId="body-contract-inspector-wrap-export-expected-width"
+                      />
+                      <Field
+                        label="Expected height"
+                        value={formatNumber(wrapExportPreviewState.expectedBodyHeightMm)}
+                        testId="body-contract-inspector-wrap-export-expected-height"
+                      />
+                      <Field
+                        label="Body bounds"
+                        value={formatBounds(wrapExportPreviewState.bodyBounds, contract.dimensionsMm.bodyBoundsUnits)}
+                        testId="body-contract-inspector-wrap-export-body-bounds"
+                      />
+                      <Field
+                        label="Scale source"
+                        value={formatScaleSource(wrapExportPreviewState.scaleSource)}
+                        testId="body-contract-inspector-wrap-export-scale-source"
+                      />
+                      <Field
+                        label="Freshness"
+                        value={wrapExportPreviewState.freshness}
+                        testId="body-contract-inspector-wrap-export-freshness"
+                      />
+                      <HashField
+                        label="Source hash"
+                        value={contract.source.hash}
+                        testId="body-contract-inspector-wrap-export-source-hash"
+                      />
+                      <HashField
+                        label="GLB source hash"
+                        value={contract.glb.sourceHash}
+                        testId="body-contract-inspector-wrap-export-glb-source-hash"
+                      />
+                    </div>
+                    <div className={styles.validationList} data-testid="body-contract-inspector-wrap-export-messages">
+                      {wrapExportPreviewState.errors.map((error) => (
+                        <div key={`wrap-error-${error}`} className={`${styles.message} ${styles.messageError}`}>
+                          {error}
+                        </div>
+                      ))}
+                      {wrapExportPreviewState.warnings.map((warning) => (
+                        <div key={`wrap-warn-${warning}`} className={`${styles.message} ${styles.messageWarn}`}>
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </details>
+              ) : null}
 
               <details
                 className={styles.section}

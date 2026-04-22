@@ -1594,6 +1594,7 @@ test("isBodyOnlyMode only treats BODY CUTOUT QA as the strict body-only render m
   assert.equal(isBodyOnlyMode("body-cutout-qa"), true);
   assert.equal(isBodyOnlyMode("hybrid-preview"), false);
   assert.equal(isBodyOnlyMode("full-model"), false);
+  assert.equal(isBodyOnlyMode("wrap-export"), false);
   assert.equal(isBodyOnlyMode("unknown"), false);
 });
 

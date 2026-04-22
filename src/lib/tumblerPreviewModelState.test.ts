@@ -151,6 +151,64 @@ test("deriveTumblerPreviewModelState remaps reviewed generated models to BODY CU
   assert.doesNotMatch(state.message ?? "", /preview-only fallback silhouette/i);
 });
 
+test("deriveTumblerPreviewModelState keeps WRAP / EXPORT distinct from BODY CUTOUT QA for reviewed GLBs", () => {
+  const state = deriveTumblerPreviewModelState({
+    requestedMode: "wrap-export",
+    hasCanonicalAlignmentModel: true,
+    hasSourceModel: true,
+    sourceModelPath: "/api/admin/models/generated/stanley-cutout.glb",
+    sourceModelStatus: "generated-reviewed-model",
+    sourceBounds: {
+      widthMm: 99,
+      heightMm: 216,
+      depthMm: 98,
+    },
+    canonicalBounds,
+  });
+
+  assert.equal(state.effectiveMode, "wrap-export");
+  assert.equal(state.glbPreviewStatus, "ready");
+  assert.equal(state.reason, "wrap-export-ready");
+  assert.match(state.message ?? "", /not body cutout qa proof/i);
+});
+
+test("deriveTumblerPreviewModelState keeps WRAP / EXPORT explicit when only provisional product geometry exists", () => {
+  const state = deriveTumblerPreviewModelState({
+    requestedMode: "wrap-export",
+    hasCanonicalAlignmentModel: true,
+    hasSourceModel: true,
+    sourceModelPath: "/models/templates/yeti-rambler-40oz.glb",
+    sourceModelStatus: "verified-product-model",
+    sourceBounds: {
+      widthMm: 103,
+      heightMm: 216,
+      depthMm: 98,
+    },
+    canonicalBounds,
+  });
+
+  assert.equal(state.effectiveMode, "wrap-export");
+  assert.equal(state.glbPreviewStatus, "ready");
+  assert.equal(state.reason, "wrap-export-ready");
+  assert.match(state.message ?? "", /provisional until a reviewed body-only glb exists/i);
+});
+
+test("deriveTumblerPreviewModelState keeps WRAP / EXPORT unavailable instead of silently degrading when no source model exists", () => {
+  const state = deriveTumblerPreviewModelState({
+    requestedMode: "wrap-export",
+    hasCanonicalAlignmentModel: true,
+    hasSourceModel: false,
+    sourceModelPath: null,
+    sourceBounds: null,
+    canonicalBounds,
+  });
+
+  assert.equal(state.effectiveMode, "wrap-export");
+  assert.equal(state.glbPreviewStatus, "unavailable");
+  assert.equal(state.reason, "missing-source-model");
+  assert.match(state.message ?? "", /requires a current source model/i);
+});
+
 test("deriveTumblerPreviewModelState keeps BODY CUTOUT QA loading while reviewed bounds are unresolved", () => {
   const state = deriveTumblerPreviewModelState({
     requestedMode: "body-cutout-qa",

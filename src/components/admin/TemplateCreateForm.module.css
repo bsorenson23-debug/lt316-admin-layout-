@@ -594,6 +594,7 @@
 }
 
 .reviewStatusReady,
+.reviewStatusFail,
 .reviewStatusPending,
 .previewScaffoldBadge {
   padding: 4px 8px;
@@ -608,6 +609,12 @@
   color: var(--success);
   background: var(--success-bg);
   border: 1px solid var(--success-border);
+}
+
+.reviewStatusFail {
+  color: var(--error);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
 }
 
 .reviewStatusPending {

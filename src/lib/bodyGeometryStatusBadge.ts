@@ -2,6 +2,10 @@ import {
   type BodyGeometryContract,
   type BodyGeometryValidationStatus,
 } from "./bodyGeometryContract.ts";
+import {
+  buildWrapExportPreviewState,
+  getWrapExportMappingStatusLabel,
+} from "./wrapExportPreviewState.ts";
 
 export interface BodyGeometryStatusBadgeState {
   title: string;
@@ -12,6 +16,7 @@ export interface BodyGeometryStatusBadgeState {
   glbLabel: string;
   qaLabel: string;
   validForBodyQa: boolean | null;
+  mappingLabel: string | null;
 }
 
 function humanizeSourceType(type: BodyGeometryContract["source"]["type"] | undefined): string {
@@ -41,6 +46,8 @@ function titleForMode(mode: BodyGeometryContract["mode"] | null | undefined): st
       return "SOURCE COMPARE";
     case "hybrid-preview":
       return "HYBRID PREVIEW";
+    case "wrap-export":
+      return "WRAP / EXPORT PREVIEW";
     default:
       return "PREVIEW";
   }
@@ -75,7 +82,10 @@ export function buildBodyGeometryStatusBadgeState(args: {
   contract: BodyGeometryContract | null;
 }): BodyGeometryStatusBadgeState {
   const { mode, contract } = args;
-  const status = contract?.validation.status ?? "unknown";
+  const wrapExportPreviewState = mode === "wrap-export"
+    ? buildWrapExportPreviewState(contract)
+    : null;
+  const status = wrapExportPreviewState?.status ?? contract?.validation.status ?? "unknown";
   const sourceLabel = humanizeSourceType(contract?.source.type);
   const geometryLabel = geometryLabelForContract(contract);
   const fallbackLabel = fallbackLabelForContract(contract);
@@ -98,6 +108,24 @@ export function buildBodyGeometryStatusBadgeState(args: {
       qaLabel = "QA status unknown";
       validForBodyQa = null;
     }
+  } else if (mode === "wrap-export") {
+    switch (wrapExportPreviewState?.mappingStatus) {
+      case "ready":
+        qaLabel = "Not BODY CUTOUT QA · Wrap/export preview ready";
+        break;
+      case "no-reviewed-glb":
+        qaLabel = "Not BODY CUTOUT QA · Exact placement waits for a reviewed GLB";
+        break;
+      case "stale-geometry":
+        qaLabel = "Not BODY CUTOUT QA · Geometry is stale";
+        break;
+      case "missing-dimensions":
+        qaLabel = "Not BODY CUTOUT QA · Missing wrap dimensions";
+        break;
+      default:
+        qaLabel = "Not BODY CUTOUT QA · Wrap/export readiness unknown";
+        break;
+    }
   }
 
   return {
@@ -109,5 +137,8 @@ export function buildBodyGeometryStatusBadgeState(args: {
     glbLabel,
     qaLabel,
     validForBodyQa,
+    mappingLabel: wrapExportPreviewState
+      ? getWrapExportMappingStatusLabel(wrapExportPreviewState.mappingStatus)
+      : null,
   };
 }
