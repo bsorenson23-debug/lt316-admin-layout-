@@ -15,6 +15,9 @@ import {
   createCenterlineAxis,
 } from "./bodyReferenceV2Layers.ts";
 import {
+  buildMirroredBodyPreview,
+} from "./bodyReferenceV2ScaleMirror.ts";
+import {
   buildLaserBedSurfaceMappingSignature,
 } from "./laserBedSurfaceMapping.ts";
 import {
@@ -2022,6 +2025,97 @@ test("BODY CUTOUT QA validation ignores BODY REFERENCE v2 semantic draft metadat
   };
 
   const contract = updateContractValidation(contractWithBodyReferenceV2);
+
+  assert.equal(contract.validation.status, "pass");
+  assert.equal(isContractPassing(contract), true);
+});
+
+test("BODY CUTOUT QA validation ignores BODY REFERENCE v2 scale and mirror preview metadata attached out of band", () => {
+  const scaleMirrorPreview = buildMirroredBodyPreview({
+    sourceImageUrl: "data:image/png;base64,body-reference-v2",
+    centerline: createCenterlineAxis({
+      id: "centerline",
+      xPx: 100,
+      topYPx: 8,
+      bottomYPx: 208,
+      source: "operator",
+    }),
+    layers: [
+      createBodyReferenceV2Layer({
+        id: "body-left",
+        kind: "body-left",
+        points: [
+          { xPx: 80, yPx: 20 },
+          { xPx: 76, yPx: 120 },
+          { xPx: 82, yPx: 205 },
+        ],
+      }),
+      createBodyReferenceV2Layer({
+        id: "lid",
+        kind: "lid-reference",
+        points: [
+          { xPx: 74, yPx: 4 },
+          { xPx: 126, yPx: 4 },
+          { xPx: 126, yPx: 18 },
+          { xPx: 74, yPx: 18 },
+        ],
+      }),
+    ],
+    blockedRegions: [],
+    scaleCalibration: {
+      scaleSource: "lookup-diameter",
+      lookupDiameterMm: 86.36,
+      resolvedDiameterMm: 86.36,
+      wrapDiameterMm: 86.36,
+      wrapWidthMm: 271.31,
+    },
+  });
+  const contractWithScaleMirrorPreview = {
+    ...createEmptyBodyGeometryContract(),
+    mode: "body-cutout-qa",
+    source: {
+      type: "approved-svg" as const,
+      hash: "json:source",
+      detectedBodyOnly: true,
+    },
+    glb: {
+      path: "/api/admin/models/generated/body-only.glb",
+      hash: "json:glb",
+      sourceHash: "json:source",
+      freshRelativeToSource: true,
+    },
+    meshes: {
+      names: ["body_mesh"],
+      bodyMeshNames: [],
+      accessoryMeshNames: [],
+      fallbackMeshNames: [],
+      fallbackDetected: false,
+      unexpectedMeshes: [],
+    },
+    dimensionsMm: {
+      bodyBounds: {
+        width: 86.42,
+        height: 141.63,
+        depth: 86.42,
+      },
+      bodyBoundsUnits: "mm" as const,
+      expectedBodyWidthMm: 86.42,
+      expectedBodyHeightMm: 141.63,
+      wrapDiameterMm: 86.36,
+      wrapWidthMm: 271.31,
+      frontVisibleWidthMm: 86.42,
+    },
+    validation: {
+      status: "unknown" as const,
+      errors: [],
+      warnings: [],
+    },
+    bodyReferenceV2ScaleMirrorPreview: scaleMirrorPreview,
+  } as BodyGeometryContract & {
+    bodyReferenceV2ScaleMirrorPreview: ReturnType<typeof buildMirroredBodyPreview>;
+  };
+
+  const contract = updateContractValidation(contractWithScaleMirrorPreview);
 
   assert.equal(contract.validation.status, "pass");
   assert.equal(isContractPassing(contract), true);
