@@ -364,3 +364,32 @@ test("outline helper prefers the approved direct contour used by reviewed GLB ge
     height: 220,
   });
 });
+
+test("outline helper rebuilds manual body-only contours from saved points when cached direct contours are stale", () => {
+  const report = buildBodyReferenceSvgQualityReportFromOutline({
+    outline: {
+      closed: true,
+      version: 1,
+      sourceContourMode: "body-only",
+      points: [
+        { id: "top", x: 54, y: 31.1, pointType: "corner", role: "topOuter" },
+        { id: "body", x: 54, y: 100, pointType: "smooth", role: "body" },
+        { id: "base", x: 38.1, y: 172.7, pointType: "corner", role: "base" },
+      ],
+      directContour: [
+        { x: 43.2, y: 31.1 },
+        { x: 43.2, y: 100 },
+        { x: 38.1, y: 172.7 },
+        { x: -38.1, y: 172.7 },
+        { x: -43.2, y: 100 },
+        { x: -43.2, y: 31.1 },
+      ],
+    },
+  });
+
+  assert.equal(report.contourSource, "outline-points");
+  assert.equal(report.boundsUnits, "mm");
+  assert.ok(report.bounds);
+  assert.equal(report.bounds.maxX, 54);
+  assert.equal(report.bounds.minX, -54);
+});

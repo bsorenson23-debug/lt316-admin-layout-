@@ -9,7 +9,7 @@ import type {
   CanonicalDimensionCalibration,
   EditableBodyOutline,
 } from "../types/productTemplate.ts";
-import { resolveEditableBodyOutlineDirectContour } from "./editableBodyOutline.ts";
+import { resolveAuthoritativeEditableBodyOutlineContour } from "./editableBodyOutline.ts";
 
 export const BODY_GEOMETRY_CONTRACT_VERSION = "2026-04-20-v1";
 
@@ -288,7 +288,7 @@ export function buildBodyGeometrySourceHashPayload(
     ? (input.outline ?? null)
     : (input ?? null);
   if (!outline) return null;
-  const directContour = resolveEditableBodyOutlineDirectContour(outline);
+  const directContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
   const outlinePayload = {
     closed: outline.closed,
     version: outline.version ?? 1,

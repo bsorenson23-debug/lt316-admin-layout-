@@ -626,6 +626,34 @@ export function resolveEditableBodyOutlineDirectContour(
   return null;
 }
 
+export function resolveAuthoritativeEditableBodyOutlineContour(
+  outline: EditableBodyOutline | null | undefined,
+): EditableBodyOutlineContourPoint[] | null {
+  if (!outline) return null;
+  const directContour = outline.directContour;
+  const directContourLooksStale = Boolean(
+    !directContour ||
+    directContour.length < Math.max(8, (outline.points.length * 2) + 2),
+  );
+  const usesManualBodyOnlyOverride =
+    outline.sourceContourMode === "body-only" &&
+    (!outline.sourceContour || outline.sourceContour.length < 3) &&
+    outline.points.length >= 2 &&
+    directContourLooksStale;
+  if (usesManualBodyOnlyOverride) {
+    return buildSmoothedContourFromProfile(outline.points);
+  }
+  if (
+    outline.sourceContourMode === "body-only" &&
+    (!outline.sourceContour || outline.sourceContour.length < 3) &&
+    directContour &&
+    directContour.length >= 3
+  ) {
+    return directContour;
+  }
+  return resolveEditableBodyOutlineDirectContour(outline);
+}
+
 function interpolateFitDebugRadius(
   profilePoints: TumblerItemLookupFitDebug["profilePoints"],
   yMm: number,

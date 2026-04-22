@@ -7,6 +7,7 @@ import {
   createEditableBodyOutlineFromImportedSvg,
   createEditableBodyOutlineFromTraceDebug,
   normalizeMeasurementContour,
+  resolveAuthoritativeEditableBodyOutlineContour,
 } from "./editableBodyOutline.ts";
 
 const noisyStanleyFitDebug: TumblerItemLookupFitDebug = {
@@ -178,6 +179,33 @@ test("trace-debug outline ignores implausibly tiny top-outer seeds", () => {
     Math.abs((byRole.get("topOuter")?.x ?? 0) - 50) < 1.0,
     `expected trace-derived top shell to reject implausible topOuterDiameterMm, got ${JSON.stringify(byRole.get("topOuter"))}`,
   );
+});
+
+test("manual body-only overrides rebuild authoritative contours from saved points", () => {
+  const outline = {
+    closed: true,
+    version: 1 as const,
+    sourceContourMode: "body-only" as const,
+    points: [
+      { id: "top", x: 54, y: 31.1, role: "topOuter" as const, pointType: "corner" as const, inHandle: null, outHandle: null },
+      { id: "body", x: 54, y: 100, role: "body" as const, pointType: "smooth" as const, inHandle: null, outHandle: null },
+      { id: "base", x: 38.1, y: 172.7, role: "base" as const, pointType: "corner" as const, inHandle: null, outHandle: null },
+    ],
+    directContour: [
+      { x: 43.2, y: 31.1 },
+      { x: 43.2, y: 100 },
+      { x: 38.1, y: 172.7 },
+      { x: -38.1, y: 172.7 },
+      { x: -43.2, y: 100 },
+      { x: -43.2, y: 31.1 },
+    ],
+  };
+
+  const authoritativeContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
+
+  assert.ok((authoritativeContour?.length ?? 0) > 6);
+  assert.equal(authoritativeContour?.[0]?.x, 54);
+  assert.equal(authoritativeContour?.at(-1)?.x, -54);
 });
 
 test("body-only imported outline stays aligned with the auto body-band fit", () => {

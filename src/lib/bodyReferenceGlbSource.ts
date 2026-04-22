@@ -5,7 +5,7 @@ import type {
   ReferencePaths,
 } from "../types/productTemplate.ts";
 import { stableStringifyForHash } from "./hashSha256.ts";
-import { resolveEditableBodyOutlineDirectContour } from "./editableBodyOutline.ts";
+import { resolveAuthoritativeEditableBodyOutlineContour } from "./editableBodyOutline.ts";
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -24,7 +24,7 @@ function normalizePoint(point: { x: number; y: number }) {
 
 function normalizeOutline(outline: EditableBodyOutline | null | undefined) {
   if (!outline) return null;
-  const directContour = resolveEditableBodyOutlineDirectContour(outline);
+  const directContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
   return {
     closed: outline.closed,
     version: outline.version ?? 1,

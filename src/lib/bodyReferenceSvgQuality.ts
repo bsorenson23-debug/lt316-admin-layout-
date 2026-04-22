@@ -1,4 +1,5 @@
 import type { EditableBodyOutline } from "../types/productTemplate.ts";
+import { resolveAuthoritativeEditableBodyOutlineContour } from "./editableBodyOutline.ts";
 
 export interface BodyReferenceSvgQualityInput {
   points?: Array<{ x: number; y: number }>;
@@ -11,6 +12,7 @@ export interface BodyReferenceSvgQualityInput {
   closed?: boolean;
   contourSource?:
     | "direct-contour"
+    | "outline-points"
     | "source-contour"
     | "profile-points"
     | "path-svg"
@@ -23,6 +25,7 @@ export interface BodyReferenceSvgQualityReport {
   status: "pass" | "warn" | "fail";
   contourSource:
     | "direct-contour"
+    | "outline-points"
     | "source-contour"
     | "profile-points"
     | "path-svg"
@@ -548,6 +551,31 @@ export function buildBodyReferenceSvgQualityReportFromOutline(args: {
       closed: false,
       contourSource: "unavailable",
       boundsUnits: "unknown",
+    });
+  }
+
+  const authoritativeContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
+  const usesAuthoritativeOutlinePoints =
+    outline.sourceContourMode === "body-only" &&
+    (!outline.sourceContour || outline.sourceContour.length < 3) &&
+    Boolean(outline.directContour && outline.directContour.length >= 3) &&
+    authoritativeContour != null &&
+    authoritativeContour !== outline.directContour;
+  if (usesAuthoritativeOutlinePoints && authoritativeContour?.length) {
+    return buildBodyReferenceSvgQualityReport({
+      points: authoritativeContour,
+      viewBox,
+      widthPx: sourceViewport?.width,
+      heightPx: sourceViewport?.height,
+      sourceHash: args.sourceHash,
+      label: args.label,
+      closed: outline.closed,
+      contourSource:
+        outline.sourceContourMode === "body-only" &&
+        (!outline.sourceContour || outline.sourceContour.length < 3)
+          ? "outline-points"
+          : "direct-contour",
+      boundsUnits: "mm",
     });
   }
 
