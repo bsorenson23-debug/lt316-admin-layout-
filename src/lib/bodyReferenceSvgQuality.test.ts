@@ -1,10 +1,53 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { EditableBodyOutline } from "../types/productTemplate.ts";
 import {
   buildBodyReferenceSvgQualityReport,
   buildBodyReferenceSvgQualityReportFromOutline,
 } from "./bodyReferenceSvgQuality.ts";
+import {
+  nudgeOutlinePoint,
+} from "./bodyReferenceFineTune.ts";
+
+function makeOutline(): EditableBodyOutline {
+  return {
+    closed: true,
+    version: 1,
+    sourceContourMode: "body-only",
+    points: [
+      { id: "top", x: 49.9, y: 28, pointType: "corner", role: "topOuter" },
+      { id: "body", x: 49.9, y: 45, pointType: "smooth", role: "body" },
+      { id: "base", x: 37.4, y: 273.8, pointType: "corner", role: "base" },
+    ],
+    directContour: [
+      { x: 49.9, y: 28 },
+      { x: 49.9, y: 31.1 },
+      { x: 49.9, y: 45 },
+      { x: 49, y: 70 },
+      { x: 48, y: 100 },
+      { x: 46, y: 130 },
+      { x: 44, y: 160 },
+      { x: 42, y: 190 },
+      { x: 40, y: 220 },
+      { x: 38, y: 250 },
+      { x: 37.4, y: 272.3 },
+      { x: 37.4, y: 273.8 },
+      { x: -37.4, y: 273.8 },
+      { x: -37.4, y: 272.3 },
+      { x: -38, y: 250 },
+      { x: -40, y: 220 },
+      { x: -42, y: 190 },
+      { x: -44, y: 160 },
+      { x: -46, y: 130 },
+      { x: -48, y: 100 },
+      { x: -49, y: 70 },
+      { x: -49.9, y: 45 },
+      { x: -49.9, y: 31.1 },
+      { x: -49.9, y: 28 },
+    ],
+  };
+}
 
 test("clean closed contour passes", () => {
   const report = buildBodyReferenceSvgQualityReport({
@@ -174,6 +217,72 @@ test("closed full-body silhouette bridges are excluded from suspicious jump warn
   assert.equal(report.suspiciousJumpCount, 0);
   assert.equal(report.expectedBridgeSegmentCount, 2);
   assert.doesNotMatch(report.warnings.join(" "), /suspicious large jump/i);
+});
+
+test("draft svg quality updates after a point move", () => {
+  const outline = makeOutline();
+  const moved = nudgeOutlinePoint({
+    outline,
+    pointId: "body",
+    deltaX: 3,
+    deltaY: 0,
+    overallHeightMm: 320,
+  });
+
+  const report = buildBodyReferenceSvgQualityReportFromOutline({ outline: moved });
+  assert.ok(report.bounds);
+  assert.ok(report.bounds!.maxX > 49.9);
+});
+
+test("expected bridge segment count remains visible after a safe draft edit", () => {
+  const report = buildBodyReferenceSvgQualityReport({
+    points: [
+      { x: 49.9, y: 28 },
+      { x: 49.9, y: 31.1 },
+      { x: 49.9, y: 45 },
+      { x: 49, y: 70 },
+      { x: 48, y: 100 },
+      { x: 46, y: 130 },
+      { x: 44, y: 160 },
+      { x: 43, y: 175 },
+      { x: 42, y: 190 },
+      { x: 40, y: 220 },
+      { x: 38, y: 250 },
+      { x: 37.4, y: 272.3 },
+      { x: 37.4, y: 273.8 },
+      { x: -37.4, y: 273.8 },
+      { x: -37.4, y: 272.3 },
+      { x: -38, y: 250 },
+      { x: -40, y: 220 },
+      { x: -42, y: 190 },
+      { x: -43, y: 175 },
+      { x: -44, y: 160 },
+      { x: -46, y: 130 },
+      { x: -48, y: 100 },
+      { x: -49, y: 70 },
+      { x: -49.9, y: 45 },
+      { x: -49.9, y: 31.1 },
+      { x: -49.9, y: 28 },
+    ],
+    closed: true,
+  });
+
+  assert.equal(report.expectedBridgeSegmentCount, 2);
+  assert.equal(report.suspiciousJumpCount, 0);
+});
+
+test("collapsed draft contour reports a fail state", () => {
+  const report = buildBodyReferenceSvgQualityReport({
+    points: [
+      { x: 40, y: 10 },
+      { x: 40, y: 30 },
+      { x: 40, y: 60 },
+    ],
+    closed: false,
+  });
+
+  assert.equal(report.status, "fail");
+  assert.match(report.errors.join(" "), /near-zero/i);
 });
 
 test("open contour with a long jump still warns", () => {

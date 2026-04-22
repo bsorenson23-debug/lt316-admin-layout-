@@ -1,6 +1,7 @@
 .editor {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  outline: none;
 }
 
 .metaRow {
@@ -23,6 +24,111 @@
   color: var(--text-secondary);
 }
 
+.toggleGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.toggleButton,
+.toggleButtonActive,
+.actionButton {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-normal);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 150ms, background 150ms, color 150ms, opacity 150ms;
+}
+
+.toggleButton:hover,
+.toggleButtonActive:hover,
+.actionButton:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.toggleButtonActive {
+  border-color: var(--info-border);
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.toggleButton:disabled,
+.toggleButtonActive:disabled,
+.actionButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.toolbarHint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.statusGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.statusCard {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+}
+
+.statusLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.statusValue {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.warningList {
+  display: grid;
+  gap: 6px;
+}
+
+.warningItem,
+.warningItemError {
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.warningItem {
+  color: var(--warning);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+}
+
+.warningItemError {
+  color: var(--error);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+}
+
 .note {
   font-size: 12px;
   color: var(--text-secondary);
@@ -30,7 +136,7 @@
 
 .canvas {
   width: 100%;
-  min-height: 260px;
+  min-height: 320px;
   border: 1px solid var(--border-normal);
   border-radius: 12px;
   background:
@@ -39,10 +145,35 @@
   touch-action: none;
 }
 
+.sourceImage {
+  opacity: 0.34;
+  pointer-events: none;
+}
+
 .centerLine {
   stroke: var(--border-strong);
   stroke-width: 0.8;
   stroke-dasharray: 3 3;
+}
+
+.boundsGuide {
+  fill: none;
+  stroke: color-mix(in srgb, var(--info) 60%, transparent);
+  stroke-width: 0.9;
+  stroke-dasharray: 4 3;
+}
+
+.boundsGuideEdge {
+  stroke: color-mix(in srgb, var(--info) 75%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.detectedPath {
+  fill: none;
+  stroke: var(--warning);
+  stroke-width: 1.1;
+  stroke-dasharray: 6 4;
 }
 
 .approvedPath {
@@ -58,6 +189,39 @@
   stroke-width: 1.4;
 }
 
+.bridgeGuide {
+  stroke: var(--success);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-dasharray: 6 4;
+}
+
+.warningSegment {
+  stroke: var(--warning);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-dasharray: 3 3;
+}
+
+.segmentGuide,
+.segmentSelected {
+  fill: none;
+  stroke-linecap: round;
+  cursor: pointer;
+}
+
+.segmentGuide {
+  stroke: color-mix(in srgb, var(--border-normal) 65%, transparent);
+  stroke-width: 5;
+  opacity: 0.45;
+}
+
+.segmentSelected {
+  stroke: color-mix(in srgb, var(--info) 70%, transparent);
+  stroke-width: 6;
+  opacity: 0.85;
+}
+
 .mirrorPoint {
   fill: color-mix(in srgb, var(--text-muted) 55%, transparent);
   stroke: none;
@@ -67,14 +231,14 @@
 .point {
   fill: var(--bg-elevated);
   stroke: var(--accent);
-  stroke-width: 0.9;
+  stroke-width: 1;
   cursor: grab;
 }
 
 .pointSelected {
   fill: var(--accent);
   stroke: var(--bg-base);
-  stroke-width: 1;
+  stroke-width: 1.1;
   cursor: grab;
 }
 

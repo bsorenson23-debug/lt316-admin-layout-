@@ -38,12 +38,14 @@ import {
   deriveDimensionsFromEditableBodyOutline,
 } from "@/lib/editableBodyOutline";
 import {
+  buildOutlineGeometrySignature,
   cloneOutline,
   hasFineTuneDraftChanges,
   resolveFineTuneGlbReviewState,
   resolveOutlineBounds,
   resolveOutlinePointCount,
 } from "@/lib/bodyReferenceFineTune";
+import { buildBodyReferenceSvgQualityReportFromOutline } from "@/lib/bodyReferenceSvgQuality";
 import {
   getBodyReferencePreviewModeHint,
   getBodyReferencePreviewModeLabel,
@@ -79,6 +81,23 @@ function round2(n: number): number {
 
 function cloneSerializable<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function formatBoundsLabel(bounds: ReturnType<typeof resolveOutlineBounds>): string {
+  if (!bounds) return "n/a";
+  return `${bounds.width} x ${bounds.height} mm`;
+}
+
+function formatShortHash(value: string | null | undefined): string {
+  const normalized = value?.trim();
+  if (!normalized) return "n/a";
+  const [prefix, digest] = normalized.includes(":")
+    ? normalized.split(":", 2)
+    : ["sig", normalized];
+  if (!digest) return normalized;
+  const head = digest.slice(0, 8);
+  const tail = digest.slice(-6);
+  return `${prefix}:${head}…${tail}`;
 }
 
 /** Convert an image file to a data URL (max 480px on longest side for face photos) */
@@ -425,6 +444,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [bodyReferenceFineTuneModeEnabled, setBodyReferenceFineTuneModeEnabled] = React.useState(false);
   const [bodyReferenceFineTuneDraftOutline, setBodyReferenceFineTuneDraftOutline] = React.useState<EditableBodyOutline | null>(null);
   const [bodyReferenceFineTuneDetectedBaselineOutline, setBodyReferenceFineTuneDetectedBaselineOutline] = React.useState<EditableBodyOutline | null>(null);
+  const [bodyReferenceFineTuneUndoStack, setBodyReferenceFineTuneUndoStack] = React.useState<EditableBodyOutline[]>([]);
   const [reviewedBodyCutoutQaGeneratedSourceSignature, setReviewedBodyCutoutQaGeneratedSourceSignature] = React.useState<string | null>(null);
   const [generatedReviewedBodyGeometryContract, setGeneratedReviewedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
   const [loadedBodyGeometryContract, setLoadedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
@@ -460,6 +480,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     setBodyReferenceFineTuneModeEnabled(false);
     setBodyReferenceFineTuneDraftOutline(null);
     setBodyReferenceFineTuneDetectedBaselineOutline(null);
+    setBodyReferenceFineTuneUndoStack([]);
   }, []);
 
   // Auto-mirror front photo as back when mirrorForBack is enabled
@@ -1024,6 +1045,12 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     () => resolveOutlinePointCount(activeBodyReferenceFineTuneOutline),
     [activeBodyReferenceFineTuneOutline],
   );
+  const activeBodyReferenceSvgQuality = React.useMemo(
+    () => buildBodyReferenceSvgQualityReportFromOutline({
+      outline: activeBodyReferenceFineTuneOutline,
+    }),
+    [activeBodyReferenceFineTuneOutline],
+  );
   const currentReviewedBodyReferenceSourceSignature = React.useMemo(() => {
     if (
       !canGenerateReviewedBodyReferenceGlb ||
@@ -1051,6 +1078,37 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     resolvedMatchedProfileId,
     rimColorHex,
   ]);
+  const activeBodyReferenceDraftSourceSignature = React.useMemo(() => {
+    if (
+      !canGenerateReviewedBodyReferenceGlb ||
+      !activeBodyReferenceFineTuneOutline ||
+      !approvedCanonicalBodyProfile ||
+      !approvedCanonicalDimensionCalibration
+    ) {
+      return null;
+    }
+    return buildBodyReferenceGlbSourceSignature({
+      renderMode: "body-cutout-qa",
+      matchedProfileId: resolvedMatchedProfileId ?? null,
+      bodyOutline: activeBodyReferenceFineTuneOutline,
+      canonicalBodyProfile: approvedCanonicalBodyProfile,
+      canonicalDimensionCalibration: approvedCanonicalDimensionCalibration,
+      bodyColorHex: bodyColorHex || null,
+      rimColorHex: rimColorHex || null,
+    });
+  }, [
+    activeBodyReferenceFineTuneOutline,
+    approvedCanonicalBodyProfile,
+    approvedCanonicalDimensionCalibration,
+    bodyColorHex,
+    canGenerateReviewedBodyReferenceGlb,
+    resolvedMatchedProfileId,
+    rimColorHex,
+  ]);
+  const reviewedBodyReferenceGlbSourceHash =
+    loadedBodyGeometryContract?.glb.sourceHash
+    ?? generatedReviewedBodyGeometryContract?.glb.sourceHash
+    ?? reviewedBodyCutoutQaGeneratedSourceSignature;
   const reviewedBodyReferenceGlbFreshness = React.useMemo(
     () => resolveFineTuneGlbReviewState({
       canGenerate: canGenerateReviewedBodyReferenceGlb,
@@ -1079,6 +1137,75 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     }
     return "Reviewed GLB freshness is unavailable until an accepted BODY REFERENCE exists.";
   }, [reviewedBodyReferenceGlbFreshness.status]);
+  const bodyReferenceFineTuneStatusLabel = React.useMemo(() => {
+    if (bodyReferenceFineTuneDraftPendingAcceptance) {
+      return "Draft pending";
+    }
+    if (reviewedBodyReferenceGlbFreshness.status === "current") {
+      return "Reviewed GLB fresh";
+    }
+    if (reviewedBodyReferenceGlbFreshness.status === "stale") {
+      return "Reviewed GLB stale / needs regeneration";
+    }
+    return "Accepted cutout is current";
+  }, [bodyReferenceFineTuneDraftPendingAcceptance, reviewedBodyReferenceGlbFreshness.status]);
+  const bodyReferenceFineTuneVisualWarnings = React.useMemo(() => {
+    const warnings: Array<{ level: "warn" | "error"; message: string }> = [];
+    if (activeBodyReferenceSvgQuality.status === "fail") {
+      warnings.push({
+        level: "error",
+        message: "Draft contour fails SVG quality and should be corrected before regeneration.",
+      });
+    }
+    if (draftBodyReferencePointCount < 3) {
+      warnings.push({
+        level: "error",
+        message: "Draft contour has too few points to remain usable.",
+      });
+    }
+    if (
+      !draftBodyReferenceOutlineBounds ||
+      draftBodyReferenceOutlineBounds.width <= 0 ||
+      draftBodyReferenceOutlineBounds.height <= 0
+    ) {
+      warnings.push({
+        level: "error",
+        message: "Draft contour bounds are invalid.",
+      });
+    }
+    if (activeBodyReferenceSvgQuality.suspiciousJumpCount > 0) {
+      warnings.push({
+        level: "warn",
+        message: `Draft contour contains ${activeBodyReferenceSvgQuality.suspiciousJumpCount} suspicious jump segment(s).`,
+      });
+    }
+    if (
+      bodyReferenceFineTuneDraftPendingAcceptance &&
+      activeBodyReferenceDraftSourceSignature &&
+      currentReviewedBodyReferenceSourceSignature &&
+      activeBodyReferenceDraftSourceSignature !== currentReviewedBodyReferenceSourceSignature
+    ) {
+      warnings.push({
+        level: "warn",
+        message: "Draft contour changes the BODY REFERENCE source hash but remains non-authoritative until accepted.",
+      });
+    }
+    if (reviewedBodyReferenceGlbFreshness.status === "stale") {
+      warnings.push({
+        level: "warn",
+        message: "Accepted cutout is newer than the reviewed GLB. Regenerate BODY CUTOUT QA before saving or exporting.",
+      });
+    }
+    return warnings;
+  }, [
+    activeBodyReferenceDraftSourceSignature,
+    activeBodyReferenceSvgQuality,
+    bodyReferenceFineTuneDraftPendingAcceptance,
+    currentReviewedBodyReferenceSourceSignature,
+    draftBodyReferenceOutlineBounds,
+    draftBodyReferencePointCount,
+    reviewedBodyReferenceGlbFreshness.status,
+  ]);
 
   const applyAcceptedBodyReferenceDerivedDimensions = React.useCallback((outline: EditableBodyOutline | null | undefined) => {
     if (!outline) return;
@@ -1105,6 +1232,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     if (productType === "flat" || !approvedBodyOutline) return;
     setBodyReferenceFineTuneModeEnabled(true);
     setBodyReferenceFineTuneDraftOutline(cloneOutline(approvedBodyOutline));
+    setBodyReferenceFineTuneUndoStack([]);
     const detectedBaseline =
       liveBodyReferencePipeline?.outline?.sourceContourMode === "body-only"
         ? cloneEditableBodyOutline(liveBodyReferencePipeline.outline) ?? null
@@ -1117,12 +1245,38 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const handleResetFineTuneDraftToApproved = React.useCallback(() => {
     if (!approvedBodyOutline) return;
     setBodyReferenceFineTuneDraftOutline(cloneOutline(approvedBodyOutline));
+    setBodyReferenceFineTuneUndoStack([]);
   }, [approvedBodyOutline]);
 
   const handleResetFineTuneDraftToDetected = React.useCallback(() => {
     if (!bodyReferenceFineTuneDetectedBaselineOutline) return;
     setBodyReferenceFineTuneDraftOutline(cloneOutline(bodyReferenceFineTuneDetectedBaselineOutline));
+    setBodyReferenceFineTuneUndoStack([]);
   }, [bodyReferenceFineTuneDetectedBaselineOutline]);
+
+  const handleBodyReferenceFineTuneEditStart = React.useCallback((previousOutline: EditableBodyOutline) => {
+    const snapshot = cloneOutline(previousOutline) ?? previousOutline;
+    const nextSignature = buildOutlineGeometrySignature(snapshot);
+    setBodyReferenceFineTuneUndoStack((current) => {
+      const previousSignature = current.length > 0
+        ? buildOutlineGeometrySignature(current[current.length - 1]!)
+        : null;
+      if (previousSignature === nextSignature) {
+        return current;
+      }
+      return [...current.slice(-39), snapshot];
+    });
+  }, []);
+
+  const handleUndoBodyReferenceFineTuneEdit = React.useCallback(() => {
+    setBodyReferenceFineTuneUndoStack((current) => {
+      const previousOutline = current[current.length - 1];
+      if (previousOutline) {
+        setBodyReferenceFineTuneDraftOutline(cloneOutline(previousOutline));
+      }
+      return current.slice(0, -1);
+    });
+  }, []);
 
   const handleDiscardBodyReferenceFineTuneDraft = React.useCallback(() => {
     resetBodyReferenceFineTuneState();
@@ -1814,12 +1968,12 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                   </div>
                   <span
                     className={
-                      bodyReferenceFineTuneDraftPendingAcceptance
+                      reviewedBodyReferenceGlbFreshness.status === "stale" || bodyReferenceFineTuneDraftPendingAcceptance
                         ? styles.reviewStatusPending
                         : styles.reviewStatusReady
                     }
                   >
-                    {bodyReferenceFineTuneDraftPendingAcceptance ? "Draft pending" : "Accepted source active"}
+                    {bodyReferenceFineTuneStatusLabel}
                   </span>
                 </div>
 
@@ -1883,33 +2037,120 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                   </button>
                 </div>
 
-                <div className={styles.reviewScaffoldMeta}>
-                  <div className={styles.reviewScaffoldInlineMeta}>
-                    <span>{bodyReferenceFineTuneModeEnabled ? "Draft contour" : "Approved contour"}</span>
-                    <span>Approved points {approvedBodyReferencePointCount}</span>
-                    <span>Draft points {draftBodyReferencePointCount}</span>
-                  </div>
-                  <div className={styles.reviewScaffoldInlineMeta}>
-                    <span>
-                      Approved bounds {approvedBodyReferenceOutlineBounds ? `${approvedBodyReferenceOutlineBounds.width} x ${approvedBodyReferenceOutlineBounds.height} mm` : "n/a"}
+                <div className={styles.cutoutFitSummary}>
+                  <div className={styles.cutoutFitSummaryHeader}>
+                    <div>
+                      <div className={styles.cutoutFitSummaryTitle}>Cutout Fit Summary</div>
+                      <div className={styles.cutoutFitSummaryHint}>
+                        Visual-fit controls update the draft only. BODY CUTOUT QA authority still follows accept then regenerate.
+                      </div>
+                    </div>
+                    <span
+                      className={
+                        reviewedBodyReferenceGlbFreshness.status === "stale" || bodyReferenceFineTuneDraftPendingAcceptance
+                          ? styles.reviewStatusPending
+                          : styles.reviewStatusReady
+                      }
+                    >
+                      {bodyReferenceFineTuneStatusLabel}
                     </span>
-                    <span>
-                      Draft bounds {draftBodyReferenceOutlineBounds ? `${draftBodyReferenceOutlineBounds.width} x ${draftBodyReferenceOutlineBounds.height} mm` : "n/a"}
-                    </span>
                   </div>
+
+                  <div className={styles.cutoutFitSummaryGrid}>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Approved point count</span>
+                      <span className={styles.cutoutFitMetricValue}>{approvedBodyReferencePointCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Draft point count</span>
+                      <span className={styles.cutoutFitMetricValue}>{draftBodyReferencePointCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Approved bounds</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(approvedBodyReferenceOutlineBounds)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Draft bounds</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(draftBodyReferenceOutlineBounds)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>SVG quality status</span>
+                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.status}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Suspicious jumps</span>
+                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.suspiciousJumpCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Expected bridge segments</span>
+                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.expectedBridgeSegmentCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Tiny segments</span>
+                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.tinySegmentCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Suspicious spikes</span>
+                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.suspiciousSpikeCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Duplicate points</span>
+                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.duplicatePointCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Near-duplicate points</span>
+                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.nearDuplicatePointCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB freshness</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceFineTuneStatusLabel}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Source hash</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatShortHash(currentReviewedBodyReferenceSourceSignature)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatShortHash(reviewedBodyReferenceGlbSourceHash)}</span>
+                    </div>
+                  </div>
+
                   <div className={styles.reviewScaffoldNote}>
                     {reviewedBodyReferenceGlbFreshnessLabel}
                     {bodyReferenceFineTuneDraftPendingAcceptance
                       ? " Accept corrected cutout before regenerating the reviewed GLB."
                       : ""}
                   </div>
+
+                  {bodyReferenceFineTuneVisualWarnings.length > 0 && (
+                    <div className={styles.cutoutFitWarningList}>
+                      {bodyReferenceFineTuneVisualWarnings.map((warning) => (
+                        <div
+                          key={`${warning.level}:${warning.message}`}
+                          className={
+                            warning.level === "error"
+                              ? styles.cutoutFitWarningError
+                              : styles.cutoutFitWarning
+                          }
+                        >
+                          {warning.message}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <BodyReferenceFineTuneEditor
                   outline={activeBodyReferenceFineTuneOutline}
                   approvedOutline={approvedBodyOutline}
+                  detectedOutline={bodyReferenceFineTuneDetectedBaselineOutline}
                   overallHeightMm={overallHeightMm}
+                  sourceImageUrl={productPhotoFullUrl || null}
+                  svgQualityReport={activeBodyReferenceSvgQuality}
                   interactive={bodyReferenceFineTuneModeEnabled}
+                  canUndo={bodyReferenceFineTuneUndoStack.length > 0}
+                  onUndo={handleUndoBodyReferenceFineTuneEdit}
+                  onEditAction={handleBodyReferenceFineTuneEditStart}
                   onChange={(nextOutline) => {
                     if (!bodyReferenceFineTuneModeEnabled) return;
                     setBodyReferenceFineTuneDraftOutline(nextOutline);
