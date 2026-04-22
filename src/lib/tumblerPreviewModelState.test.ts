@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deriveTumblerPreviewModelState, type TumblerPreviewBoundsSnapshot } from "./tumblerPreviewModelState.ts";
+import {
+  deriveTumblerPreviewModelState,
+  getTumblerPreviewModelStateSignature,
+  type TumblerPreviewBoundsSnapshot,
+} from "./tumblerPreviewModelState.ts";
 
 const canonicalBounds: TumblerPreviewBoundsSnapshot = {
   widthMm: 101,
@@ -81,6 +85,29 @@ test("deriveTumblerPreviewModelState degrades generated trace paths before sourc
   assert.equal(state.glbPreviewStatus, "degraded");
   assert.equal(state.reason, "generated-trace-profile");
   assert.match(state.message ?? "", /generated front trace/i);
+});
+
+test("preview state signature captures requested versus effective preview mismatch", () => {
+  const state = deriveTumblerPreviewModelState({
+    requestedMode: "full-model",
+    hasCanonicalAlignmentModel: true,
+    hasSourceModel: true,
+    sourceModelPath: "/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb",
+    sourceBounds: null,
+    canonicalBounds: { widthMm: 99.8, heightMm: 273.8, depthMm: 99.8 },
+  });
+
+  assert.equal(
+    getTumblerPreviewModelStateSignature(state),
+    [
+      "full-model",
+      "alignment-model",
+      "degraded",
+      "/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb",
+      "generated-trace-profile",
+      state.message ?? "",
+    ].join("|"),
+  );
 });
 
 test("deriveTumblerPreviewModelState degrades flat profile bounds even without a generated path", () => {
