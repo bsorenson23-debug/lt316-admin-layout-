@@ -56,6 +56,26 @@ export interface BodyReferenceSvgQualityReport {
   errors: string[];
 }
 
+export interface BodyReferenceSvgQualitySegmentAnnotation {
+  kind: "expected-horizontal-bridge" | "suspicious-jump";
+  segmentIndex: number;
+  length: number;
+  from: {
+    x: number;
+    y: number;
+  };
+  to: {
+    x: number;
+    y: number;
+  };
+}
+
+export interface BodyReferenceSvgQualityVisualization {
+  bounds?: BodyReferenceSvgQualityReport["bounds"];
+  expectedBridgeSegments: BodyReferenceSvgQualitySegmentAnnotation[];
+  suspiciousJumpSegments: BodyReferenceSvgQualitySegmentAnnotation[];
+}
+
 export const BODY_REFERENCE_SVG_QUALITY_THRESHOLDS = {
   exactDuplicateDistance: 0.000001,
   nearDuplicateDistanceRatio: 0.0005,
@@ -317,6 +337,51 @@ function createUnavailableReport(input: BodyReferenceSvgQualityInput, warning: s
   };
 }
 
+function resolveVisualizationInput(input: BodyReferenceSvgQualityInput): {
+  usablePoints: QualityPoint[];
+  closed: boolean;
+  bounds: NonNullable<ReturnType<typeof getBounds>>;
+  segmentLengths: number[];
+} | null {
+  let parsedClosed = input.closed;
+  let usablePoints: QualityPoint[] = [];
+
+  if (input.points && input.points.length > 0) {
+    const invalidPoint = input.points.find((point) => !isFinitePoint(point));
+    if (invalidPoint) {
+      return null;
+    }
+    usablePoints = input.points.map((point) => ({ x: point.x, y: point.y }));
+  } else if (input.pathSvg?.trim()) {
+    const parsed = parseLinearContourPathPoints(input.pathSvg);
+    if (!parsed) return null;
+    usablePoints = parsed.points;
+    parsedClosed = input.closed ?? parsed.closed;
+  }
+
+  if (usablePoints.length < 2) return null;
+  const bounds = getBounds(usablePoints);
+  if (!bounds) return null;
+
+  const diagonal = Math.max(1, Math.hypot(bounds.width, bounds.height));
+  const nearDuplicateThreshold = Math.max(
+    BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.nearDuplicateDistanceAbs,
+    diagonal * BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.nearDuplicateDistanceRatio,
+  );
+  const closed = (() => {
+    if (typeof parsedClosed === "boolean") return parsedClosed;
+    if (usablePoints.length < 3) return false;
+    return distance(usablePoints[0]!, usablePoints[usablePoints.length - 1]!) <= nearDuplicateThreshold;
+  })();
+
+  return {
+    usablePoints,
+    closed,
+    bounds,
+    segmentLengths: buildSegmentLengths(usablePoints, closed),
+  };
+}
+
 export function buildBodyReferenceSvgQualityReport(
   input: BodyReferenceSvgQualityInput,
 ): BodyReferenceSvgQualityReport {
@@ -530,6 +595,85 @@ export function buildBodyReferenceSvgQualityReport(
   };
 }
 
+export function buildBodyReferenceSvgQualityVisualization(
+  input: BodyReferenceSvgQualityInput,
+): BodyReferenceSvgQualityVisualization {
+  const geometry = resolveVisualizationInput(input);
+  if (!geometry) {
+    return {
+      bounds: undefined,
+      expectedBridgeSegments: [],
+      suspiciousJumpSegments: [],
+    };
+  }
+
+  const { usablePoints, closed, bounds, segmentLengths } = geometry;
+  if (segmentLengths.length === 0) {
+    return {
+      bounds,
+      expectedBridgeSegments: [],
+      suspiciousJumpSegments: [],
+    };
+  }
+
+  const diagonal = Math.max(1, Math.hypot(bounds.width, bounds.height));
+  const nonZeroSegmentLengths = segmentLengths.filter(
+    (length) => length > BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.exactDuplicateDistance,
+  );
+  const medianSegmentLength = median(nonZeroSegmentLengths);
+  const suspiciousJumpBaseThreshold = Math.max(
+    BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.suspiciousJumpAbs,
+    diagonal * BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.suspiciousJumpRatio,
+  );
+
+  const expectedBridgeSegments: BodyReferenceSvgQualitySegmentAnnotation[] = [];
+  const suspiciousJumpSegments: BodyReferenceSvgQualitySegmentAnnotation[] = [];
+
+  for (let index = 0; index < segmentLengths.length; index += 1) {
+    const length = segmentLengths[index]!;
+    if (length < suspiciousJumpBaseThreshold) continue;
+    const previousLength = segmentLengths[(index - 1 + segmentLengths.length) % segmentLengths.length] ?? 0;
+    const nextLength = segmentLengths[(index + 1) % segmentLengths.length] ?? 0;
+    const localRatioSuspicious =
+      (previousLength > 0 && length >= previousLength * BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.suspiciousJumpMultiple) ||
+      (nextLength > 0 && length >= nextLength * BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.suspiciousJumpMultiple);
+    const globalRatioSuspicious =
+      medianSegmentLength > 0 &&
+      length >= medianSegmentLength * BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.suspiciousJumpMultiple;
+    if (!localRatioSuspicious && !globalRatioSuspicious) continue;
+
+    const { from, to } = getSegmentEndpoints(usablePoints, index);
+    const annotation: BodyReferenceSvgQualitySegmentAnnotation = {
+      kind:
+        closed && isExpectedHorizontalBridgeSegment({
+          points: usablePoints,
+          segmentIndex: index,
+          segmentLength: length,
+          segmentLengths,
+          bounds,
+        })
+          ? "expected-horizontal-bridge"
+          : "suspicious-jump",
+      segmentIndex: index,
+      length: round2(length),
+      from: { x: round2(from.x), y: round2(from.y) },
+      to: { x: round2(to.x), y: round2(to.y) },
+    };
+
+    if (annotation.kind === "expected-horizontal-bridge") {
+      expectedBridgeSegments.push(annotation);
+    } else {
+      suspiciousJumpSegments.push(annotation);
+    }
+  }
+
+  return {
+    bounds,
+    expectedBridgeSegments,
+    suspiciousJumpSegments,
+  };
+}
+
 export function buildBodyReferenceSvgQualityReportFromOutline(args: {
   outline: EditableBodyOutline | null | undefined;
   sourceHash?: string;
@@ -631,4 +775,58 @@ export function buildBodyReferenceSvgQualityReportFromOutline(args: {
     contourSource: "unavailable",
     boundsUnits: "unknown",
   });
+}
+
+export function buildBodyReferenceSvgQualityVisualizationFromOutline(args: {
+  outline: EditableBodyOutline | null | undefined;
+}): BodyReferenceSvgQualityVisualization {
+  const outline = args.outline;
+  if (!outline) {
+    return {
+      bounds: undefined,
+      expectedBridgeSegments: [],
+      suspiciousJumpSegments: [],
+    };
+  }
+
+  const authoritativeContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
+  const usesAuthoritativeOutlinePoints =
+    outline.sourceContourMode === "body-only" &&
+    (!outline.sourceContour || outline.sourceContour.length < 3) &&
+    Boolean(outline.directContour && outline.directContour.length >= 3) &&
+    authoritativeContour != null &&
+    authoritativeContour !== outline.directContour;
+  if (usesAuthoritativeOutlinePoints && authoritativeContour?.length) {
+    return buildBodyReferenceSvgQualityVisualization({
+      points: authoritativeContour,
+      closed: outline.closed,
+    });
+  }
+
+  if (outline.directContour?.length) {
+    return buildBodyReferenceSvgQualityVisualization({
+      points: outline.directContour,
+      closed: outline.closed,
+    });
+  }
+
+  if (outline.sourceContour?.length) {
+    return buildBodyReferenceSvgQualityVisualization({
+      points: outline.sourceContour,
+      closed: outline.closed,
+    });
+  }
+
+  if (outline.points.length > 0) {
+    return buildBodyReferenceSvgQualityVisualization({
+      points: outline.points.map((point) => ({ x: point.x, y: point.y })),
+      closed: outline.closed,
+    });
+  }
+
+  return {
+    bounds: undefined,
+    expectedBridgeSegments: [],
+    suspiciousJumpSegments: [],
+  };
 }

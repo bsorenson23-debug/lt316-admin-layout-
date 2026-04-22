@@ -1,7 +1,21 @@
 import type { EditableBodyOutline } from "../types/productTemplate.ts";
 import { stableStringifyForHash } from "./hashSha256.ts";
 import { resolveBodyReferenceGlbReviewState } from "./bodyReferenceGlbSource.ts";
-import { resolveAuthoritativeEditableBodyOutlineContour } from "./editableBodyOutline.ts";
+import {
+  insertEditableOutlinePoint,
+  rebuildEditableBodyOutline,
+  removeEditableOutlinePoint,
+  resolveAuthoritativeEditableBodyOutlineContour,
+  sortEditableOutlinePoints,
+} from "./editableBodyOutline.ts";
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -89,6 +103,99 @@ export function resolveOutlinePointCount(outline: EditableBodyOutline | null | u
   return resolveAuthoritativeEditableBodyOutlineContour(outline)?.length
     ?? outline.sourceContour?.length
     ?? outline.points.length;
+}
+
+export function canDeleteFineTunePoint(outline: EditableBodyOutline | null | undefined): boolean {
+  return Boolean(outline && outline.points.length > 4);
+}
+
+export function updateOutlinePointPosition(args: {
+  outline: EditableBodyOutline | null | undefined;
+  pointId: string;
+  nextX: number;
+  nextY: number;
+  overallHeightMm?: number | null;
+}): EditableBodyOutline | null {
+  const outline = args.outline;
+  if (!outline) return null;
+
+  const ordered = sortEditableOutlinePoints(outline.points);
+  const index = ordered.findIndex((point) => point.id === args.pointId);
+  if (index < 0) return outline;
+
+  const targetPoint = ordered[index]!;
+  const previousPoint = ordered[index - 1] ?? null;
+  const nextPoint = ordered[index + 1] ?? null;
+  const minY = previousPoint ? previousPoint.y + 1 : 0;
+  const maxY = nextPoint
+    ? nextPoint.y - 1
+    : (
+      typeof args.overallHeightMm === "number" &&
+      Number.isFinite(args.overallHeightMm) &&
+      args.overallHeightMm > minY
+        ? args.overallHeightMm
+        : Math.max(minY, targetPoint.y)
+    );
+
+  const resolvedX = round1(Math.max(0.5, args.nextX));
+  const resolvedY = round1(clamp(args.nextY, minY, maxY));
+  if (resolvedX === round1(targetPoint.x) && resolvedY === round1(targetPoint.y)) {
+    return outline;
+  }
+
+  return rebuildEditableBodyOutline({
+    ...outline,
+    points: outline.points.map((point) => {
+      if (point.id !== args.pointId) return point;
+      return {
+        ...point,
+        x: resolvedX,
+        y: resolvedY,
+      };
+    }),
+  });
+}
+
+export function nudgeOutlinePoint(args: {
+  outline: EditableBodyOutline | null | undefined;
+  pointId: string;
+  deltaX?: number;
+  deltaY?: number;
+  overallHeightMm?: number | null;
+}): EditableBodyOutline | null {
+  const outline = args.outline;
+  if (!outline) return null;
+  const point = outline.points.find((candidate) => candidate.id === args.pointId);
+  if (!point) return outline;
+  return updateOutlinePointPosition({
+    outline,
+    pointId: args.pointId,
+    nextX: point.x + (args.deltaX ?? 0),
+    nextY: point.y + (args.deltaY ?? 0),
+    overallHeightMm: args.overallHeightMm,
+  });
+}
+
+export function insertFineTunePointOnSegment(args: {
+  outline: EditableBodyOutline | null | undefined;
+  segmentIndex: number;
+}): EditableBodyOutline | null {
+  const outline = args.outline;
+  if (!outline) return null;
+  if (args.segmentIndex < 0 || args.segmentIndex >= outline.points.length - 1) {
+    return outline;
+  }
+  return insertEditableOutlinePoint(outline, args.segmentIndex);
+}
+
+export function deleteFineTunePoint(args: {
+  outline: EditableBodyOutline | null | undefined;
+  pointId: string;
+}): EditableBodyOutline | null {
+  const outline = args.outline;
+  if (!outline) return null;
+  if (!canDeleteFineTunePoint(outline)) return outline;
+  return removeEditableOutlinePoint(outline, args.pointId);
 }
 
 export function hasFineTuneDraftChanges(args: {

@@ -6,7 +6,10 @@ import { buildBodyReferenceSvgQualityReportFromOutline } from "./bodyReferenceSv
 import {
   buildOutlineGeometrySignature,
   cloneOutline,
+  deleteFineTunePoint,
   hasFineTuneDraftChanges,
+  insertFineTunePointOnSegment,
+  nudgeOutlinePoint,
   resolveFineTuneGlbReviewState,
   resolveOutlineBounds,
   resolveOutlinePointCount,
@@ -134,6 +137,69 @@ test("draft edits do not mutate approved until accepted", () => {
   assert.notEqual(buildOutlineGeometrySignature(accepted), originalApprovedSignature);
 });
 
+test("nudge updates only the draft contour", () => {
+  const approved = makeOutline();
+  const draft = cloneOutline(approved)!;
+  const nudged = nudgeOutlinePoint({
+    outline: draft,
+    pointId: "p2",
+    deltaX: 4,
+    deltaY: 0,
+    overallHeightMm: 120,
+  });
+
+  assert.ok(nudged);
+  assert.equal(approved.points[1]!.x, 40);
+  assert.equal(nudged!.points.find((point) => point.id === "p2")?.x, 44);
+  assert.equal(hasFineTuneDraftChanges({ approved, draft: nudged }), true);
+});
+
+test("shift-sized nudges use the larger step", () => {
+  const outline = makeOutline();
+  const nudged = nudgeOutlinePoint({
+    outline,
+    pointId: "p3",
+    deltaX: 0,
+    deltaY: 5,
+    overallHeightMm: 120,
+  });
+
+  assert.ok(nudged);
+  assert.equal(nudged!.points.find((point) => point.id === "p3")?.y, 65);
+});
+
+test("adding a point on a segment changes the draft geometry", () => {
+  const outline = makeOutline();
+  const inserted = insertFineTunePointOnSegment({
+    outline,
+    segmentIndex: 1,
+  });
+
+  assert.ok(inserted);
+  assert.equal(inserted!.points.length, 5);
+  assert.notEqual(buildOutlineGeometrySignature(outline), buildOutlineGeometrySignature(inserted));
+});
+
+test("deleting a selected point removes it from the draft only", () => {
+  const approved = makeOutline();
+  const inserted = insertFineTunePointOnSegment({
+    outline: cloneOutline(approved)!,
+    segmentIndex: 1,
+  });
+  assert.ok(inserted);
+  const insertedPointId = inserted!.points.find((point) => point.role === "custom")?.id;
+  assert.ok(insertedPointId);
+
+  const deleted = deleteFineTunePoint({
+    outline: inserted,
+    pointId: insertedPointId!,
+  });
+
+  assert.ok(deleted);
+  assert.equal(deleted!.points.length, approved.points.length);
+  assert.equal(approved.points.length, 4);
+});
+
 test("stale cached contour does not override saved manual outline authority", () => {
   const staleApproved = makeManualOutlineWithStaleContour();
   const rebuiltApproved = cloneOutline(staleApproved)!;
@@ -178,4 +244,17 @@ test("pending draft blocks generation until accepted", () => {
   });
   assert.equal(reviewState.status, "draft-pending");
   assert.equal(reviewState.canRequestGeneration, false);
+});
+
+test("regenerated reviewed glb becomes fresh again after acceptance", () => {
+  const reviewState = resolveFineTuneGlbReviewState({
+    canGenerate: true,
+    hasGeneratedArtifact: true,
+    currentSourceSignature: "accepted-v2",
+    generatedSourceSignature: "accepted-v2",
+    hasPendingSourceDraft: false,
+  });
+
+  assert.equal(reviewState.status, "current");
+  assert.equal(reviewState.canRequestGeneration, true);
 });
