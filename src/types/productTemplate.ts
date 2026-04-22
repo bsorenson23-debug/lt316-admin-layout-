@@ -3,6 +3,7 @@ import type {
   LaserBedArtworkPlacement,
   TemplateEngravingPreviewState,
 } from "@/lib/laserBedSurfaceMapping";
+import type { ProductAppearanceReferenceLayer } from "@/lib/productAppearanceReferenceLayers";
 
 export type EditableOutlinePointType = "corner" | "smooth";
 export type ReferenceLayerKey = "bodyOutline" | "lidProfile" | "silverProfile";
@@ -293,6 +294,7 @@ export interface ProductTemplate {
   updatedAt: string;
   builtIn: boolean; // true = shipped with app, false = user-created
   tumblerMapping?: TumblerMapping;
+  appearanceReferenceLayers?: ProductAppearanceReferenceLayer[];
   artworkPlacements?: LaserBedArtworkPlacement[];
   engravingPreviewState?: TemplateEngravingPreviewState;
   /** Straight-on photo of the front face — base64 data URL */

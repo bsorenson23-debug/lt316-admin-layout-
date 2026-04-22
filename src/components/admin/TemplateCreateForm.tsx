@@ -66,6 +66,10 @@ import {
   validateLaserBedSurfaceMapping,
 } from "@/lib/laserBedSurfaceMapping";
 import {
+  summarizeAppearanceReferenceLayers,
+  type ProductAppearanceReferenceLayer,
+} from "@/lib/productAppearanceReferenceLayers";
+import {
   buildWrapExportPreviewState,
   getWrapExportMappingStatusLabel,
   getWrapExportPreviewStatusLabel,
@@ -130,6 +134,7 @@ function formatBodyBoundsMetric(
 
 function buildWrapExportSurfaceMapping(
   contract: BodyGeometryContract | null | undefined,
+  frontCenterAngleDeg?: number,
 ): LaserBedSurfaceMapping | null {
   if (!contract) return null;
 
@@ -182,6 +187,10 @@ function buildWrapExportSurfaceMapping(
         }
       : undefined,
     scaleSource: contract.dimensionsMm.scaleSource,
+    frontCenterAngleDeg:
+      typeof frontCenterAngleDeg === "number" && Number.isFinite(frontCenterAngleDeg)
+        ? round2(frontCenterAngleDeg)
+        : undefined,
     sourceHash: contract.source.hash,
     glbSourceHash: contract.glb.sourceHash,
   };
@@ -792,9 +801,17 @@ export function TemplateCreateForm({
       workspaceArtworkPlacements,
     ],
   );
+  const templateAppearanceReferenceLayers = React.useMemo<ProductAppearanceReferenceLayer[]>(
+    () => cloneSerializable(editingTemplate?.appearanceReferenceLayers ?? []),
+    [editingTemplate?.appearanceReferenceLayers],
+  );
+  const appearanceReferenceSummary = React.useMemo(
+    () => summarizeAppearanceReferenceLayers(templateAppearanceReferenceLayers),
+    [templateAppearanceReferenceLayers],
+  );
   const templateArtworkPlacementMapping = React.useMemo(
-    () => buildWrapExportSurfaceMapping(wrapExportContract),
-    [wrapExportContract],
+    () => buildWrapExportSurfaceMapping(wrapExportContract, appearanceReferenceSummary.frontCenterAngleDeg),
+    [appearanceReferenceSummary.frontCenterAngleDeg, wrapExportContract],
   );
   const templateArtworkPlacementMappingSignature = React.useMemo(
     () => templateArtworkPlacementMapping
@@ -1650,6 +1667,10 @@ export function TemplateCreateForm({
         materialProfileId,
         rotaryPresetId,
       },
+      appearanceReferenceLayers:
+        templateAppearanceReferenceLayers.length > 0
+          ? templateAppearanceReferenceLayers
+          : undefined,
       artworkPlacements: persistedArtworkPlacements,
       engravingPreviewState: {
         ...persistedTemplateEngravingPreviewState,
@@ -2297,15 +2318,46 @@ export function TemplateCreateForm({
                         )}
                       </span>
                     </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Appearance references</span>
+                      <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.totalLayers}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Top finish band</span>
+                      <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.topFinishBandPresent ? "present" : "none"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Bottom finish band</span>
+                      <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.bottomFinishBandPresent ? "present" : "none"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Front logo reference</span>
+                      <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.frontLogoReferencePresent ? "present" : "none"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Back logo reference</span>
+                      <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.backLogoReferencePresent ? "present" : "none"}</span>
+                    </div>
                   </div>
 
                   <div className={styles.reviewScaffoldNote}>
                     WRAP / EXPORT uses current body geometry freshness and printable-surface metadata when available. It never replaces BODY CUTOUT QA.
                   </div>
+                  <div
+                    className={styles.reviewScaffoldNote}
+                    data-testid="appearance-reference-summary"
+                  >
+                    Product appearance references are orientation context only. Reference only — not BODY CUTOUT QA.
+                  </div>
 
                   {!hasSavedArtworkPlacements && (
                     <div className={styles.previewPlaceholderNote}>
                       No artwork placements saved yet. Template save remains valid; WRAP / EXPORT will report placement readiness once artwork is stored in millimeter space.
+                    </div>
+                  )}
+                  {appearanceReferenceSummary.totalLayers === 0 && (
+                    <div className={styles.previewPlaceholderNote}>
+                      No product appearance references saved yet. Reference only — not BODY CUTOUT QA.
                     </div>
                   )}
 
@@ -2318,6 +2370,15 @@ export function TemplateCreateForm({
                       ))}
                       {wrapExportPreviewState.warnings.map((warning) => (
                         <div key={`wrap-warning-${warning}`} className={styles.cutoutFitWarning}>
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {appearanceReferenceSummary.warnings.length > 0 && (
+                    <div className={styles.cutoutFitWarningList}>
+                      {appearanceReferenceSummary.warnings.map((warning) => (
+                        <div key={`appearance-reference-warning-${warning}`} className={styles.cutoutFitWarning}>
                           {warning}
                         </div>
                       ))}

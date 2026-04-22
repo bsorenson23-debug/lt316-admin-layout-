@@ -3,6 +3,10 @@ import test from "node:test";
 
 import type { ProductTemplate } from "@/types/productTemplate";
 import {
+  createBrandLogoReference,
+  createFinishBandReference,
+} from "./productAppearanceReferenceLayers.ts";
+import {
   getTemplate,
   loadTemplates,
   saveTemplate,
@@ -217,4 +221,36 @@ test("old templates without artwork placement data still load", () => {
   assert.ok(loaded);
   assert.equal(loaded.artworkPlacements, undefined);
   assert.equal(loaded.engravingPreviewState, undefined);
+});
+
+test("saveTemplate preserves appearance reference layers exactly", () => {
+  const template = createTemplate({
+    id: "template-appearance-reference-layers",
+    appearanceReferenceLayers: [
+      createFinishBandReference({
+        id: "top-band",
+        kind: "top-finish-band",
+        yMm: 0,
+        heightMm: 10,
+        source: "lookup",
+      }),
+      createBrandLogoReference({
+        id: "front-logo",
+        kind: "front-brand-logo",
+        widthMm: 28,
+        heightMm: 12,
+        angleDeg: 0,
+        source: "operator",
+      }),
+    ],
+  });
+
+  saveTemplate(template);
+  const saved = getTemplate(template.id);
+
+  assert.ok(saved);
+  assert.deepEqual(saved.appearanceReferenceLayers, template.appearanceReferenceLayers);
+  assert.equal(saved.appearanceReferenceLayers?.[0]?.referenceOnly, true);
+  assert.equal(saved.appearanceReferenceLayers?.[0]?.includedInBodyCutoutQa, false);
+  assert.equal(saved.appearanceReferenceLayers?.[1]?.kind, "front-brand-logo");
 });
