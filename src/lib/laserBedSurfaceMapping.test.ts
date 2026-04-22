@@ -164,6 +164,16 @@ test("mapping freshness falls back to source lineage when no saved signature exi
   assert.equal(freshness.reason, "source-lineage-match");
 });
 
+test("mapping freshness becomes stale after the body source hash changes", () => {
+  const freshness = compareLaserBedSurfaceMappingFreshness({
+    sourceHash: "accepted-source-hash",
+    glbSourceHash: "stale-reviewed-glb-hash",
+  });
+
+  assert.equal(freshness.freshness, "stale");
+  assert.equal(freshness.reason, "source-lineage-mismatch");
+});
+
 test("mapping signature is deterministic", () => {
   const mapping = createMapping();
 

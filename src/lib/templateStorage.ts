@@ -1,5 +1,5 @@
-import type { ProductTemplate, ProductTemplateStore } from "@/types/productTemplate";
-import { BUILT_IN_TEMPLATES } from "@/data/builtInTemplates";
+import type { ProductTemplate, ProductTemplateStore } from "../types/productTemplate.ts";
+import { BUILT_IN_TEMPLATES } from "../data/builtInTemplates.ts";
 
 const STORAGE_KEY = "lt316_product_templates";
 const REMOVED_GLB_PATHS = new Set([

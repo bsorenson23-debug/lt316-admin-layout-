@@ -2,13 +2,35 @@ export type MappingFreshness = "fresh" | "stale" | "unknown";
 export type SurfaceMappingMode = "cylindrical-v1";
 export type LaserBedSurfaceMappingStatus = "pass" | "warn" | "fail" | "unknown";
 
+export interface LaserBedArtworkPlacementBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface LaserBedArtworkPlacementAssetSnapshot {
+  svgText?: string;
+  sourceSvgText?: string;
+  documentBounds?: LaserBedArtworkPlacementBounds;
+  artworkBounds?: LaserBedArtworkPlacementBounds;
+}
+
 export interface LaserBedArtworkPlacement {
   id: string;
+  assetId?: string;
+  svgAssetId?: string;
+  name?: string;
   xMm: number;
   yMm: number;
   widthMm: number;
   heightMm: number;
   rotationDeg?: number;
+  layerId?: string;
+  layerName?: string;
+  visible?: boolean;
+  mappingSignature?: string;
+  assetSnapshot?: LaserBedArtworkPlacementAssetSnapshot;
 }
 
 export interface LaserBedSurfaceBodyBounds {
@@ -46,6 +68,7 @@ export interface TemplateEngravingPreviewState {
   readyForPreview: boolean;
   readyForExactPlacement: boolean;
   isBodyCutoutQaProof: false;
+  mappingSignature?: string;
   material: EngravingPreviewMaterial;
   mapping: LaserBedSurfaceMapping | null;
   placements: LaserBedArtworkPlacement[];
@@ -242,6 +265,7 @@ export function validateLaserBedSurfaceMapping(
       readyForPreview: false,
       readyForExactPlacement: false,
       isBodyCutoutQaProof: false,
+      mappingSignature: undefined,
       material: args.material ?? DEFAULT_PREVIEW_MATERIAL,
       mapping: null,
       placements: [...(args.placements ?? [])],
@@ -314,6 +338,7 @@ export function validateLaserBedSurfaceMapping(
     readyForPreview,
     readyForExactPlacement,
     isBodyCutoutQaProof: false,
+    mappingSignature: buildLaserBedSurfaceMappingSignature(mapping),
     material: args.material ?? DEFAULT_PREVIEW_MATERIAL,
     mapping,
     placements: [...(args.placements ?? [])],

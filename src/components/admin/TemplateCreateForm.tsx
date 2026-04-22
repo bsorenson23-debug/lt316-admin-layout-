@@ -60,6 +60,12 @@ import { parseBodyReferenceGlbResponse } from "@/lib/adminApi.schema";
 import type { BodyGeometryContract } from "@/lib/bodyGeometryContract";
 import { inferGeneratedModelStatusFromSource } from "@/lib/generatedModelUrl";
 import {
+  buildLaserBedSurfaceMappingSignature,
+  type LaserBedArtworkPlacement,
+  type LaserBedSurfaceMapping,
+  validateLaserBedSurfaceMapping,
+} from "@/lib/laserBedSurfaceMapping";
+import {
   buildWrapExportPreviewState,
   getWrapExportMappingStatusLabel,
   getWrapExportPreviewStatusLabel,
@@ -81,6 +87,7 @@ interface Props {
   onSave: (template: ProductTemplate) => void;
   onCancel: () => void;
   editingTemplate?: ProductTemplate;
+  workspaceArtworkPlacements?: LaserBedArtworkPlacement[] | null;
 }
 
 function round2(n: number): number {
@@ -119,6 +126,65 @@ function formatBodyBoundsMetric(
 ): string {
   if (!bounds) return "n/a";
   return `${round2(bounds.width)} × ${round2(bounds.height)} × ${round2(bounds.depth)} mm`;
+}
+
+function buildWrapExportSurfaceMapping(
+  contract: BodyGeometryContract | null | undefined,
+): LaserBedSurfaceMapping | null {
+  if (!contract) return null;
+
+  const wrapDiameterMm =
+    typeof contract.dimensionsMm.wrapDiameterMm === "number" && Number.isFinite(contract.dimensionsMm.wrapDiameterMm)
+      ? round2(contract.dimensionsMm.wrapDiameterMm)
+      : undefined;
+  const wrapWidthMm =
+    typeof contract.dimensionsMm.wrapWidthMm === "number" && Number.isFinite(contract.dimensionsMm.wrapWidthMm)
+      ? round2(contract.dimensionsMm.wrapWidthMm)
+      : undefined;
+  const printableTopMm =
+    typeof contract.dimensionsMm.printableTopMm === "number" && Number.isFinite(contract.dimensionsMm.printableTopMm)
+      ? round2(contract.dimensionsMm.printableTopMm)
+      : undefined;
+  const printableBottomMm =
+    typeof contract.dimensionsMm.printableBottomMm === "number" && Number.isFinite(contract.dimensionsMm.printableBottomMm)
+      ? round2(contract.dimensionsMm.printableBottomMm)
+      : undefined;
+  const printableHeightMm =
+    typeof printableTopMm === "number" &&
+    typeof printableBottomMm === "number" &&
+    printableBottomMm > printableTopMm
+      ? round2(printableBottomMm - printableTopMm)
+      : undefined;
+  const expectedBodyWidthMm =
+    typeof contract.dimensionsMm.expectedBodyWidthMm === "number" && Number.isFinite(contract.dimensionsMm.expectedBodyWidthMm)
+      ? round2(contract.dimensionsMm.expectedBodyWidthMm)
+      : undefined;
+  const expectedBodyHeightMm =
+    typeof contract.dimensionsMm.expectedBodyHeightMm === "number" && Number.isFinite(contract.dimensionsMm.expectedBodyHeightMm)
+      ? round2(contract.dimensionsMm.expectedBodyHeightMm)
+      : undefined;
+  const bodyBounds = contract.dimensionsMm.bodyBounds;
+
+  return {
+    mode: "cylindrical-v1",
+    wrapDiameterMm,
+    wrapWidthMm,
+    printableTopMm,
+    printableBottomMm,
+    printableHeightMm,
+    expectedBodyWidthMm,
+    expectedBodyHeightMm,
+    bodyBounds: bodyBounds
+      ? {
+          width: round2(bodyBounds.width),
+          height: round2(bodyBounds.height),
+          depth: round2(bodyBounds.depth),
+        }
+      : undefined,
+    scaleSource: contract.dimensionsMm.scaleSource,
+    sourceHash: contract.source.hash,
+    glbSourceHash: contract.glb.sourceHash,
+  };
 }
 
 /** Convert an image file to a data URL (max 480px on longest side for face photos) */
@@ -246,7 +312,12 @@ function buildPreviewTumblerDimensions(args: {
   };
 }
 
-export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props) {
+export function TemplateCreateForm({
+  onSave,
+  onCancel,
+  editingTemplate,
+  workspaceArtworkPlacements = null,
+}: Props) {
   const isEdit = Boolean(editingTemplate);
   const derivedEditingDims = React.useMemo(
     () => (editingTemplate ? getEngravableDimensions(editingTemplate) : null),
@@ -702,10 +773,62 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     productType,
   ]);
   const effectivePreviewModelMode = previewModelState?.effectiveMode ?? previewModelMode;
+  const wrapExportContract =
+    loadedBodyGeometryContract ?? generatedReviewedBodyGeometryContract;
   const wrapExportPreviewState = React.useMemo(
-    () => buildWrapExportPreviewState(loadedBodyGeometryContract),
-    [loadedBodyGeometryContract],
+    () => buildWrapExportPreviewState(wrapExportContract),
+    [wrapExportContract],
   );
+  const templateArtworkPlacements = React.useMemo(
+    () => cloneSerializable(
+      workspaceArtworkPlacements
+      ?? editingTemplate?.artworkPlacements
+      ?? editingTemplate?.engravingPreviewState?.placements
+      ?? [],
+    ),
+    [
+      editingTemplate?.artworkPlacements,
+      editingTemplate?.engravingPreviewState?.placements,
+      workspaceArtworkPlacements,
+    ],
+  );
+  const templateArtworkPlacementMapping = React.useMemo(
+    () => buildWrapExportSurfaceMapping(wrapExportContract),
+    [wrapExportContract],
+  );
+  const templateArtworkPlacementMappingSignature = React.useMemo(
+    () => templateArtworkPlacementMapping
+      ? buildLaserBedSurfaceMappingSignature(templateArtworkPlacementMapping)
+      : undefined,
+    [templateArtworkPlacementMapping],
+  );
+  const savedArtworkPlacementSignature =
+    workspaceArtworkPlacements != null
+      ? templateArtworkPlacementMappingSignature
+      : editingTemplate?.engravingPreviewState?.mappingSignature
+        ?? editingTemplate?.artworkPlacements?.[0]?.mappingSignature;
+  const persistedArtworkPlacements = React.useMemo(
+    () => templateArtworkPlacements.map((placement) => ({
+      ...placement,
+      mappingSignature:
+        templateArtworkPlacementMappingSignature
+        ?? placement.mappingSignature,
+    })),
+    [templateArtworkPlacements, templateArtworkPlacementMappingSignature],
+  );
+  const persistedTemplateEngravingPreviewState = React.useMemo(
+    () => validateLaserBedSurfaceMapping({
+      mapping: templateArtworkPlacementMapping,
+      placements: persistedArtworkPlacements,
+      savedSignature: savedArtworkPlacementSignature ?? null,
+    }),
+    [
+      persistedArtworkPlacements,
+      savedArtworkPlacementSignature,
+      templateArtworkPlacementMapping,
+    ],
+  );
+  const hasSavedArtworkPlacements = persistedArtworkPlacements.length > 0;
   const wrapExportSummaryVisible =
     previewModelMode === "wrap-export" ||
     effectivePreviewModelMode === "wrap-export";
@@ -1527,6 +1650,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         materialProfileId,
         rotaryPresetId,
       },
+      artworkPlacements: persistedArtworkPlacements,
+      engravingPreviewState: {
+        ...persistedTemplateEngravingPreviewState,
+        mappingSignature:
+          templateArtworkPlacementMappingSignature
+          ?? persistedTemplateEngravingPreviewState.mappingSignature,
+      },
       createdAt: editingTemplate?.createdAt ?? now,
       updatedAt: now,
       builtIn: editingTemplate?.builtIn ?? false,
@@ -2135,15 +2265,36 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                       <span className={styles.cutoutFitMetricValue}>{wrapExportPreviewState.freshness}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Saved artwork placements</span>
+                      <span className={styles.cutoutFitMetricValue}>{persistedArtworkPlacements.length}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Saved mapping freshness</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {hasSavedArtworkPlacements
+                          ? persistedTemplateEngravingPreviewState.freshness
+                          : "unknown"}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Source hash</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {formatShortHash(loadedBodyGeometryContract?.source.hash)}
+                        {formatShortHash(wrapExportContract?.source.hash)}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {formatShortHash(loadedBodyGeometryContract?.glb.sourceHash)}
+                        {formatShortHash(wrapExportContract?.glb.sourceHash)}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Saved mapping signature</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {formatShortHash(
+                          templateArtworkPlacementMappingSignature
+                          ?? editingTemplate?.engravingPreviewState?.mappingSignature,
+                        )}
                       </span>
                     </div>
                   </div>
@@ -2151,6 +2302,12 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                   <div className={styles.reviewScaffoldNote}>
                     WRAP / EXPORT uses current body geometry freshness and printable-surface metadata when available. It never replaces BODY CUTOUT QA.
                   </div>
+
+                  {!hasSavedArtworkPlacements && (
+                    <div className={styles.previewPlaceholderNote}>
+                      No artwork placements saved yet. Template save remains valid; WRAP / EXPORT will report placement readiness once artwork is stored in millimeter space.
+                    </div>
+                  )}
 
                   {(wrapExportPreviewState.errors.length > 0 || wrapExportPreviewState.warnings.length > 0) && (
                     <div className={styles.cutoutFitWarningList}>
@@ -2161,6 +2318,23 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                       ))}
                       {wrapExportPreviewState.warnings.map((warning) => (
                         <div key={`wrap-warning-${warning}`} className={styles.cutoutFitWarning}>
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {hasSavedArtworkPlacements && (
+                    persistedTemplateEngravingPreviewState.errors.length > 0 ||
+                    persistedTemplateEngravingPreviewState.warnings.length > 0
+                  ) && (
+                    <div className={styles.cutoutFitWarningList}>
+                      {persistedTemplateEngravingPreviewState.errors.map((error) => (
+                        <div key={`saved-wrap-error-${error}`} className={styles.cutoutFitWarningError}>
+                          {error}
+                        </div>
+                      ))}
+                      {persistedTemplateEngravingPreviewState.warnings.map((warning) => (
+                        <div key={`saved-wrap-warning-${warning}`} className={styles.cutoutFitWarning}>
                           {warning}
                         </div>
                       ))}

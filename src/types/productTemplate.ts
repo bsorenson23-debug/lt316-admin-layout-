@@ -1,4 +1,8 @@
 import type { AxialSurfaceBand, PrintableSurfaceContract } from "./printableSurface";
+import type {
+  LaserBedArtworkPlacement,
+  TemplateEngravingPreviewState,
+} from "@/lib/laserBedSurfaceMapping";
 
 export type EditableOutlinePointType = "corner" | "smooth";
 export type ReferenceLayerKey = "bodyOutline" | "lidProfile" | "silverProfile";
@@ -289,6 +293,8 @@ export interface ProductTemplate {
   updatedAt: string;
   builtIn: boolean; // true = shipped with app, false = user-created
   tumblerMapping?: TumblerMapping;
+  artworkPlacements?: LaserBedArtworkPlacement[];
+  engravingPreviewState?: TemplateEngravingPreviewState;
   /** Straight-on photo of the front face — base64 data URL */
   frontPhotoDataUrl?: string;
   /** Straight-on photo of the back face — base64 data URL */

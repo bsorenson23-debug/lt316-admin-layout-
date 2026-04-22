@@ -1,0 +1,220 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { ProductTemplate } from "@/types/productTemplate";
+import {
+  getTemplate,
+  loadTemplates,
+  saveTemplate,
+} from "./templateStorage.ts";
+
+const STORAGE_KEY = "lt316_product_templates";
+const NOW = "2026-04-22T00:00:00.000Z";
+
+class MemoryStorage {
+  private readonly entries = new Map<string, string>();
+
+  get length(): number {
+    return this.entries.size;
+  }
+
+  clear(): void {
+    this.entries.clear();
+  }
+
+  getItem(key: string): string | null {
+    return this.entries.get(key) ?? null;
+  }
+
+  key(index: number): string | null {
+    return [...this.entries.keys()][index] ?? null;
+  }
+
+  removeItem(key: string): void {
+    this.entries.delete(key);
+  }
+
+  setItem(key: string, value: string): void {
+    this.entries.set(key, value);
+  }
+}
+
+const originalLocalStorage = globalThis.localStorage;
+
+function installMemoryStorage(): MemoryStorage {
+  const storage = new MemoryStorage();
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: storage,
+    writable: true,
+  });
+  return storage;
+}
+
+function createTemplate(
+  overrides: Partial<ProductTemplate> = {},
+): ProductTemplate {
+  const base: ProductTemplate = {
+    id: "template-artwork-placement",
+    name: "Template artwork placement",
+    brand: "LT316",
+    capacity: "30 oz",
+    laserType: "fiber",
+    productType: "tumbler",
+    thumbnailDataUrl: "data:image/png;base64,thumb",
+    glbPath: "/models/templates/template-artwork-placement.glb",
+    dimensions: {
+      diameterMm: 88.9,
+      printHeightMm: 220,
+      templateWidthMm: 279.29,
+      handleArcDeg: 0,
+      taperCorrection: "none",
+    },
+    laserSettings: {
+      power: 55,
+      speed: 1200,
+      frequency: 30,
+      lineInterval: 0.08,
+      materialProfileId: "fiber-stainless",
+      rotaryPresetId: "rotary-default",
+    },
+    createdAt: NOW,
+    updatedAt: NOW,
+    builtIn: false,
+  };
+
+  return {
+    ...base,
+    ...overrides,
+    dimensions: {
+      ...base.dimensions,
+      ...overrides.dimensions,
+    },
+    laserSettings: {
+      ...base.laserSettings,
+      ...overrides.laserSettings,
+    },
+  };
+}
+
+test.beforeEach(() => {
+  installMemoryStorage();
+});
+
+test.after(() => {
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: originalLocalStorage,
+    writable: true,
+  });
+});
+
+test("saveTemplate persists laser-bed artwork placements in millimeter space", () => {
+  const template = createTemplate({
+    artworkPlacements: [
+      {
+        id: "placement-1",
+        assetId: "asset-svg-1",
+        svgAssetId: "asset-svg-1",
+        name: "Front logo",
+        xMm: 22.5,
+        yMm: 18.25,
+        widthMm: 42,
+        heightMm: 38.5,
+        rotationDeg: 15,
+        visible: true,
+        mappingSignature: "laser-bed-surface-mapping:abc12345",
+      },
+    ],
+    engravingPreviewState: {
+      mode: "cylindrical-v1",
+      status: "pass",
+      freshness: "fresh",
+      readyForPreview: true,
+      readyForExactPlacement: true,
+      isBodyCutoutQaProof: false,
+      mappingSignature: "laser-bed-surface-mapping:abc12345",
+      material: {
+        key: "unknown",
+        label: "Unknown",
+      },
+      mapping: {
+        mode: "cylindrical-v1",
+        wrapDiameterMm: 88.9,
+        wrapWidthMm: 279.29,
+        printableHeightMm: 220,
+        sourceHash: "source-hash",
+        glbSourceHash: "glb-hash",
+      },
+      placements: [
+        {
+          id: "placement-1",
+          assetId: "asset-svg-1",
+          svgAssetId: "asset-svg-1",
+          name: "Front logo",
+          xMm: 22.5,
+          yMm: 18.25,
+          widthMm: 42,
+          heightMm: 38.5,
+          rotationDeg: 15,
+          visible: true,
+          mappingSignature: "laser-bed-surface-mapping:abc12345",
+        },
+      ],
+      warnings: [],
+      errors: [],
+    },
+  });
+
+  saveTemplate(template);
+  const saved = getTemplate(template.id);
+
+  assert.ok(saved);
+  assert.deepEqual(saved.artworkPlacements, template.artworkPlacements);
+  assert.equal(saved.artworkPlacements?.[0]?.xMm, 22.5);
+  assert.equal(saved.artworkPlacements?.[0]?.yMm, 18.25);
+  assert.equal(saved.artworkPlacements?.[0]?.widthMm, 42);
+  assert.equal(saved.artworkPlacements?.[0]?.heightMm, 38.5);
+  assert.equal(saved.artworkPlacements?.[0]?.rotationDeg, 15);
+  assert.equal(saved.engravingPreviewState?.mappingSignature, "laser-bed-surface-mapping:abc12345");
+  assert.equal(saved.engravingPreviewState?.mapping?.sourceHash, "source-hash");
+  assert.equal(saved.engravingPreviewState?.mapping?.glbSourceHash, "glb-hash");
+  assert.equal(saved.engravingPreviewState?.mapping?.wrapDiameterMm, 88.9);
+  assert.equal(saved.engravingPreviewState?.mapping?.wrapWidthMm, 279.29);
+  assert.equal(saved.engravingPreviewState?.mapping?.printableHeightMm, 220);
+});
+
+test("empty artwork placement list remains a valid saved template state", () => {
+  const template = createTemplate({
+    id: "template-empty-artwork-placement",
+    artworkPlacements: [],
+  });
+
+  saveTemplate(template);
+  const saved = getTemplate(template.id);
+
+  assert.ok(saved);
+  assert.deepEqual(saved.artworkPlacements, []);
+});
+
+test("old templates without artwork placement data still load", () => {
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      templates: [
+        createTemplate({
+          id: "template-legacy-artwork-placement",
+          artworkPlacements: undefined,
+          engravingPreviewState: undefined,
+        }),
+      ],
+      lastUpdated: NOW,
+    }),
+  );
+
+  const loaded = loadTemplates().find((template) => template.id === "template-legacy-artwork-placement");
+
+  assert.ok(loaded);
+  assert.equal(loaded.artworkPlacements, undefined);
+  assert.equal(loaded.engravingPreviewState, undefined);
+});
