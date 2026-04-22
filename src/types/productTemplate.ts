@@ -4,6 +4,7 @@ import type {
   LaserBedArtworkPlacement,
   TemplateEngravingPreviewState,
 } from "@/lib/laserBedSurfaceMapping";
+import type { BodyReferenceV2Draft } from "@/lib/bodyReferenceV2Layers";
 import type { ProductAppearanceReferenceLayer } from "@/lib/productAppearanceReferenceLayers";
 
 export type EditableOutlinePointType = "corner" | "smooth";
@@ -299,6 +300,7 @@ export interface ProductTemplate {
   artworkPlacements?: LaserBedArtworkPlacement[];
   engravingPreviewState?: TemplateEngravingPreviewState;
   lookupDimensions?: TumblerItemLookupDimensions;
+  acceptedBodyReferenceV2Draft?: BodyReferenceV2Draft;
   /** Straight-on photo of the front face — base64 data URL */
   frontPhotoDataUrl?: string;
   /** Straight-on photo of the back face — base64 data URL */

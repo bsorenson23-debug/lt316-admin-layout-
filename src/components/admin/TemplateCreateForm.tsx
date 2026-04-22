@@ -84,15 +84,23 @@ import {
   ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN,
 } from "@/lib/engravingOverlayPreview";
 import {
+  acceptBodyReferenceV2Draft,
+  buildBodyReferenceV2GenerationReadinessFromDraft,
+  createEmptyBodyReferenceV2Draft,
+  resetBodyReferenceV2Draft,
+  seedBodyLeftOutlineFromApprovedBodyOutline,
+  seedCenterlineFromApprovedBodyOutline,
+  setBodyLeftOutline,
+  setCenterlineAxis,
+  summarizeBodyReferenceV2CaptureReadiness,
+} from "@/lib/bodyReferenceV2Capture";
+import {
   summarizeBodyReferenceV2Draft,
   type BodyReferenceV2Draft,
 } from "@/lib/bodyReferenceV2Layers";
 import {
   summarizeBodyReferenceV2ScaleMirrorPreview,
 } from "@/lib/bodyReferenceV2ScaleMirror";
-import {
-  summarizeBodyReferenceV2GenerationReadiness,
-} from "@/lib/bodyReferenceV2GenerationSource";
 import { summarizeProductDimensionAuthority } from "@/lib/productDimensionAuthority";
 import { BodyReferenceFineTuneEditor } from "./BodyReferenceFineTuneEditor";
 import { FileDropZone } from "./shared/FileDropZone";
@@ -120,6 +128,21 @@ function round2(n: number): number {
 
 function cloneSerializable<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function buildEffectiveBodyReferenceV2Draft(args: {
+  draft?: BodyReferenceV2Draft | null;
+  sourceImageUrl?: string;
+  scaleCalibration: BodyReferenceV2Draft["scaleCalibration"];
+}): BodyReferenceV2Draft {
+  const geometryDraft = args.draft ?? createEmptyBodyReferenceV2Draft();
+  return acceptBodyReferenceV2Draft({
+    sourceImageUrl: args.sourceImageUrl,
+    centerline: geometryDraft.centerline ? cloneSerializable(geometryDraft.centerline) : null,
+    layers: cloneSerializable(geometryDraft.layers ?? []),
+    blockedRegions: cloneSerializable(geometryDraft.blockedRegions ?? []),
+    scaleCalibration: cloneSerializable(args.scaleCalibration),
+  });
 }
 
 const ENGRAVING_OVERLAY_TEXTURE_PX_PER_MM = 4;
@@ -681,6 +704,16 @@ export function TemplateCreateForm({
   const [approvedBodyReferenceWarnings, setApprovedBodyReferenceWarnings] = React.useState<string[]>(
     () => [...(editingTemplate?.dimensions.bodyReferenceWarnings ?? [])],
   );
+  const [bodyReferenceV2DraftCapture, setBodyReferenceV2DraftCapture] = React.useState<BodyReferenceV2Draft>(
+    () => editingTemplate?.acceptedBodyReferenceV2Draft
+      ? cloneSerializable(editingTemplate.acceptedBodyReferenceV2Draft)
+      : createEmptyBodyReferenceV2Draft(),
+  );
+  const [acceptedBodyReferenceV2DraftSnapshot, setAcceptedBodyReferenceV2DraftSnapshot] = React.useState<BodyReferenceV2Draft | null>(
+    () => editingTemplate?.acceptedBodyReferenceV2Draft
+      ? cloneSerializable(editingTemplate.acceptedBodyReferenceV2Draft)
+      : null,
+  );
   const [bodyReferenceFineTuneModeEnabled, setBodyReferenceFineTuneModeEnabled] = React.useState(false);
   const [bodyReferenceFineTuneDraftOutline, setBodyReferenceFineTuneDraftOutline] = React.useState<EditableBodyOutline | null>(null);
   const [bodyReferenceFineTuneDetectedBaselineOutline, setBodyReferenceFineTuneDetectedBaselineOutline] = React.useState<EditableBodyOutline | null>(null);
@@ -973,46 +1006,40 @@ export function TemplateCreateForm({
       lookupResult,
     ],
   );
-  const bodyReferenceV2Draft = React.useMemo<BodyReferenceV2Draft>(() => {
+  const bodyReferenceV2ScaleCalibration = React.useMemo<BodyReferenceV2Draft["scaleCalibration"]>(() => {
     const lookupDiameterMm = lookupDimensionAuthoritySummary.readyForLookupScale
       ? lookupDimensionAuthoritySummary.scaleDiameterMm ?? null
       : null;
     const resolvedDiameterMm = diameterMm > 0 ? round2(diameterMm) : undefined;
 
     return {
-      sourceImageUrl: productPhotoFullUrl || undefined,
-      centerline: null,
-      layers: [],
-      blockedRegions: [],
-      scaleCalibration: {
-        scaleSource:
-          typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
-            ? "lookup-diameter"
-            : resolvedDiameterMm != null
-              ? "manual-diameter"
-              : "unknown",
-        lookupDiameterMm:
-          typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
-            ? round2(lookupDiameterMm)
-            : undefined,
-        resolvedDiameterMm,
-        wrapDiameterMm:
-          typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
-            ? round2(lookupDiameterMm)
-            : resolvedDiameterMm,
-        wrapWidthMm: templateWidthMm > 0 ? round2(templateWidthMm) : undefined,
-        expectedBodyHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
-        expectedBodyWidthMm: resolvedDiameterMm,
-        lookupVariantLabel: lookupDimensionAuthoritySummary.selectedVariantLabel,
-        lookupSizeOz: lookupDimensionAuthoritySummary.selectedSizeOz,
-        lookupDimensionAuthority: lookupDimensionAuthoritySummary.dimensionAuthority,
-        lookupScaleStatus: lookupDimensionAuthoritySummary.status,
-        lookupFullProductHeightMm: lookupDimensionAuthoritySummary.fullProductHeightMm,
-        lookupBodyHeightMm: lookupDimensionAuthoritySummary.bodyHeightMm,
-        lookupHeightIgnoredForScale: lookupDimensionAuthoritySummary.heightIgnoredForScale,
-        lookupWarnings: lookupDimensionAuthoritySummary.warnings,
-        lookupErrors: lookupDimensionAuthoritySummary.errors,
-      },
+      scaleSource:
+        typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
+          ? "lookup-diameter"
+          : resolvedDiameterMm != null
+            ? "manual-diameter"
+            : "unknown",
+      lookupDiameterMm:
+        typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
+          ? round2(lookupDiameterMm)
+          : undefined,
+      resolvedDiameterMm,
+      wrapDiameterMm:
+        typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
+          ? round2(lookupDiameterMm)
+          : resolvedDiameterMm,
+      wrapWidthMm: templateWidthMm > 0 ? round2(templateWidthMm) : undefined,
+      expectedBodyHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
+      expectedBodyWidthMm: resolvedDiameterMm,
+      lookupVariantLabel: lookupDimensionAuthoritySummary.selectedVariantLabel,
+      lookupSizeOz: lookupDimensionAuthoritySummary.selectedSizeOz,
+      lookupDimensionAuthority: lookupDimensionAuthoritySummary.dimensionAuthority,
+      lookupScaleStatus: lookupDimensionAuthoritySummary.status,
+      lookupFullProductHeightMm: lookupDimensionAuthoritySummary.fullProductHeightMm,
+      lookupBodyHeightMm: lookupDimensionAuthoritySummary.bodyHeightMm,
+      lookupHeightIgnoredForScale: lookupDimensionAuthoritySummary.heightIgnoredForScale,
+      lookupWarnings: lookupDimensionAuthoritySummary.warnings,
+      lookupErrors: lookupDimensionAuthoritySummary.errors,
     };
   }, [
     diameterMm,
@@ -1028,8 +1055,29 @@ export function TemplateCreateForm({
     lookupDimensionAuthoritySummary.status,
     lookupDimensionAuthoritySummary.warnings,
     printHeightMm,
-    productPhotoFullUrl,
     templateWidthMm,
+  ]);
+  const bodyReferenceV2Draft = React.useMemo<BodyReferenceV2Draft>(() => buildEffectiveBodyReferenceV2Draft({
+    draft: bodyReferenceV2DraftCapture,
+    sourceImageUrl: productPhotoFullUrl || undefined,
+    scaleCalibration: bodyReferenceV2ScaleCalibration,
+  }), [
+    bodyReferenceV2DraftCapture,
+    bodyReferenceV2ScaleCalibration,
+    productPhotoFullUrl,
+  ]);
+  const acceptedBodyReferenceV2Draft = React.useMemo<BodyReferenceV2Draft | null>(() => (
+    acceptedBodyReferenceV2DraftSnapshot
+      ? buildEffectiveBodyReferenceV2Draft({
+          draft: acceptedBodyReferenceV2DraftSnapshot,
+          sourceImageUrl: productPhotoFullUrl || undefined,
+          scaleCalibration: bodyReferenceV2ScaleCalibration,
+        })
+      : null
+  ), [
+    acceptedBodyReferenceV2DraftSnapshot,
+    bodyReferenceV2ScaleCalibration,
+    productPhotoFullUrl,
   ]);
   const bodyReferenceV2Summary = React.useMemo(
     () => summarizeBodyReferenceV2Draft(bodyReferenceV2Draft),
@@ -1040,8 +1088,21 @@ export function TemplateCreateForm({
     [bodyReferenceV2Draft],
   );
   const bodyReferenceV2GenerationReadiness = React.useMemo(
-    () => summarizeBodyReferenceV2GenerationReadiness(bodyReferenceV2Draft),
+    () => buildBodyReferenceV2GenerationReadinessFromDraft(bodyReferenceV2Draft),
     [bodyReferenceV2Draft],
+  );
+  const acceptedBodyReferenceV2GenerationReadiness = React.useMemo(
+    () => acceptedBodyReferenceV2Draft
+      ? buildBodyReferenceV2GenerationReadinessFromDraft(acceptedBodyReferenceV2Draft)
+      : null,
+    [acceptedBodyReferenceV2Draft],
+  );
+  const bodyReferenceV2CaptureReadiness = React.useMemo(
+    () => summarizeBodyReferenceV2CaptureReadiness({
+      draft: bodyReferenceV2Draft,
+      acceptedDraft: acceptedBodyReferenceV2Draft,
+    }),
+    [acceptedBodyReferenceV2Draft, bodyReferenceV2Draft],
   );
   const activeReviewedBodyReferenceAuthority = React.useMemo(() => {
     const sourceType = wrapExportContract?.source.type ?? null;
@@ -1244,6 +1305,8 @@ export function TemplateCreateForm({
     setApprovedCanonicalDimensionCalibration(null);
     setApprovedBodyReferenceQa(null);
     setApprovedBodyReferenceWarnings([]);
+    setBodyReferenceV2DraftCapture(createEmptyBodyReferenceV2Draft());
+    setAcceptedBodyReferenceV2DraftSnapshot(null);
     setGeneratedReviewedBodyGeometryContract(null);
     setLoadedBodyGeometryContract(null);
     setReviewedBodyCutoutQaGeneratedSourceSignature(null);
@@ -1853,6 +1916,50 @@ export function TemplateCreateForm({
     resetBodyReferenceFineTuneState,
   ]);
 
+  const handleSeedBodyReferenceV2Centerline = React.useCallback(() => {
+    const seededCenterline = seedCenterlineFromApprovedBodyOutline(approvedBodyOutline);
+    if (!seededCenterline) return;
+    setBodyReferenceV2DraftCapture((currentDraft) => setCenterlineAxis(currentDraft, seededCenterline));
+  }, [approvedBodyOutline]);
+
+  const handleSeedBodyReferenceV2BodyLeft = React.useCallback(() => {
+    const seededBodyLeft = seedBodyLeftOutlineFromApprovedBodyOutline(approvedBodyOutline);
+    if (seededBodyLeft.length < 2) return;
+    setBodyReferenceV2DraftCapture((currentDraft) => setBodyLeftOutline(currentDraft, seededBodyLeft));
+  }, [approvedBodyOutline]);
+
+  const handleChangeBodyReferenceV2CenterlineX = React.useCallback((nextX: number) => {
+    if (!Number.isFinite(nextX)) return;
+    setBodyReferenceV2DraftCapture((currentDraft) => {
+      if (!currentDraft.centerline) {
+        return currentDraft;
+      }
+      return setCenterlineAxis(currentDraft, {
+        ...currentDraft.centerline,
+        xPx: nextX,
+        source: "operator",
+      });
+    });
+  }, []);
+
+  const handleAcceptBodyReferenceV2Draft = React.useCallback(() => {
+    const acceptedDraft = acceptBodyReferenceV2Draft(bodyReferenceV2Draft);
+    setBodyReferenceV2DraftCapture(acceptedDraft);
+    setAcceptedBodyReferenceV2DraftSnapshot(acceptedDraft);
+  }, [bodyReferenceV2Draft]);
+
+  const handleResetBodyReferenceV2Draft = React.useCallback(() => {
+    setBodyReferenceV2DraftCapture(resetBodyReferenceV2Draft({
+      sourceImageUrl: productPhotoFullUrl || undefined,
+      scaleCalibration: bodyReferenceV2ScaleCalibration,
+      acceptedDraft: acceptedBodyReferenceV2DraftSnapshot,
+    }));
+  }, [
+    acceptedBodyReferenceV2DraftSnapshot,
+    bodyReferenceV2ScaleCalibration,
+    productPhotoFullUrl,
+  ]);
+
   const handleGenerateReviewedBodyReferenceGlb = React.useCallback(async (
     generationSourceMode: "v1-approved-contour" | "v2-mirrored-profile" = "v1-approved-contour",
   ) => {
@@ -1862,7 +1969,7 @@ export function TemplateCreateForm({
     }
     if (
       requestingV2
-        ? !bodyReferenceV2GenerationReadiness.ready
+        ? !bodyReferenceV2CaptureReadiness.generationReady || !acceptedBodyReferenceV2Draft
         : (
           !approvedBodyOutline ||
           !approvedCanonicalBodyProfile ||
@@ -1887,7 +1994,7 @@ export function TemplateCreateForm({
           generationSourceMode,
           ...(requestingV2
             ? {
-                bodyReferenceV2Draft,
+                bodyReferenceV2Draft: acceptedBodyReferenceV2Draft,
               }
             : {
                 bodyOutline: approvedBodyOutline,
@@ -1939,11 +2046,11 @@ export function TemplateCreateForm({
     }
   }, [
     approvedBodyOutline,
+    acceptedBodyReferenceV2Draft,
     approvedCanonicalBodyProfile,
     approvedCanonicalDimensionCalibration,
     bodyColorHex,
-    bodyReferenceV2Draft,
-    bodyReferenceV2GenerationReadiness.ready,
+    bodyReferenceV2CaptureReadiness.generationReady,
     name,
     productType,
     resolvedMatchedProfileId,
@@ -2022,6 +2129,7 @@ export function TemplateCreateForm({
           ?? persistedTemplateEngravingPreviewState.mappingSignature,
       },
       lookupDimensions: lookupDimensionsSnapshot ?? undefined,
+      acceptedBodyReferenceV2Draft: acceptedBodyReferenceV2Draft ?? undefined,
       createdAt: editingTemplate?.createdAt ?? now,
       updatedAt: now,
       builtIn: editingTemplate?.builtIn ?? false,
@@ -3078,7 +3186,7 @@ export function TemplateCreateForm({
                 <div>
                   <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 semantic layers</div>
                   <div className={styles.cutoutFitSummaryHint}>
-                    Experimental scaffold for centerline/body-left/reference-only layer semantics and future mirror preview. Not current generation source.
+                    Operator capture scaffold for centerline, body-left, and readiness-gated future body-only generation. Not current generation source until explicitly generated.
                   </div>
                 </div>
                 <span
@@ -3092,6 +3200,60 @@ export function TemplateCreateForm({
                 >
                   {bodyReferenceV2Summary.status.toUpperCase()}
                 </span>
+              </div>
+
+              <div className={styles.reviewScaffoldActions}>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  data-testid="body-reference-v2-seed-centerline"
+                  disabled={!approvedBodyOutline}
+                  onClick={handleSeedBodyReferenceV2Centerline}
+                >
+                  Capture / seed centerline
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  data-testid="body-reference-v2-seed-body-left"
+                  disabled={!approvedBodyOutline}
+                  onClick={handleSeedBodyReferenceV2BodyLeft}
+                >
+                  Set body-left from accepted BODY REFERENCE
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  data-testid="body-reference-v2-accept-draft"
+                  disabled={!bodyReferenceV2Draft.centerline && !bodyReferenceV2Summary.bodyLeftCaptured}
+                  onClick={handleAcceptBodyReferenceV2Draft}
+                >
+                  Accept v2 draft
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  data-testid="body-reference-v2-reset-draft"
+                  onClick={handleResetBodyReferenceV2Draft}
+                >
+                  Reset v2 draft
+                </button>
+              </div>
+
+              <div className={styles.fieldRow}>
+                <label className={styles.fieldLabel}>Centerline X</label>
+                <input
+                  className={styles.textInput}
+                  type="number"
+                  step="0.01"
+                  value={bodyReferenceV2Draft.centerline?.xPx ?? ""}
+                  disabled={!bodyReferenceV2Draft.centerline}
+                  onChange={(event) => {
+                    const nextValue = Number(event.target.value);
+                    if (!Number.isFinite(nextValue)) return;
+                    handleChangeBodyReferenceV2CenterlineX(nextValue);
+                  }}
+                />
               </div>
 
               <div className={styles.cutoutFitSummaryGrid}>
@@ -3128,8 +3290,22 @@ export function TemplateCreateForm({
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lookupDiameterPresent ? "present" : "missing"}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Accepted v2 draft</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.accepted ? "yes" : "no"}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Draft pending acceptance</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.hasDraftChanges ? "yes" : "no"}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>v2 generation ready</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.generationReady ? "yes" : "no"}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
                   <span className={styles.cutoutFitMetricLabel}>Current generation source</span>
-                  <span className={styles.cutoutFitMetricValue}>no</span>
+                  <span className={styles.cutoutFitMetricValue}>
+                    {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile" ? "yes" : "no"}
+                  </span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
                   <span className={styles.cutoutFitMetricLabel}>v1 BODY CUTOUT QA</span>
@@ -3138,10 +3314,15 @@ export function TemplateCreateForm({
               </div>
 
               <div className={styles.reviewScaffoldNote}>
-                Not current generation source. Existing v1 BODY CUTOUT QA remains active.
+                {approvedBodyOutline
+                  ? "Seed v2 capture from the accepted BODY REFERENCE contour, then accept the v2 draft before generation can unlock."
+                  : "Accept BODY REFERENCE review first to seed the v2 centerline and body-left outline."}
               </div>
               <div className={styles.reviewScaffoldNote}>
-                Out of scope in this scaffold: centerline editing UI, v2 capture workflow, and BODY CUTOUT QA validation changes.
+                Not current generation source. Existing v1 BODY CUTOUT QA remains active until the accepted v2 draft is explicitly generated.
+              </div>
+              <div className={styles.reviewScaffoldNote}>
+                Direct point editing, mirror-derived defaulting, and BODY CUTOUT QA validation changes remain out of scope in this scaffold.
               </div>
 
               {(bodyReferenceV2Summary.validation.errors.length > 0 || bodyReferenceV2Summary.validation.warnings.length > 0) && (
@@ -3153,6 +3334,20 @@ export function TemplateCreateForm({
                   ))}
                   {bodyReferenceV2Summary.validation.warnings.map((warning) => (
                     <div key={`body-reference-v2-warning-${warning}`} className={styles.cutoutFitWarning}>
+                      {warning}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(bodyReferenceV2CaptureReadiness.errors.length > 0 || bodyReferenceV2CaptureReadiness.warnings.length > 0) && (
+                <div className={styles.cutoutFitWarningList}>
+                  {bodyReferenceV2CaptureReadiness.errors.map((error) => (
+                    <div key={`body-reference-v2-capture-error-${error}`} className={styles.cutoutFitWarningError}>
+                      {error}
+                    </div>
+                  ))}
+                  {bodyReferenceV2CaptureReadiness.warnings.map((warning) => (
+                    <div key={`body-reference-v2-capture-warning-${warning}`} className={styles.cutoutFitWarning}>
                       {warning}
                     </div>
                   ))}
@@ -3238,7 +3433,9 @@ export function TemplateCreateForm({
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Current generation source</span>
-                      <span className={styles.cutoutFitMetricValue}>no</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile" ? "yes" : "no"}
+                      </span>
                     </div>
                   </div>
                 )}
@@ -3272,7 +3469,7 @@ export function TemplateCreateForm({
                   <div>
                     <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 Generation Readiness</div>
                     <div className={styles.cutoutFitSummaryHint}>
-                      Experimental v2 body-only generation gate. Existing v1 BODY CUTOUT QA remains the default until v2 is explicitly generated.
+                      Accepted v2 draft gate for experimental body-only generation. Existing v1 BODY CUTOUT QA remains the default until v2 is explicitly generated.
                     </div>
                   </div>
                   <span
@@ -3329,6 +3526,18 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.blockedRegionCount}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Accepted draft</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.accepted ? "yes" : "no"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Draft pending acceptance</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.hasDraftChanges ? "yes" : "no"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Accepted draft ready</span>
+                      <span className={styles.cutoutFitMetricValue}>{acceptedBodyReferenceV2GenerationReadiness?.ready ? "yes" : "no"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Current generation source</span>
                       <span className={styles.cutoutFitMetricValue}>
                         {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile" ? "yes" : "no"}
@@ -3342,7 +3551,7 @@ export function TemplateCreateForm({
                     type="button"
                     className={styles.detectBtn}
                     disabled={
-                      !bodyReferenceV2GenerationReadiness.ready ||
+                      !bodyReferenceV2CaptureReadiness.generationReady ||
                       generatingReviewedBodyReferenceGlb ||
                       bodyReferenceFineTuneDraftPendingAcceptance
                     }
@@ -3352,14 +3561,20 @@ export function TemplateCreateForm({
                   >
                     {generatingReviewedBodyReferenceGlb
                       ? "Generating BODY CUTOUT QA GLB…"
-                      : "Generate BODY CUTOUT QA from v2 mirrored profile"}
+                      : !bodyReferenceV2CaptureReadiness.accepted
+                        ? "Accept v2 draft to enable v2 generation"
+                        : bodyReferenceV2CaptureReadiness.hasDraftChanges
+                          ? "Accept or reset v2 draft changes"
+                          : "Generate BODY CUTOUT QA from v2 mirrored profile"}
                   </button>
                 </div>
 
                 <div className={styles.reviewScaffoldNote}>
                   {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile"
                     ? "Current source authority: BODY REFERENCE v2 mirrored profile."
-                    : "Not current generation source. Existing v1 BODY CUTOUT QA remains active until this experimental path is explicitly generated."}
+                    : bodyReferenceV2CaptureReadiness.hasDraftChanges
+                      ? "Draft changes are pending acceptance. v2 generation stays locked to the last accepted v2 draft."
+                      : "Not current generation source. Existing v1 BODY CUTOUT QA remains active until this experimental path is explicitly generated."}
                 </div>
 
                 {(bodyReferenceV2GenerationReadiness.errors.length > 0 || bodyReferenceV2GenerationReadiness.warnings.length > 0) && (
