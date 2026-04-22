@@ -83,6 +83,9 @@ import {
   summarizeBodyReferenceV2Draft,
   type BodyReferenceV2Draft,
 } from "@/lib/bodyReferenceV2Layers";
+import {
+  summarizeBodyReferenceV2ScaleMirrorPreview,
+} from "@/lib/bodyReferenceV2ScaleMirror";
 import { BodyReferenceFineTuneEditor } from "./BodyReferenceFineTuneEditor";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -951,6 +954,10 @@ export function TemplateCreateForm({
   ]);
   const bodyReferenceV2Summary = React.useMemo(
     () => summarizeBodyReferenceV2Draft(bodyReferenceV2Draft),
+    [bodyReferenceV2Draft],
+  );
+  const bodyReferenceV2ScaleMirrorPreview = React.useMemo(
+    () => summarizeBodyReferenceV2ScaleMirrorPreview(bodyReferenceV2Draft),
     [bodyReferenceV2Draft],
   );
   const templateArtworkPlacementMapping = React.useMemo(
@@ -2911,7 +2918,7 @@ export function TemplateCreateForm({
                 <div>
                   <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 semantic layers</div>
                   <div className={styles.cutoutFitSummaryHint}>
-                    Experimental scaffold for centerline/body-left/reference-only layer semantics. Not current generation source.
+                    Experimental scaffold for centerline/body-left/reference-only layer semantics and future mirror preview. Not current generation source.
                   </div>
                 </div>
                 <span
@@ -2974,7 +2981,7 @@ export function TemplateCreateForm({
                 Not current generation source. Existing v1 BODY CUTOUT QA remains active.
               </div>
               <div className={styles.reviewScaffoldNote}>
-                Out of scope in this scaffold: mirror preview, centerline editing UI, v2 GLB generation, and BODY CUTOUT QA validation changes.
+                Out of scope in this scaffold: centerline editing UI, v2 GLB generation, and BODY CUTOUT QA validation changes.
               </div>
 
               {(bodyReferenceV2Summary.validation.errors.length > 0 || bodyReferenceV2Summary.validation.warnings.length > 0) && (
@@ -2991,6 +2998,94 @@ export function TemplateCreateForm({
                   ))}
                 </div>
               )}
+
+              <div
+                className={styles.cutoutFitSummary}
+                data-testid="body-reference-v2-mirror-preview"
+                data-body-reference-v2-mirror-preview-status={bodyReferenceV2ScaleMirrorPreview.status}
+              >
+                <div className={styles.cutoutFitSummaryHeader}>
+                  <div>
+                    <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 Mirror Preview</div>
+                    <div className={styles.cutoutFitSummaryHint}>
+                      Future lookup-diameter calibration and mirrored-right preview only. Not current generation source.
+                    </div>
+                  </div>
+                  <span
+                    className={
+                      bodyReferenceV2ScaleMirrorPreview.status === "pass"
+                        ? styles.reviewStatusReady
+                        : bodyReferenceV2ScaleMirrorPreview.status === "fail"
+                          ? styles.reviewStatusFail
+                          : styles.reviewStatusPending
+                    }
+                  >
+                    {bodyReferenceV2ScaleMirrorPreview.status.toUpperCase()}
+                  </span>
+                </div>
+
+                {(bodyReferenceV2ScaleMirrorPreview.centerline == null && bodyReferenceV2ScaleMirrorPreview.leftBodyPointCount === 0) ? (
+                  <div className={styles.cutoutFitWarningList}>
+                    <div className={styles.cutoutFitWarning}>Centerline not captured.</div>
+                    <div className={styles.cutoutFitWarning}>Body-left outline not captured.</div>
+                    <div className={styles.cutoutFitWarning}>Current v1 BODY CUTOUT QA remains active.</div>
+                  </div>
+                ) : (
+                  <div className={styles.cutoutFitSummaryGrid}>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Centerline</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.centerline ? "captured" : "missing"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.leftBodyPointCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Lookup diameter</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.lookupDiameterMm)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Diameter (px)</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.diameterPx != null ? round2(bodyReferenceV2ScaleMirrorPreview.diameterPx) : "n/a"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>mm per px</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.mmPerPx != null ? bodyReferenceV2ScaleMirrorPreview.mmPerPx.toFixed(4) : "n/a"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Derived wrap width</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.wrapWidthMm)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Mirrored-right points</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.mirroredRightPointCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Current generation source</span>
+                      <span className={styles.cutoutFitMetricValue}>no</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className={styles.reviewScaffoldNote}>
+                  Not current generation source. Existing v1 BODY CUTOUT QA remains active.
+                </div>
+
+                {(bodyReferenceV2ScaleMirrorPreview.errors.length > 0 || bodyReferenceV2ScaleMirrorPreview.warnings.length > 0) && (
+                  <div className={styles.cutoutFitWarningList}>
+                    {bodyReferenceV2ScaleMirrorPreview.errors.map((error) => (
+                      <div key={`body-reference-v2-mirror-error-${error}`} className={styles.cutoutFitWarningError}>
+                        {error}
+                      </div>
+                    ))}
+                    {bodyReferenceV2ScaleMirrorPreview.warnings.map((warning) => (
+                      <div key={`body-reference-v2-mirror-warning-${warning}`} className={styles.cutoutFitWarning}>
+                        {warning}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
