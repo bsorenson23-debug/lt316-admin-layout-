@@ -79,6 +79,10 @@ import {
   buildEngravingOverlayPreviewState,
   ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN,
 } from "@/lib/engravingOverlayPreview";
+import {
+  summarizeBodyReferenceV2Draft,
+  type BodyReferenceV2Draft,
+} from "@/lib/bodyReferenceV2Layers";
 import { BodyReferenceFineTuneEditor } from "./BodyReferenceFineTuneEditor";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -904,6 +908,50 @@ export function TemplateCreateForm({
   const appearanceReferenceSummary = React.useMemo(
     () => summarizeAppearanceReferenceLayers(templateAppearanceReferenceLayers),
     [templateAppearanceReferenceLayers],
+  );
+  const bodyReferenceV2Draft = React.useMemo<BodyReferenceV2Draft>(() => {
+    const matchedProfileDiameterMm =
+      resolvedMatchedProfile?.outsideDiameterMm
+      ?? resolvedMatchedProfile?.topDiameterMm
+      ?? null;
+    const lookupDiameterMm = matchedProfileDiameterMm ?? lookupResult?.dimensions.outsideDiameterMm ?? null;
+    const resolvedDiameterMm = diameterMm > 0 ? round2(diameterMm) : undefined;
+
+    return {
+      sourceImageUrl: productPhotoFullUrl || undefined,
+      centerline: null,
+      layers: [],
+      blockedRegions: [],
+      scaleCalibration: {
+        scaleSource:
+          typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
+            ? "lookup-diameter"
+            : resolvedDiameterMm != null
+              ? "manual-diameter"
+              : "unknown",
+        lookupDiameterMm:
+          typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
+            ? round2(lookupDiameterMm)
+            : undefined,
+        resolvedDiameterMm,
+        wrapDiameterMm: resolvedDiameterMm,
+        wrapWidthMm: templateWidthMm > 0 ? round2(templateWidthMm) : undefined,
+        expectedBodyHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
+        expectedBodyWidthMm: resolvedDiameterMm,
+      },
+    };
+  }, [
+    diameterMm,
+    lookupResult?.dimensions.outsideDiameterMm,
+    printHeightMm,
+    productPhotoFullUrl,
+    resolvedMatchedProfile?.outsideDiameterMm,
+    resolvedMatchedProfile?.topDiameterMm,
+    templateWidthMm,
+  ]);
+  const bodyReferenceV2Summary = React.useMemo(
+    () => summarizeBodyReferenceV2Draft(bodyReferenceV2Draft),
+    [bodyReferenceV2Draft],
   );
   const templateArtworkPlacementMapping = React.useMemo(
     () => buildWrapExportSurfaceMapping(wrapExportContract, appearanceReferenceSummary.frontCenterAngleDeg),
@@ -2853,6 +2901,97 @@ export function TemplateCreateForm({
                 />
               </div>
             )}
+
+            <div
+              className={styles.cutoutFitSummary}
+              data-testid="body-reference-v2-summary"
+              data-body-reference-v2-status={bodyReferenceV2Summary.status}
+            >
+              <div className={styles.cutoutFitSummaryHeader}>
+                <div>
+                  <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 semantic layers</div>
+                  <div className={styles.cutoutFitSummaryHint}>
+                    Experimental scaffold for centerline/body-left/reference-only layer semantics. Not current generation source.
+                  </div>
+                </div>
+                <span
+                  className={
+                    bodyReferenceV2Summary.status === "pass"
+                      ? styles.reviewStatusReady
+                      : bodyReferenceV2Summary.status === "fail"
+                        ? styles.reviewStatusFail
+                        : styles.reviewStatusPending
+                  }
+                >
+                  {bodyReferenceV2Summary.status.toUpperCase()}
+                </span>
+              </div>
+
+              <div className={styles.cutoutFitSummaryGrid}>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Centerline</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.centerlineCaptured ? "captured" : "missing"}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Body-left</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.bodyLeftCaptured ? "captured" : "missing"}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Body-right mirrored</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.bodyRightMirroredPresent ? "present" : "missing"}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Lid reference layers</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lidReferenceCount}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Handle reference layers</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.handleReferenceCount}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Blocked regions</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.blockedRegionCount}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Scale source</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.scaleSource}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Lookup diameter</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lookupDiameterPresent ? "present" : "missing"}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Current generation source</span>
+                  <span className={styles.cutoutFitMetricValue}>no</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>v1 BODY CUTOUT QA</span>
+                  <span className={styles.cutoutFitMetricValue}>active</span>
+                </div>
+              </div>
+
+              <div className={styles.reviewScaffoldNote}>
+                Not current generation source. Existing v1 BODY CUTOUT QA remains active.
+              </div>
+              <div className={styles.reviewScaffoldNote}>
+                Out of scope in this scaffold: mirror preview, centerline editing UI, v2 GLB generation, and BODY CUTOUT QA validation changes.
+              </div>
+
+              {(bodyReferenceV2Summary.validation.errors.length > 0 || bodyReferenceV2Summary.validation.warnings.length > 0) && (
+                <div className={styles.cutoutFitWarningList}>
+                  {bodyReferenceV2Summary.validation.errors.map((error) => (
+                    <div key={`body-reference-v2-error-${error}`} className={styles.cutoutFitWarningError}>
+                      {error}
+                    </div>
+                  ))}
+                  {bodyReferenceV2Summary.validation.warnings.map((warning) => (
+                    <div key={`body-reference-v2-warning-${warning}`} className={styles.cutoutFitWarning}>
+                      {warning}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
