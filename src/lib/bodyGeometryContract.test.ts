@@ -1776,6 +1776,59 @@ test("contracts with only a valid body mesh and matching dimensions pass cleanly
   assert.equal(isContractPassing(contract), true);
 });
 
+test("BODY CUTOUT QA accepts BODY REFERENCE v2 source metadata when the generated GLB stays body-only", () => {
+  const contract = updateContractValidation({
+    ...createEmptyBodyGeometryContract(),
+    mode: "body-cutout-qa",
+    source: {
+      type: "body-reference-v2",
+      hash: "json:v2-source",
+      detectedBodyOnly: true,
+      centerlineCaptured: true,
+      leftBodyOutlineCaptured: true,
+      mirroredBodyGenerated: true,
+      blockedRegionCount: 0,
+      generationSourceMode: "v2-mirrored-profile",
+    },
+    glb: {
+      path: "/api/admin/models/generated/body-only-v2.glb",
+      hash: "json:glb",
+      sourceHash: "json:v2-source",
+      freshRelativeToSource: true,
+    },
+    meshes: {
+      names: ["body_mesh"],
+      bodyMeshNames: [],
+      accessoryMeshNames: [],
+      fallbackMeshNames: [],
+      fallbackDetected: false,
+      unexpectedMeshes: [],
+    },
+    dimensionsMm: {
+      bodyBounds: {
+        width: 88.9,
+        height: 185,
+        depth: 88.9,
+      },
+      bodyBoundsUnits: "mm",
+      expectedBodyWidthMm: 88.9,
+      expectedBodyHeightMm: 185,
+      wrapDiameterMm: 88.9,
+      wrapWidthMm: 279.29,
+      frontVisibleWidthMm: 88.9,
+      scaleSource: "lookup-diameter",
+    },
+    validation: {
+      status: "unknown",
+      errors: [],
+      warnings: [],
+    },
+  });
+
+  assert.equal(contract.validation.status, "pass");
+  assert.equal(contract.dimensionsMm.scaleSource, "lookup-diameter");
+});
+
 test("BODY CUTOUT QA validation ignores reference-only appearance layers attached out of band", () => {
   const contractWithAppearance = {
     ...createEmptyBodyGeometryContract(),

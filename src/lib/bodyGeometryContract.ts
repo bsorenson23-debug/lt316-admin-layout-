@@ -20,6 +20,7 @@ export type BodyGeometryContractMode =
 
 export type BodyGeometrySourceType =
   | "approved-svg"
+  | "body-reference-v2"
   | "uploaded-svg"
   | "generated"
   | "fallback"
@@ -28,6 +29,7 @@ export type BodyGeometrySourceType =
 export type BodyGeometryValidationStatus = "pass" | "warn" | "fail" | "unknown";
 export type BodyGeometryScaleSource =
   | "svg-viewbox"
+  | "lookup-diameter"
   | "physical-wrap"
   | "mesh-bounds"
   | "unknown";
@@ -68,6 +70,11 @@ export interface BodyGeometryContract {
     heightPx?: number;
     viewBox?: string;
     detectedBodyOnly?: boolean;
+    centerlineCaptured?: boolean;
+    leftBodyOutlineCaptured?: boolean;
+    mirroredBodyGenerated?: boolean;
+    blockedRegionCount?: number;
+    generationSourceMode?: "v1-approved-contour" | "v2-mirrored-profile";
   };
   glb: {
     path?: string;

@@ -10,6 +10,11 @@ import type {
   CanonicalDimensionCalibration,
   EditableBodyOutline,
 } from "../../types/productTemplate.ts";
+import type { BodyReferenceV2Draft } from "../../lib/bodyReferenceV2Layers.ts";
+import {
+  createBodyReferenceV2Layer,
+  createCenterlineAxis,
+} from "../../lib/bodyReferenceV2Layers.ts";
 import { generateBodyReferenceGlb, type GenerateBodyReferenceGlbInput } from "./generateTumblerModel.ts";
 
 const BODY_PROFILE: CanonicalBodyProfile = {
@@ -118,12 +123,68 @@ function createInput(overrides: Partial<GenerateBodyReferenceGlbInput> = {}): Ge
     renderMode: "body-cutout-qa",
     templateName: "Stanley Quencher 40oz",
     matchedProfileId: "stanley-quencher-h2.0-flowstate-40oz",
+    generationSourceMode: "v1-approved-contour",
     bodyOutlineSourceMode: "body-only",
     bodyOutline: createOutline(),
     canonicalBodyProfile: BODY_PROFILE,
     canonicalDimensionCalibration: DIMENSION_CALIBRATION,
     bodyColorHex: "#184f90",
     rimColorHex: "#b6b6b6",
+    ...overrides,
+  };
+}
+
+function createV2Draft(overrides: Partial<BodyReferenceV2Draft> = {}): BodyReferenceV2Draft {
+  return {
+    sourceImageUrl: "data:image/png;base64,body-reference-v2",
+    centerline: createCenterlineAxis({
+      id: "centerline",
+      xPx: 100,
+      topYPx: 8,
+      bottomYPx: 208,
+      source: "operator",
+    }),
+    layers: [
+      createBodyReferenceV2Layer({
+        id: "body-left",
+        kind: "body-left",
+        points: [
+          { xPx: 84, yPx: 20 },
+          { xPx: 80, yPx: 120 },
+          { xPx: 82, yPx: 205 },
+        ],
+      }),
+      createBodyReferenceV2Layer({
+        id: "lid",
+        kind: "lid-reference",
+        points: [
+          { xPx: 74, yPx: 4 },
+          { xPx: 126, yPx: 4 },
+          { xPx: 126, yPx: 18 },
+          { xPx: 74, yPx: 18 },
+        ],
+      }),
+      createBodyReferenceV2Layer({
+        id: "handle",
+        kind: "handle-reference",
+        points: [
+          { xPx: 118, yPx: 45 },
+          { xPx: 138, yPx: 45 },
+          { xPx: 138, yPx: 155 },
+          { xPx: 118, yPx: 155 },
+        ],
+      }),
+    ],
+    blockedRegions: [],
+    scaleCalibration: {
+      scaleSource: "lookup-diameter",
+      lookupDiameterMm: 88.9,
+      resolvedDiameterMm: 88.9,
+      wrapDiameterMm: 88.9,
+      wrapWidthMm: 279.29,
+      expectedBodyHeightMm: 185,
+      expectedBodyWidthMm: 88.9,
+    },
     ...overrides,
   };
 }
@@ -227,5 +288,70 @@ test("generateBodyReferenceGlb requires an approved body outline", async () => {
   await assert.rejects(
     generateBodyReferenceGlb(createInput({ bodyOutline: null })),
     /Approved BODY REFERENCE outline is required/i,
+  );
+});
+
+test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirrored profile with body_mesh only", async () => {
+  const result = await generateBodyReferenceGlb(createInput({
+    generationSourceMode: "v2-mirrored-profile",
+    bodyOutline: undefined,
+    canonicalBodyProfile: undefined,
+    canonicalDimensionCalibration: undefined,
+    bodyReferenceV2Draft: createV2Draft(),
+  }));
+
+  assert.equal(result.modelStatus, "generated-reviewed-model");
+  assert.equal(result.renderMode, "body-cutout-qa");
+  assert.equal(result.modelSourceLabel, "Generated from BODY REFERENCE v2 mirrored profile");
+  assert.deepEqual(result.meshNames, ["body_mesh"]);
+  assert.deepEqual(result.fallbackMeshNames, []);
+  assert.equal(result.bodyGeometryContract.source.type, "body-reference-v2");
+  assert.equal(result.bodyGeometryContract.source.centerlineCaptured, true);
+  assert.equal(result.bodyGeometryContract.source.leftBodyOutlineCaptured, true);
+  assert.equal(result.bodyGeometryContract.source.mirroredBodyGenerated, true);
+  assert.equal(result.bodyGeometryContract.source.blockedRegionCount, 0);
+  assert.equal(result.bodyGeometryContract.source.generationSourceMode, "v2-mirrored-profile");
+  assert.equal(result.bodyGeometryContract.glb.sourceHash, result.bodyGeometryContract.source.hash);
+  assert.equal(result.bodyGeometryContract.validation.status, "pass");
+  assert.equal(result.bodyGeometryContract.dimensionsMm.scaleSource, "lookup-diameter");
+  assert.deepEqual(result.bodyGeometryContract.meshes.bodyMeshNames, ["body_mesh"]);
+  assert.deepEqual(result.bodyGeometryContract.meshes.accessoryMeshNames, []);
+
+  const scene = await loadGeneratedScene(result.glbPath);
+  const sceneMeshNames = scene.children.map((child) => child.name).filter(Boolean);
+  assert.deepEqual(sceneMeshNames, ["body_mesh"]);
+  const bounds = getObjectBounds(scene, "body_mesh").getSize(new THREE.Vector3());
+  assert.ok(bounds.x > 80);
+  assert.ok(bounds.y > 180);
+  assert.ok(bounds.z > 80);
+
+  const auditArtifact = JSON.parse(await readFile(result.auditJsonPath ?? "", "utf8")) as {
+    source: { type?: string; hash?: string; centerlineCaptured?: boolean; mirroredBodyGenerated?: boolean };
+    glb: { sourceHash?: string };
+    meshes: { names: string[]; bodyMeshNames: string[]; accessoryMeshNames: string[] };
+    dimensionsMm: { scaleSource?: string };
+  };
+  assert.equal(auditArtifact.source.type, "body-reference-v2");
+  assert.equal(auditArtifact.source.centerlineCaptured, true);
+  assert.equal(auditArtifact.source.mirroredBodyGenerated, true);
+  assert.equal(auditArtifact.glb.sourceHash, auditArtifact.source.hash);
+  assert.deepEqual(auditArtifact.meshes.names, ["body_mesh"]);
+  assert.deepEqual(auditArtifact.meshes.bodyMeshNames, ["body_mesh"]);
+  assert.deepEqual(auditArtifact.meshes.accessoryMeshNames, []);
+  assert.equal(auditArtifact.dimensionsMm.scaleSource, "lookup-diameter");
+});
+
+test("generateBodyReferenceGlb rejects v2 generation when the mirrored profile source is not ready", async () => {
+  await assert.rejects(
+    generateBodyReferenceGlb(createInput({
+      generationSourceMode: "v2-mirrored-profile",
+      bodyOutline: undefined,
+      canonicalBodyProfile: undefined,
+      canonicalDimensionCalibration: undefined,
+      bodyReferenceV2Draft: createV2Draft({
+        centerline: null,
+      }),
+    })),
+    /BODY REFERENCE v2 mirrored profile is not ready/i,
   );
 });

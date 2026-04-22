@@ -55,6 +55,8 @@ function formatScaleSource(
   switch (value) {
     case "svg-viewbox":
       return "svg-viewbox";
+    case "lookup-diameter":
+      return "lookup-diameter";
     case "physical-wrap":
       return "physical-wrap";
     case "mesh-bounds":
@@ -364,6 +366,11 @@ export function BodyContractInspectorPanel({
                     <Field label="Raw height (px)" value={formatNumber(contract.source.heightPx)} testId="body-contract-inspector-source-height" />
                     <Field label="ViewBox" value={contract.source.viewBox ?? "n/a"} code testId="body-contract-inspector-source-viewbox" />
                     <Field label="Body only" value={formatBoolean(contract.source.detectedBodyOnly)} testId="body-contract-inspector-source-body-only" />
+                    <Field label="Generation mode" value={contract.source.generationSourceMode ?? "n/a"} testId="body-contract-inspector-source-generation-mode" />
+                    <Field label="Centerline captured" value={formatBoolean(contract.source.centerlineCaptured)} testId="body-contract-inspector-source-centerline" />
+                    <Field label="Left body captured" value={formatBoolean(contract.source.leftBodyOutlineCaptured)} testId="body-contract-inspector-source-left-body" />
+                    <Field label="Mirrored body generated" value={formatBoolean(contract.source.mirroredBodyGenerated)} testId="body-contract-inspector-source-mirrored-body" />
+                    <Field label="Blocked regions" value={contract.source.blockedRegionCount != null ? String(contract.source.blockedRegionCount) : "n/a"} testId="body-contract-inspector-source-blocked-regions" />
                   </div>
                   <div className={styles.note}>
                     Source width, height, and viewBox are raw SVG-space values. They are not assumed to be millimeters.

@@ -23,6 +23,8 @@ function humanizeSourceType(type: BodyGeometryContract["source"]["type"] | undef
   switch (type) {
     case "approved-svg":
       return "Approved SVG";
+    case "body-reference-v2":
+      return "BODY REFERENCE v2";
     case "uploaded-svg":
       return "Uploaded SVG";
     case "generated":
