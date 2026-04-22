@@ -6,12 +6,14 @@ import {
 } from "@/data/tumblerProfiles";
 import type { TumblerSourceLink } from "@/types/tumblerAutoSize";
 import type {
+  DimensionAuthority,
   TumblerItemLookupFitDebug,
   TumblerItemLookupDimensions,
   TumblerItemLookupResponse,
 } from "@/types/tumblerItemLookup";
 import { access } from "node:fs/promises";
 import path from "node:path";
+import { computeWrapWidthFromDiameterMm } from "@/lib/productDimensionAuthority";
 import { ensureGeneratedTumblerGlb } from "@/server/tumbler/generateTumblerModel";
 
 const IMAGE_META_NAMES = [
@@ -103,6 +105,60 @@ function parseCapacityOz(text: string): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function extractAllCapacitiesOz(text: string): number[] {
+  const values = new Set<number>();
+  for (const match of text.matchAll(/([0-9]{2,3})\s*(?:oz|ounce|ounces)\b/gi)) {
+    const parsed = Number(match[1]);
+    if (Number.isFinite(parsed)) {
+      values.add(parsed);
+    }
+  }
+  return [...values].sort((left, right) => left - right);
+}
+
+function inferColorOrFinish(text: string): string | null {
+  const normalized = normalizeText(text);
+  const candidates = [
+    "stainless",
+    "black",
+    "white",
+    "charcoal",
+    "ash",
+    "rose quartz",
+    "navy",
+    "cream",
+    "fog",
+    "matte",
+  ];
+  return candidates.find((candidate) => normalized.includes(candidate)) ?? null;
+}
+
+function normalizeVariantId(value: string | null | undefined): string | null {
+  const normalized = normalizeText(value);
+  if (!normalized) return null;
+  return normalized.replace(/\s+/g, "-");
+}
+
+function buildVariantLabel(args: {
+  selectedSizeOz?: number | null;
+  selectedColorOrFinish?: string | null;
+  fallbackLabel?: string | null;
+}): string | null {
+  const parts = [
+    args.selectedSizeOz ? `${args.selectedSizeOz} oz` : null,
+    args.selectedColorOrFinish ?? null,
+  ].filter((value): value is string => Boolean(value));
+  if (parts.length > 0) {
+    return parts.join(" / ");
+  }
+  return args.fallbackLabel?.trim() || null;
+}
+
+interface ParsedDimensionCandidate {
+  dimensions: TumblerItemLookupDimensions;
+  score: number;
 }
 
 function inferBrand(text: string): string | null {
@@ -302,27 +358,126 @@ async function selectBestProductImage(args: {
   return bestUrl;
 }
 
-function parseTripletDimensionsMm(text: string): TumblerItemLookupDimensions | null {
-  const match = text.match(/(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:in|")/i);
-  if (!match) return null;
+function buildParsedDimensions(args: {
+  values: number[];
+  unit: string;
+  context: string;
+  resolvedUrl: string | null;
+  lookupInput: string;
+  title: string | null;
+  selectedSizeOz: number | null;
+  selectedColorOrFinish: string | null;
+  availableSizeOz: number[];
+  lookupProductId: string | null;
+  score: number;
+}): ParsedDimensionCandidate | null {
+  const values = args.values.filter(Number.isFinite);
+  if (values.length !== 3) return null;
 
-  const valuesIn = [Number(match[1]), Number(match[2]), Number(match[3])].filter(Number.isFinite);
-  if (valuesIn.length !== 3) return null;
-
-  const valuesMm = valuesIn.map((value) => value * 25.4).sort((a, b) => a - b);
+  const isMillimeters = /^mm$/i.test(args.unit);
+  const valuesMm = values
+    .map((value) => (isMillimeters ? value : value * 25.4))
+    .sort((left, right) => left - right);
   const horizontalA = valuesMm[0];
   const horizontalB = valuesMm[1];
   const overallHeightMm = valuesMm[2];
   const horizontalDelta = Math.abs(horizontalA - horizontalB);
   const isStraight = horizontalDelta <= 3;
+  const diameterMm = isStraight ? round2((horizontalA + horizontalB) / 2) : round2(horizontalB);
+  const usableHeightMm = round2(overallHeightMm * 0.78);
+  const variantLabel = buildVariantLabel({
+    selectedSizeOz: args.selectedSizeOz,
+    selectedColorOrFinish: args.selectedColorOrFinish,
+    fallbackLabel: args.title,
+  });
+  const dimensionSourceSizeOz = parseCapacityOz(args.context);
+  const titleSizeOz = parseCapacityOz(args.title ?? args.lookupInput);
+  const dimensionAuthority: DimensionAuthority = Number.isFinite(diameterMm)
+    ? "diameter-primary"
+    : "unknown";
 
   return {
-    overallHeightMm: round2(overallHeightMm),
-    outsideDiameterMm: isStraight ? round2((horizontalA + horizontalB) / 2) : null,
-    topDiameterMm: isStraight ? null : round2(horizontalB),
-    bottomDiameterMm: isStraight ? null : round2(horizontalA),
-    usableHeightMm: round2(overallHeightMm * 0.78),
+    score: args.score,
+    dimensions: {
+      lookupProductId: args.lookupProductId,
+      productUrl: args.resolvedUrl,
+      selectedVariantId: normalizeVariantId(variantLabel),
+      selectedVariantLabel: variantLabel,
+      selectedSizeOz: args.selectedSizeOz,
+      selectedColorOrFinish: args.selectedColorOrFinish,
+      availableVariantLabels: args.availableSizeOz.map((value) => `${value} oz`),
+      availableSizeOz: args.availableSizeOz,
+      dimensionSourceUrl: args.resolvedUrl,
+      dimensionSourceText: args.context,
+      dimensionSourceSizeOz,
+      titleSizeOz,
+      confidence: round2(args.score),
+      dimensionAuthority,
+      diameterMm,
+      bodyDiameterMm: diameterMm,
+      wrapDiameterMm: diameterMm,
+      wrapWidthMm: computeWrapWidthFromDiameterMm(diameterMm) ?? null,
+      fullProductHeightMm: round2(overallHeightMm),
+      bodyHeightMm: usableHeightMm,
+      heightIncludesLidOrStraw: round2(overallHeightMm) > usableHeightMm,
+      overallHeightMm: round2(overallHeightMm),
+      outsideDiameterMm: isStraight ? diameterMm : null,
+      topDiameterMm: isStraight ? null : round2(horizontalB),
+      bottomDiameterMm: isStraight ? null : round2(horizontalA),
+      usableHeightMm,
+    },
   };
+}
+
+function parseTripletDimensionsMm(args: {
+  text: string;
+  resolvedUrl: string | null;
+  lookupInput: string;
+  title: string | null;
+  selectedSizeOz: number | null;
+  selectedColorOrFinish: string | null;
+  availableSizeOz: number[];
+  lookupProductId: string | null;
+}): TumblerItemLookupDimensions | null {
+  const candidates: ParsedDimensionCandidate[] = [];
+  const pattern = /(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(mm|in(?:ches)?|")/gi;
+
+  for (const match of args.text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    const context = decodeHtml(args.text.slice(Math.max(0, start - 160), Math.min(args.text.length, end + 160)))
+      .replace(/\s+/g, " ")
+      .trim();
+    const contextSizeOz = parseCapacityOz(context);
+    let score = 0.55;
+
+    if (/dimension|dimensions|size|spec/i.test(context)) score += 0.12;
+    if (/package|shipping|box|carton/i.test(context)) score -= 0.22;
+    if (args.selectedSizeOz && contextSizeOz === args.selectedSizeOz) score += 0.2;
+    if (args.selectedSizeOz && contextSizeOz && contextSizeOz !== args.selectedSizeOz) score -= 0.35;
+    if (!args.selectedSizeOz && contextSizeOz) score += 0.04;
+    if (args.availableSizeOz.length > 1 && !contextSizeOz) score -= 0.12;
+
+    const candidate = buildParsedDimensions({
+      values: [Number(match[1]), Number(match[2]), Number(match[3])],
+      unit: match[4] ?? "in",
+      context,
+      resolvedUrl: args.resolvedUrl,
+      lookupInput: args.lookupInput,
+      title: args.title,
+      selectedSizeOz: args.selectedSizeOz,
+      selectedColorOrFinish: args.selectedColorOrFinish,
+      availableSizeOz: args.availableSizeOz,
+      lookupProductId: args.lookupProductId,
+      score,
+    });
+    if (candidate) {
+      candidates.push(candidate);
+    }
+  }
+
+  candidates.sort((left, right) => right.score - left.score);
+  return candidates[0]?.dimensions ?? null;
 }
 
 function scoreProfileMatch(profileText: string, lookupText: string): number {
@@ -455,6 +610,8 @@ export async function lookupTumblerItem(args: {
   let selectedImageUrl: string | null = null;
 
   let lookupText = lookupInput;
+  let titleSizeOz = parseCapacityOz(lookupInput);
+  let selectedColorOrFinish = inferColorOrFinish(lookupInput);
 
   if (isLikelyUrl(lookupInput)) {
     const { html, finalUrl } = await fetchPage(lookupInput);
@@ -468,7 +625,19 @@ export async function lookupTumblerItem(args: {
     else if (/amazon\.com|walmart\.com|dickssportinggoods\.com/i.test(finalUrl)) sourceKind = "retailer";
 
     sources = buildSources(finalUrl, sourceKind, title);
-    scrapedDims = parseTripletDimensionsMm(lookupText);
+    titleSizeOz = parseCapacityOz(title ?? lookupInput);
+    selectedColorOrFinish = inferColorOrFinish([title, lookupInput].filter(Boolean).join(" "));
+    const availableSizeOz = extractAllCapacitiesOz(lookupText);
+    scrapedDims = parseTripletDimensionsMm({
+      text: lookupText,
+      resolvedUrl: finalUrl,
+      lookupInput,
+      title,
+      selectedSizeOz: titleSizeOz,
+      selectedColorOrFinish,
+      availableSizeOz,
+      lookupProductId: finalUrl,
+    });
     selectedImageUrl = await selectBestProductImage({
       imageUrls,
       lookupText,
@@ -510,6 +679,15 @@ export async function lookupTumblerItem(args: {
       imageUrls,
     });
 
+    const matchedProfileDiameterMm = matchedProfile.outsideDiameterMm
+      ?? matchedProfile.topDiameterMm
+      ?? matchedProfile.bottomDiameterMm
+      ?? null;
+    const variantLabel = buildVariantLabel({
+      selectedSizeOz: matchedProfile.capacityOz,
+      selectedColorOrFinish,
+      fallbackLabel: matchedProfile.label,
+    });
     return {
       lookupInput,
       resolvedUrl,
@@ -523,6 +701,27 @@ export async function lookupTumblerItem(args: {
       imageUrls,
       fitDebug: fallbackAsset.fitDebug,
       dimensions: {
+        lookupProductId: matchedProfile.id,
+        productUrl: resolvedUrl,
+        selectedVariantId: normalizeVariantId(variantLabel),
+        selectedVariantLabel: variantLabel,
+        selectedSizeOz: matchedProfile.capacityOz,
+        selectedColorOrFinish,
+        availableVariantLabels: [`${matchedProfile.capacityOz} oz`],
+        availableSizeOz: [matchedProfile.capacityOz],
+        dimensionSourceUrl: resolvedUrl,
+        dimensionSourceText: `Matched internal profile ${matchedProfile.label}`,
+        dimensionSourceSizeOz: matchedProfile.capacityOz,
+        titleSizeOz,
+        confidence: 1,
+        dimensionAuthority: matchedProfileDiameterMm ? "diameter-primary" : "unknown",
+        diameterMm: matchedProfileDiameterMm,
+        bodyDiameterMm: matchedProfileDiameterMm,
+        wrapDiameterMm: matchedProfileDiameterMm,
+        wrapWidthMm: computeWrapWidthFromDiameterMm(matchedProfileDiameterMm) ?? null,
+        fullProductHeightMm: matchedProfile.overallHeightMm,
+        bodyHeightMm: matchedProfile.usableHeightMm,
+        heightIncludesLidOrStraw: matchedProfile.overallHeightMm > matchedProfile.usableHeightMm,
         overallHeightMm: matchedProfile.overallHeightMm,
         outsideDiameterMm: matchedProfile.outsideDiameterMm ?? null,
         topDiameterMm: matchedProfile.topDiameterMm ?? null,
@@ -541,6 +740,35 @@ export async function lookupTumblerItem(args: {
   }
 
   const safeDims = scrapedDims ?? {
+    lookupProductId: resolvedUrl ?? lookupInput,
+    productUrl: resolvedUrl,
+    selectedVariantId: normalizeVariantId(buildVariantLabel({
+      selectedSizeOz: titleSizeOz,
+      selectedColorOrFinish,
+      fallbackLabel: title,
+    })),
+    selectedVariantLabel: buildVariantLabel({
+      selectedSizeOz: titleSizeOz,
+      selectedColorOrFinish,
+      fallbackLabel: title,
+    }),
+    selectedSizeOz: titleSizeOz,
+    selectedColorOrFinish,
+    availableVariantLabels: extractAllCapacitiesOz(lookupText).map((value) => `${value} oz`),
+    availableSizeOz: extractAllCapacitiesOz(lookupText),
+    dimensionSourceUrl: resolvedUrl,
+    dimensionSourceText: null,
+    dimensionSourceSizeOz: null,
+    titleSizeOz,
+    confidence: null,
+    dimensionAuthority: "unknown" as const,
+    diameterMm: null,
+    bodyDiameterMm: null,
+    wrapDiameterMm: null,
+    wrapWidthMm: null,
+    fullProductHeightMm: null,
+    bodyHeightMm: null,
+    heightIncludesLidOrStraw: null,
     overallHeightMm: null,
     outsideDiameterMm: null,
     topDiameterMm: null,
@@ -550,6 +778,19 @@ export async function lookupTumblerItem(args: {
 
   if (!scrapedDims) {
     notes.push("No exact profile match or parseable product dimensions found. Using safe tumbler fallback values.");
+  } else if (
+    scrapedDims.selectedSizeOz &&
+    scrapedDims.dimensionSourceSizeOz &&
+    scrapedDims.selectedSizeOz !== scrapedDims.dimensionSourceSizeOz
+  ) {
+    notes.push(
+      `Parsed page dimensions appear to belong to ${scrapedDims.dimensionSourceSizeOz} oz instead of the selected ${scrapedDims.selectedSizeOz} oz variant.`,
+    );
+  } else if (
+    (scrapedDims.availableSizeOz?.length ?? 0) > 1 &&
+    !scrapedDims.selectedSizeOz
+  ) {
+    notes.push("Product page exposes multiple size variants. Dimensions remain ambiguous until a specific variant is selected.");
   }
 
   const fallbackAsset = await pickFallbackGlbPath({
@@ -574,13 +815,7 @@ export async function lookupTumblerItem(args: {
     imageUrl: selectedImageUrl,
     imageUrls,
     fitDebug: fallbackAsset.fitDebug,
-    dimensions: {
-      overallHeightMm: safeDims.overallHeightMm,
-      outsideDiameterMm: safeDims.outsideDiameterMm,
-      topDiameterMm: safeDims.topDiameterMm,
-      bottomDiameterMm: safeDims.bottomDiameterMm,
-      usableHeightMm: safeDims.usableHeightMm,
-    },
+    dimensions: safeDims,
     mode: scrapedDims ? "parsed-page" : "safe-fallback",
     notes: [
       ...notes,

@@ -1,4 +1,5 @@
 import type { AxialSurfaceBand, PrintableSurfaceContract } from "./printableSurface";
+import type { TumblerItemLookupDimensions } from "./tumblerItemLookup";
 import type {
   LaserBedArtworkPlacement,
   TemplateEngravingPreviewState,
@@ -297,6 +298,7 @@ export interface ProductTemplate {
   appearanceReferenceLayers?: ProductAppearanceReferenceLayer[];
   artworkPlacements?: LaserBedArtworkPlacement[];
   engravingPreviewState?: TemplateEngravingPreviewState;
+  lookupDimensions?: TumblerItemLookupDimensions;
   /** Straight-on photo of the front face — base64 data URL */
   frontPhotoDataUrl?: string;
   /** Straight-on photo of the back face — base64 data URL */

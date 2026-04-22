@@ -5,6 +5,13 @@ export type TumblerItemLookupMode =
   | "parsed-page"
   | "safe-fallback";
 
+export type DimensionAuthority =
+  | "diameter-primary"
+  | "body-diameter-primary"
+  | "wrap-diameter-primary"
+  | "manual-override"
+  | "unknown";
+
 export type TumblerModelStatus =
   | "verified-product-model"
   | "generated-reviewed-model"
@@ -12,6 +19,27 @@ export type TumblerModelStatus =
   | "missing-model";
 
 export interface TumblerItemLookupDimensions {
+  lookupProductId?: string | null;
+  productUrl?: string | null;
+  selectedVariantId?: string | null;
+  selectedVariantLabel?: string | null;
+  selectedSizeOz?: number | null;
+  selectedColorOrFinish?: string | null;
+  availableVariantLabels?: string[];
+  availableSizeOz?: number[];
+  dimensionSourceUrl?: string | null;
+  dimensionSourceText?: string | null;
+  dimensionSourceSizeOz?: number | null;
+  titleSizeOz?: number | null;
+  confidence?: number | null;
+  dimensionAuthority: DimensionAuthority;
+  diameterMm?: number | null;
+  bodyDiameterMm?: number | null;
+  wrapDiameterMm?: number | null;
+  wrapWidthMm?: number | null;
+  fullProductHeightMm?: number | null;
+  bodyHeightMm?: number | null;
+  heightIncludesLidOrStraw?: boolean | null;
   overallHeightMm: number | null;
   outsideDiameterMm: number | null;
   topDiameterMm: number | null;
