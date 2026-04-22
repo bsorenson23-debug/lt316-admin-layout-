@@ -32,7 +32,10 @@ import type {
   EditableBodyOutline,
   ProductTemplate,
 } from "@/types/productTemplate";
-import type { PreviewModelMode } from "@/lib/tumblerPreviewModelState";
+import {
+  deriveTumblerPreviewModelState,
+  type PreviewModelMode,
+} from "@/lib/tumblerPreviewModelState";
 import {
   getBodyReferencePreviewModeHint,
   getBodyReferencePreviewModeLabel,
@@ -779,25 +782,101 @@ export default function ModelViewer({
   const sourceModelUrl = modelUrl ?? glbPath ?? null;
   const sourceName = getModelSourceName(file, sourceModelUrl);
   const ext = sourceName.split(".").pop()?.toLowerCase() ?? "";
-  const previewModeLabel = previewModelMode
+  const canonicalPreviewBounds = useMemo(() => {
+    const widthMm = canonicalDimensionCalibration?.wrapDiameterMm ?? tumblerDims?.diameterMm ?? null;
+    const heightMm = canonicalDimensionCalibration?.totalHeightMm ?? tumblerDims?.overallHeightMm ?? null;
+    const depthMm = canonicalDimensionCalibration?.wrapDiameterMm ?? tumblerDims?.diameterMm ?? null;
+    if (
+      typeof widthMm !== "number" ||
+      !Number.isFinite(widthMm) ||
+      widthMm <= 0 ||
+      typeof heightMm !== "number" ||
+      !Number.isFinite(heightMm) ||
+      heightMm <= 0 ||
+      typeof depthMm !== "number" ||
+      !Number.isFinite(depthMm) ||
+      depthMm <= 0
+    ) {
+      return null;
+    }
+    return {
+      widthMm: round2(widthMm),
+      heightMm: round2(heightMm),
+      depthMm: round2(depthMm),
+    };
+  }, [canonicalDimensionCalibration?.totalHeightMm, canonicalDimensionCalibration?.wrapDiameterMm, tumblerDims?.diameterMm, tumblerDims?.overallHeightMm]);
+  const sourcePreviewBounds = useMemo(() => {
+    if (loadedSceneInspectionState.status !== "complete") return null;
+    const fullSceneBounds = loadedSceneInspectionState.sceneInspection.bounds.fullScene;
+    if (!fullSceneBounds) return null;
+    return {
+      widthMm: fullSceneBounds.width,
+      heightMm: fullSceneBounds.height,
+      depthMm: fullSceneBounds.depth,
+    };
+  }, [loadedSceneInspectionState]);
+  const previewModelState = useMemo(() => (
+    previewModelMode && reviewProductType === "tumbler"
+      ? deriveTumblerPreviewModelState({
+          requestedMode: previewModelMode,
+          hasCanonicalAlignmentModel: Boolean(tumblerDims),
+          hasSourceModel: Boolean(sourceModelUrl?.trim()),
+          sourceModelPath: sourceModelUrl,
+          sourceModelStatus,
+          sourceBounds: sourcePreviewBounds,
+          canonicalBounds: canonicalPreviewBounds,
+        })
+      : null
+  ), [
+    canonicalPreviewBounds,
+    previewModelMode,
+    reviewProductType,
+    sourceModelStatus,
+    sourceModelUrl,
+    sourcePreviewBounds,
+    tumblerDims,
+  ]);
+  const effectivePreviewMode = previewModelState?.effectiveMode ?? previewModelMode ?? null;
+  const previewModeLabel = effectivePreviewMode
     ? getBodyReferencePreviewModeLabel({
         productType: reviewProductType,
-        mode: previewModelMode,
+        mode: effectivePreviewMode,
         glbStatus: sourceModelStatus,
       })
     : null;
-  const previewModeHint = previewModelMode
+  const previewModeHint = effectivePreviewMode
     ? getBodyReferencePreviewModeHint({
         productType: reviewProductType,
-        mode: previewModelMode,
+        mode: effectivePreviewMode,
+      })
+    : null;
+  const requestedPreviewModeLabel = (
+    previewModelState &&
+    previewModelState.requestedMode !== previewModelState.effectiveMode
+  )
+    ? getBodyReferencePreviewModeLabel({
+        productType: reviewProductType,
+        mode: previewModelState.requestedMode,
+        glbStatus: sourceModelStatus,
       })
     : null;
   const statusLabel = sourceModelLabel ?? getDrinkwareGlbStatusLabel(sourceModelStatus);
-  const qaReservedNote = previewModelMode === "body-cutout-qa" && !isBodyCutoutQaPreviewAvailable(sourceModelStatus)
+  const previewModeTransitionNote = (
+    requestedPreviewModeLabel &&
+    previewModeLabel
+  )
+    ? `Requested ${requestedPreviewModeLabel}. Showing ${previewModeLabel} instead.`
+    : null;
+  const previewModeReasonNote = previewModelState?.message ?? null;
+  const qaReservedNote = (
+    !previewModelState &&
+    previewModelMode === "body-cutout-qa" &&
+    !isBodyCutoutQaPreviewAvailable(sourceModelStatus)
+  )
     ? "BODY CUTOUT QA slot reserved until a reviewed body-only GLB exists."
     : null;
   const scaleTargetHeightMm =
-    previewModelMode === "body-cutout-qa"
+    effectivePreviewMode === "body-cutout-qa"
       ? (
           tumblerDims?.bodyHeightMm ??
           canonicalDimensionCalibration?.bodyHeightMm ??
@@ -805,7 +884,14 @@ export default function ModelViewer({
           null
         )
       : null;
-  const showScaffoldOverlay = Boolean(previewModeLabel || statusLabel || qaReservedNote);
+  const showScaffoldOverlay = Boolean(
+    previewModeLabel ||
+    statusLabel ||
+    previewModeHint ||
+    previewModeTransitionNote ||
+    previewModeReasonNote ||
+    qaReservedNote
+  );
   const generatedModelAuditRequestPlan = useMemo(
     () => resolveGeneratedModelAuditRequestPlan({
       modelUrl: sourceModelUrl,
@@ -872,7 +958,7 @@ export default function ModelViewer({
     let cancelled = false;
     const shouldTrackRuntimeTruth = Boolean(
       showModelDebug ||
-      previewModelMode === "body-cutout-qa" ||
+      effectivePreviewMode === "body-cutout-qa" ||
       sourceModelStatus === "generated-reviewed-model" ||
       BODY_CONTRACT_INSPECTOR_ENABLED,
     );
@@ -913,7 +999,7 @@ export default function ModelViewer({
     return () => {
       cancelled = true;
     };
-  }, [file, previewModelMode, showModelDebug, sourceModelStatus, url]);
+  }, [effectivePreviewMode, file, showModelDebug, sourceModelStatus, url]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1151,7 +1237,7 @@ export default function ModelViewer({
 
     const baseContract: BodyGeometryContract = {
       ...createEmptyBodyGeometryContract(),
-      mode: previewModelMode ?? "unknown",
+      mode: effectivePreviewMode ?? "unknown",
       source: {
         type: resolveViewerSourceType({
           sourceModelStatus,
@@ -1213,7 +1299,7 @@ export default function ModelViewer({
       auditContract: viewerRuntimeAuditContract,
       loadedInspectionContract: baseContract,
       metadataSeed: bodyGeometryContractSeed,
-      currentMode: previewModelMode ?? "unknown",
+      currentMode: effectivePreviewMode ?? "unknown",
       currentSourceHash: viewerRuntimeSourceHash,
       loadedGlbHash: viewerRuntimeGlbHash,
       runtimeInspection: {
@@ -1242,7 +1328,7 @@ export default function ModelViewer({
     loadedAuditArtifactState.status,
     loadedSceneInspectionState,
     modelUrl,
-    previewModelMode,
+    effectivePreviewMode,
     runtimeDebugSceneInspection,
     sourceModelStatus,
     sourceModelUrl,
@@ -1255,10 +1341,10 @@ export default function ModelViewer({
 
   const bodyCutoutQaGuardState = useMemo(
     () => buildBodyCutoutQaGuardState({
-      mode: previewModelMode ?? null,
+      mode: effectivePreviewMode,
       contract: viewerRuntimeBodyGeometryContract,
     }),
-    [previewModelMode, viewerRuntimeBodyGeometryContract],
+    [effectivePreviewMode, viewerRuntimeBodyGeometryContract],
   );
 
   useEffect(() => {
@@ -1273,7 +1359,7 @@ export default function ModelViewer({
 
   const showBodyGeometryStatusBadge = Boolean(
     viewerRuntimeBodyGeometryContract ||
-    previewModelMode ||
+    effectivePreviewMode ||
     sourceModelStatus ||
     approvedBodyOutline,
   );
@@ -1319,10 +1405,19 @@ export default function ModelViewer({
             color: "var(--text-primary)",
             pointerEvents: "none",
           }}
+          data-requested-preview-mode={previewModelMode ?? "unknown"}
+          data-effective-preview-mode={effectivePreviewMode ?? "unknown"}
+          data-preview-status={previewModelState?.glbPreviewStatus ?? "not-requested"}
+          data-preview-reason={previewModelState?.reason ?? "not-requested"}
         >
           {previewModeLabel && (
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
               {previewModeLabel}
+            </div>
+          )}
+          {previewModeTransitionNote && (
+            <div style={{ fontSize: 10, lineHeight: 1.4, color: "var(--warning)" }}>
+              {previewModeTransitionNote}
             </div>
           )}
           {statusLabel && (
@@ -1333,6 +1428,21 @@ export default function ModelViewer({
           {previewModeHint && (
             <div style={{ fontSize: 10, lineHeight: 1.4, color: "var(--text-dim)" }}>
               {previewModeHint}
+            </div>
+          )}
+          {previewModeReasonNote && (
+            <div
+              style={{
+                fontSize: 10,
+                lineHeight: 1.4,
+                color:
+                  previewModelState?.glbPreviewStatus === "degraded" ||
+                  previewModelState?.glbPreviewStatus === "unavailable"
+                    ? "var(--warning)"
+                    : "var(--text-dim)",
+              }}
+            >
+              {previewModeReasonNote}
             </div>
           )}
           {qaReservedNote && (
@@ -1364,7 +1474,7 @@ export default function ModelViewer({
           {showBodyGeometryStatusBadge && (
             <div style={{ pointerEvents: "auto" }}>
               <BodyGeometryStatusBadge
-                mode={previewModelMode ?? null}
+                mode={effectivePreviewMode}
                 contract={viewerRuntimeBodyGeometryContract}
               />
             </div>

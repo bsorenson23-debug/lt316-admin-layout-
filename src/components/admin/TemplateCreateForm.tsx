@@ -12,7 +12,10 @@ import type {
 } from "@/types/productTemplate";
 import type { AutoDetectResult } from "@/lib/autoDetect";
 import type { TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
-import type { PreviewModelMode } from "@/lib/tumblerPreviewModelState";
+import {
+  deriveTumblerPreviewModelState,
+  type PreviewModelMode,
+} from "@/lib/tumblerPreviewModelState";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
 import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
@@ -639,6 +642,74 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     }),
     [diameterMm, overallHeightMm, printHeightMm, productType],
   );
+  const previewCanonicalBounds = React.useMemo(() => {
+    if (!previewTumblerDims) return null;
+    const widthMm = previewTumblerDims.diameterMm;
+    const heightMm = previewTumblerDims.overallHeightMm;
+    const depthMm = previewTumblerDims.diameterMm;
+    if (
+      !Number.isFinite(widthMm) ||
+      widthMm <= 0 ||
+      !Number.isFinite(heightMm) ||
+      heightMm <= 0 ||
+      !Number.isFinite(depthMm) ||
+      depthMm <= 0
+    ) {
+      return null;
+    }
+    return {
+      widthMm: round2(widthMm),
+      heightMm: round2(heightMm),
+      depthMm: round2(depthMm),
+    };
+  }, [previewTumblerDims]);
+  const previewModelState = React.useMemo(() => (
+    productType === "tumbler"
+      ? deriveTumblerPreviewModelState({
+          requestedMode: previewModelMode,
+          hasCanonicalAlignmentModel: Boolean(previewTumblerDims),
+          hasSourceModel: Boolean(glbPath.trim()),
+          sourceModelPath: glbPath.trim() || null,
+          sourceModelStatus: activeDrinkwareGlbStatus,
+          sourceBounds: null,
+          canonicalBounds: previewCanonicalBounds,
+        })
+      : null
+  ), [
+    activeDrinkwareGlbStatus,
+    glbPath,
+    previewCanonicalBounds,
+    previewModelMode,
+    previewTumblerDims,
+    productType,
+  ]);
+  const effectivePreviewModelMode = previewModelState?.effectiveMode ?? previewModelMode;
+  const requestedPreviewModeLabel = React.useMemo(
+    () => getBodyReferencePreviewModeLabel({
+      productType,
+      mode: previewModelMode,
+      glbStatus: activeDrinkwareGlbStatus,
+    }),
+    [activeDrinkwareGlbStatus, previewModelMode, productType],
+  );
+  const effectivePreviewModeLabel = React.useMemo(
+    () => getBodyReferencePreviewModeLabel({
+      productType,
+      mode: effectivePreviewModelMode,
+      glbStatus: activeDrinkwareGlbStatus,
+    }),
+    [activeDrinkwareGlbStatus, effectivePreviewModelMode, productType],
+  );
+  const effectivePreviewModeHint = React.useMemo(
+    () => getBodyReferencePreviewModeHint({
+      productType,
+      mode: effectivePreviewModelMode,
+    }),
+    [effectivePreviewModelMode, productType],
+  );
+  const previewModeDowngradeActive =
+    previewModelState != null &&
+    previewModelState.requestedMode !== previewModelState.effectiveMode;
 
   const workflowInput = React.useMemo(
     () => ({
@@ -1852,21 +1923,21 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               )}
             </div>
 
-            <div className={styles.previewScaffold} data-body-reference-preview-scaffold="present">
+            <div
+              className={styles.previewScaffold}
+              data-body-reference-preview-scaffold="present"
+              data-requested-preview-mode={previewModelMode}
+              data-effective-preview-mode={effectivePreviewModelMode}
+              data-preview-status={previewModelState?.glbPreviewStatus ?? "not-requested"}
+              data-preview-reason={previewModelState?.reason ?? "not-requested"}
+            >
               <div className={styles.previewScaffoldHeader}>
                 <div>
                   <div className={styles.previewScaffoldTitle}>
-                    {getBodyReferencePreviewModeLabel({
-                      productType,
-                      mode: previewModelMode,
-                      glbStatus: activeDrinkwareGlbStatus,
-                    })}
+                    {effectivePreviewModeLabel}
                   </div>
                   <div className={styles.previewScaffoldHint}>
-                    {getBodyReferencePreviewModeHint({
-                      productType,
-                      mode: previewModelMode,
-                    })}
+                    {effectivePreviewModeHint}
                   </div>
                 </div>
                 {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
@@ -1875,6 +1946,18 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                   </span>
                 )}
               </div>
+
+              {previewModeDowngradeActive && (
+                <div className={styles.reviewScaffoldInlineMeta}>
+                  <span>Requested: {requestedPreviewModeLabel}</span>
+                  <span>Showing: {effectivePreviewModeLabel}</span>
+                </div>
+              )}
+              {previewModelState?.message && (
+                <div className={styles.previewPlaceholderNote}>
+                  {previewModelState.message}
+                </div>
+              )}
 
               <div className={styles.previewModeRow}>
                 <button
@@ -1938,7 +2021,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                       tumblerMapping={tumblerMapping}
                       bodyTintColor={bodyColorHex}
                       rimTintColor={rimColorHex}
-                      showTemplateSurfaceZones={previewModelMode === "alignment-model"}
+                      showTemplateSurfaceZones={effectivePreviewModelMode === "alignment-model"}
                       previewModelMode={previewModelMode}
                       sourceModelStatus={activeDrinkwareGlbStatus}
                       sourceModelLabel={activeDrinkwareGlbSourceLabel}

@@ -73,6 +73,38 @@ test("non-QA badge reports full model preview as not valid for body QA", () => {
   assert.equal(state.validForBodyQa, false);
 });
 
+test("alignment preview badge stays non-QA even when the loaded geometry is only a degraded fallback", () => {
+  const contract = updateContractValidation({
+    ...createEmptyBodyGeometryContract(),
+    mode: "alignment-model",
+    source: {
+      type: "generated",
+    },
+    meshes: {
+      ...createEmptyBodyGeometryContract().meshes,
+      names: ["body_mesh", "rim_mesh"],
+      bodyMeshNames: ["body_mesh"],
+      accessoryMeshNames: ["rim_mesh"],
+    },
+    validation: {
+      status: "unknown",
+      errors: [],
+      warnings: ["Full model preview degraded to canonical alignment fallback."],
+    },
+  });
+
+  const state = buildBodyGeometryStatusBadgeState({
+    mode: "alignment-model",
+    contract,
+  });
+
+  assert.equal(state.title, "ALIGNMENT PREVIEW");
+  assert.equal(state.status, "warn");
+  assert.equal(state.geometryLabel, "Body + extras");
+  assert.equal(state.qaLabel, "Not valid for body contour QA");
+  assert.equal(state.validForBodyQa, false);
+});
+
 test("unknown QA state reports unknown freshness and QA status", () => {
   const state = buildBodyGeometryStatusBadgeState({
     mode: "body-cutout-qa",
