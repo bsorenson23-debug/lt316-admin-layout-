@@ -2,6 +2,7 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
+import type { PlacedItem } from "@/types/admin";
 import type {
   BodyReferenceQAContract,
   CanonicalBodyProfile,
@@ -74,6 +75,10 @@ import {
   getWrapExportMappingStatusLabel,
   getWrapExportPreviewStatusLabel,
 } from "@/lib/wrapExportPreviewState";
+import {
+  buildEngravingOverlayPreviewState,
+  ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN,
+} from "@/lib/engravingOverlayPreview";
 import { BodyReferenceFineTuneEditor } from "./BodyReferenceFineTuneEditor";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -100,6 +105,96 @@ function round2(n: number): number {
 
 function cloneSerializable<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+const ENGRAVING_OVERLAY_TEXTURE_PX_PER_MM = 4;
+const ENGRAVING_OVERLAY_TINT = "#d7dde6";
+
+function buildFallbackOverlayBounds(widthMm: number, heightMm: number) {
+  return {
+    x: 0,
+    y: 0,
+    width: Math.max(1, round2(widthMm)),
+    height: Math.max(1, round2(heightMm)),
+  };
+}
+
+function buildOverlayPreviewPlacedItem(args: {
+  assetId: string;
+  name: string;
+  xMm: number;
+  yMm: number;
+  widthMm: number;
+  heightMm: number;
+  rotationDeg: number;
+  visible: boolean;
+  placement: LaserBedArtworkPlacement;
+}): PlacedItem | null {
+  const snapshot = args.placement.assetSnapshot;
+  const svgText = snapshot?.svgText?.trim();
+  const sourceSvgText = snapshot?.sourceSvgText?.trim() ?? svgText;
+  if (!svgText || !sourceSvgText) return null;
+
+  const documentBounds = snapshot?.documentBounds ?? buildFallbackOverlayBounds(args.widthMm, args.heightMm);
+  const artworkBounds = snapshot?.artworkBounds ?? documentBounds;
+
+  return {
+    id: args.placement.id,
+    assetId: args.assetId,
+    name: args.name,
+    svgText,
+    sourceSvgText,
+    documentBounds,
+    artworkBounds,
+    x: args.xMm,
+    y: args.yMm,
+    width: args.widthMm,
+    height: args.heightMm,
+    rotation: args.rotationDeg,
+    defaults: {
+      x: args.xMm,
+      y: args.yMm,
+      width: args.widthMm,
+      height: args.heightMm,
+      rotation: args.rotationDeg,
+    },
+    visible: args.visible,
+  };
+}
+
+async function rasterizeOverlayTexture(item: PlacedItem, tintColor: string): Promise<HTMLCanvasElement | null> {
+  const svgText = item.svgText.trim();
+  if (!svgText) return null;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(item.width * ENGRAVING_OVERLAY_TEXTURE_PX_PER_MM));
+  canvas.height = Math.max(1, Math.ceil(item.height * ENGRAVING_OVERLAY_TEXTURE_PX_PER_MM));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  const blob = new Blob([svgText], { type: "image/svg+xml" });
+  const blobUrl = URL.createObjectURL(blob);
+
+  await new Promise<void>((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = "source-in";
+      ctx.fillStyle = tintColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = "source-over";
+      URL.revokeObjectURL(blobUrl);
+      resolve();
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(blobUrl);
+      resolve();
+    };
+    img.src = blobUrl;
+  });
+
+  return canvas;
 }
 
 function formatBoundsLabel(bounds: ReturnType<typeof resolveOutlineBounds>): string {
@@ -353,6 +448,7 @@ export function TemplateCreateForm({
   const [glbFileName, setGlbFileName] = React.useState<string | null>(null);
   const [glbUploading, setGlbUploading] = React.useState(false);
   const [glbUploadError, setGlbUploadError] = React.useState<string | null>(null);
+  const [overlayPreviewTextures, setOverlayPreviewTextures] = React.useState<Map<string, HTMLCanvasElement>>(new Map());
   const [checkingGlbPath, setCheckingGlbPath] = React.useState(false);
   const [productImageFile, setProductImageFile] = React.useState<File | null>(null);
   const [productImageLabel, setProductImageLabel] = React.useState<string | null>(
@@ -845,6 +941,71 @@ export function TemplateCreateForm({
       templateArtworkPlacementMapping,
     ],
   );
+  const engravingOverlayPreviewState = React.useMemo(
+    () => buildEngravingOverlayPreviewState({
+      placements: persistedArtworkPlacements,
+      mapping: templateArtworkPlacementMapping,
+      savedSignature: savedArtworkPlacementSignature ?? null,
+      previewMode: effectivePreviewModelMode,
+    }),
+    [
+      effectivePreviewModelMode,
+      persistedArtworkPlacements,
+      savedArtworkPlacementSignature,
+      templateArtworkPlacementMapping,
+    ],
+  );
+  const overlayPreviewPlacedItems = React.useMemo<PlacedItem[]>(
+    () => {
+      const placementsById = new Map(persistedArtworkPlacements.map((placement) => [placement.id, placement]));
+      return engravingOverlayPreviewState.items.flatMap((item) => {
+        if (!item.visible) return [];
+        const placement = placementsById.get(item.id);
+        if (!placement) return [];
+        const restored = buildOverlayPreviewPlacedItem({
+          assetId: item.assetId,
+          name: item.name,
+          xMm: item.xMm,
+          yMm: item.yMm,
+          widthMm: item.widthMm,
+          heightMm: item.heightMm,
+          rotationDeg: item.rotationDeg,
+          visible: item.visible,
+          placement,
+        });
+        return restored ? [restored] : [];
+      });
+    },
+    [engravingOverlayPreviewState.items, persistedArtworkPlacements],
+  );
+  const overlayPreviewTextureKey = React.useMemo(
+    () => overlayPreviewPlacedItems
+      .map((item) => `${item.id}:${item.x}:${item.y}:${item.width}:${item.height}:${item.rotation}:${item.svgText.length}`)
+      .join("|"),
+    [overlayPreviewPlacedItems],
+  );
+
+  React.useEffect(() => {
+    if (!engravingOverlayPreviewState.enabled || overlayPreviewPlacedItems.length === 0) {
+      setOverlayPreviewTextures(new Map());
+      return;
+    }
+
+    let cancelled = false;
+    Promise.all(
+      overlayPreviewPlacedItems.map(async (item) => {
+        const texture = await rasterizeOverlayTexture(item, ENGRAVING_OVERLAY_TINT);
+        return texture ? [item.id, texture] as const : null;
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      setOverlayPreviewTextures(new Map(entries.filter((entry): entry is readonly [string, HTMLCanvasElement] => Boolean(entry))));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [engravingOverlayPreviewState.enabled, overlayPreviewPlacedItems, overlayPreviewTextureKey]);
   const hasSavedArtworkPlacements = persistedArtworkPlacements.length > 0;
   const wrapExportSummaryVisible =
     previewModelMode === "wrap-export" ||
@@ -2199,12 +2360,19 @@ export function TemplateCreateForm({
               )}
 
               {wrapExportSummaryVisible && (
-                <div className={styles.cutoutFitSummary} data-testid="wrap-export-summary">
+                <div
+                  className={styles.cutoutFitSummary}
+                  data-testid="wrap-export-summary"
+                  data-engraving-overlay-enabled={engravingOverlayPreviewState.enabled ? "yes" : "no"}
+                  data-engraving-overlay-count={engravingOverlayPreviewState.visibleCount}
+                  data-engraving-overlay-first-angle={engravingOverlayPreviewState.items[0]?.angleDeg ?? ""}
+                  data-engraving-overlay-first-body-y={engravingOverlayPreviewState.items[0]?.bodyYMm ?? ""}
+                >
                   <div className={styles.cutoutFitSummaryHeader}>
                     <div>
                       <div className={styles.cutoutFitSummaryTitle}>Wrap / Export Summary</div>
                       <div className={styles.cutoutFitSummaryHint}>
-                        WRAP / EXPORT shows printable-surface readiness. It is not BODY CUTOUT QA and does not place artwork on the body yet.
+                        WRAP / EXPORT shows printable-surface readiness and can preview saved artwork on the 3D body when mapping is fresh. It is not BODY CUTOUT QA.
                       </div>
                     </div>
                     <span
@@ -2290,10 +2458,28 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{persistedArtworkPlacements.length}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Artwork overlay items</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {engravingOverlayPreviewState.visibleCount} / {engravingOverlayPreviewState.totalCount}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Overlay enabled</span>
+                      <span className={styles.cutoutFitMetricValue}>{engravingOverlayPreviewState.enabled ? "yes" : "no"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Overlay material</span>
+                      <span className={styles.cutoutFitMetricValue}>{ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Outside printable warnings</span>
+                      <span className={styles.cutoutFitMetricValue}>{engravingOverlayPreviewState.outsidePrintableAreaCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Saved mapping freshness</span>
                       <span className={styles.cutoutFitMetricValue}>
                         {hasSavedArtworkPlacements
-                          ? persistedTemplateEngravingPreviewState.freshness
+                          ? engravingOverlayPreviewState.freshness
                           : "unknown"}
                       </span>
                     </div>
@@ -2343,6 +2529,9 @@ export function TemplateCreateForm({
                   <div className={styles.reviewScaffoldNote}>
                     WRAP / EXPORT uses current body geometry freshness and printable-surface metadata when available. It never replaces BODY CUTOUT QA.
                   </div>
+                  <div className={styles.reviewScaffoldNote}>
+                    Saved artwork overlay uses preview-only millimeter mapping with {ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN}. It never changes GLB geometry truth.
+                  </div>
                   <div
                     className={styles.reviewScaffoldNote}
                     data-testid="appearance-reference-summary"
@@ -2353,6 +2542,11 @@ export function TemplateCreateForm({
                   {!hasSavedArtworkPlacements && (
                     <div className={styles.previewPlaceholderNote}>
                       No artwork placements saved yet. Template save remains valid; WRAP / EXPORT will report placement readiness once artwork is stored in millimeter space.
+                    </div>
+                  )}
+                  {hasSavedArtworkPlacements && engravingOverlayPreviewState.disabledReason && (
+                    <div className={styles.previewPlaceholderNote}>
+                      {engravingOverlayPreviewState.disabledReason}
                     </div>
                   )}
                   {appearanceReferenceSummary.totalLayers === 0 && (
@@ -2401,6 +2595,23 @@ export function TemplateCreateForm({
                       ))}
                     </div>
                   )}
+                  {hasSavedArtworkPlacements && (
+                    engravingOverlayPreviewState.errors.length > 0 ||
+                    engravingOverlayPreviewState.warnings.length > 0
+                  ) && (
+                    <div className={styles.cutoutFitWarningList}>
+                      {engravingOverlayPreviewState.errors.map((error) => (
+                        <div key={`overlay-error-${error}`} className={styles.cutoutFitWarningError}>
+                          {error}
+                        </div>
+                      ))}
+                      {engravingOverlayPreviewState.warnings.map((warning) => (
+                        <div key={`overlay-warning-${warning}`} className={styles.cutoutFitWarning}>
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2410,6 +2621,8 @@ export function TemplateCreateForm({
                     <ModelViewer
                       modelUrl={glbPath}
                       glbPath={glbPath}
+                      placedItems={engravingOverlayPreviewState.enabled ? overlayPreviewPlacedItems : undefined}
+                      itemTextures={engravingOverlayPreviewState.enabled ? overlayPreviewTextures : undefined}
                       bedWidthMm={templateWidthMm > 0 ? templateWidthMm : undefined}
                       bedHeightMm={printHeightMm > 0 ? printHeightMm : undefined}
                       tumblerDims={previewTumblerDims}

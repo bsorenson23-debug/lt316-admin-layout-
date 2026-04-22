@@ -538,7 +538,12 @@ export function YetiRambler40oz({
       />
 
       {overlayUniforms && (
-        <mesh geometry={rimCenteredGeo} renderOrder={2}>
+        <mesh
+          geometry={rimCenteredGeo}
+          renderOrder={2}
+          name="engraving_overlay_preview"
+          userData={{ bodyContractIgnore: true, engravingOverlayPreview: true }}
+        >
           <shaderMaterial
             transparent
             depthWrite={false}

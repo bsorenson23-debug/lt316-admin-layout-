@@ -8,6 +8,12 @@ import type {
 } from "../types/productTemplate.ts";
 import { hashJsonSha256Node } from "./hashSha256.node.ts";
 import {
+  buildEngravingOverlayPreviewState,
+} from "./engravingOverlayPreview.ts";
+import {
+  buildLaserBedSurfaceMappingSignature,
+} from "./laserBedSurfaceMapping.ts";
+import {
   buildBodyGeometrySourceHashPayload,
   createEmptyBodyGeometryContract,
   detectAccessoryMeshes,
@@ -1817,6 +1823,99 @@ test("BODY CUTOUT QA validation ignores reference-only appearance layers attache
   };
 
   const contract = updateContractValidation(contractWithAppearance);
+
+  assert.equal(contract.validation.status, "pass");
+  assert.equal(isContractPassing(contract), true);
+});
+
+test("BODY CUTOUT QA validation ignores preview-only engraving overlay metadata attached out of band", () => {
+  const mapping = {
+    mode: "cylindrical-v1" as const,
+    wrapDiameterMm: 86.36,
+    wrapWidthMm: 271.31,
+    printableTopMm: 15.54,
+    printableBottomMm: 157.17,
+    printableHeightMm: 141.63,
+    expectedBodyWidthMm: 86.42,
+    expectedBodyHeightMm: 141.63,
+    bodyBounds: {
+      width: 86.42,
+      height: 141.63,
+      depth: 86.42,
+    },
+    scaleSource: "mesh-bounds",
+    sourceHash: "json:source",
+    glbSourceHash: "json:source",
+  };
+  const overlayPreview = buildEngravingOverlayPreviewState({
+    placements: [{
+      id: "art-1",
+      assetId: "asset-1",
+      name: "Preview artwork",
+      xMm: 22.5,
+      yMm: 18.25,
+      widthMm: 42,
+      heightMm: 38.5,
+      rotationDeg: 15,
+      visible: true,
+      mappingSignature: buildLaserBedSurfaceMappingSignature(mapping),
+      assetSnapshot: {
+        svgText: "<svg viewBox=\"0 0 100 100\"><rect width=\"100\" height=\"100\" fill=\"#000\"/></svg>",
+        sourceSvgText: "<svg viewBox=\"0 0 100 100\"><rect width=\"100\" height=\"100\" fill=\"#000\"/></svg>",
+        documentBounds: { x: 0, y: 0, width: 100, height: 100 },
+        artworkBounds: { x: 0, y: 0, width: 100, height: 100 },
+      },
+    }],
+    mapping,
+    savedSignature: buildLaserBedSurfaceMappingSignature(mapping),
+    previewMode: "wrap-export",
+  });
+  const contractWithOverlay = {
+    ...createEmptyBodyGeometryContract(),
+    mode: "body-cutout-qa",
+    source: {
+      type: "approved-svg" as const,
+      hash: "json:source",
+      detectedBodyOnly: true,
+    },
+    glb: {
+      path: "/api/admin/models/generated/body-only.glb",
+      hash: "json:glb",
+      sourceHash: "json:source",
+      freshRelativeToSource: true,
+    },
+    meshes: {
+      names: ["body_mesh"],
+      bodyMeshNames: [],
+      accessoryMeshNames: [],
+      fallbackMeshNames: [],
+      fallbackDetected: false,
+      unexpectedMeshes: [],
+    },
+    dimensionsMm: {
+      bodyBounds: {
+        width: 86.42,
+        height: 141.63,
+        depth: 86.42,
+      },
+      bodyBoundsUnits: "mm" as const,
+      expectedBodyWidthMm: 86.42,
+      expectedBodyHeightMm: 141.63,
+      wrapDiameterMm: 86.36,
+      wrapWidthMm: 271.31,
+      frontVisibleWidthMm: 86.42,
+    },
+    validation: {
+      status: "unknown" as const,
+      errors: [],
+      warnings: [],
+    },
+    engravingOverlayPreview: overlayPreview,
+  } as BodyGeometryContract & {
+    engravingOverlayPreview: ReturnType<typeof buildEngravingOverlayPreviewState>;
+  };
+
+  const contract = updateContractValidation(contractWithOverlay);
 
   assert.equal(contract.validation.status, "pass");
   assert.equal(isContractPassing(contract), true);

@@ -92,6 +92,7 @@ export function inspectLoadedGltfScene(
   scene.updateMatrixWorld(true);
   scene.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
+    if (child.userData?.bodyContractIgnore === true) return;
     meshes.push(child);
 
     if (child.name) {
