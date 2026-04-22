@@ -12,7 +12,11 @@ import type {
   TumblerMapping,
 } from "@/types/productTemplate";
 import type { AutoDetectResult } from "@/lib/autoDetect";
-import type { TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
+import type {
+  DimensionAuthority,
+  TumblerItemLookupDimensions,
+  TumblerItemLookupResponse,
+} from "@/types/tumblerItemLookup";
 import {
   deriveTumblerPreviewModelState,
   type PreviewModelMode,
@@ -89,6 +93,7 @@ import {
 import {
   summarizeBodyReferenceV2GenerationReadiness,
 } from "@/lib/bodyReferenceV2GenerationSource";
+import { summarizeProductDimensionAuthority } from "@/lib/productDimensionAuthority";
 import { BodyReferenceFineTuneEditor } from "./BodyReferenceFineTuneEditor";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -368,6 +373,10 @@ function getLookupModeLabel(mode: TumblerItemLookupResponse["mode"]): string {
 
 function getLookupSourceLabel(result: TumblerItemLookupResponse): string | null {
   const sourceUrl = result.resolvedUrl ?? result.sources[0]?.url ?? null;
+  return getLookupSourceLabelFromUrl(sourceUrl);
+}
+
+function getLookupSourceLabelFromUrl(sourceUrl: string | null | undefined): string | null {
   if (!sourceUrl) return null;
   try {
     const host = new URL(sourceUrl).hostname.replace(/^www\./i, "");
@@ -387,6 +396,27 @@ function formatLookupMeasurement(value: number | null | undefined): string | nul
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? `${round2(value)} mm`
     : null;
+}
+
+function formatLookupSize(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? `${round2(value)} oz`
+    : "n/a";
+}
+
+function formatLookupAuthority(value: DimensionAuthority | null | undefined): string {
+  switch (value) {
+    case "diameter-primary":
+      return "Diameter primary";
+    case "body-diameter-primary":
+      return "Body diameter primary";
+    case "wrap-diameter-primary":
+      return "Wrap diameter primary";
+    case "manual-override":
+      return "Manual override";
+    default:
+      return "Unknown";
+  }
 }
 
 function resolveDefaultPreviewModelMode(args: {
@@ -473,6 +503,9 @@ export function TemplateCreateForm({
   const [lookupInput, setLookupInput] = React.useState("");
   const [lookingUpItem, setLookingUpItem] = React.useState(false);
   const [lookupResult, setLookupResult] = React.useState<TumblerItemLookupResponse | null>(null);
+  const [lookupDimensionsSnapshot, setLookupDimensionsSnapshot] = React.useState<TumblerItemLookupDimensions | null>(
+    editingTemplate?.lookupDimensions ?? null,
+  );
   const [lookupError, setLookupError] = React.useState<string | null>(null);
   const [lookupDebugImageUrl, setLookupDebugImageUrl] = React.useState("");
 
@@ -915,12 +948,35 @@ export function TemplateCreateForm({
     () => summarizeAppearanceReferenceLayers(templateAppearanceReferenceLayers),
     [templateAppearanceReferenceLayers],
   );
+  const activeLookupDimensions = React.useMemo(
+    () => lookupResult?.dimensions ?? lookupDimensionsSnapshot ?? null,
+    [lookupDimensionsSnapshot, lookupResult?.dimensions],
+  );
+  const lookupDimensionAuthoritySummary = React.useMemo(
+    () => summarizeProductDimensionAuthority(activeLookupDimensions, {
+      requireScaleDiameter: true,
+      requireExactVariantMatch: true,
+    }),
+    [activeLookupDimensions],
+  );
+  const activeLookupSourceLabel = React.useMemo(
+    () => lookupResult
+      ? getLookupSourceLabel(lookupResult)
+      : getLookupSourceLabelFromUrl(
+          activeLookupDimensions?.productUrl
+          ?? activeLookupDimensions?.dimensionSourceUrl
+          ?? null,
+        ),
+    [
+      activeLookupDimensions?.dimensionSourceUrl,
+      activeLookupDimensions?.productUrl,
+      lookupResult,
+    ],
+  );
   const bodyReferenceV2Draft = React.useMemo<BodyReferenceV2Draft>(() => {
-    const matchedProfileDiameterMm =
-      resolvedMatchedProfile?.outsideDiameterMm
-      ?? resolvedMatchedProfile?.topDiameterMm
-      ?? null;
-    const lookupDiameterMm = matchedProfileDiameterMm ?? lookupResult?.dimensions.outsideDiameterMm ?? null;
+    const lookupDiameterMm = lookupDimensionAuthoritySummary.readyForLookupScale
+      ? lookupDimensionAuthoritySummary.scaleDiameterMm ?? null
+      : null;
     const resolvedDiameterMm = diameterMm > 0 ? round2(diameterMm) : undefined;
 
     return {
@@ -940,19 +996,39 @@ export function TemplateCreateForm({
             ? round2(lookupDiameterMm)
             : undefined,
         resolvedDiameterMm,
-        wrapDiameterMm: resolvedDiameterMm,
+        wrapDiameterMm:
+          typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
+            ? round2(lookupDiameterMm)
+            : resolvedDiameterMm,
         wrapWidthMm: templateWidthMm > 0 ? round2(templateWidthMm) : undefined,
         expectedBodyHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
         expectedBodyWidthMm: resolvedDiameterMm,
+        lookupVariantLabel: lookupDimensionAuthoritySummary.selectedVariantLabel,
+        lookupSizeOz: lookupDimensionAuthoritySummary.selectedSizeOz,
+        lookupDimensionAuthority: lookupDimensionAuthoritySummary.dimensionAuthority,
+        lookupScaleStatus: lookupDimensionAuthoritySummary.status,
+        lookupFullProductHeightMm: lookupDimensionAuthoritySummary.fullProductHeightMm,
+        lookupBodyHeightMm: lookupDimensionAuthoritySummary.bodyHeightMm,
+        lookupHeightIgnoredForScale: lookupDimensionAuthoritySummary.heightIgnoredForScale,
+        lookupWarnings: lookupDimensionAuthoritySummary.warnings,
+        lookupErrors: lookupDimensionAuthoritySummary.errors,
       },
     };
   }, [
     diameterMm,
-    lookupResult?.dimensions.outsideDiameterMm,
+    lookupDimensionAuthoritySummary.bodyHeightMm,
+    lookupDimensionAuthoritySummary.dimensionAuthority,
+    lookupDimensionAuthoritySummary.errors,
+    lookupDimensionAuthoritySummary.fullProductHeightMm,
+    lookupDimensionAuthoritySummary.heightIgnoredForScale,
+    lookupDimensionAuthoritySummary.readyForLookupScale,
+    lookupDimensionAuthoritySummary.scaleDiameterMm,
+    lookupDimensionAuthoritySummary.selectedSizeOz,
+    lookupDimensionAuthoritySummary.selectedVariantLabel,
+    lookupDimensionAuthoritySummary.status,
+    lookupDimensionAuthoritySummary.warnings,
     printHeightMm,
     productPhotoFullUrl,
-    resolvedMatchedProfile?.outsideDiameterMm,
-    resolvedMatchedProfile?.topDiameterMm,
     templateWidthMm,
   ]);
   const bodyReferenceV2Summary = React.useMemo(
@@ -1207,11 +1283,11 @@ export function TemplateCreateForm({
     brand: string | null | undefined;
     model: string | null | undefined;
     capacityOz?: number | null;
-    outsideDiameterMm?: number | null;
+    scaleDiameterMm?: number | null;
     topDiameterMm?: number | null;
     bottomDiameterMm?: number | null;
-    overallHeightMm?: number | null;
-    usableHeightMm?: number | null;
+    fullProductHeightMm?: number | null;
+    bodyHeightMm?: number | null;
   }) => {
     const profileId = findTumblerProfileIdForBrandModel({
       brand: args.brand,
@@ -1220,16 +1296,16 @@ export function TemplateCreateForm({
     });
     const matchedProfile = profileId ? getTumblerProfileById(profileId) : null;
 
-    if (args.outsideDiameterMm) {
-      setDiameterMm(round2(args.outsideDiameterMm));
+    if (args.scaleDiameterMm) {
+      setDiameterMm(round2(args.scaleDiameterMm));
     } else if (matchedProfile?.outsideDiameterMm) {
       setDiameterMm(round2(matchedProfile.outsideDiameterMm));
     } else if (args.topDiameterMm && args.bottomDiameterMm) {
       setDiameterMm(round2((args.topDiameterMm + args.bottomDiameterMm) / 2));
     }
 
-    if (args.usableHeightMm) {
-      setPrintHeightMm(round2(args.usableHeightMm));
+    if (args.bodyHeightMm) {
+      setPrintHeightMm(round2(args.bodyHeightMm));
     } else if (matchedProfile?.usableHeightMm) {
       setPrintHeightMm(round2(matchedProfile.usableHeightMm));
     }
@@ -1254,12 +1330,12 @@ export function TemplateCreateForm({
       return;
     }
 
-    if (args.overallHeightMm) {
-      setOverallHeightMm(round2(args.overallHeightMm));
+    if (args.fullProductHeightMm) {
+      setOverallHeightMm(round2(args.fullProductHeightMm));
     }
-    if (args.overallHeightMm && args.usableHeightMm) {
-      const topM = round2((args.overallHeightMm - args.usableHeightMm) / 2);
-      const bottomM = round2(Math.max(0, args.overallHeightMm - args.usableHeightMm - topM));
+    if (args.fullProductHeightMm && args.bodyHeightMm) {
+      const topM = round2((args.fullProductHeightMm - args.bodyHeightMm) / 2);
+      const bottomM = round2(Math.max(0, args.fullProductHeightMm - args.bodyHeightMm - topM));
       setTopMarginMm(topM);
       setBottomMarginMm(bottomM);
     }
@@ -1281,7 +1357,12 @@ export function TemplateCreateForm({
 
     try {
       const result = await lookupTumblerItem(raw);
+      const authoritySummary = summarizeProductDimensionAuthority(result.dimensions, {
+        requireScaleDiameter: true,
+        requireExactVariantMatch: true,
+      });
       setLookupResult(result);
+      setLookupDimensionsSnapshot(result.dimensions);
 
       const parts: string[] = [];
       if (result.brand) parts.push(result.brand);
@@ -1297,11 +1378,19 @@ export function TemplateCreateForm({
         brand: result.brand,
         model: result.model,
         capacityOz: result.capacityOz,
-        outsideDiameterMm: result.dimensions.outsideDiameterMm,
+        scaleDiameterMm: authoritySummary.readyForLookupScale
+          ? authoritySummary.scaleDiameterMm ?? null
+          : null,
         topDiameterMm: result.dimensions.topDiameterMm,
         bottomDiameterMm: result.dimensions.bottomDiameterMm,
-        overallHeightMm: result.dimensions.overallHeightMm,
-        usableHeightMm: result.dimensions.usableHeightMm,
+        fullProductHeightMm:
+          authoritySummary.fullProductHeightMm
+          ?? result.dimensions.fullProductHeightMm
+          ?? result.dimensions.overallHeightMm,
+        bodyHeightMm:
+          authoritySummary.bodyHeightMm
+          ?? result.dimensions.bodyHeightMm
+          ?? result.dimensions.usableHeightMm,
       });
 
       if (result.imageUrl) {
@@ -1932,6 +2021,7 @@ export function TemplateCreateForm({
           templateArtworkPlacementMappingSignature
           ?? persistedTemplateEngravingPreviewState.mappingSignature,
       },
+      lookupDimensions: lookupDimensionsSnapshot ?? undefined,
       createdAt: editingTemplate?.createdAt ?? now,
       updatedAt: now,
       builtIn: editingTemplate?.builtIn ?? false,
@@ -2029,12 +2119,13 @@ export function TemplateCreateForm({
                   assign the best profile, and pull a usable product photo.
                 </div>
               </div>
-              {lookupResult && (
+              {activeLookupDimensions && (
                 <button
                   type="button"
                   className={styles.lookupResetBtn}
                   onClick={() => {
                     setLookupResult(null);
+                    setLookupDimensionsSnapshot(null);
                     setLookupError(null);
                     setLookupInput("");
                     setLookupDebugImageUrl("");
@@ -2062,40 +2153,71 @@ export function TemplateCreateForm({
               </button>
             </div>
 
-            {lookupResult && (
+            {activeLookupDimensions && (
               <div className={styles.lookupSummary}>
                 <div className={styles.lookupSummaryHeader}>
                   <div className={styles.lookupSummaryTitle}>
-                    {lookupResult.title || name || "Resolved item"}
+                    {lookupResult?.title || activeLookupDimensions.selectedVariantLabel || name || "Resolved item"}
                   </div>
                   <div className={styles.lookupBadgeRow}>
                     <span className={styles.lookupBadgePrimary}>
-                      {getLookupModeLabel(lookupResult.mode)}
+                      {lookupResult ? getLookupModeLabel(lookupResult.mode) : "Saved lookup"}
                     </span>
-                    {getLookupSourceLabel(lookupResult) && (
+                    {activeLookupSourceLabel && (
                       <span className={styles.lookupBadgeMuted}>
-                        {getLookupSourceLabel(lookupResult)}
+                        {activeLookupSourceLabel}
                       </span>
                     )}
-                    {lookupResult.imageUrl && productImageLabel && thumbDataUrl && (
+                    {lookupResult?.imageUrl && productImageLabel && thumbDataUrl && (
                       <span className={styles.lookupBadgeMuted}>Photo applied</span>
                     )}
                   </div>
                 </div>
                 <div className={styles.lookupSummaryLine}>
-                  {[lookupResult.brand, lookupResult.capacityOz ? `${lookupResult.capacityOz}oz` : null]
+                  {[
+                    lookupResult?.brand ?? brand,
+                    lookupDimensionAuthoritySummary.selectedSizeOz
+                      ? `${lookupDimensionAuthoritySummary.selectedSizeOz}oz`
+                      : lookupResult?.capacityOz
+                        ? `${lookupResult.capacityOz}oz`
+                        : null,
+                    activeLookupDimensions.selectedColorOrFinish ?? null,
+                  ]
                     .filter(Boolean)
                     .join(" / ")}
                 </div>
                 <div className={styles.lookupMetrics}>
-                  {formatLookupMeasurement(lookupResult.dimensions.outsideDiameterMm) && (
-                    <span>Dia {formatLookupMeasurement(lookupResult.dimensions.outsideDiameterMm)}</span>
+                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm) && (
+                    <span>Dia {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm)}</span>
                   )}
-                  {formatLookupMeasurement(lookupResult.dimensions.usableHeightMm) && (
-                    <span>Print {formatLookupMeasurement(lookupResult.dimensions.usableHeightMm)}</span>
+                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm) && (
+                    <span>Body {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm)}</span>
                   )}
-                  {lookupResult.glbPath && <span>3D ready</span>}
+                  <span>{formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
+                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm) && (
+                    <span>Full {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm)}</span>
+                  )}
+                  {(lookupResult?.glbPath || glbPath) && <span>3D ready</span>}
                 </div>
+                <div className={styles.lookupMetrics}>
+                  <span>Variant {activeLookupDimensions.selectedVariantLabel || "n/a"}</span>
+                  <span>Selected size {formatLookupSize(lookupDimensionAuthoritySummary.selectedSizeOz)}</span>
+                  <span>Authority {formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
+                </div>
+                {(lookupDimensionAuthoritySummary.errors.length > 0 || lookupDimensionAuthoritySummary.warnings.length > 0) && (
+                  <div className={styles.cutoutFitWarningList}>
+                    {lookupDimensionAuthoritySummary.errors.map((error) => (
+                      <div key={`lookup-dimension-error-${error}`} className={styles.cutoutFitWarningError}>
+                        {error}
+                      </div>
+                    ))}
+                    {lookupDimensionAuthoritySummary.warnings.map((warning) => (
+                      <div key={`lookup-dimension-warning-${warning}`} className={styles.cutoutFitWarning}>
+                        {warning}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -2650,13 +2772,13 @@ export function TemplateCreateForm({
 
                   {(wrapExportPreviewState.errors.length > 0 || wrapExportPreviewState.warnings.length > 0) && (
                     <div className={styles.cutoutFitWarningList}>
-                      {wrapExportPreviewState.errors.map((error) => (
-                        <div key={`wrap-error-${error}`} className={styles.cutoutFitWarningError}>
+                      {wrapExportPreviewState.errors.map((error, index) => (
+                        <div key={`wrap-error-${index}-${error}`} className={styles.cutoutFitWarningError}>
                           {error}
                         </div>
                       ))}
-                      {wrapExportPreviewState.warnings.map((warning) => (
-                        <div key={`wrap-warning-${warning}`} className={styles.cutoutFitWarning}>
+                      {wrapExportPreviewState.warnings.map((warning, index) => (
+                        <div key={`wrap-warning-${index}-${warning}`} className={styles.cutoutFitWarning}>
                           {warning}
                         </div>
                       ))}
@@ -2676,13 +2798,13 @@ export function TemplateCreateForm({
                     persistedTemplateEngravingPreviewState.warnings.length > 0
                   ) && (
                     <div className={styles.cutoutFitWarningList}>
-                      {persistedTemplateEngravingPreviewState.errors.map((error) => (
-                        <div key={`saved-wrap-error-${error}`} className={styles.cutoutFitWarningError}>
+                      {persistedTemplateEngravingPreviewState.errors.map((error, index) => (
+                        <div key={`saved-wrap-error-${index}-${error}`} className={styles.cutoutFitWarningError}>
                           {error}
                         </div>
                       ))}
-                      {persistedTemplateEngravingPreviewState.warnings.map((warning) => (
-                        <div key={`saved-wrap-warning-${warning}`} className={styles.cutoutFitWarning}>
+                      {persistedTemplateEngravingPreviewState.warnings.map((warning, index) => (
+                        <div key={`saved-wrap-warning-${index}-${warning}`} className={styles.cutoutFitWarning}>
                           {warning}
                         </div>
                       ))}
@@ -3083,6 +3205,18 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.lookupDiameterMm)}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Lookup variant</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.lookupVariantLabel || "n/a"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Selected size</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatLookupSize(bodyReferenceV2ScaleMirrorPreview.lookupSizeOz)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Diameter authority</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatLookupAuthority(bodyReferenceV2ScaleMirrorPreview.lookupDimensionAuthority)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Diameter (px)</span>
                       <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.diameterPx != null ? round2(bodyReferenceV2ScaleMirrorPreview.diameterPx) : "n/a"}</span>
                     </div>
@@ -3093,6 +3227,10 @@ export function TemplateCreateForm({
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Derived wrap width</span>
                       <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.wrapWidthMm)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Full product height</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.lookupFullProductHeightMm)}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Mirrored-right points</span>

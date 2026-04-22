@@ -254,3 +254,46 @@ test("saveTemplate preserves appearance reference layers exactly", () => {
   assert.equal(saved.appearanceReferenceLayers?.[0]?.includedInBodyCutoutQa, false);
   assert.equal(saved.appearanceReferenceLayers?.[1]?.kind, "front-brand-logo");
 });
+
+test("saveTemplate preserves lookup dimension authority metadata exactly", () => {
+  const template = createTemplate({
+    id: "template-lookup-dimension-authority",
+    lookupDimensions: {
+      lookupProductId: "stanley-iceflow-40",
+      productUrl: "https://example.com/products/iceflow",
+      selectedVariantId: "40oz-stainless",
+      selectedVariantLabel: "40 oz / Stainless",
+      selectedSizeOz: 40,
+      selectedColorOrFinish: "Stainless",
+      availableVariantLabels: ["30 oz / Stainless", "40 oz / Stainless"],
+      availableSizeOz: [30, 40],
+      dimensionSourceUrl: "https://example.com/products/iceflow",
+      dimensionSourceText: "40 oz dimensions 4.0 x 4.0 x 11.2 in",
+      dimensionSourceSizeOz: 40,
+      titleSizeOz: 40,
+      confidence: 0.92,
+      dimensionAuthority: "diameter-primary",
+      diameterMm: 101.6,
+      bodyDiameterMm: 101.6,
+      wrapDiameterMm: 101.6,
+      wrapWidthMm: 319.19,
+      fullProductHeightMm: 284.48,
+      bodyHeightMm: 236.22,
+      heightIncludesLidOrStraw: true,
+      overallHeightMm: 284.48,
+      outsideDiameterMm: 101.6,
+      topDiameterMm: null,
+      bottomDiameterMm: null,
+      usableHeightMm: 236.22,
+    },
+  });
+
+  saveTemplate(template);
+  const saved = getTemplate(template.id);
+
+  assert.ok(saved);
+  assert.deepEqual(saved.lookupDimensions, template.lookupDimensions);
+  assert.equal(saved.lookupDimensions?.dimensionAuthority, "diameter-primary");
+  assert.equal(saved.lookupDimensions?.selectedVariantLabel, "40 oz / Stainless");
+  assert.equal(saved.lookupDimensions?.wrapWidthMm, 319.19);
+});

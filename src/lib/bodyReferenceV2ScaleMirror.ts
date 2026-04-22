@@ -5,6 +5,7 @@ import type {
   BodyReferenceV2Validation,
   CenterlineAxis,
 } from "./bodyReferenceV2Layers.ts";
+import type { DimensionAuthority } from "@/types/tumblerItemLookup";
 import {
   validateBodyLeftLayer,
   validateCenterlineAxis,
@@ -25,6 +26,12 @@ export interface BodyReferenceV2ScaleMirrorPreview {
   leftBodyPointCount: number;
   mirroredRightPointCount: number;
   lookupDiameterMm?: number;
+  lookupVariantLabel?: string;
+  lookupSizeOz?: number;
+  lookupDimensionAuthority?: DimensionAuthority;
+  lookupFullProductHeightMm?: number;
+  lookupBodyHeightMm?: number;
+  lookupHeightIgnoredForScale?: boolean;
   diameterPx?: number;
   mmPerPx?: number;
   wrapWidthMm?: number;
@@ -193,6 +200,9 @@ export function validateLookupDiameterScale(args: {
     });
   }
 
+  warnings.push(...normalizeMessages(scaleCalibration.lookupWarnings ?? []));
+  errors.push(...normalizeMessages(scaleCalibration.lookupErrors ?? []));
+
   if (scaleCalibration.mmPerPx != null && !isFinitePositive(scaleCalibration.mmPerPx)) {
     errors.push("BODY REFERENCE v2 mmPerPx must be finite and positive when provided.");
   }
@@ -218,6 +228,16 @@ export function validateLookupDiameterScale(args: {
     if (Math.abs(scaleCalibration.wrapWidthMm - expectedWrapWidthMm) > toleranceMm) {
       errors.push("BODY REFERENCE v2 wrapWidthMm does not match Math.PI * lookup diameter within tolerance.");
     }
+  }
+
+  if (
+    isFinitePositive(scaleCalibration.lookupBodyHeightMm) &&
+    isFinitePositive(scaleCalibration.expectedBodyHeightMm) &&
+    Math.abs(scaleCalibration.lookupBodyHeightMm - scaleCalibration.expectedBodyHeightMm) > 5
+  ) {
+    warnings.push(
+      "Lookup body height differs from the current body contour height. Diameter remains the scale authority.",
+    );
   }
 
   const validation = normalizeValidation({ errors, warnings });
@@ -363,6 +383,18 @@ export function buildMirroredBodyPreview(
     leftBodyPointCount: bodyLeftLayer?.points.length ?? 0,
     mirroredRightPointCount: mirroredRightOutline.length,
     lookupDiameterMm,
+    lookupVariantLabel: draft.scaleCalibration.lookupVariantLabel,
+    lookupSizeOz: isFinitePositive(draft.scaleCalibration.lookupSizeOz)
+      ? draft.scaleCalibration.lookupSizeOz
+      : undefined,
+    lookupDimensionAuthority: draft.scaleCalibration.lookupDimensionAuthority,
+    lookupFullProductHeightMm: isFinitePositive(draft.scaleCalibration.lookupFullProductHeightMm)
+      ? draft.scaleCalibration.lookupFullProductHeightMm
+      : undefined,
+    lookupBodyHeightMm: isFinitePositive(draft.scaleCalibration.lookupBodyHeightMm)
+      ? draft.scaleCalibration.lookupBodyHeightMm
+      : undefined,
+    lookupHeightIgnoredForScale: draft.scaleCalibration.lookupHeightIgnoredForScale === true,
     diameterPx: scaleValidation.diameterPx,
     mmPerPx: scaleValidation.mmPerPx,
     wrapWidthMm: scaleValidation.wrapWidthMm,

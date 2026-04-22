@@ -1,3 +1,5 @@
+import type { DimensionAuthority } from "@/types/tumblerItemLookup";
+
 export type BodyReferenceV2LayerKind =
   | "centerline"
   | "body-left"
@@ -10,6 +12,12 @@ export type BodyReferenceV2ScaleSource =
   | "lookup-diameter"
   | "manual-diameter"
   | "svg-viewbox"
+  | "unknown";
+
+export type BodyReferenceV2LookupScaleStatus =
+  | "pass"
+  | "warn"
+  | "fail"
   | "unknown";
 
 export interface CenterlineAxis {
@@ -46,6 +54,15 @@ export interface BodyReferenceV2ScaleCalibration {
   wrapWidthMm?: number;
   expectedBodyHeightMm?: number;
   expectedBodyWidthMm?: number;
+  lookupVariantLabel?: string;
+  lookupSizeOz?: number;
+  lookupDimensionAuthority?: DimensionAuthority;
+  lookupScaleStatus?: BodyReferenceV2LookupScaleStatus;
+  lookupFullProductHeightMm?: number;
+  lookupBodyHeightMm?: number;
+  lookupHeightIgnoredForScale?: boolean;
+  lookupWarnings?: string[];
+  lookupErrors?: string[];
 }
 
 export interface BlockedBodyRegion {

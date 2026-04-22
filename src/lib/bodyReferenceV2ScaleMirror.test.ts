@@ -208,6 +208,23 @@ test("invalid mmPerPx fails validation", () => {
   assert.match(validation.errors.join(" "), /mmPerPx must be finite and positive/i);
 });
 
+test("lookup body height mismatch warns while mmPerPx still resolves from diameter only", () => {
+  const preview = buildMirroredBodyPreview(createDraft({
+    scaleCalibration: {
+      scaleSource: "lookup-diameter",
+      lookupDiameterMm: 88.9,
+      lookupBodyHeightMm: 260,
+      lookupFullProductHeightMm: 290,
+      lookupHeightIgnoredForScale: true,
+      expectedBodyHeightMm: 220,
+    },
+  }));
+
+  assert.equal(preview.mmPerPx, 1.852083);
+  assert.equal(preview.status, "warn");
+  assert.match(preview.warnings.join(" "), /diameter remains the scale authority/i);
+});
+
 test("mirror preview is always marked as not current generation source", () => {
   const preview = summarizeBodyReferenceV2ScaleMirrorPreview(createDraft());
 
