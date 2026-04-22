@@ -8,21 +8,21 @@ import {
   isBodyCutoutQaPreviewAvailable,
 } from "./bodyReferencePreviewIntent.ts";
 
-test("review scaffold labels reserve BODY CUTOUT QA without runtime-truth wording", () => {
+test("preview labels keep BODY CUTOUT QA explicit and operator-readable", () => {
   assert.equal(
     getBodyReferencePreviewModeLabel({
       productType: "tumbler",
       mode: "body-cutout-qa",
       glbStatus: "verified-product-model",
     }),
-    "BODY CUTOUT QA · RESERVED",
+    "BODY CUTOUT QA · BODY ONLY",
   );
   assert.match(
     getBodyReferencePreviewModeHint({
       productType: "tumbler",
       mode: "body-cutout-qa",
     }) ?? "",
-    /reserved/i,
+    /validates the loaded geometry/i,
   );
 });
 
@@ -33,7 +33,7 @@ test("preview scaffold still exposes source compare and full-model labels", () =
       mode: "full-model",
       glbStatus: "verified-product-model",
     }),
-    "FULL MODEL · REVIEW SCAFFOLD",
+    "FULL MODEL · GEOMETRY REFERENCE",
   );
   assert.equal(
     getBodyReferencePreviewModeLabel({
@@ -42,6 +42,21 @@ test("preview scaffold still exposes source compare and full-model labels", () =
       glbStatus: "placeholder-model",
     }),
     "PLACEHOLDER MODEL · SOURCE COMPARE",
+  );
+  assert.equal(
+    getBodyReferencePreviewModeLabel({
+      productType: "tumbler",
+      mode: "wrap-export",
+      glbStatus: "verified-product-model",
+    }),
+    "WRAP / EXPORT · PLACEMENT READINESS",
+  );
+  assert.match(
+    getBodyReferencePreviewModeHint({
+      productType: "tumbler",
+      mode: "wrap-export",
+    }) ?? "",
+    /without claiming body cutout qa proof/i,
   );
 });
 

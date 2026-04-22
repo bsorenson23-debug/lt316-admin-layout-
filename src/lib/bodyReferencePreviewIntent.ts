@@ -29,6 +29,9 @@ export function getBodyReferencePreviewModeLabel(args: {
   if (args.mode === "alignment-model") {
     return "ALIGNMENT MODEL · REVIEW";
   }
+  if (args.mode === "wrap-export") {
+    return "WRAP / EXPORT · PLACEMENT READINESS";
+  }
   if (args.mode === "body-cutout-qa") {
     return "BODY CUTOUT QA · BODY ONLY";
   }
@@ -53,6 +56,9 @@ export function getBodyReferencePreviewModeHint(args: {
   }
   if (args.mode === "alignment-model") {
     return "Alignment keeps the source-model review visible while BODY REFERENCE approval and BODY CUTOUT QA stay separate.";
+  }
+  if (args.mode === "wrap-export") {
+    return "Wrap / export shows printable-surface dimensions, freshness, and placement readiness without claiming BODY CUTOUT QA proof.";
   }
   if (args.mode === "body-cutout-qa") {
     return "BODY CUTOUT QA renders the reviewed body-only GLB and validates the loaded geometry against audit/runtime truth.";

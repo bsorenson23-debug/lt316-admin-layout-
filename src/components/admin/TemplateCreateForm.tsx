@@ -59,6 +59,11 @@ import { buildBodyReferenceGlbSourceSignature } from "@/lib/bodyReferenceGlbSour
 import { parseBodyReferenceGlbResponse } from "@/lib/adminApi.schema";
 import type { BodyGeometryContract } from "@/lib/bodyGeometryContract";
 import { inferGeneratedModelStatusFromSource } from "@/lib/generatedModelUrl";
+import {
+  buildWrapExportPreviewState,
+  getWrapExportMappingStatusLabel,
+  getWrapExportPreviewStatusLabel,
+} from "@/lib/wrapExportPreviewState";
 import { BodyReferenceFineTuneEditor } from "./BodyReferenceFineTuneEditor";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -101,6 +106,19 @@ function formatShortHash(value: string | null | undefined): string {
   const head = digest.slice(0, 8);
   const tail = digest.slice(-6);
   return `${prefix}:${head}…${tail}`;
+}
+
+function formatDimensionMetric(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${round2(value)} mm`
+    : "n/a";
+}
+
+function formatBodyBoundsMetric(
+  bounds: BodyGeometryContract["dimensionsMm"]["bodyBounds"] | null | undefined,
+): string {
+  if (!bounds) return "n/a";
+  return `${round2(bounds.width)} × ${round2(bounds.height)} × ${round2(bounds.depth)} mm`;
 }
 
 /** Convert an image file to a data URL (max 480px on longest side for face photos) */
@@ -684,6 +702,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     productType,
   ]);
   const effectivePreviewModelMode = previewModelState?.effectiveMode ?? previewModelMode;
+  const wrapExportPreviewState = React.useMemo(
+    () => buildWrapExportPreviewState(loadedBodyGeometryContract),
+    [loadedBodyGeometryContract],
+  );
+  const wrapExportSummaryVisible =
+    previewModelMode === "wrap-export" ||
+    effectivePreviewModelMode === "wrap-export";
   const requestedPreviewModeLabel = React.useMemo(
     () => getBodyReferencePreviewModeLabel({
       productType,
@@ -1979,6 +2004,15 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                 </button>
                 <button
                   type="button"
+                  className={`${styles.detectBtn} ${previewModelMode === "wrap-export" ? styles.detectBtnActive : ""}`}
+                  disabled={!glbPath.trim()}
+                  aria-pressed={previewModelMode === "wrap-export"}
+                  onClick={() => setPreviewModelMode("wrap-export")}
+                >
+                  WRAP / EXPORT
+                </button>
+                <button
+                  type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "body-cutout-qa" ? styles.detectBtnActive : ""}`}
                   disabled={!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)}
                   aria-pressed={previewModelMode === "body-cutout-qa"}
@@ -2002,9 +2036,136 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                   Load or resolve a source model to surface the reviewed model preview in this review flow.
                 </div>
               )}
+              {!glbPath.trim() && (
+                <div className={styles.previewPlaceholderNote}>
+                  WRAP / EXPORT preview uses the current source model plus wrap dimensions. It stays separate from BODY CUTOUT QA.
+                </div>
+              )}
               {!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus) && (
                 <div className={styles.previewPlaceholderNote}>
                   BODY CUTOUT QA unlocks after generating the reviewed body-only GLB from the accepted BODY REFERENCE.
+                </div>
+              )}
+
+              {wrapExportSummaryVisible && (
+                <div className={styles.cutoutFitSummary} data-testid="wrap-export-summary">
+                  <div className={styles.cutoutFitSummaryHeader}>
+                    <div>
+                      <div className={styles.cutoutFitSummaryTitle}>Wrap / Export Summary</div>
+                      <div className={styles.cutoutFitSummaryHint}>
+                        WRAP / EXPORT shows printable-surface readiness. It is not BODY CUTOUT QA and does not place artwork on the body yet.
+                      </div>
+                    </div>
+                    <span
+                      className={
+                        wrapExportPreviewState.status === "pass"
+                          ? styles.reviewStatusReady
+                          : wrapExportPreviewState.status === "fail"
+                            ? styles.reviewStatusFail
+                            : wrapExportPreviewState.status === "warn"
+                              ? styles.reviewStatusPending
+                              : styles.previewScaffoldBadge
+                      }
+                    >
+                      {getWrapExportPreviewStatusLabel(wrapExportPreviewState.status)}
+                    </span>
+                  </div>
+
+                  <div className={styles.cutoutFitSummaryGrid}>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Mapping status</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {getWrapExportMappingStatusLabel(wrapExportPreviewState.mappingStatus)}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Ready for preview</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {wrapExportPreviewState.readyForPreview ? "yes" : "no"}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Ready for exact placement</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {wrapExportPreviewState.readyForExactPlacement ? "yes" : "no"}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>BODY CUTOUT QA proof</span>
+                      <span className={styles.cutoutFitMetricValue}>no</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Wrap diameter</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.wrapDiameterMm)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Wrap width</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.wrapWidthMm)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Printable top</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableTopMm)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Printable bottom</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableBottomMm)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Printable height</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableHeightMm)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Expected body width</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.expectedBodyWidthMm)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Expected body height</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.expectedBodyHeightMm)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Body bounds</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatBodyBoundsMetric(wrapExportPreviewState.bodyBounds)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Scale source</span>
+                      <span className={styles.cutoutFitMetricValue}>{wrapExportPreviewState.scaleSource ?? "unknown"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Freshness</span>
+                      <span className={styles.cutoutFitMetricValue}>{wrapExportPreviewState.freshness}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Source hash</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {formatShortHash(loadedBodyGeometryContract?.source.hash)}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {formatShortHash(loadedBodyGeometryContract?.glb.sourceHash)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className={styles.reviewScaffoldNote}>
+                    WRAP / EXPORT uses current body geometry freshness and printable-surface metadata when available. It never replaces BODY CUTOUT QA.
+                  </div>
+
+                  {(wrapExportPreviewState.errors.length > 0 || wrapExportPreviewState.warnings.length > 0) && (
+                    <div className={styles.cutoutFitWarningList}>
+                      {wrapExportPreviewState.errors.map((error) => (
+                        <div key={`wrap-error-${error}`} className={styles.cutoutFitWarningError}>
+                          {error}
+                        </div>
+                      ))}
+                      {wrapExportPreviewState.warnings.map((warning) => (
+                        <div key={`wrap-warning-${warning}`} className={styles.cutoutFitWarning}>
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2021,7 +2182,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                       tumblerMapping={tumblerMapping}
                       bodyTintColor={bodyColorHex}
                       rimTintColor={rimColorHex}
-                      showTemplateSurfaceZones={effectivePreviewModelMode === "alignment-model"}
+                      showTemplateSurfaceZones={
+                        effectivePreviewModelMode === "alignment-model" ||
+                        effectivePreviewModelMode === "wrap-export"
+                      }
                       previewModelMode={previewModelMode}
                       sourceModelStatus={activeDrinkwareGlbStatus}
                       sourceModelLabel={activeDrinkwareGlbSourceLabel}
