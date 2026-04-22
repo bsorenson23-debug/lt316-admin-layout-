@@ -297,3 +297,51 @@ test("saveTemplate preserves lookup dimension authority metadata exactly", () =>
   assert.equal(saved.lookupDimensions?.selectedVariantLabel, "40 oz / Stainless");
   assert.equal(saved.lookupDimensions?.wrapWidthMm, 319.19);
 });
+
+test("saveTemplate preserves accepted BODY REFERENCE v2 draft metadata exactly", () => {
+  const template = createTemplate({
+    id: "template-body-reference-v2-accepted",
+    acceptedBodyReferenceV2Draft: {
+      sourceImageUrl: "data:image/png;base64,v2-draft",
+      centerline: {
+        id: "centerline",
+        xPx: 0,
+        topYPx: 12,
+        bottomYPx: 188,
+        source: "operator",
+      },
+      layers: [
+        {
+          id: "body-left",
+          kind: "body-left",
+          points: [
+            { xPx: -42, yPx: 12 },
+            { xPx: -44, yPx: 96 },
+            { xPx: -38, yPx: 188 },
+          ],
+          closed: false,
+          editable: true,
+          visible: true,
+          referenceOnly: false,
+          includedInBodyCutoutQa: true,
+        },
+      ],
+      blockedRegions: [],
+      scaleCalibration: {
+        scaleSource: "lookup-diameter",
+        lookupDiameterMm: 88,
+        wrapDiameterMm: 88,
+        wrapWidthMm: 276.46,
+      },
+    },
+  });
+
+  saveTemplate(template);
+  const saved = getTemplate(template.id);
+
+  assert.ok(saved);
+  assert.deepEqual(saved.acceptedBodyReferenceV2Draft, template.acceptedBodyReferenceV2Draft);
+  assert.equal(saved.acceptedBodyReferenceV2Draft?.centerline?.source, "operator");
+  assert.equal(saved.acceptedBodyReferenceV2Draft?.layers[0]?.kind, "body-left");
+  assert.equal(saved.acceptedBodyReferenceV2Draft?.scaleCalibration.lookupDiameterMm, 88);
+});

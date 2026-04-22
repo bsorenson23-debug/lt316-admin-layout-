@@ -341,6 +341,54 @@ test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirro
   assert.equal(auditArtifact.dimensionsMm.scaleSource, "lookup-diameter");
 });
 
+test("generateBodyReferenceGlb keeps BODY CUTOUT QA pass clean for operator-seeded v2 drafts with context-only warnings", async () => {
+  const operatorSeededDraft = createV2Draft({
+    layers: [
+      createBodyReferenceV2Layer({
+        id: "body-left",
+        kind: "body-left",
+        points: [
+          { xPx: 84, yPx: 20 },
+          { xPx: 80, yPx: 120 },
+          { xPx: 82, yPx: 205 },
+        ],
+      }),
+    ],
+    scaleCalibration: {
+      scaleSource: "lookup-diameter",
+      lookupDiameterMm: 88.9,
+      resolvedDiameterMm: 88.9,
+      wrapDiameterMm: 88.9,
+      wrapWidthMm: 279.29,
+      expectedBodyHeightMm: 185,
+      expectedBodyWidthMm: 88.9,
+      lookupFullProductHeightMm: 222,
+      lookupHeightIgnoredForScale: true,
+      lookupWarnings: ["Full product height is stored for context and ignored for lookup-based body contour scale."],
+    },
+  });
+
+  const result = await generateBodyReferenceGlb(createInput({
+    generationSourceMode: "v2-mirrored-profile",
+    bodyOutline: undefined,
+    canonicalBodyProfile: undefined,
+    canonicalDimensionCalibration: undefined,
+    bodyReferenceV2Draft: operatorSeededDraft,
+  }));
+
+  assert.equal(result.bodyGeometryContract.source.type, "body-reference-v2");
+  assert.equal(result.bodyGeometryContract.validation.status, "pass");
+  assert.deepEqual(result.bodyGeometryContract.validation.errors, []);
+  assert.deepEqual(result.bodyGeometryContract.validation.warnings, []);
+
+  const auditArtifact = JSON.parse(await readFile(result.auditJsonPath ?? "", "utf8")) as {
+    validation: { status?: string; errors?: string[]; warnings?: string[] };
+  };
+  assert.equal(auditArtifact.validation.status, "pass");
+  assert.deepEqual(auditArtifact.validation.errors ?? [], []);
+  assert.deepEqual(auditArtifact.validation.warnings ?? [], []);
+});
+
 test("generateBodyReferenceGlb rejects v2 generation when the mirrored profile source is not ready", async () => {
   await assert.rejects(
     generateBodyReferenceGlb(createInput({

@@ -1228,6 +1228,14 @@ export default function ModelViewer({
       viewerRuntimeAuditContract?.source.hash ??
       bodyGeometryContractSeed?.glb?.sourceHash ??
       bodyGeometryContractSeed?.source?.hash;
+    const currentSourceHash =
+      bodyGeometryContractSeed?.source?.type === "body-reference-v2"
+        ? (
+            bodyGeometryContractSeed?.source?.hash ??
+            bodyGeometryContractSeed?.glb?.sourceHash ??
+            viewerRuntimeSourceHash
+          )
+        : viewerRuntimeSourceHash;
     const runtimeValidationWarnings = [
       ...(runtimeDebugSceneInspection?.warnings ?? []),
       ...(loadedAuditArtifactState.status === "required-missing"
@@ -1237,6 +1245,18 @@ export default function ModelViewer({
         ? ["Failed to load required generated audit sidecar metadata."]
         : []),
     ];
+    const runtimeBodyBounds = toBodyBounds(runtimeDebugSceneInspection?.bounds.body);
+    const runtimeBodyBoundsUnits = runtimeDebugSceneInspection?.bounds.units;
+    const seededBodyBounds =
+      bodyGeometryContractSeed?.dimensionsMm?.bodyBounds ??
+      viewerRuntimeAuditContract?.dimensionsMm?.bodyBounds;
+    const seededBodyBoundsUnits =
+      bodyGeometryContractSeed?.dimensionsMm?.bodyBoundsUnits ??
+      viewerRuntimeAuditContract?.dimensionsMm?.bodyBoundsUnits;
+    const resolvedBodyBounds = seededBodyBounds ?? runtimeBodyBounds;
+    const resolvedBodyBoundsUnits = seededBodyBounds
+      ? (seededBodyBoundsUnits ?? "mm")
+      : runtimeBodyBoundsUnits;
 
     const baseContract: BodyGeometryContract = {
       ...createEmptyBodyGeometryContract(),
@@ -1246,7 +1266,7 @@ export default function ModelViewer({
           sourceModelStatus,
           approvedBodyOutline,
         }),
-        hash: viewerRuntimeSourceHash ?? undefined,
+        hash: currentSourceHash ?? undefined,
         widthPx: sourceViewport?.width,
         heightPx: sourceViewport?.height,
         viewBox: sourceViewport
@@ -1273,8 +1293,8 @@ export default function ModelViewer({
         totalTriangleCount: runtimeDebugSceneInspection?.totalTriangleCount ?? 0,
       },
       dimensionsMm: {
-        bodyBounds: toBodyBounds(runtimeDebugSceneInspection?.bounds.body),
-        bodyBoundsUnits: runtimeDebugSceneInspection?.bounds.units,
+        bodyBounds: resolvedBodyBounds,
+        bodyBoundsUnits: resolvedBodyBoundsUnits,
         wrapDiameterMm: canonicalDimensionCalibration?.wrapDiameterMm ?? tumblerDims?.diameterMm,
         wrapWidthMm: canonicalDimensionCalibration?.wrapWidthMm ?? bedWidthMm,
         frontVisibleWidthMm: canonicalDimensionCalibration?.frontVisibleWidthMm,
@@ -1303,7 +1323,7 @@ export default function ModelViewer({
       loadedInspectionContract: baseContract,
       metadataSeed: bodyGeometryContractSeed,
       currentMode: effectivePreviewMode ?? "unknown",
-      currentSourceHash: viewerRuntimeSourceHash,
+      currentSourceHash,
       loadedGlbHash: viewerRuntimeGlbHash,
       runtimeInspection: {
         status: loadedSceneInspectionState.status,

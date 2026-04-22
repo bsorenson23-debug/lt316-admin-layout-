@@ -1221,7 +1221,7 @@ function buildV2BodyReferenceBodyGeometryContract(args: {
     validation: {
       status: "unknown",
       errors: [],
-      warnings: args.v2Source.warnings,
+      warnings: [],
     },
   });
 }
