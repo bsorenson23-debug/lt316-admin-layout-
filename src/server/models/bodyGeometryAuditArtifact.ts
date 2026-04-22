@@ -23,6 +23,10 @@ export interface BodyGeometryAuditArtifact {
     leftBodyOutlineCaptured?: boolean;
     mirroredBodyGenerated?: boolean;
     blockedRegionCount?: number;
+    lookupDimensionAuthorityStatus?: BodyGeometryContract["source"]["lookupDimensionAuthorityStatus"];
+    referenceLayersExcluded?: string[];
+    nonBodyGenerationExclusions?: string[];
+    fallbackGenerationModeAvailable?: boolean;
     generationSourceMode?: BodyGeometryContract["source"]["generationSourceMode"];
   };
   glb: {
@@ -100,6 +104,10 @@ export function buildBodyGeometryAuditArtifact(
       leftBodyOutlineCaptured: contract.source.leftBodyOutlineCaptured,
       mirroredBodyGenerated: contract.source.mirroredBodyGenerated,
       blockedRegionCount: contract.source.blockedRegionCount,
+      lookupDimensionAuthorityStatus: contract.source.lookupDimensionAuthorityStatus,
+      referenceLayersExcluded: normalizeStringArray(contract.source.referenceLayersExcluded),
+      nonBodyGenerationExclusions: normalizeStringArray(contract.source.nonBodyGenerationExclusions),
+      fallbackGenerationModeAvailable: contract.source.fallbackGenerationModeAvailable,
       generationSourceMode: contract.source.generationSourceMode,
     },
     glb: {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import * as THREE from "three";
@@ -201,6 +201,12 @@ function generatedAuditFilePath(glbPath: string): string {
   return path.join(parsedPath.dir, `${parsedPath.name}.audit.json`);
 }
 
+async function listGeneratedArtifactsByToken(token: string): Promise<string[]> {
+  const generatedModelsDir = path.join(process.cwd(), ".local", "generated-models");
+  const entries = await readdir(generatedModelsDir);
+  return entries.filter((entry) => entry.includes(token));
+}
+
 async function loadGeneratedScene(glbPath: string): Promise<THREE.Group> {
   const buffer = await readFile(generatedModelFilePath(glbPath));
   const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
@@ -310,6 +316,14 @@ test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirro
   assert.equal(result.bodyGeometryContract.source.leftBodyOutlineCaptured, true);
   assert.equal(result.bodyGeometryContract.source.mirroredBodyGenerated, true);
   assert.equal(result.bodyGeometryContract.source.blockedRegionCount, 0);
+  assert.equal(result.bodyGeometryContract.source.lookupDimensionAuthorityStatus, "unknown");
+  assert.deepEqual(result.bodyGeometryContract.source.referenceLayersExcluded, ["handle-reference", "lid-reference"]);
+  assert.deepEqual(result.bodyGeometryContract.source.nonBodyGenerationExclusions, [
+    "artwork-placements",
+    "engraving-overlay-preview",
+    "product-appearance-layers",
+  ]);
+  assert.equal(result.bodyGeometryContract.source.fallbackGenerationModeAvailable, true);
   assert.equal(result.bodyGeometryContract.source.generationSourceMode, "v2-mirrored-profile");
   assert.equal(result.bodyGeometryContract.glb.sourceHash, result.bodyGeometryContract.source.hash);
   assert.equal(result.bodyGeometryContract.validation.status, "pass");
@@ -326,7 +340,16 @@ test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirro
   assert.ok(bounds.z > 80);
 
   const auditArtifact = JSON.parse(await readFile(result.auditJsonPath ?? "", "utf8")) as {
-    source: { type?: string; hash?: string; centerlineCaptured?: boolean; mirroredBodyGenerated?: boolean };
+    source: {
+      type?: string;
+      hash?: string;
+      centerlineCaptured?: boolean;
+      mirroredBodyGenerated?: boolean;
+      lookupDimensionAuthorityStatus?: string;
+      referenceLayersExcluded?: string[];
+      nonBodyGenerationExclusions?: string[];
+      fallbackGenerationModeAvailable?: boolean;
+    };
     glb: { sourceHash?: string };
     meshes: { names: string[]; bodyMeshNames: string[]; accessoryMeshNames: string[] };
     dimensionsMm: { scaleSource?: string };
@@ -334,6 +357,14 @@ test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirro
   assert.equal(auditArtifact.source.type, "body-reference-v2");
   assert.equal(auditArtifact.source.centerlineCaptured, true);
   assert.equal(auditArtifact.source.mirroredBodyGenerated, true);
+  assert.equal(auditArtifact.source.lookupDimensionAuthorityStatus, "unknown");
+  assert.deepEqual(auditArtifact.source.referenceLayersExcluded, ["handle-reference", "lid-reference"]);
+  assert.deepEqual(auditArtifact.source.nonBodyGenerationExclusions, [
+    "artwork-placements",
+    "engraving-overlay-preview",
+    "product-appearance-layers",
+  ]);
+  assert.equal(auditArtifact.source.fallbackGenerationModeAvailable, true);
   assert.equal(auditArtifact.glb.sourceHash, auditArtifact.source.hash);
   assert.deepEqual(auditArtifact.meshes.names, ["body_mesh"]);
   assert.deepEqual(auditArtifact.meshes.bodyMeshNames, ["body_mesh"]);
@@ -390,8 +421,12 @@ test("generateBodyReferenceGlb keeps BODY CUTOUT QA pass clean for operator-seed
 });
 
 test("generateBodyReferenceGlb rejects v2 generation when the mirrored profile source is not ready", async () => {
+  const templateToken = `invalid-v2-guard-${Date.now()}`;
+  const artifactsBefore = await listGeneratedArtifactsByToken(templateToken);
+
   await assert.rejects(
     generateBodyReferenceGlb(createInput({
+      templateName: templateToken,
       generationSourceMode: "v2-mirrored-profile",
       bodyOutline: undefined,
       canonicalBodyProfile: undefined,
@@ -402,4 +437,7 @@ test("generateBodyReferenceGlb rejects v2 generation when the mirrored profile s
     })),
     /BODY REFERENCE v2 mirrored profile is not ready/i,
   );
+
+  const artifactsAfter = await listGeneratedArtifactsByToken(templateToken);
+  assert.deepEqual(artifactsAfter, artifactsBefore);
 });

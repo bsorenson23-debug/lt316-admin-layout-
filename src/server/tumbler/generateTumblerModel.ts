@@ -1167,6 +1167,16 @@ function buildV2BodyReferenceBodyGeometryContract(args: {
 }): BodyGeometryContract {
   const diameterPx = round2(args.v2Source.wrapDiameterMm / args.v2Source.mmPerPx);
   const bodyHeightPx = round2(args.v2MirroredProfile.maxYPx - args.v2MirroredProfile.minYPx);
+  const referenceLayersExcluded = [...new Set(
+    (args.input.bodyReferenceV2Draft?.layers ?? [])
+      .filter((layer) => layer.referenceOnly === true)
+      .map((layer) => layer.kind),
+  )].sort((left, right) => left.localeCompare(right));
+  const nonBodyGenerationExclusions = [
+    "product-appearance-layers",
+    "artwork-placements",
+    "engraving-overlay-preview",
+  ].sort((left, right) => left.localeCompare(right));
 
   return updateContractValidation({
     ...createEmptyBodyGeometryContract(),
@@ -1183,6 +1193,10 @@ function buildV2BodyReferenceBodyGeometryContract(args: {
       leftBodyOutlineCaptured: true,
       mirroredBodyGenerated: true,
       blockedRegionCount: args.v2Source.blockedRegionCount,
+      lookupDimensionAuthorityStatus: args.v2Source.scaleCalibration.lookupScaleStatus ?? "unknown",
+      referenceLayersExcluded,
+      nonBodyGenerationExclusions,
+      fallbackGenerationModeAvailable: true,
       generationSourceMode: "v2-mirrored-profile",
     },
     glb: {
