@@ -19,6 +19,11 @@ export interface BodyGeometryAuditArtifact {
     heightPx?: number;
     viewBox?: string;
     detectedBodyOnly?: boolean;
+    centerlineCaptured?: boolean;
+    leftBodyOutlineCaptured?: boolean;
+    mirroredBodyGenerated?: boolean;
+    blockedRegionCount?: number;
+    generationSourceMode?: BodyGeometryContract["source"]["generationSourceMode"];
   };
   glb: {
     path?: string;
@@ -91,6 +96,11 @@ export function buildBodyGeometryAuditArtifact(
       heightPx: contract.source.heightPx,
       viewBox: contract.source.viewBox,
       detectedBodyOnly: contract.source.detectedBodyOnly,
+      centerlineCaptured: contract.source.centerlineCaptured,
+      leftBodyOutlineCaptured: contract.source.leftBodyOutlineCaptured,
+      mirroredBodyGenerated: contract.source.mirroredBodyGenerated,
+      blockedRegionCount: contract.source.blockedRegionCount,
+      generationSourceMode: contract.source.generationSourceMode,
     },
     glb: {
       path: contract.glb.path,
