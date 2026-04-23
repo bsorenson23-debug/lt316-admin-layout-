@@ -23,6 +23,12 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.sectionLead {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
 /* ── Field rows ────────────────────────────────────────────────── */
 .fieldRow {
   display: flex;
@@ -471,7 +477,7 @@
 
 .workflowStepRow {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 8px;
 }
 
@@ -557,6 +563,12 @@
   font-size: 11px;
   line-height: 1.4;
   color: var(--warning);
+}
+
+.workflowNextNote {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 
 .reviewScaffoldCard,

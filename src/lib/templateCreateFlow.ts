@@ -1,4 +1,4 @@
-export type TemplateCreateWorkflowStep = "source" | "detect" | "review";
+export type TemplateCreateWorkflowStep = "source" | "detect" | "review" | "generate" | "preview";
 
 export type TemplateCreateWorkflowStatus = "ready" | "action" | "review";
 
@@ -7,6 +7,7 @@ export interface TemplateCreateWorkflowInput {
   hasProductImage: boolean;
   hasStagedDetectResult: boolean;
   hasAcceptedReview: boolean;
+  hasReviewedBodyCutoutQa: boolean;
   hasCanonicalBodyProfile: boolean;
   hasCanonicalDimensionCalibration: boolean;
 }
@@ -23,6 +24,18 @@ export interface TemplateCreateSourceReadiness {
   detectReady: boolean;
   missing: Array<"productType" | "productImage">;
   blockedReason?: string;
+}
+
+export interface TemplateCreateGenerateGateInput {
+  productType: string | null | undefined;
+  hasAcceptedReview: boolean;
+  canGenerate: boolean;
+  hasPendingSourceDraft: boolean;
+}
+
+export interface TemplateCreatePreviewGateInput {
+  hasSourceModel: boolean;
+  hasQaPreview: boolean;
 }
 
 export function isTemplateCreateReviewFlowProductType(
@@ -56,7 +69,7 @@ export function getTemplateCreateSourceReadiness(
       sourceReady: false,
       detectReady: false,
       missing: ["productImage"],
-      blockedReason: "Upload a product image in Source before detection.",
+      blockedReason: "Upload a product image in Source before photo auto-detect.",
     };
   }
 
@@ -73,8 +86,13 @@ export function deriveTemplateCreateWorkflowStep(
   if (!isTemplateCreateReviewFlowProductType(input.productType)) {
     return "source";
   }
+  if (input.hasReviewedBodyCutoutQa) {
+    return "preview";
+  }
+  if (input.hasAcceptedReview) {
+    return "generate";
+  }
   if (
-    input.hasAcceptedReview ||
     input.hasStagedDetectResult ||
     (input.hasCanonicalBodyProfile && input.hasCanonicalDimensionCalibration)
   ) {
@@ -122,7 +140,7 @@ export function buildTemplateCreateWorkflowSteps(
   return [
     {
       step: "source",
-      label: "Source",
+      label: "1. Source",
       status:
         input.productType && (!reviewFlow || sourceReadiness.sourceReady)
           ? "ready"
@@ -135,7 +153,7 @@ export function buildTemplateCreateWorkflowSteps(
     },
     {
       step: "detect",
-      label: "Detect",
+      label: "2. Detect",
       status: !reviewFlow
         ? "review"
         : input.hasStagedDetectResult || input.hasAcceptedReview
@@ -157,7 +175,7 @@ export function buildTemplateCreateWorkflowSteps(
     },
     {
       step: "review",
-      label: "Review & Save",
+      label: "3. Review BODY REFERENCE",
       status: !reviewFlow
         ? "ready"
         : input.hasAcceptedReview && input.hasCanonicalBodyProfile && input.hasCanonicalDimensionCalibration
@@ -175,5 +193,95 @@ export function buildTemplateCreateWorkflowSteps(
               ? "Accept or discard the staged body reference."
               : "Run detection before review.",
     },
+    {
+      step: "generate",
+      label: "4. Generate QA GLB",
+      status: !reviewFlow
+        ? "review"
+        : input.hasReviewedBodyCutoutQa
+          ? "ready"
+          : input.hasAcceptedReview
+            ? "action"
+            : "review",
+      detail: !reviewFlow
+        ? "BODY CUTOUT QA generation is only used for drinkware review."
+        : input.hasReviewedBodyCutoutQa
+          ? "Reviewed body-only GLB is ready for BODY CUTOUT QA."
+          : input.hasAcceptedReview
+            ? "Generate the reviewed body-only GLB for BODY CUTOUT QA."
+            : "Accept BODY REFERENCE review before QA generation.",
+    },
+    {
+      step: "preview",
+      label: "5. Preview & Export",
+      status: !reviewFlow
+        ? "review"
+        : input.hasReviewedBodyCutoutQa
+          ? "action"
+          : "review",
+      detail: !reviewFlow
+        ? "Use preview and save when the flat template is ready."
+        : input.hasReviewedBodyCutoutQa
+          ? "Switch between BODY CUTOUT QA, WRAP / EXPORT, and comparison views."
+          : "BODY CUTOUT QA preview unlocks after the reviewed GLB is generated.",
+    },
   ];
+}
+
+export function getTemplateCreateNextActionHint(
+  input: TemplateCreateWorkflowInput,
+): string {
+  if (!isTemplateCreateReviewFlowProductType(input.productType)) {
+    return "Finish the flat template fields, preview if needed, then save.";
+  }
+  if (!input.productType) {
+    return "Choose a drinkware product type, then add lookup or photo source material.";
+  }
+  if (input.hasReviewedBodyCutoutQa) {
+    return "Use BODY CUTOUT QA, WRAP / EXPORT, or compare views as needed, then save when the template is ready.";
+  }
+  if (input.hasAcceptedReview) {
+    return "Generate BODY CUTOUT QA GLB next, then switch to BODY CUTOUT QA or WRAP / EXPORT preview modes.";
+  }
+  if (input.hasStagedDetectResult) {
+    if (!input.hasProductImage) {
+      return "Review the staged BODY REFERENCE now. Upload a product image later if you want to rerun photo auto-detect.";
+    }
+    return "Accept BODY REFERENCE review to lock the current v1 contour before QA generation.";
+  }
+  if (!input.hasProductImage) {
+    return "Run lookup or upload a product image so detection and BODY REFERENCE review can start.";
+  }
+  return "Run lookup or auto-detect to stage the BODY REFERENCE proposal.";
+}
+
+export function getTemplateCreateGenerateGateReason(
+  input: TemplateCreateGenerateGateInput,
+): string | null {
+  if (!isTemplateCreateReviewFlowProductType(input.productType)) {
+    return null;
+  }
+  if (!input.hasAcceptedReview) {
+    return "Accept BODY REFERENCE review before generating BODY CUTOUT QA.";
+  }
+  if (!input.canGenerate) {
+    return "Finish BODY REFERENCE review data before generating BODY CUTOUT QA.";
+  }
+  if (input.hasPendingSourceDraft) {
+    return "Accept corrected cutout changes before generating BODY CUTOUT QA.";
+  }
+  return null;
+}
+
+export function getTemplateCreatePreviewGateNotes(
+  input: TemplateCreatePreviewGateInput,
+): string[] {
+  const notes: string[] = [];
+  if (!input.hasSourceModel) {
+    notes.push("Full model, WRAP / EXPORT, and Source compare stay disabled until a source model is loaded.");
+  }
+  if (!input.hasQaPreview) {
+    notes.push("BODY CUTOUT QA preview unlocks after generating the reviewed body-only GLB.");
+  }
+  return notes;
 }

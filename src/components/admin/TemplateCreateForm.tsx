@@ -33,6 +33,9 @@ import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import {
   buildTemplateCreateWorkflowSteps,
   deriveTemplateCreateWorkflowStep,
+  getTemplateCreateGenerateGateReason,
+  getTemplateCreateNextActionHint,
+  getTemplateCreatePreviewGateNotes,
   getTemplateCreateSaveGateReason,
   getTemplateCreateSourceReadiness,
 } from "@/lib/templateCreateFlow";
@@ -1270,6 +1273,8 @@ export function TemplateCreateForm({
   const previewModeDowngradeActive =
     previewModelState != null &&
     previewModelState.requestedMode !== previewModelState.effectiveMode;
+  const hasReviewedBodyCutoutQaGlb = activeDrinkwareGlbStatus === "generated-reviewed-model";
+  const hasSourceModelForPreview = Boolean(glbPath.trim());
 
   const workflowInput = React.useMemo(
     () => ({
@@ -1277,6 +1282,7 @@ export function TemplateCreateForm({
       hasProductImage: Boolean(productImageFile || productPhotoFullUrl),
       hasStagedDetectResult: Boolean(detectResult || lookupResult),
       hasAcceptedReview: hasAcceptedBodyReferenceReview,
+      hasReviewedBodyCutoutQa: hasReviewedBodyCutoutQaGlb,
       hasCanonicalBodyProfile: Boolean(approvedCanonicalBodyProfile),
       hasCanonicalDimensionCalibration: Boolean(approvedCanonicalDimensionCalibration),
     }),
@@ -1285,6 +1291,7 @@ export function TemplateCreateForm({
       approvedCanonicalDimensionCalibration,
       detectResult,
       hasAcceptedBodyReferenceReview,
+      hasReviewedBodyCutoutQaGlb,
       lookupResult,
       productImageFile,
       productPhotoFullUrl,
@@ -1304,9 +1311,24 @@ export function TemplateCreateForm({
     () => deriveTemplateCreateWorkflowStep(workflowInput),
     [workflowInput],
   );
+  const workflowCurrentStepLabel = React.useMemo(
+    () => workflowSteps.find((step) => step.step === workflowCurrentStep)?.label ?? workflowCurrentStep,
+    [workflowCurrentStep, workflowSteps],
+  );
+  const workflowNextActionHint = React.useMemo(
+    () => getTemplateCreateNextActionHint(workflowInput),
+    [workflowInput],
+  );
   const saveGateReason = React.useMemo(
     () => getTemplateCreateSaveGateReason(workflowInput),
     [workflowInput],
+  );
+  const previewModeGateNotes = React.useMemo(
+    () => getTemplateCreatePreviewGateNotes({
+      hasSourceModel: hasSourceModelForPreview,
+      hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+    }),
+    [activeDrinkwareGlbStatus, hasSourceModelForPreview],
   );
 
   React.useEffect(() => {
@@ -1675,6 +1697,55 @@ export function TemplateCreateForm({
   const bodyReferenceFineTuneDraftPendingAcceptance =
     bodyReferenceFineTuneModeEnabled &&
     bodyReferenceFineTuneDraftHasChanges;
+  const acceptBodyReferenceGateReason = React.useMemo(() => {
+    if (hasAcceptedBodyReferenceReview) {
+      return "BODY REFERENCE review is already locked for the current v1 source.";
+    }
+    if (!liveBodyReferencePipeline) {
+      return "Run lookup or auto-detect first so BODY REFERENCE review has a contour to accept.";
+    }
+    return null;
+  }, [hasAcceptedBodyReferenceReview, liveBodyReferencePipeline]);
+  const generateBodyCutoutGateReason = React.useMemo(
+    () => getTemplateCreateGenerateGateReason({
+      productType,
+      hasAcceptedReview: hasAcceptedBodyReferenceReview,
+      canGenerate: canGenerateReviewedBodyReferenceGlb,
+      hasPendingSourceDraft: bodyReferenceFineTuneDraftPendingAcceptance,
+    }),
+    [
+      bodyReferenceFineTuneDraftPendingAcceptance,
+      canGenerateReviewedBodyReferenceGlb,
+      hasAcceptedBodyReferenceReview,
+      productType,
+    ],
+  );
+  const previewModeTransitionNote = React.useMemo(
+    () => previewModeDowngradeActive
+      ? `Selected preview: ${requestedPreviewModeLabel}. Viewer is showing ${effectivePreviewModeLabel} until the required model state is available.`
+      : null,
+    [effectivePreviewModeLabel, previewModeDowngradeActive, requestedPreviewModeLabel],
+  );
+  const bodyReferenceV2GenerateGateReason = React.useMemo(() => {
+    if (bodyReferenceFineTuneDraftPendingAcceptance) {
+      return "Accept corrected v1 cutout changes before generating BODY CUTOUT QA from v2.";
+    }
+    if (!bodyReferenceV2CaptureReadiness.accepted) {
+      return "Accept the v2 draft to unlock optional BODY CUTOUT QA generation from v2.";
+    }
+    if (bodyReferenceV2CaptureReadiness.hasDraftChanges) {
+      return "Accept or reset pending v2 draft changes before generating from v2.";
+    }
+    if (!bodyReferenceV2CaptureReadiness.generationReady) {
+      return "Complete centerline, body-left, and lookup-diameter readiness before generating from v2.";
+    }
+    return null;
+  }, [
+    bodyReferenceFineTuneDraftPendingAcceptance,
+    bodyReferenceV2CaptureReadiness.accepted,
+    bodyReferenceV2CaptureReadiness.generationReady,
+    bodyReferenceV2CaptureReadiness.hasDraftChanges,
+  ]);
   const approvedBodyReferenceOutlineBounds = React.useMemo(
     () => resolveOutlineBounds(approvedBodyOutline),
     [approvedBodyOutline],
@@ -2428,7 +2499,10 @@ export function TemplateCreateForm({
 
       {productType !== "flat" && (
         <div className={styles.section} data-body-reference-review-scaffold="present">
-          <div className={styles.sectionTitle}>BODY REFERENCE review scaffold</div>
+          <div className={styles.sectionTitle}>BODY REFERENCE workflow</div>
+          <div className={styles.sectionLead}>
+            Move through the drinkware flow in order: stage the source, review BODY REFERENCE, generate BODY CUTOUT QA, then switch preview modes for QA or WRAP / EXPORT checks.
+          </div>
 
           <div className={styles.workflowScaffold}>
             <div className={styles.workflowStepRow}>
@@ -2471,8 +2545,12 @@ export function TemplateCreateForm({
                 {templateCreateSourceReadiness.detectReady ? "Detect actionable" : "Detect blocked"}
               </span>
               <span className={styles.workflowReadinessCurrent}>
-                Current step: {workflowCurrentStep}
+                Current step: {workflowCurrentStepLabel}
               </span>
+            </div>
+
+            <div className={styles.workflowNextNote}>
+              Next action: {workflowNextActionHint}
             </div>
 
             {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
@@ -2485,9 +2563,9 @@ export function TemplateCreateForm({
           <div className={styles.reviewScaffoldCard}>
             <div className={styles.reviewScaffoldHeader}>
               <div>
-                <div className={styles.reviewScaffoldTitle}>Review handoff</div>
+                <div className={styles.reviewScaffoldTitle}>Step 4 · Generate BODY CUTOUT QA</div>
                 <div className={styles.reviewScaffoldHint}>
-                  Accept the current BODY REFERENCE snapshot, then generate a reviewed body-only GLB for BODY CUTOUT QA.
+                  Lock the accepted BODY REFERENCE (v1) first, then generate the reviewed body-only GLB used by BODY CUTOUT QA.
                 </div>
               </div>
               <span
@@ -2497,7 +2575,7 @@ export function TemplateCreateForm({
                     : styles.reviewStatusPending
                 }
               >
-                {hasAcceptedBodyReferenceReview ? "Accepted" : "Pending review"}
+                {hasAcceptedBodyReferenceReview ? "v1 locked" : "Pending v1 review"}
               </span>
             </div>
 
@@ -2530,7 +2608,7 @@ export function TemplateCreateForm({
                   setPreviewModelMode("alignment-model");
                 }}
               >
-                {hasAcceptedBodyReferenceReview ? "BODY REFERENCE accepted" : "Accept BODY REFERENCE review"}
+                {hasAcceptedBodyReferenceReview ? "BODY REFERENCE (v1) locked" : "Accept BODY REFERENCE (v1)"}
               </button>
               <button
                 type="button"
@@ -2544,11 +2622,21 @@ export function TemplateCreateForm({
                   void handleGenerateReviewedBodyReferenceGlb();
                 }}
               >
-                {generatingReviewedBodyReferenceGlb ? "Generating BODY CUTOUT QA GLB…" : "Generate BODY CUTOUT QA GLB"}
+                {generatingReviewedBodyReferenceGlb ? "Generating BODY CUTOUT QA GLB…" : "Generate BODY CUTOUT QA GLB (v1)"}
               </button>
             </div>
 
             <div className={styles.reviewScaffoldMeta}>
+              {acceptBodyReferenceGateReason && (
+                <div className={styles.reviewScaffoldNote}>
+                  {acceptBodyReferenceGateReason}
+                </div>
+              )}
+              {generateBodyCutoutGateReason && (
+                <div className={styles.reviewScaffoldNote}>
+                  {generateBodyCutoutGateReason}
+                </div>
+              )}
               {!workflowInput.hasStagedDetectResult && !liveBodyReferencePipeline && (
                 <div className={styles.reviewScaffoldNote}>
                   Run auto-detect or lookup first so BODY REFERENCE review has a real canonical contour to accept.
@@ -2561,7 +2649,7 @@ export function TemplateCreateForm({
               )}
               {hasAcceptedBodyReferenceReview && (
                 <div className={styles.reviewScaffoldNote}>
-                  BODY REFERENCE review is accepted. Generate the reviewed GLB to switch the viewer into body-only QA proof mode.
+                  BODY REFERENCE (v1) is locked. Generate the reviewed body-only GLB next to unlock BODY CUTOUT QA preview.
                 </div>
               )}
               {approvedBodyReferenceQa && (
@@ -2595,7 +2683,7 @@ export function TemplateCreateForm({
               )}
               {saveGateReason && (
                 <div className={styles.reviewScaffoldNote}>
-                  Save gate preview: {saveGateReason}
+                  Save remains blocked: {saveGateReason}
                 </div>
               )}
               {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
@@ -2619,10 +2707,10 @@ export function TemplateCreateForm({
               <div className={styles.previewScaffoldHeader}>
                 <div>
                   <div className={styles.previewScaffoldTitle}>
-                    {effectivePreviewModeLabel}
+                    Step 5 · Preview and operator checks
                   </div>
                   <div className={styles.previewScaffoldHint}>
-                    {effectivePreviewModeHint}
+                    Select the viewer mode here. BODY CUTOUT QA validates reviewed body-only geometry; WRAP / EXPORT stays separate and reports printable-surface readiness.
                   </div>
                 </div>
                 {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
@@ -2634,10 +2722,19 @@ export function TemplateCreateForm({
 
               {previewModeDowngradeActive && (
                 <div className={styles.reviewScaffoldInlineMeta}>
-                  <span>Requested: {requestedPreviewModeLabel}</span>
-                  <span>Showing: {effectivePreviewModeLabel}</span>
+                  <span>Selected preview: {requestedPreviewModeLabel}</span>
+                  <span>Viewer showing: {effectivePreviewModeLabel}</span>
                 </div>
               )}
+              {previewModeTransitionNote && (
+                <div className={styles.previewPlaceholderNote}>
+                  {previewModeTransitionNote}
+                </div>
+              )}
+              <div className={styles.reviewScaffoldInlineMeta}>
+                <span>Preview mode: {effectivePreviewModeLabel}</span>
+                <span>{effectivePreviewModeHint}</span>
+              </div>
               {previewModelState?.message && (
                 <div className={styles.previewPlaceholderNote}>
                   {previewModelState.message}
@@ -2647,20 +2744,12 @@ export function TemplateCreateForm({
               <div className={styles.previewModeRow}>
                 <button
                   type="button"
-                  className={`${styles.detectBtn} ${previewModelMode === "alignment-model" ? styles.detectBtnActive : ""}`}
-                  aria-pressed={previewModelMode === "alignment-model"}
-                  onClick={() => setPreviewModelMode("alignment-model")}
+                  className={`${styles.detectBtn} ${previewModelMode === "body-cutout-qa" ? styles.detectBtnActive : ""}`}
+                  disabled={!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)}
+                  aria-pressed={previewModelMode === "body-cutout-qa"}
+                  onClick={() => setPreviewModelMode("body-cutout-qa")}
                 >
-                  Alignment
-                </button>
-                <button
-                  type="button"
-                  className={`${styles.detectBtn} ${previewModelMode === "full-model" ? styles.detectBtnActive : ""}`}
-                  disabled={!glbPath.trim()}
-                  aria-pressed={previewModelMode === "full-model"}
-                  onClick={() => setPreviewModelMode("full-model")}
-                >
-                  Full model
+                  BODY CUTOUT QA
                 </button>
                 <button
                   type="button"
@@ -2673,12 +2762,20 @@ export function TemplateCreateForm({
                 </button>
                 <button
                   type="button"
-                  className={`${styles.detectBtn} ${previewModelMode === "body-cutout-qa" ? styles.detectBtnActive : ""}`}
-                  disabled={!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)}
-                  aria-pressed={previewModelMode === "body-cutout-qa"}
-                  onClick={() => setPreviewModelMode("body-cutout-qa")}
+                  className={`${styles.detectBtn} ${previewModelMode === "alignment-model" ? styles.detectBtnActive : ""}`}
+                  aria-pressed={previewModelMode === "alignment-model"}
+                  onClick={() => setPreviewModelMode("alignment-model")}
                 >
-                  Body cutout QA
+                  Alignment review
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.detectBtn} ${previewModelMode === "full-model" ? styles.detectBtnActive : ""}`}
+                  disabled={!glbPath.trim()}
+                  aria-pressed={previewModelMode === "full-model"}
+                  onClick={() => setPreviewModelMode("full-model")}
+                >
+                  Full model
                 </button>
                 <button
                   type="button"
@@ -2691,21 +2788,11 @@ export function TemplateCreateForm({
                 </button>
               </div>
 
-              {!glbPath.trim() && (
-                <div className={styles.previewPlaceholderNote}>
-                  Load or resolve a source model to surface the reviewed model preview in this review flow.
+              {previewModeGateNotes.map((note) => (
+                <div key={note} className={styles.previewPlaceholderNote}>
+                  {note}
                 </div>
-              )}
-              {!glbPath.trim() && (
-                <div className={styles.previewPlaceholderNote}>
-                  WRAP / EXPORT preview uses the current source model plus wrap dimensions. It stays separate from BODY CUTOUT QA.
-                </div>
-              )}
-              {!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus) && (
-                <div className={styles.previewPlaceholderNote}>
-                  BODY CUTOUT QA unlocks after generating the reviewed body-only GLB from the accepted BODY REFERENCE.
-                </div>
-              )}
+              ))}
 
               {wrapExportSummaryVisible && (
                 <div
@@ -3243,9 +3330,9 @@ export function TemplateCreateForm({
             >
               <div className={styles.cutoutFitSummaryHeader}>
                 <div>
-                  <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 semantic layers</div>
+                  <div className={styles.cutoutFitSummaryTitle}>Optional BODY REFERENCE v2 capture</div>
                   <div className={styles.cutoutFitSummaryHint}>
-                    Operator capture scaffold for centerline, body-left, and readiness-gated future body-only generation. Not current generation source until explicitly generated.
+                    Capture centerline and body-left here when you want to test the optional v2 path. v1 BODY CUTOUT QA stays current until you explicitly generate from v2.
                   </div>
                 </div>
                 <span
@@ -3361,14 +3448,14 @@ export function TemplateCreateForm({
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.generationReady ? "yes" : "no"}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Current generation source</span>
+                  <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
                   <span className={styles.cutoutFitMetricValue}>
                     {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile" ? "yes" : "no"}
                   </span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
                   <span className={styles.cutoutFitMetricLabel}>v1 BODY CUTOUT QA</span>
-                  <span className={styles.cutoutFitMetricValue}>active</span>
+                  <span className={styles.cutoutFitMetricValue}>current default</span>
                 </div>
               </div>
 
@@ -3378,7 +3465,7 @@ export function TemplateCreateForm({
                   : "Accept BODY REFERENCE review first to seed the v2 centerline and body-left outline."}
               </div>
               <div className={styles.reviewScaffoldNote}>
-                Not current generation source. Existing v1 BODY CUTOUT QA remains active until the accepted v2 draft is explicitly generated.
+                Not current BODY CUTOUT QA source. Existing v1 BODY CUTOUT QA remains active until the accepted v2 draft is explicitly generated.
               </div>
               <div className={styles.reviewScaffoldNote}>
                 Direct point editing, mirror-derived defaulting, and BODY CUTOUT QA validation changes remain out of scope in this scaffold.
@@ -3422,7 +3509,7 @@ export function TemplateCreateForm({
                   <div>
                     <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 Mirror Preview</div>
                     <div className={styles.cutoutFitSummaryHint}>
-                      Future lookup-diameter calibration and mirrored-right preview only. Not current generation source.
+                      Lookup-diameter calibration and mirrored-right preview only. This stays reference-only until you explicitly generate from v2.
                     </div>
                   </div>
                   <span
@@ -3491,7 +3578,7 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.mirroredRightPointCount}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Current generation source</span>
+                      <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
                       <span className={styles.cutoutFitMetricValue}>
                         {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile" ? "yes" : "no"}
                       </span>
@@ -3500,7 +3587,7 @@ export function TemplateCreateForm({
                 )}
 
                 <div className={styles.reviewScaffoldNote}>
-                  Not current generation source. Existing v1 BODY CUTOUT QA remains active.
+                  Not current BODY CUTOUT QA source. Existing v1 BODY CUTOUT QA remains active.
                 </div>
 
                 {(bodyReferenceV2ScaleMirrorPreview.errors.length > 0 || bodyReferenceV2ScaleMirrorPreview.warnings.length > 0) && (
@@ -3528,7 +3615,7 @@ export function TemplateCreateForm({
                   <div>
                     <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 Generation Readiness</div>
                     <div className={styles.cutoutFitSummaryHint}>
-                      Accepted v2 draft gate for experimental body-only generation. Existing v1 BODY CUTOUT QA remains the default until v2 is explicitly generated.
+                      Accepted v2 draft gate for optional body-only generation. Existing v1 BODY CUTOUT QA remains the default until v2 is explicitly generated.
                     </div>
                   </div>
                   <span
@@ -3597,7 +3684,7 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{acceptedBodyReferenceV2GenerationReadiness?.ready ? "yes" : "no"}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Current generation source</span>
+                      <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
                       <span className={styles.cutoutFitMetricValue}>
                         {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile" ? "yes" : "no"}
                       </span>
@@ -3621,19 +3708,25 @@ export function TemplateCreateForm({
                     {generatingReviewedBodyReferenceGlb
                       ? "Generating BODY CUTOUT QA GLB…"
                       : !bodyReferenceV2CaptureReadiness.accepted
-                        ? "Accept v2 draft to enable v2 generation"
+                        ? "Accept v2 draft to unlock optional v2 generation"
                         : bodyReferenceV2CaptureReadiness.hasDraftChanges
                           ? "Accept or reset v2 draft changes"
                           : "Generate BODY CUTOUT QA from v2 mirrored profile"}
                   </button>
                 </div>
 
+                {bodyReferenceV2GenerateGateReason && (
+                  <div className={styles.reviewScaffoldNote}>
+                    {bodyReferenceV2GenerateGateReason}
+                  </div>
+                )}
+
                 <div className={styles.reviewScaffoldNote}>
                   {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile"
                     ? "Current source authority: BODY REFERENCE v2 mirrored profile."
                     : bodyReferenceV2CaptureReadiness.hasDraftChanges
                       ? "Draft changes are pending acceptance. v2 generation stays locked to the last accepted v2 draft."
-                      : "Not current generation source. Existing v1 BODY CUTOUT QA remains active until this experimental path is explicitly generated."}
+                      : "Not current BODY CUTOUT QA source. Existing v1 BODY CUTOUT QA remains active until this optional path is explicitly generated."}
                 </div>
 
                 {(bodyReferenceV2GenerationReadiness.errors.length > 0 || bodyReferenceV2GenerationReadiness.warnings.length > 0) && (
