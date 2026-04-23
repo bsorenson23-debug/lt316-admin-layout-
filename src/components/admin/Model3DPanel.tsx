@@ -6,6 +6,11 @@ import type { ModelViewerProps, TumblerDimensions } from "./ModelViewer";
 import type { PlacedItem } from "@/types/admin";
 import { GLB_TEMPLATES } from "@/data/glbTemplates";
 import type { GlbTemplate } from "@/data/glbTemplates";
+import {
+  buildTemplateModelAvailabilitySeed,
+  getTemplatesRequiringAvailabilityProbe,
+  setCachedTemplateModelAvailability,
+} from "@/lib/templateModelAvailability";
 import styles from "./Model3DPanel.module.css";
 
 const VIEWABLE_EXTS = new Set(["stl", "obj", "glb", "gltf"]);
@@ -141,6 +146,10 @@ export function Model3DPanel({
     () => GLB_TEMPLATES.filter((t) => t.workspaceModes.includes(workspaceMode)),
     [workspaceMode],
   );
+  const seededTemplateAvailability = React.useMemo(
+    () => buildTemplateModelAvailabilitySeed(filteredTemplates),
+    [filteredTemplates],
+  );
 
   const modelExt = modelFile?.name.split(".").pop()?.toLowerCase() ?? "";
   const viewable = VIEWABLE_EXTS.has(modelExt);
@@ -153,23 +162,33 @@ export function Model3DPanel({
       return;
     }
     let cancelled = false;
+    setTemplateAvailability(seededTemplateAvailability);
+    const templatesToProbe = getTemplatesRequiringAvailabilityProbe(filteredTemplates);
+    if (templatesToProbe.length === 0) {
+      return () => {
+        cancelled = true;
+      };
+    }
     Promise.all(
-      filteredTemplates.map(async (tpl) => {
+      templatesToProbe.map(async (tpl) => {
         try {
           const res = await fetch(tpl.glbPath, { method: "HEAD" });
-          return [tpl.id, res.ok || res.status === 405] as const;
+          const ok = res.ok || res.status === 405;
+          setCachedTemplateModelAvailability(tpl.glbPath, ok);
+          return [tpl.id, ok] as const;
         } catch {
+          setCachedTemplateModelAvailability(tpl.glbPath, false);
           return [tpl.id, false] as const;
         }
       }),
     ).then((entries) => {
       if (cancelled) return;
-      const next: Record<string, boolean> = {};
+      const next: Record<string, boolean> = { ...seededTemplateAvailability };
       entries.forEach(([id, ok]) => { next[id] = ok; });
       setTemplateAvailability(next);
     });
     return () => { cancelled = true; };
-  }, [filteredTemplates]);
+  }, [filteredTemplates, seededTemplateAvailability]);
 
   const accept = React.useCallback((file: File) => {
     if (file.size > MAX_MODEL_BYTES) {
@@ -496,7 +515,7 @@ export function Model3DPanel({
               {filteredTemplates.map((tpl) => {
                 const isActive = modelFile?.name === tpl.glbPath.split("/").pop();
                 const isLoading = templateLoading === tpl.id;
-                const isAvailable = templateAvailability[tpl.id] ?? true;
+                const isAvailable = templateAvailability[tpl.id] ?? seededTemplateAvailability[tpl.id] ?? true;
                 return (
                   <button
                     key={tpl.id}

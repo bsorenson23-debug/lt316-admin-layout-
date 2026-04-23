@@ -8,6 +8,12 @@ export interface GlbTemplate {
   label: string;
   /** Path relative to /public — fetched at runtime */
   glbPath: string;
+  /**
+   * Optional availability hint for static library cards.
+   * Use "known-missing-placeholder" for shipped placeholder slots that should
+   * render as missing without emitting browser 404 probe noise.
+   */
+  availabilityPolicy?: "probe" | "known-missing-placeholder";
   /** Optional thumbnail image — falls back to icon if missing/404 */
   thumbnailPath?: string;
   /** Emoji shown when no thumbnail is available */
@@ -22,6 +28,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "tumbler-20oz-skinny",
     label: "20oz Skinny",
     glbPath: "/models/templates/tumbler-20oz-skinny.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/tumbler-20oz-skinny.png",
     icon: "🥤",
     workspaceModes: ["tumbler-wrap"],
@@ -30,6 +37,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "tumbler-30oz",
     label: "30oz Tumbler",
     glbPath: "/models/templates/tumbler-30oz.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/tumbler-30oz.png",
     icon: "🥤",
     workspaceModes: ["tumbler-wrap"],
@@ -46,6 +54,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "tumbler-wine",
     label: "Wine Tumbler",
     glbPath: "/models/templates/tumbler-wine.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/tumbler-wine.png",
     icon: "🍷",
     workspaceModes: ["tumbler-wrap"],
@@ -54,6 +63,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "mug-12oz",
     label: "12oz Mug",
     glbPath: "/models/templates/mug-12oz.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/mug-12oz.png",
     icon: "☕",
     workspaceModes: ["tumbler-wrap"],
@@ -62,6 +72,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "bottle-24oz",
     label: "24oz Bottle",
     glbPath: "/models/templates/bottle-24oz.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/bottle-24oz.png",
     icon: "🍶",
     workspaceModes: ["tumbler-wrap"],
@@ -72,6 +83,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "flat-phone-case",
     label: "Phone Case",
     glbPath: "/models/templates/phone-case.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/phone-case.png",
     icon: "📱",
     workspaceModes: ["flat-bed"],
@@ -80,6 +92,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "flat-wood-plank",
     label: "Wood Plank",
     glbPath: "/models/templates/wood-plank.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/wood-plank.png",
     icon: "🪵",
     workspaceModes: ["flat-bed"],
@@ -88,6 +101,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "flat-dog-tag",
     label: "Dog Tag",
     glbPath: "/models/templates/dog-tag.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/dog-tag.png",
     icon: "🏷",
     workspaceModes: ["flat-bed"],
@@ -96,6 +110,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "flat-slate",
     label: "Slate Tile",
     glbPath: "/models/templates/slate-tile.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/slate-tile.png",
     icon: "◼",
     workspaceModes: ["flat-bed"],
@@ -104,6 +119,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "flat-keychain",
     label: "Keychain",
     glbPath: "/models/templates/keychain.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/keychain.png",
     icon: "🔑",
     workspaceModes: ["flat-bed"],
@@ -112,6 +128,7 @@ export const GLB_TEMPLATES: GlbTemplate[] = [
     id: "flat-tumbler-blank",
     label: "Tumbler Blank",
     glbPath: "/models/templates/tumbler-blank.glb",
+    availabilityPolicy: "known-missing-placeholder",
     thumbnailPath: "/models/thumbnails/tumbler-blank.png",
     icon: "⬛",
     workspaceModes: ["flat-bed"],
