@@ -303,9 +303,9 @@ export function validateLaserBedSurfaceMapping(
     glbSourceHash: mapping.glbSourceHash,
   });
   if (freshnessResult.freshness === "stale") {
-    warnings.push("Wrap/export mapping signature is stale relative to the saved geometry state.");
+    warnings.push("Saved WRAP / EXPORT mapping is stale relative to the current body geometry.");
   } else if (freshnessResult.freshness === "unknown") {
-    warnings.push("Wrap/export mapping freshness is unknown.");
+    warnings.push("Saved WRAP / EXPORT mapping freshness cannot be confirmed yet.");
   }
 
   for (const placement of args.placements ?? []) {
@@ -393,7 +393,7 @@ export function validateLaserBedArtworkPlacement(
     placement.yMm + placement.heightMm <= mapping.printableHeightMm;
 
   if (!insidePrintableArea && errors.length === 0) {
-    errors.push("Artwork placement falls outside the printable wrap/export area.");
+    errors.push("Saved artwork placement falls outside the printable wrap/export area. Move or resize it in laser-bed millimeter space.");
   }
 
   const wrapStartAngle = isFinitePositive(mapping.wrapWidthMm) && isFiniteNumber(placement.xMm)

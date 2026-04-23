@@ -176,7 +176,7 @@ test("overlay preview is only visible in wrap-export intent", () => {
   assert.equal(item.visible, false);
   assert.equal(state.enabled, false);
   assert.equal(state.isBodyCutoutQaProof, false);
-  assert.match(state.warnings.join(" "), /WRAP \/ EXPORT mode/i);
+  assert.match(state.warnings.join(" "), /WRAP \/ EXPORT/i);
 });
 
 test("moving artwork changes overlay descriptors without changing body-source lineage", () => {
@@ -215,5 +215,5 @@ test("missing placements return an empty disabled summary", () => {
   assert.equal(state.visibleCount, 0);
   assert.equal(state.enabled, false);
   assert.equal(state.isBodyCutoutQaProof, false);
-  assert.match(state.disabledReason ?? "", /No saved artwork placements/i);
+  assert.match(state.disabledReason ?? "", /No saved laser-bed artwork placements yet/i);
 });

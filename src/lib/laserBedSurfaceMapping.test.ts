@@ -98,6 +98,7 @@ test("artwork placement outside printable area fails", () => {
   assert.equal(validation.status, "fail");
   assert.equal(validation.insidePrintableArea, false);
   assert.match(validation.errors[0] ?? "", /outside the printable wrap\/export area/i);
+  assert.match(validation.errors[0] ?? "", /laser-bed millimeter space/i);
 });
 
 test("missing wrap dimensions fail mapping validation", () => {
@@ -151,7 +152,7 @@ test("stale mapping signature warns and freshness comparison reports stale", () 
   assert.equal(freshness.reason, "signature-mismatch");
   assert.equal(validation.status, "warn");
   assert.equal(validation.freshness, "stale");
-  assert.match(validation.warnings.join(" "), /signature is stale/i);
+  assert.match(validation.warnings.join(" "), /mapping is stale relative to the current body geometry/i);
 });
 
 test("mapping freshness falls back to source lineage when no saved signature exists", () => {

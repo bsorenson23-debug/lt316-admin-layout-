@@ -6,6 +6,7 @@ import {
   buildWrapExportPreviewState,
   getWrapExportMappingStatusLabel,
 } from "./wrapExportPreviewState.ts";
+import { getWrapExportBadgeNote } from "./wrapExportCopy.ts";
 
 export interface BodyGeometryStatusBadgeState {
   title: string;
@@ -111,23 +112,7 @@ export function buildBodyGeometryStatusBadgeState(args: {
       validForBodyQa = null;
     }
   } else if (mode === "wrap-export") {
-    switch (wrapExportPreviewState?.mappingStatus) {
-      case "ready":
-        qaLabel = "Not BODY CUTOUT QA · Wrap/export preview ready";
-        break;
-      case "no-reviewed-glb":
-        qaLabel = "Not BODY CUTOUT QA · Exact placement waits for a reviewed GLB";
-        break;
-      case "stale-geometry":
-        qaLabel = "Not BODY CUTOUT QA · Geometry is stale";
-        break;
-      case "missing-dimensions":
-        qaLabel = "Not BODY CUTOUT QA · Missing wrap dimensions";
-        break;
-      default:
-        qaLabel = "Not BODY CUTOUT QA · Wrap/export readiness unknown";
-        break;
-    }
+    qaLabel = getWrapExportBadgeNote(wrapExportPreviewState?.mappingStatus ?? "unknown");
   }
 
   return {
