@@ -2441,6 +2441,7 @@ export function TemplateCreateForm({
                 className={styles.detectBtn}
                 onClick={() => void handleItemLookup()}
                 disabled={lookingUpItem || !lookupInput.trim()}
+                data-testid="template-create-run-lookup"
               >
                 {lookingUpItem ? "Looking up..." : "Run lookup"}
               </button>
@@ -2696,6 +2697,7 @@ export function TemplateCreateForm({
                   setHasAcceptedBodyReferenceReview(true);
                   setPreviewModelMode("alignment-model");
                 }}
+                data-testid="body-reference-v1-accept"
               >
                 {hasAcceptedBodyReferenceReview ? "BODY REFERENCE (v1) locked" : "Accept BODY REFERENCE (v1)"}
               </button>
@@ -2710,6 +2712,7 @@ export function TemplateCreateForm({
                 onClick={() => {
                   void handleGenerateReviewedBodyReferenceGlb();
                 }}
+                data-testid="body-reference-v1-generate"
               >
                 {generatingReviewedBodyReferenceGlb ? "Generating BODY CUTOUT QA GLB…" : "Generate BODY CUTOUT QA GLB (v1)"}
               </button>
@@ -2837,6 +2840,7 @@ export function TemplateCreateForm({
                   disabled={!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)}
                   aria-pressed={previewModelMode === "body-cutout-qa"}
                   onClick={() => setPreviewModelMode("body-cutout-qa")}
+                  data-testid="preview-mode-body-cutout-qa"
                 >
                   BODY CUTOUT QA
                 </button>
@@ -2846,6 +2850,7 @@ export function TemplateCreateForm({
                   disabled={!glbPath.trim()}
                   aria-pressed={previewModelMode === "wrap-export"}
                   onClick={() => setPreviewModelMode("wrap-export")}
+                  data-testid="preview-mode-wrap-export"
                 >
                   WRAP / EXPORT
                 </button>
@@ -3244,6 +3249,7 @@ export function TemplateCreateForm({
                     className={styles.detectBtn}
                     onClick={handleStartBodyReferenceFineTune}
                     disabled={bodyReferenceFineTuneModeEnabled}
+                    data-testid="body-reference-fine-tune-edit"
                   >
                     Edit contour
                   </button>
@@ -3252,6 +3258,7 @@ export function TemplateCreateForm({
                     className={styles.detectBtn}
                     onClick={handleAcceptBodyReferenceFineTuneDraft}
                     disabled={!bodyReferenceFineTuneDraftPendingAcceptance}
+                    data-testid="body-reference-fine-tune-accept"
                   >
                     Accept corrected cutout
                   </button>
@@ -3291,6 +3298,7 @@ export function TemplateCreateForm({
                     onClick={() => {
                       void handleGenerateReviewedBodyReferenceGlb();
                     }}
+                    data-testid="body-reference-fine-tune-regenerate"
                   >
                     {generatingReviewedBodyReferenceGlb
                       ? "Regenerating reviewed GLB…"
@@ -3785,6 +3793,7 @@ export function TemplateCreateForm({
                     onClick={() => {
                       void handleGenerateReviewedBodyReferenceGlb("v2-mirrored-profile");
                     }}
+                    data-testid="body-reference-v2-generate"
                   >
                     {generatingReviewedBodyReferenceGlb
                       ? "Generating BODY CUTOUT QA GLB…"
@@ -4318,7 +4327,12 @@ export function TemplateCreateForm({
         <button type="button" className={styles.cancelBtn} onClick={onCancel}>
           Cancel
         </button>
-        <button type="button" className={styles.saveBtn} onClick={handleSave}>
+        <button
+          type="button"
+          className={styles.saveBtn}
+          onClick={handleSave}
+          data-testid="template-create-save"
+        >
           {isEdit ? "Save changes" : "Save template"}
         </button>
       </div>

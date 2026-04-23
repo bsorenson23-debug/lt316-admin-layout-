@@ -133,6 +133,7 @@ export function TemplateGallery({ onSelect, onCreateNew, onEdit, onDelete, selec
           type="button"
           className={`${styles.managePill} ${manageMode ? styles.managePillActive : ""}`}
           onClick={() => { setManageMode((m) => !m); setConfirmDeleteId(null); }}
+          data-testid="template-gallery-manage-button"
         >
           {manageMode ? "Done" : "Manage"}
         </button>
