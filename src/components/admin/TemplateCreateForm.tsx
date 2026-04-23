@@ -2,6 +2,7 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 import type { PlacedItem } from "@/types/admin";
 import type {
   BodyReferenceQAContract,
@@ -99,6 +100,10 @@ import {
   getWrapExportSummaryTitle,
 } from "@/lib/wrapExportCopy";
 import {
+  dedupeTemplateCreateDisplayMessages,
+  shouldAutoOpenTemplateCreateDiagnostics,
+} from "@/lib/templateCreateDisplayDensity";
+import {
   buildEngravingOverlayPreviewState,
   ENGRAVING_OVERLAY_PREVIEW_MATERIAL_LABEL,
   ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN,
@@ -177,6 +182,9 @@ function buildEffectiveBodyReferenceV2Draft(args: {
 
 const ENGRAVING_OVERLAY_TEXTURE_PX_PER_MM = 4;
 const ENGRAVING_OVERLAY_TINT = "#d7dde6";
+const TEMPLATE_CREATE_DEBUG_DETAILS_ENABLED =
+  process.env.NEXT_PUBLIC_ADMIN_DEBUG === "1" ||
+  process.env.NEXT_PUBLIC_SHOW_BODY_CONTRACT_INSPECTOR === "1";
 
 function buildFallbackOverlayBounds(widthMm: number, heightMm: number) {
   return {
@@ -516,6 +524,13 @@ export function TemplateCreateForm({
   workspaceArtworkPlacements = null,
 }: Props) {
   const isEdit = Boolean(editingTemplate);
+  const searchParams = useSearchParams();
+  const routeDebugEnabled = searchParams.get("debug") === "1";
+  const templateCreateDiagnosticsExpanded =
+    shouldAutoOpenTemplateCreateDiagnostics({
+      adminDebugEnabled: TEMPLATE_CREATE_DEBUG_DETAILS_ENABLED,
+      routeDebugEnabled,
+    });
   const derivedEditingDims = React.useMemo(
     () => (editingTemplate ? getEngravableDimensions(editingTemplate) : null),
     [editingTemplate],
@@ -1288,6 +1303,26 @@ export function TemplateCreateForm({
       wrapExportProductionReadiness.mappingFreshness,
       wrapExportProductionReadiness.placementCount,
       wrapExportProductionReadiness.staleMappingWarningCount,
+    ],
+  );
+  const wrapExportDiagnosticMessages = React.useMemo(
+    () => dedupeTemplateCreateDisplayMessages([
+      ...wrapExportPreviewState.errors.map((message) => ({ level: "error" as const, message })),
+      ...wrapExportPreviewState.warnings.map((message) => ({ level: "warning" as const, message })),
+      ...appearanceReferenceSummary.warnings.map((message) => ({ level: "warning" as const, message })),
+      ...persistedTemplateEngravingPreviewState.errors.map((message) => ({ level: "error" as const, message })),
+      ...persistedTemplateEngravingPreviewState.warnings.map((message) => ({ level: "warning" as const, message })),
+      ...engravingOverlayPreviewState.errors.map((message) => ({ level: "error" as const, message })),
+      ...engravingOverlayPreviewState.warnings.map((message) => ({ level: "warning" as const, message })),
+    ]),
+    [
+      appearanceReferenceSummary.warnings,
+      engravingOverlayPreviewState.errors,
+      engravingOverlayPreviewState.warnings,
+      persistedTemplateEngravingPreviewState.errors,
+      persistedTemplateEngravingPreviewState.warnings,
+      wrapExportPreviewState.errors,
+      wrapExportPreviewState.warnings,
     ],
   );
   const wrapExportSummaryVisible =
@@ -2744,28 +2779,9 @@ export function TemplateCreateForm({
                   BODY REFERENCE (v1) is locked. Generate the reviewed body-only GLB next to unlock BODY CUTOUT QA preview.
                 </div>
               )}
-              {approvedBodyReferenceQa && (
-                <div className={styles.reviewScaffoldInlineMeta}>
-                  <span>QA {approvedBodyReferenceQa.severity}</span>
-                  <span>{approvedBodyReferenceQa.shellAuthority}</span>
-                  <span>{approvedBodyReferenceQa.scaleAuthority}</span>
-                </div>
-              )}
               {approvedBodyReferenceWarnings.length > 0 && (
                 <div className={styles.reviewScaffoldNote}>
                   {approvedBodyReferenceWarnings[0]}
-                </div>
-              )}
-              {loadedBodyGeometryContract && (
-                <div className={styles.reviewScaffoldInlineMeta}>
-                  <span>Runtime {loadedBodyGeometryContract.validation.status}</span>
-                  <span>
-                    {loadedBodyGeometryContract.glb.freshRelativeToSource === true
-                      ? "GLB fresh"
-                      : loadedBodyGeometryContract.glb.freshRelativeToSource === false
-                        ? "GLB stale"
-                        : "GLB freshness unknown"}
-                  </span>
                 </div>
               )}
               {bodyReferenceFineTuneDraftPendingAcceptance && (
@@ -2778,13 +2794,41 @@ export function TemplateCreateForm({
                   Save remains blocked: {saveGateReason}
                 </div>
               )}
-              {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
-                <div className={styles.reviewScaffoldInlineMeta}>
-                  <span>{getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)}</span>
-                  {activeDrinkwareGlbSourceLabel && (
-                    <span>{activeDrinkwareGlbSourceLabel}</span>
-                  )}
-                </div>
+              {(approvedBodyReferenceQa || loadedBodyGeometryContract || getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)) && (
+                <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                  <summary className={styles.compactDetailsSummary}>
+                    Review diagnostics and runtime detail
+                  </summary>
+                  <div className={styles.compactDetailsContent}>
+                    {approvedBodyReferenceQa && (
+                      <div className={styles.reviewScaffoldInlineMeta}>
+                        <span>QA {approvedBodyReferenceQa.severity}</span>
+                        <span>{approvedBodyReferenceQa.shellAuthority}</span>
+                        <span>{approvedBodyReferenceQa.scaleAuthority}</span>
+                      </div>
+                    )}
+                    {loadedBodyGeometryContract && (
+                      <div className={styles.reviewScaffoldInlineMeta}>
+                        <span>Runtime {loadedBodyGeometryContract.validation.status}</span>
+                        <span>
+                          {loadedBodyGeometryContract.glb.freshRelativeToSource === true
+                            ? "GLB fresh"
+                            : loadedBodyGeometryContract.glb.freshRelativeToSource === false
+                              ? "GLB stale"
+                              : "GLB freshness unknown"}
+                        </span>
+                      </div>
+                    )}
+                    {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
+                      <div className={styles.reviewScaffoldInlineMeta}>
+                        <span>{getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)}</span>
+                        {activeDrinkwareGlbSourceLabel && (
+                          <span>{activeDrinkwareGlbSourceLabel}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </details>
               )}
             </div>
 
@@ -2931,100 +2975,8 @@ export function TemplateCreateForm({
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Ready for preview</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportProductionReadiness.readyForPreview ? "yes" : "no"}
-                      </span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Ready for exact placement</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportProductionReadiness.readyForExactPlacement ? "yes" : "no"}
-                      </span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Viewer agreement ready</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportProductionReadiness.readyForViewerAgreement ? "yes" : "no"}
-                      </span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>BODY CUTOUT QA proof</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportProductionReadiness.notBodyCutoutQa ? "no" : "yes"}
-                      </span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Export source of truth</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {getWrapExportExportAuthorityLabel(wrapExportProductionReadiness.exportAuthority)}
-                      </span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Wrap diameter</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.wrapDiameterMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Wrap width</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.wrapWidthMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Printable top</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableTopMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Printable bottom</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableBottomMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Printable height</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableHeightMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Expected body width</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.expectedBodyWidthMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Expected body height</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.expectedBodyHeightMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Body bounds</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatBodyBoundsMetric(wrapExportPreviewState.bodyBounds)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Scale source</span>
-                      <span className={styles.cutoutFitMetricValue}>{wrapExportPreviewState.scaleSource ?? "unknown"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Saved placement freshness</span>
-                      <span className={styles.cutoutFitMetricValue}>{wrapExportFreshnessLabel}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Body bounds source</span>
-                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.bodyBoundsSource}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Saved artwork placements</span>
                       <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.placementCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Visible overlay items</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportProductionReadiness.overlayCount} / {wrapExportProductionReadiness.overlayTotalCount}
-                      </span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Overlay enabled</span>
-                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.overlayEnabled ? "yes" : "no"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Overlay material</span>
-                      <span className={styles.cutoutFitMetricValue}>{ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Outside printable placements</span>
-                      <span className={styles.cutoutFitMetricValue}>{engravingOverlayPreviewState.outsidePrintableAreaCount}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Saved placement agreement</span>
@@ -3035,58 +2987,156 @@ export function TemplateCreateForm({
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Stale mapping warnings</span>
-                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.staleMappingWarningCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Source hash</span>
+                      <span className={styles.cutoutFitMetricLabel}>Export source of truth</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {formatShortHash(wrapExportContract?.source.hash)}
+                        {getWrapExportExportAuthorityLabel(wrapExportProductionReadiness.exportAuthority)}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {formatShortHash(wrapExportContract?.glb.sourceHash)}
-                      </span>
+                      <span className={styles.cutoutFitMetricLabel}>Overlay enabled</span>
+                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.overlayEnabled ? "yes" : "no"}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Saved mapping signature</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {formatShortHash(
-                          wrapExportProductionReadiness.mappingSignature
-                          ?? templateArtworkPlacementMappingSignature
-                          ?? editingTemplate?.engravingPreviewState?.mappingSignature,
-                        )}
-                      </span>
+                      <span className={styles.cutoutFitMetricLabel}>Outside printable placements</span>
+                      <span className={styles.cutoutFitMetricValue}>{engravingOverlayPreviewState.outsidePrintableAreaCount}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Appearance references</span>
                       <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.totalLayers}</span>
                     </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Reference-only layers</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportProductionReadiness.appearanceReferenceContextOnly ? "yes" : "no"}
-                      </span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Top finish band</span>
-                      <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.topFinishBandPresent ? "present" : "none"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Bottom finish band</span>
-                      <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.bottomFinishBandPresent ? "present" : "none"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Front logo reference</span>
-                      <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.frontLogoReferencePresent ? "present" : "none"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Back logo reference</span>
-                      <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.backLogoReferencePresent ? "present" : "none"}</span>
-                    </div>
                   </div>
+
+                  <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                    <summary className={styles.compactDetailsSummary}>
+                      Mapping, overlay, and signature detail
+                    </summary>
+                    <div className={styles.compactDetailsContent}>
+                      <div className={styles.cutoutFitSummaryGrid}>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Ready for preview</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.readyForPreview ? "yes" : "no"}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Ready for exact placement</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.readyForExactPlacement ? "yes" : "no"}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Viewer agreement ready</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.readyForViewerAgreement ? "yes" : "no"}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>BODY CUTOUT QA proof</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.notBodyCutoutQa ? "no" : "yes"}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Wrap diameter</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.wrapDiameterMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Wrap width</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.wrapWidthMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Printable top</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableTopMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Printable bottom</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableBottomMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Printable height</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableHeightMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Expected body width</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.expectedBodyWidthMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Expected body height</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.expectedBodyHeightMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Body bounds</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatBodyBoundsMetric(wrapExportPreviewState.bodyBounds)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Scale source</span>
+                          <span className={styles.cutoutFitMetricValue}>{wrapExportPreviewState.scaleSource ?? "unknown"}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Body bounds source</span>
+                          <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.bodyBoundsSource}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Visible overlay items</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.overlayCount} / {wrapExportProductionReadiness.overlayTotalCount}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Overlay material</span>
+                          <span className={styles.cutoutFitMetricValue}>{ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Stale mapping warnings</span>
+                          <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.staleMappingWarningCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Source hash</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {formatShortHash(wrapExportContract?.source.hash)}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {formatShortHash(wrapExportContract?.glb.sourceHash)}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Saved mapping signature</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {formatShortHash(
+                              wrapExportProductionReadiness.mappingSignature
+                              ?? templateArtworkPlacementMappingSignature
+                              ?? editingTemplate?.engravingPreviewState?.mappingSignature,
+                            )}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Reference-only layers</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.appearanceReferenceContextOnly ? "yes" : "no"}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Top finish band</span>
+                          <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.topFinishBandPresent ? "present" : "none"}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Bottom finish band</span>
+                          <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.bottomFinishBandPresent ? "present" : "none"}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Front logo reference</span>
+                          <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.frontLogoReferencePresent ? "present" : "none"}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Back logo reference</span>
+                          <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.backLogoReferencePresent ? "present" : "none"}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
 
                   <div className={styles.reviewScaffoldNote}>
                     {getWrapExportAuthorityNote()}
@@ -3125,59 +3175,14 @@ export function TemplateCreateForm({
                     </div>
                   )}
 
-                  {(wrapExportPreviewState.errors.length > 0 || wrapExportPreviewState.warnings.length > 0) && (
+                  {wrapExportDiagnosticMessages.length > 0 && (
                     <div className={styles.cutoutFitWarningList}>
-                      {wrapExportPreviewState.errors.map((error, index) => (
-                        <div key={`wrap-error-${index}-${error}`} className={styles.cutoutFitWarningError}>
-                          {error}
-                        </div>
-                      ))}
-                      {wrapExportPreviewState.warnings.map((warning, index) => (
-                        <div key={`wrap-warning-${index}-${warning}`} className={styles.cutoutFitWarning}>
-                          {warning}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {appearanceReferenceSummary.warnings.length > 0 && (
-                    <div className={styles.cutoutFitWarningList}>
-                      {appearanceReferenceSummary.warnings.map((warning) => (
-                        <div key={`appearance-reference-warning-${warning}`} className={styles.cutoutFitWarning}>
-                          {warning}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {hasSavedArtworkPlacements && (
-                    persistedTemplateEngravingPreviewState.errors.length > 0 ||
-                    persistedTemplateEngravingPreviewState.warnings.length > 0
-                  ) && (
-                    <div className={styles.cutoutFitWarningList}>
-                      {persistedTemplateEngravingPreviewState.errors.map((error, index) => (
-                        <div key={`saved-wrap-error-${index}-${error}`} className={styles.cutoutFitWarningError}>
-                          {error}
-                        </div>
-                      ))}
-                      {persistedTemplateEngravingPreviewState.warnings.map((warning, index) => (
-                        <div key={`saved-wrap-warning-${index}-${warning}`} className={styles.cutoutFitWarning}>
-                          {warning}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {hasSavedArtworkPlacements && (
-                    engravingOverlayPreviewState.errors.length > 0 ||
-                    engravingOverlayPreviewState.warnings.length > 0
-                  ) && (
-                    <div className={styles.cutoutFitWarningList}>
-                      {engravingOverlayPreviewState.errors.map((error) => (
-                        <div key={`overlay-error-${error}`} className={styles.cutoutFitWarningError}>
-                          {error}
-                        </div>
-                      ))}
-                      {engravingOverlayPreviewState.warnings.map((warning) => (
-                        <div key={`overlay-warning-${warning}`} className={styles.cutoutFitWarning}>
-                          {warning}
+                      {wrapExportDiagnosticMessages.map((entry) => (
+                        <div
+                          key={`wrap-export-diagnostic-${entry.level}-${entry.message}`}
+                          className={entry.level === "error" ? styles.cutoutFitWarningError : styles.cutoutFitWarning}
+                        >
+                          {entry.message}
                         </div>
                       ))}
                     </div>
@@ -3327,20 +3332,8 @@ export function TemplateCreateForm({
 
                   <div className={styles.cutoutFitSummaryGrid}>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Approved point count</span>
-                      <span className={styles.cutoutFitMetricValue}>{approvedBodyReferencePointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Draft point count</span>
-                      <span className={styles.cutoutFitMetricValue}>{draftBodyReferencePointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Approved bounds</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(approvedBodyReferenceOutlineBounds)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Draft bounds</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(draftBodyReferenceOutlineBounds)}</span>
+                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB freshness</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceFineTuneStatusLabel}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>SVG quality status</span>
@@ -3354,35 +3347,57 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricLabel}>Expected bridge segments</span>
                       <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.expectedBridgeSegmentCount}</span>
                     </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Tiny segments</span>
-                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.tinySegmentCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Suspicious spikes</span>
-                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.suspiciousSpikeCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Duplicate points</span>
-                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.duplicatePointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Near-duplicate points</span>
-                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.nearDuplicatePointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB freshness</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceFineTuneStatusLabel}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Source hash</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatShortHash(currentReviewedBodyReferenceSourceSignature)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatShortHash(reviewedBodyReferenceGlbSourceHash)}</span>
-                    </div>
                   </div>
+
+                  <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                    <summary className={styles.compactDetailsSummary}>
+                      Cutout geometry and hash detail
+                    </summary>
+                    <div className={styles.compactDetailsContent}>
+                      <div className={styles.cutoutFitSummaryGrid}>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Approved point count</span>
+                          <span className={styles.cutoutFitMetricValue}>{approvedBodyReferencePointCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Draft point count</span>
+                          <span className={styles.cutoutFitMetricValue}>{draftBodyReferencePointCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Approved bounds</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(approvedBodyReferenceOutlineBounds)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Draft bounds</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(draftBodyReferenceOutlineBounds)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Tiny segments</span>
+                          <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.tinySegmentCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Suspicious spikes</span>
+                          <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.suspiciousSpikeCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Duplicate points</span>
+                          <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.duplicatePointCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Near-duplicate points</span>
+                          <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.nearDuplicatePointCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Source hash</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatShortHash(currentReviewedBodyReferenceSourceSignature)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatShortHash(reviewedBodyReferenceGlbSourceHash)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
 
                   <div className={styles.reviewScaffoldNote}>
                     {reviewedBodyReferenceGlbFreshnessLabel}
@@ -3517,30 +3532,6 @@ export function TemplateCreateForm({
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.bodyLeftCaptured ? "captured" : "missing"}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Mirrored right side</span>
-                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.bodyRightMirroredPresent ? "derived" : "missing"}</span>
-                </div>
-                <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Lid references (excluded)</span>
-                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lidReferenceCount}</span>
-                </div>
-                <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Handle references (excluded)</span>
-                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.handleReferenceCount}</span>
-                </div>
-                <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Blocked regions (reference-only)</span>
-                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.blockedRegionCount}</span>
-                </div>
-                <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Scale authority</span>
-                  <span className={styles.cutoutFitMetricValue}>{formatBodyReferenceV2ScaleSourceLabel(bodyReferenceV2Summary.scaleSource)}</span>
-                </div>
-                <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Lookup diameter ready</span>
-                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lookupDiameterPresent ? "present" : "missing"}</span>
-                </div>
-                <div className={styles.cutoutFitMetric}>
                   <span className={styles.cutoutFitMetricLabel}>Accepted v2 draft</span>
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.accepted ? "yes" : "no"}</span>
                 </div>
@@ -3556,11 +3547,45 @@ export function TemplateCreateForm({
                   <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                 </div>
-                <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>v1 BODY CUTOUT QA</span>
-                  <span className={styles.cutoutFitMetricValue}>available fallback</span>
-                </div>
               </div>
+
+              <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                <summary className={styles.compactDetailsSummary}>
+                  v2 reference and scale detail
+                </summary>
+                <div className={styles.compactDetailsContent}>
+                  <div className={styles.cutoutFitSummaryGrid}>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Mirrored right side</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.bodyRightMirroredPresent ? "derived" : "missing"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Lid references (excluded)</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lidReferenceCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Handle references (excluded)</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.handleReferenceCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Blocked regions (reference-only)</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.blockedRegionCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Scale authority</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatBodyReferenceV2ScaleSourceLabel(bodyReferenceV2Summary.scaleSource)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Lookup diameter ready</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lookupDiameterPresent ? "present" : "missing"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>v1 BODY CUTOUT QA</span>
+                      <span className={styles.cutoutFitMetricValue}>available fallback</span>
+                    </div>
+                  </div>
+                </div>
+              </details>
 
               <div className={styles.reviewScaffoldNote}>
                 {approvedBodyOutline
@@ -3621,59 +3646,70 @@ export function TemplateCreateForm({
                   <div className={styles.cutoutFitWarningList}>
                     <div className={styles.cutoutFitWarning}>Capture the centerline axis.</div>
                     <div className={styles.cutoutFitWarning}>Capture or seed the body-left outline.</div>
-                    <div className={styles.cutoutFitWarning}>BODY CUTOUT QA stays on the accepted v1 contour until v2 is generated.</div>
                   </div>
                 ) : (
-                  <div className={styles.cutoutFitSummaryGrid}>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.centerline ? "captured" : "missing"}</span>
+                  <>
+                    <div className={styles.cutoutFitSummaryGrid}>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
+                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.centerline ? "captured" : "missing"}</span>
+                      </div>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
+                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.leftBodyPointCount}</span>
+                      </div>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Lookup diameter authority</span>
+                        <span className={styles.cutoutFitMetricValue}>{formatLookupAuthority(bodyReferenceV2ScaleMirrorPreview.lookupDimensionAuthority)}</span>
+                      </div>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
+                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
+                      </div>
                     </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.leftBodyPointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Lookup diameter</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.lookupDiameterMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Lookup variant</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.lookupVariantLabel || "n/a"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Selected size</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatLookupSize(bodyReferenceV2ScaleMirrorPreview.lookupSizeOz)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Lookup diameter authority</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatLookupAuthority(bodyReferenceV2ScaleMirrorPreview.lookupDimensionAuthority)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Diameter (px)</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.diameterPx != null ? round2(bodyReferenceV2ScaleMirrorPreview.diameterPx) : "n/a"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>mm per px</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.mmPerPx != null ? bodyReferenceV2ScaleMirrorPreview.mmPerPx.toFixed(4) : "n/a"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Derived wrap width</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.wrapWidthMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Full product height</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.lookupFullProductHeightMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Mirrored-right points</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.mirroredRightPointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
-                    </div>
-                  </div>
+
+                    <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                      <summary className={styles.compactDetailsSummary}>
+                        Mirror scale and lookup detail
+                      </summary>
+                      <div className={styles.compactDetailsContent}>
+                        <div className={styles.cutoutFitSummaryGrid}>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Lookup diameter</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.lookupDiameterMm)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Lookup variant</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.lookupVariantLabel || "n/a"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Selected size</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatLookupSize(bodyReferenceV2ScaleMirrorPreview.lookupSizeOz)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Diameter (px)</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.diameterPx != null ? round2(bodyReferenceV2ScaleMirrorPreview.diameterPx) : "n/a"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>mm per px</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.mmPerPx != null ? bodyReferenceV2ScaleMirrorPreview.mmPerPx.toFixed(4) : "n/a"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Derived wrap width</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.wrapWidthMm)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Full product height</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.lookupFullProductHeightMm)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Mirrored-right points</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.mirroredRightPointCount}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </details>
+                  </>
                 )}
 
                 <div className={styles.reviewScaffoldNote}>
@@ -3726,59 +3762,70 @@ export function TemplateCreateForm({
                   <div className={styles.cutoutFitWarningList}>
                     <div className={styles.cutoutFitWarning}>Capture the centerline axis.</div>
                     <div className={styles.cutoutFitWarning}>Capture or seed the body-left outline.</div>
-                    <div className={styles.cutoutFitWarning}>BODY CUTOUT QA stays on the accepted v1 contour until v2 is generated.</div>
                   </div>
                 ) : (
-                  <div className={styles.cutoutFitSummaryGrid}>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.centerlineCaptured ? "captured" : "missing"}</span>
+                  <>
+                    <div className={styles.cutoutFitSummaryGrid}>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
+                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.centerlineCaptured ? "captured" : "missing"}</span>
+                      </div>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
+                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.leftBodyPointCount}</span>
+                      </div>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Accepted draft</span>
+                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.accepted ? "yes" : "no"}</span>
+                      </div>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Accepted draft ready</span>
+                        <span className={styles.cutoutFitMetricValue}>{acceptedBodyReferenceV2GenerationReadiness?.ready ? "yes" : "no"}</span>
+                      </div>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
+                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
+                      </div>
                     </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.leftBodyPointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Mirrored-right points</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.mirroredRightPointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Lookup diameter</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2GenerationReadiness.lookupDiameterMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Diameter (px)</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.diameterPx != null ? round2(bodyReferenceV2GenerationReadiness.diameterPx) : "n/a"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>mm per px</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.mmPerPx != null ? bodyReferenceV2GenerationReadiness.mmPerPx.toFixed(4) : "n/a"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Derived wrap width</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2GenerationReadiness.wrapWidthMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Blocked regions</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.blockedRegionCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Accepted draft</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.accepted ? "yes" : "no"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Draft pending acceptance</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.hasDraftChanges ? "yes" : "no"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Accepted draft ready</span>
-                      <span className={styles.cutoutFitMetricValue}>{acceptedBodyReferenceV2GenerationReadiness?.ready ? "yes" : "no"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
-                    </div>
-                  </div>
+
+                    <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                      <summary className={styles.compactDetailsSummary}>
+                        v2 generation metric detail
+                      </summary>
+                      <div className={styles.compactDetailsContent}>
+                        <div className={styles.cutoutFitSummaryGrid}>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Mirrored-right points</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.mirroredRightPointCount}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Lookup diameter</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2GenerationReadiness.lookupDiameterMm)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Diameter (px)</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.diameterPx != null ? round2(bodyReferenceV2GenerationReadiness.diameterPx) : "n/a"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>mm per px</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.mmPerPx != null ? bodyReferenceV2GenerationReadiness.mmPerPx.toFixed(4) : "n/a"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Derived wrap width</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2GenerationReadiness.wrapWidthMm)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Blocked regions</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.blockedRegionCount}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Draft pending acceptance</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.hasDraftChanges ? "yes" : "no"}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </details>
+                  </>
                 )}
 
                 <div className={styles.reviewScaffoldActions}>
