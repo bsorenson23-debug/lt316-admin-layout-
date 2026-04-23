@@ -942,6 +942,7 @@ export function AdminLayoutShell() {
                   type="button"
                   className={styles.selectProductBtn}
                   onClick={() => setShowTemplateGallery(true)}
+                  data-testid="browse-products-button"
                 >
                   Browse Products
                 </button>
@@ -1000,6 +1001,7 @@ export function AdminLayoutShell() {
                   type="button"
                   className={styles.productCardCompactChange}
                   onClick={() => setShowTemplateGallery(true)}
+                  data-testid="selected-template-change-button"
                 >
                   Change
                 </button>
@@ -1215,6 +1217,7 @@ export function AdminLayoutShell() {
                   type="button"
                   className={styles.productCardCompactChange}
                   onClick={() => setShowTemplateGallery(true)}
+                  data-testid="selected-template-change-button"
                 >
                   Change
                 </button>
@@ -1754,6 +1757,7 @@ export function AdminLayoutShell() {
                   type="button"
                   className={styles.modalCreateBtn}
                   onClick={() => { setEditingTemplate(null); setShowCreateForm(true); }}
+                  data-testid="template-gallery-create-new"
                 >
                   Create new template
                 </button>
