@@ -18,6 +18,11 @@ import {
   getWrapExportPreviewStatusLabel,
 } from "@/lib/wrapExportPreviewState";
 import type { WrapExportProductionReadinessSummary } from "@/lib/wrapExportProductionValidation";
+import {
+  getWrapExportExportAuthorityLabel,
+  getWrapExportMappingFreshnessLabel,
+  getWrapExportSummaryTitle,
+} from "@/lib/wrapExportCopy";
 import packageJson from "../../../package.json";
 import styles from "./BodyContractInspectorPanel.module.css";
 
@@ -515,7 +520,7 @@ export function BodyContractInspectorPanel({
                   open
                   data-testid="body-contract-inspector-wrap-export-section"
                 >
-                  <summary className={styles.sectionSummary}>Wrap / Export</summary>
+                  <summary className={styles.sectionSummary}>{getWrapExportSummaryTitle()}</summary>
                   <div className={styles.sectionBody}>
                     <div className={styles.fieldList}>
                       <Field
@@ -524,33 +529,33 @@ export function BodyContractInspectorPanel({
                         testId="body-contract-inspector-wrap-export-status"
                       />
                       <Field
-                        label="Mapping status"
+                        label="Wrap/export mapping"
                         value={getWrapExportMappingStatusLabel(wrapExportPreviewState.mappingStatus)}
                         testId="body-contract-inspector-wrap-export-mapping-status"
                       />
                       <Field
-                        label="Ready for preview"
+                        label="Preview ready"
                         value={formatBoolean(wrapExportReadiness?.readyForPreview ?? wrapExportPreviewState.readyForPreview)}
                         testId="body-contract-inspector-wrap-export-ready-preview"
                       />
                       <Field
-                        label="Ready for exact placement"
+                        label="Exact placement ready"
                         value={formatBoolean(wrapExportReadiness?.readyForExactPlacement ?? wrapExportPreviewState.readyForExactPlacement)}
                         testId="body-contract-inspector-wrap-export-ready-exact"
                       />
                       <Field
-                        label="Ready for viewer agreement"
+                        label="Viewer agreement ready"
                         value={formatBoolean(wrapExportReadiness?.readyForViewerAgreement)}
                         testId="body-contract-inspector-wrap-export-ready-viewer-agreement"
                       />
                       <Field
-                        label="Is BODY CUTOUT QA proof"
+                        label="BODY CUTOUT QA proof"
                         value={wrapExportReadiness ? formatBoolean(!wrapExportReadiness.notBodyCutoutQa) : formatBoolean(wrapExportPreviewState.isBodyCutoutQaProof)}
                         testId="body-contract-inspector-wrap-export-is-qa-proof"
                       />
                       <Field
-                        label="Export authority"
-                        value={wrapExportReadiness?.exportAuthority ?? "laser-bed-mm-placement"}
+                        label="Export source of truth"
+                        value={getWrapExportExportAuthorityLabel(wrapExportReadiness?.exportAuthority)}
                         testId="body-contract-inspector-wrap-export-authority"
                       />
                       <Field
@@ -604,17 +609,20 @@ export function BodyContractInspectorPanel({
                         testId="body-contract-inspector-wrap-export-body-bounds-source"
                       />
                       <Field
-                        label="Freshness"
-                        value={wrapExportReadiness?.mappingFreshness ?? wrapExportPreviewState.freshness}
+                        label="Saved placement freshness"
+                        value={getWrapExportMappingFreshnessLabel({
+                          freshness: wrapExportReadiness?.mappingFreshness ?? wrapExportPreviewState.freshness,
+                          hasSavedPlacements: (wrapExportReadiness?.placementCount ?? 0) > 0,
+                        })}
                         testId="body-contract-inspector-wrap-export-freshness"
                       />
                       <Field
-                        label="Placement count"
+                        label="Saved placements"
                         value={wrapExportReadiness ? String(wrapExportReadiness.placementCount) : "n/a"}
                         testId="body-contract-inspector-wrap-export-placement-count"
                       />
                       <Field
-                        label="Overlay count"
+                        label="Visible overlays / total"
                         value={wrapExportReadiness ? `${wrapExportReadiness.overlayCount} / ${wrapExportReadiness.overlayTotalCount}` : "n/a"}
                         testId="body-contract-inspector-wrap-export-overlay-count"
                       />
@@ -624,7 +632,7 @@ export function BodyContractInspectorPanel({
                         testId="body-contract-inspector-wrap-export-overlay-enabled"
                       />
                       <Field
-                        label="Outside printable warnings"
+                        label="Outside printable placements"
                         value={wrapExportReadiness ? String(wrapExportReadiness.outsidePrintableAreaWarningCount) : "n/a"}
                         testId="body-contract-inspector-wrap-export-outside-printable"
                       />
@@ -660,7 +668,7 @@ export function BodyContractInspectorPanel({
                           {warning}
                         </div>
                       ))}
-                    </div>
+                  </div>
                   </div>
                 </details>
               ) : null}

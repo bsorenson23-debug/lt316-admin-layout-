@@ -146,7 +146,7 @@ test("wrap-export badge reports mapping readiness without treating the preview a
   assert.equal(state.title, "WRAP / EXPORT PREVIEW");
   assert.equal(state.status, "pass");
   assert.equal(state.mappingLabel, "Ready");
-  assert.equal(state.qaLabel, "Not BODY CUTOUT QA · Wrap/export preview ready");
+  assert.equal(state.qaLabel, "Separate from BODY CUTOUT QA · Preview and export checks ready");
   assert.equal(state.validForBodyQa, false);
 });
 

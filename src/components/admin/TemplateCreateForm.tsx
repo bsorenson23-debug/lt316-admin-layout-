@@ -86,7 +86,21 @@ import {
   summarizeWrapExportProductionReadiness,
 } from "@/lib/wrapExportProductionValidation";
 import {
+  getWrapExportAppearanceReferenceNote,
+  getWrapExportAuthorityNote,
+  getWrapExportExportAuthorityLabel,
+  getWrapExportMappingFreshnessLabel,
+  getWrapExportNoAppearanceReferenceMessage,
+  getWrapExportNoSavedPlacementMessage,
+  getWrapExportOperatorWarningNote,
+  getWrapExportOverlayPreviewNote,
+  getWrapExportRegenerateNote,
+  getWrapExportSummarySubtitle,
+  getWrapExportSummaryTitle,
+} from "@/lib/wrapExportCopy";
+import {
   buildEngravingOverlayPreviewState,
+  ENGRAVING_OVERLAY_PREVIEW_MATERIAL_LABEL,
   ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN,
 } from "@/lib/engravingOverlayPreview";
 import {
@@ -1255,6 +1269,27 @@ export function TemplateCreateForm({
     };
   }, [engravingOverlayPreviewState.enabled, overlayPreviewPlacedItems, overlayPreviewTextureKey]);
   const hasSavedArtworkPlacements = persistedArtworkPlacements.length > 0;
+  const wrapExportFreshnessLabel = React.useMemo(
+    () => getWrapExportMappingFreshnessLabel({
+      freshness: wrapExportProductionReadiness.mappingFreshness,
+      hasSavedPlacements: hasSavedArtworkPlacements,
+    }),
+    [hasSavedArtworkPlacements, wrapExportProductionReadiness.mappingFreshness],
+  );
+  const wrapExportOperatorWarningNote = React.useMemo(
+    () => getWrapExportOperatorWarningNote({
+      freshness: wrapExportProductionReadiness.mappingFreshness,
+      placementCount: wrapExportProductionReadiness.placementCount,
+      outsidePrintableWarningCount: engravingOverlayPreviewState.outsidePrintableAreaCount,
+      staleMappingWarningCount: wrapExportProductionReadiness.staleMappingWarningCount,
+    }),
+    [
+      engravingOverlayPreviewState.outsidePrintableAreaCount,
+      wrapExportProductionReadiness.mappingFreshness,
+      wrapExportProductionReadiness.placementCount,
+      wrapExportProductionReadiness.staleMappingWarningCount,
+    ],
+  );
   const wrapExportSummaryVisible =
     previewModelMode === "wrap-export" ||
     effectivePreviewModelMode === "wrap-export";
@@ -2863,9 +2898,9 @@ export function TemplateCreateForm({
                 >
                   <div className={styles.cutoutFitSummaryHeader}>
                     <div>
-                      <div className={styles.cutoutFitSummaryTitle}>Wrap / Export Summary</div>
+                      <div className={styles.cutoutFitSummaryTitle}>{getWrapExportSummaryTitle()}</div>
                       <div className={styles.cutoutFitSummaryHint}>
-                        WRAP / EXPORT shows printable-surface readiness and can preview saved artwork on the 3D body when mapping is fresh. It is not BODY CUTOUT QA.
+                        {getWrapExportSummarySubtitle()}
                       </div>
                     </div>
                     <span
@@ -2915,9 +2950,9 @@ export function TemplateCreateForm({
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Export authority</span>
+                      <span className={styles.cutoutFitMetricLabel}>Export source of truth</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportProductionReadiness.exportAuthority}
+                        {getWrapExportExportAuthorityLabel(wrapExportProductionReadiness.exportAuthority)}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
@@ -2957,8 +2992,8 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{wrapExportPreviewState.scaleSource ?? "unknown"}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Freshness</span>
-                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.mappingFreshness}</span>
+                      <span className={styles.cutoutFitMetricLabel}>Saved placement freshness</span>
+                      <span className={styles.cutoutFitMetricValue}>{wrapExportFreshnessLabel}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Body bounds source</span>
@@ -2969,7 +3004,7 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.placementCount}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Artwork overlay items</span>
+                      <span className={styles.cutoutFitMetricLabel}>Visible overlay items</span>
                       <span className={styles.cutoutFitMetricValue}>
                         {wrapExportProductionReadiness.overlayCount} / {wrapExportProductionReadiness.overlayTotalCount}
                       </span>
@@ -2983,15 +3018,15 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Outside printable warnings</span>
+                      <span className={styles.cutoutFitMetricLabel}>Outside printable placements</span>
                       <span className={styles.cutoutFitMetricValue}>{engravingOverlayPreviewState.outsidePrintableAreaCount}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Saved mapping freshness</span>
+                      <span className={styles.cutoutFitMetricLabel}>Saved placement agreement</span>
                       <span className={styles.cutoutFitMetricValue}>
                         {hasSavedArtworkPlacements
-                          ? wrapExportProductionReadiness.mappingFreshness
-                          : "unknown"}
+                          ? wrapExportFreshnessLabel
+                          : "No saved placement yet"}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
@@ -3025,7 +3060,7 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.totalLayers}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Appearance refs context only</span>
+                      <span className={styles.cutoutFitMetricLabel}>Reference-only layers</span>
                       <span className={styles.cutoutFitMetricValue}>
                         {wrapExportProductionReadiness.appearanceReferenceContextOnly ? "yes" : "no"}
                       </span>
@@ -3049,21 +3084,24 @@ export function TemplateCreateForm({
                   </div>
 
                   <div className={styles.reviewScaffoldNote}>
-                    WRAP / EXPORT uses current body geometry freshness and printable-surface metadata when available. It never replaces BODY CUTOUT QA.
+                    {getWrapExportAuthorityNote()}
                   </div>
                   <div className={styles.reviewScaffoldNote}>
-                    Saved artwork overlay uses preview-only millimeter mapping with {ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN}. It never changes GLB geometry truth.
+                    {getWrapExportOverlayPreviewNote(ENGRAVING_OVERLAY_PREVIEW_MATERIAL_LABEL)}
+                  </div>
+                  <div className={styles.reviewScaffoldNote}>
+                    {getWrapExportRegenerateNote()}
                   </div>
                   <div
                     className={styles.reviewScaffoldNote}
                     data-testid="appearance-reference-summary"
                   >
-                    Product appearance references are orientation context only. Reference only — not BODY CUTOUT QA.
+                    {getWrapExportAppearanceReferenceNote()}
                   </div>
 
                   {!hasSavedArtworkPlacements && (
                     <div className={styles.previewPlaceholderNote}>
-                      No artwork placements saved yet. Template save remains valid; WRAP / EXPORT will report placement readiness once artwork is stored in millimeter space.
+                      {getWrapExportNoSavedPlacementMessage()}
                     </div>
                   )}
                   {hasSavedArtworkPlacements && engravingOverlayPreviewState.disabledReason && (
@@ -3071,9 +3109,14 @@ export function TemplateCreateForm({
                       {engravingOverlayPreviewState.disabledReason}
                     </div>
                   )}
+                  {wrapExportOperatorWarningNote && (
+                    <div className={styles.previewPlaceholderNote}>
+                      {wrapExportOperatorWarningNote}
+                    </div>
+                  )}
                   {appearanceReferenceSummary.totalLayers === 0 && (
                     <div className={styles.previewPlaceholderNote}>
-                      No product appearance references saved yet. Reference only — not BODY CUTOUT QA.
+                      {getWrapExportNoAppearanceReferenceMessage()}
                     </div>
                   )}
 

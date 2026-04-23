@@ -87,9 +87,9 @@ export function getWrapExportMappingStatusLabel(
     case "missing-dimensions":
       return "Missing dimensions";
     case "stale-geometry":
-      return "Stale geometry";
+      return "Stale reviewed geometry";
     case "no-reviewed-glb":
-      return "No reviewed GLB";
+      return "Preview only - no reviewed GLB";
     default:
       return "Unknown";
   }
@@ -148,21 +148,21 @@ export function buildWrapExportPreviewState(
   const errors: string[] = [];
 
   if (!wrapDiameterMm || !wrapWidthMm) {
-    errors.push("Wrap diameter and wrap width are required for wrap/export preview.");
+    errors.push("WRAP / EXPORT is blocked until wrap diameter and wrap width are available.");
   }
 
   if (!hasBodyBounds) {
-    warnings.push("Body bounds are unavailable; exact wrap placement cannot be confirmed.");
+    warnings.push("WRAP / EXPORT can preview saved artwork, but exact viewer agreement is waiting on body bounds.");
   }
 
   if (freshness === "unknown") {
-    warnings.push("Geometry freshness is unknown; wrap/export placement may not match the latest accepted source.");
+    warnings.push("WRAP / EXPORT preview is available, but saved placement freshness cannot be confirmed against the current reviewed geometry yet.");
   } else if (freshness === "stale") {
-    warnings.push("Geometry is stale relative to the accepted source; regenerate the reviewed GLB for exact wrap/export placement.");
+    warnings.push("Saved laser-bed millimeter placement stays authoritative, but exact viewer agreement is stale. Regenerate the reviewed BODY CUTOUT QA GLB after body-geometry changes.");
   }
 
   if (!reviewedGeneratedGlb) {
-    warnings.push("No reviewed GLB is loaded; wrap/export preview is using current product geometry and is not exact placement proof.");
+    warnings.push("WRAP / EXPORT can still preview saved artwork, but exact placement waits for a reviewed BODY CUTOUT QA GLB.");
   }
 
   if (
@@ -170,7 +170,7 @@ export function buildWrapExportPreviewState(
     typeof printableBottomMm !== "number" ||
     typeof printableHeightMm !== "number"
   ) {
-    warnings.push("Printable top/bottom bounds are unavailable; wrap/export preview is using the current body span only.");
+    warnings.push("Printable top/bottom bounds are unavailable, so WRAP / EXPORT is using the current body span only.");
   }
 
   const readyForPreview = errors.length === 0;

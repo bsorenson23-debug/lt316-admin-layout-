@@ -97,7 +97,7 @@ test("wrap-export preview warns when body bounds are missing", () => {
   assert.equal(state.mappingStatus, "unknown");
   assert.equal(state.readyForPreview, true);
   assert.equal(state.readyForExactPlacement, false);
-  assert.match(state.warnings.join(" "), /body bounds are unavailable/i);
+  assert.match(state.warnings.join(" "), /viewer agreement is waiting on body bounds/i);
 });
 
 test("wrap-export preview warns when geometry is stale", () => {
@@ -128,7 +128,7 @@ test("wrap-export preview warns when geometry is stale", () => {
   assert.equal(state.status, "warn");
   assert.equal(state.mappingStatus, "stale-geometry");
   assert.equal(state.readyForExactPlacement, false);
-  assert.match(state.warnings.join(" "), /stale relative to the accepted source/i);
+  assert.match(state.warnings.join(" "), /viewer agreement is stale/i);
 });
 
 test("wrap-export preview warns when no reviewed GLB is loaded", () => {
@@ -156,11 +156,13 @@ test("wrap-export preview warns when no reviewed GLB is loaded", () => {
   assert.equal(state.readyForPreview, true);
   assert.equal(state.readyForExactPlacement, false);
   assert.equal(state.isBodyCutoutQaProof, false);
+  assert.match(state.warnings.join(" "), /exact placement waits for a reviewed BODY CUTOUT QA GLB/i);
 });
 
 test("wrap-export helper status and mapping labels stay operator-readable", () => {
   assert.equal(getWrapExportPreviewStatusLabel("pass"), "PASS");
   assert.equal(getWrapExportPreviewStatusLabel("unknown"), "UNKNOWN");
   assert.equal(getWrapExportMappingStatusLabel("ready"), "Ready");
-  assert.equal(getWrapExportMappingStatusLabel("no-reviewed-glb"), "No reviewed GLB");
+  assert.equal(getWrapExportMappingStatusLabel("stale-geometry"), "Stale reviewed geometry");
+  assert.equal(getWrapExportMappingStatusLabel("no-reviewed-glb"), "Preview only - no reviewed GLB");
 });
