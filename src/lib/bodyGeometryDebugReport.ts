@@ -1,5 +1,6 @@
 import type { BodyGeometryContract } from "./bodyGeometryContract.ts";
 import type { parseBodyGeometryAuditArtifact } from "./adminApi.schema";
+import type { WrapExportProductionReadinessSummary } from "./wrapExportProductionValidation.ts";
 
 export const BODY_GEOMETRY_DEBUG_REPORT_VERSION = "2026-04-20-v1";
 
@@ -43,6 +44,7 @@ export interface BodyGeometryDebugReport {
     auditArtifactOptionalMissing: boolean;
     auditArtifactRequiredMissing: boolean;
   };
+  wrapExport?: WrapExportProductionReadinessSummary | null;
   contract: BodyGeometryContract | null;
   auditArtifact: BodyGeometryAuditArtifactLike | null;
 }
@@ -59,6 +61,7 @@ function sanitizeFileStem(value: string | undefined): string | null {
 export function buildBodyGeometryDebugReport(args: {
   contract: BodyGeometryContract | null;
   auditArtifact?: BodyGeometryAuditArtifactLike | null;
+  wrapExport?: WrapExportProductionReadinessSummary | null;
   exportedAt?: string;
   environment?: BodyGeometryDebugReportEnvironment;
 }): BodyGeometryDebugReport {
@@ -103,6 +106,7 @@ export function buildBodyGeometryDebugReport(args: {
       auditArtifactRequiredMissing:
         contract?.runtimeInspection?.auditArtifactRequiredMissing ?? false,
     },
+    wrapExport: args.wrapExport ?? null,
     contract,
     auditArtifact,
   };
