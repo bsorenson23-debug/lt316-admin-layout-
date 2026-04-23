@@ -6,6 +6,11 @@
   max-width: 560px;
 }
 
+.formPage {
+  width: 100%;
+  max-width: min(1120px, 100%);
+}
+
 /* ── Sections ──────────────────────────────────────────────────── */
 .section {
   display: flex;

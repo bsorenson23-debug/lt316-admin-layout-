@@ -56,12 +56,20 @@ import { ColorLayerPanel } from "./ColorLayerPanel";
 import { type LaserLayer, buildDefaultLayers } from "@/types/laserLayer";
 import { FiberColorCalibrationPanel } from "./FiberColorCalibrationPanel";
 import { TemplateGallery } from "./TemplateGallery";
-import { TemplateCreateForm } from "./TemplateCreateForm";
+import { TemplateModeSurface } from "./TemplateModeSurface";
 import type { ProductTemplate } from "@/types/productTemplate";
 import type { LaserBedArtworkPlacement } from "@/lib/laserBedSurfaceMapping";
 import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import { getTumblerWrapLayout, getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
+import {
+  createInactiveTemplateModeState,
+  enterCreateTemplateMode,
+  enterEditTemplateMode,
+  resolveTemplateModeCancelOutcome,
+  resolveTemplateModeSaveOutcome,
+  resolveTemplateModeWorkspaceArtworkPlacements,
+} from "@/lib/templateModeState";
 import styles from "./AdminLayoutShell.module.css";
 
 function isDevEnvironment() {
@@ -237,8 +245,7 @@ export function AdminLayoutShell() {
   // -- Product template system -----------------------------------------------
   const [selectedTemplate, setSelectedTemplate] = useState<ProductTemplate | null>(null);
   const [showTemplateGallery, setShowTemplateGallery] = useState(false);
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState<ProductTemplate | null>(null);
+  const [templateMode, setTemplateMode] = useState(createInactiveTemplateModeState);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [, setTemplateRefreshNonce] = useState(0);
   const [didRestorePersistedState, setDidRestorePersistedState] = useState(false);
@@ -839,7 +846,6 @@ export function AdminLayoutShell() {
 
     setSelectedTemplate(template);
     setShowTemplateGallery(false);
-    setShowCreateForm(false);
     setBgRemovalStatus("idle");
     const templateArtworkPlacements =
       template.artworkPlacements ?? template.engravingPreviewState?.placements;
@@ -879,6 +885,58 @@ export function AdminLayoutShell() {
     setTimeout(() => setToastMessage(null), 2200);
   }, [svgAssets]);
 
+  const showTemplateUpdatedToast = useCallback(() => {
+    setToastMessage("Template updated");
+    setTimeout(() => setToastMessage(null), 2200);
+  }, []);
+
+  const handleCloseTemplateGallery = useCallback(() => {
+    setShowTemplateGallery(false);
+  }, []);
+
+  const handleStartTemplateCreate = useCallback(() => {
+    setTemplateMode(enterCreateTemplateMode("gallery"));
+    setShowTemplateGallery(false);
+  }, []);
+
+  const handleStartTemplateEdit = useCallback((template: ProductTemplate) => {
+    setTemplateMode(enterEditTemplateMode(template, "gallery"));
+    setShowTemplateGallery(false);
+  }, []);
+
+  const handleStartSelectedTemplateEdit = useCallback(() => {
+    if (!selectedTemplate) return;
+    setTemplateMode(enterEditTemplateMode(selectedTemplate, "workspace"));
+    setShowTemplateGallery(false);
+  }, [selectedTemplate]);
+
+  const handleExitTemplateMode = useCallback(() => {
+    const outcome = resolveTemplateModeCancelOutcome(templateMode);
+    setTemplateMode(outcome.nextState);
+    setShowTemplateGallery(outcome.reopenGallery);
+  }, [templateMode]);
+
+  const handleTemplateModeSave = useCallback((template: ProductTemplate) => {
+    setTemplateRefreshNonce((n) => n + 1);
+    const outcome = resolveTemplateModeSaveOutcome({
+      mode: templateMode,
+      savedTemplateId: template.id,
+      selectedTemplateId: selectedTemplate?.id,
+    });
+
+    setTemplateMode(outcome.nextState);
+
+    if (outcome.selectSavedTemplate) {
+      handleTemplateSelect(template);
+    } else {
+      setShowTemplateGallery(outcome.reopenGallery);
+    }
+
+    if (templateMode.intent === "edit") {
+      showTemplateUpdatedToast();
+    }
+  }, [handleTemplateSelect, selectedTemplate?.id, showTemplateUpdatedToast, templateMode]);
+
   const handleUpdateCalibration = useCallback((offsetX: number, offsetY: number, rotation: number) => {
     if (!selectedTemplate) return;
     const calXLimit = Math.max(15, Math.min(45, Math.round(bedConfig.width * 0.12)));
@@ -907,9 +965,26 @@ export function AdminLayoutShell() {
     () => serializePlacedItemsToLaserBedArtworkPlacements(placedItems),
     [placedItems],
   );
+  const templateModeWorkspaceArtworkPlacements = React.useMemo(
+    () => resolveTemplateModeWorkspaceArtworkPlacements({
+      mode: templateMode,
+      selectedTemplateId: selectedTemplate?.id,
+      workspaceArtworkPlacements,
+    }),
+    [templateMode, selectedTemplate?.id, workspaceArtworkPlacements],
+  );
 
   return (
     <div className={styles.shell}>
+      {templateMode.active ? (
+        <TemplateModeSurface
+          mode={templateMode}
+          workspaceArtworkPlacements={templateModeWorkspaceArtworkPlacements}
+          onSave={handleTemplateModeSave}
+          onExit={handleExitTemplateMode}
+        />
+      ) : (
+        <>
       {/* LEFT */}
       <aside className={styles.leftPanel}>
         {/* ── Step indicator ── */}
@@ -997,14 +1072,24 @@ export function AdminLayoutShell() {
                       : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplatePrintHeightMm}mm`}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  className={styles.productCardCompactChange}
-                  onClick={() => setShowTemplateGallery(true)}
-                  data-testid="selected-template-change-button"
-                >
-                  Change
-                </button>
+                <div className={styles.productCardCompactActions}>
+                  <button
+                    type="button"
+                    className={styles.productCardCompactChange}
+                    onClick={() => setShowTemplateGallery(true)}
+                    data-testid="selected-template-change-button"
+                  >
+                    Change
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.productCardCompactChange}
+                    onClick={handleStartSelectedTemplateEdit}
+                    data-testid="selected-template-edit-button"
+                  >
+                    Edit
+                  </button>
+                </div>
               </div>
 
               {/* Product photo overlay controls */}
@@ -1213,14 +1298,24 @@ export function AdminLayoutShell() {
                       : `${selectedTemplate.dimensions.templateWidthMm} \u00D7 ${selectedTemplatePrintHeightMm}mm`}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  className={styles.productCardCompactChange}
-                  onClick={() => setShowTemplateGallery(true)}
-                  data-testid="selected-template-change-button"
-                >
-                  Change
-                </button>
+                <div className={styles.productCardCompactActions}>
+                  <button
+                    type="button"
+                    className={styles.productCardCompactChange}
+                    onClick={() => setShowTemplateGallery(true)}
+                    data-testid="selected-template-change-button"
+                  >
+                    Change
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.productCardCompactChange}
+                    onClick={handleStartSelectedTemplateEdit}
+                    data-testid="selected-template-edit-button"
+                  >
+                    Edit
+                  </button>
+                </div>
               </div>
 
               {/* Product photo overlay controls */}
@@ -1690,81 +1785,48 @@ export function AdminLayoutShell() {
 
       {/* ── Template gallery modal ── */}
       {showTemplateGallery && (
-        <div className={styles.modalBackdrop} onClick={() => { setShowTemplateGallery(false); setShowCreateForm(false); setEditingTemplate(null); }}>
+        <div className={styles.modalBackdrop} onClick={handleCloseTemplateGallery}>
           <div className={styles.modalContainer} onClick={(e) => e.stopPropagation()}>
             <div className={styles.modalHeader}>
-              <span className={styles.modalTitle}>
-                {showCreateForm
-                  ? editingTemplate ? "Edit template" : "Create new template"
-                  : "Select product"}
-              </span>
+              <span className={styles.modalTitle}>Select product</span>
               <button
                 type="button"
                 className={styles.modalCloseBtn}
-                onClick={() => { setShowTemplateGallery(false); setShowCreateForm(false); setEditingTemplate(null); }}
+                onClick={handleCloseTemplateGallery}
               >
                 ×
               </button>
             </div>
             <div className={styles.modalBody}>
-              {showCreateForm ? (
-                <TemplateCreateForm
-                  editingTemplate={editingTemplate ?? undefined}
-                  workspaceArtworkPlacements={
-                    !editingTemplate
-                      ? workspaceArtworkPlacements
-                      : editingTemplate && selectedTemplate?.id === editingTemplate.id
-                      ? workspaceArtworkPlacements
-                      : null
+              <TemplateGallery
+                onSelect={handleTemplateSelect}
+                onCreateNew={handleStartTemplateCreate}
+                onEdit={handleStartTemplateEdit}
+                onDelete={(id) => {
+                  setTemplateRefreshNonce((n) => n + 1);
+                  if (selectedTemplate?.id === id) {
+                    setSelectedTemplate(null);
                   }
-                  onSave={(t) => {
-                    setTemplateRefreshNonce((n) => n + 1);
-                    // If the edited template is the active one, re-select to sync workspace
-                    if (editingTemplate && selectedTemplate?.id === t.id) {
-                      handleTemplateSelect(t);
-                    } else if (!editingTemplate) {
-                      handleTemplateSelect(t);
-                    }
-                    setShowCreateForm(false);
-                    setEditingTemplate(null);
-                    if (editingTemplate) {
-                      setToastMessage("Template updated");
-                      setTimeout(() => setToastMessage(null), 2200);
-                    }
-                  }}
-                  onCancel={() => { setShowCreateForm(false); setEditingTemplate(null); }}
-                />
-              ) : (
-                <TemplateGallery
-                  onSelect={handleTemplateSelect}
-                  onCreateNew={() => { setEditingTemplate(null); setShowCreateForm(true); }}
-                  onEdit={(t) => { setEditingTemplate(t); setShowCreateForm(true); }}
-                  onDelete={(id) => {
-                    setTemplateRefreshNonce((n) => n + 1);
-                    if (selectedTemplate?.id === id) {
-                      setSelectedTemplate(null);
-                    }
-                    setToastMessage("Template deleted");
-                    setTimeout(() => setToastMessage(null), 2200);
-                  }}
-                  selectedId={selectedTemplate?.id}
-                />
-              )}
+                  setToastMessage("Template deleted");
+                  setTimeout(() => setToastMessage(null), 2200);
+                }}
+                selectedId={selectedTemplate?.id}
+              />
             </div>
-            {!showCreateForm && (
-              <div className={styles.modalFooter}>
-                <button
-                  type="button"
-                  className={styles.modalCreateBtn}
-                  onClick={() => { setEditingTemplate(null); setShowCreateForm(true); }}
-                  data-testid="template-gallery-create-new"
-                >
-                  Create new template
-                </button>
-              </div>
-            )}
+            <div className={styles.modalFooter}>
+              <button
+                type="button"
+                className={styles.modalCreateBtn}
+                onClick={handleStartTemplateCreate}
+                data-testid="template-gallery-create-new"
+              >
+                Create new template
+              </button>
+            </div>
           </div>
         </div>
+      )}
+        </>
       )}
 
       {/* ── Toast ── */}
