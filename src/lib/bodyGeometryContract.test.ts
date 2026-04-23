@@ -401,6 +401,97 @@ test("BODY CUTOUT QA contracts fail when accessory meshes leak into the mesh lis
   assert.match(contract.validation.errors.join(" "), /expected exactly body geometry/i);
 });
 
+test("BODY CUTOUT QA contracts fail when reference-only meshes leak into the mesh list", () => {
+  const contract = updateContractValidation({
+    ...createEmptyBodyGeometryContract(),
+    mode: "body-cutout-qa",
+    source: {
+      type: "body-reference-v2",
+      hash: "json:source",
+      detectedBodyOnly: true,
+    },
+    glb: {
+      path: "/api/admin/models/generated/example.glb",
+      hash: "json:glb",
+      sourceHash: "json:source",
+      freshRelativeToSource: true,
+    },
+    meshes: {
+      names: ["body_mesh", "handle_reference_mesh", "finish_band_reference_mesh"],
+      bodyMeshNames: [],
+      accessoryMeshNames: [],
+      fallbackMeshNames: [],
+      fallbackDetected: false,
+      unexpectedMeshes: [],
+    },
+    dimensionsMm: {
+      bodyBounds: {
+        width: 88.98,
+        height: 225,
+        depth: 88.98,
+      },
+      bodyBoundsUnits: "mm",
+      expectedBodyWidthMm: 88.98,
+      expectedBodyHeightMm: 225,
+    },
+    validation: {
+      status: "unknown",
+      errors: [],
+      warnings: [],
+    },
+  });
+
+  assert.deepEqual(contract.meshes.bodyMeshNames, ["body_mesh"]);
+  assert.deepEqual(contract.meshes.accessoryMeshNames, ["handle_reference_mesh", "finish_band_reference_mesh"]);
+  assert.equal(contract.validation.status, "fail");
+  assert.match(contract.validation.errors.join(" "), /expected exactly body geometry/i);
+});
+
+test("BODY CUTOUT QA contracts fail when engraving or artwork meshes leak into the mesh list", () => {
+  const contract = updateContractValidation({
+    ...createEmptyBodyGeometryContract(),
+    mode: "body-cutout-qa",
+    source: {
+      type: "body-reference-v2",
+      hash: "json:source",
+      detectedBodyOnly: true,
+    },
+    glb: {
+      path: "/api/admin/models/generated/example.glb",
+      hash: "json:glb",
+      sourceHash: "json:source",
+      freshRelativeToSource: true,
+    },
+    meshes: {
+      names: ["body_mesh", "engraving_artwork_mesh", "artwork_logo_mesh"],
+      bodyMeshNames: [],
+      accessoryMeshNames: [],
+      fallbackMeshNames: [],
+      fallbackDetected: false,
+      unexpectedMeshes: [],
+    },
+    dimensionsMm: {
+      bodyBounds: {
+        width: 88.98,
+        height: 225,
+        depth: 88.98,
+      },
+      bodyBoundsUnits: "mm",
+      expectedBodyWidthMm: 88.98,
+      expectedBodyHeightMm: 225,
+    },
+    validation: {
+      status: "unknown",
+      errors: [],
+      warnings: [],
+    },
+  });
+
+  assert.deepEqual(contract.meshes.accessoryMeshNames, ["engraving_artwork_mesh", "artwork_logo_mesh"]);
+  assert.equal(contract.validation.status, "fail");
+  assert.match(contract.validation.errors.join(" "), /expected exactly body geometry/i);
+});
+
 test("BODY CUTOUT QA contracts fail when fallback meshes leak into the mesh list", () => {
   const contract = updateContractValidation({
     ...createEmptyBodyGeometryContract(),

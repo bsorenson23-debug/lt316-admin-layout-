@@ -371,6 +371,22 @@ export function BodyContractInspectorPanel({
                     <Field label="Left body captured" value={formatBoolean(contract.source.leftBodyOutlineCaptured)} testId="body-contract-inspector-source-left-body" />
                     <Field label="Mirrored body generated" value={formatBoolean(contract.source.mirroredBodyGenerated)} testId="body-contract-inspector-source-mirrored-body" />
                     <Field label="Blocked regions" value={contract.source.blockedRegionCount != null ? String(contract.source.blockedRegionCount) : "n/a"} testId="body-contract-inspector-source-blocked-regions" />
+                    <Field label="Lookup authority status" value={contract.source.lookupDimensionAuthorityStatus ?? "n/a"} testId="body-contract-inspector-source-lookup-authority-status" />
+                    <Field
+                      label="Reference layers excluded"
+                      value={contract.source.referenceLayersExcluded?.length ? contract.source.referenceLayersExcluded.join(", ") : "n/a"}
+                      testId="body-contract-inspector-source-reference-layers-excluded"
+                    />
+                    <Field
+                      label="Non-body exclusions"
+                      value={contract.source.nonBodyGenerationExclusions?.length ? contract.source.nonBodyGenerationExclusions.join(", ") : "n/a"}
+                      testId="body-contract-inspector-source-non-body-exclusions"
+                    />
+                    <Field
+                      label="V1 fallback available"
+                      value={formatBoolean(contract.source.fallbackGenerationModeAvailable)}
+                      testId="body-contract-inspector-source-v1-fallback-available"
+                    />
                   </div>
                   <div className={styles.note}>
                     Source width, height, and viewBox are raw SVG-space values. They are not assumed to be millimeters.

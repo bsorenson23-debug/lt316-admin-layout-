@@ -74,6 +74,10 @@ export interface BodyGeometryContract {
     leftBodyOutlineCaptured?: boolean;
     mirroredBodyGenerated?: boolean;
     blockedRegionCount?: number;
+    lookupDimensionAuthorityStatus?: "pass" | "warn" | "fail" | "unknown";
+    referenceLayersExcluded?: string[];
+    nonBodyGenerationExclusions?: string[];
+    fallbackGenerationModeAvailable?: boolean;
     generationSourceMode?: "v1-approved-contour" | "v2-mirrored-profile";
   };
   glb: {
@@ -167,16 +171,31 @@ export const BODY_MESH_NAME_MARKERS = [
 ] as const;
 export const ACCESSORY_MESH_NAME_MARKERS = [
   "lid",
+  "lid_reference",
+  "lid-reference",
   "rim",
   "ring",
   "silver_ring",
   "handle",
+  "handle_reference",
+  "handle-reference",
   "straw",
   "grommet",
   "flip",
   "tab",
   "cap",
   "logo_marker",
+  "blocked_region",
+  "blocked-region",
+  "finish_band",
+  "finish-band",
+  "factory_logo",
+  "factory-logo",
+  "appearance",
+  "engraving",
+  "artwork",
+  "overlay_preview",
+  "overlay-preview",
   "accessory",
 ] as const;
 export const FALLBACK_MESH_NAME_MARKERS = [

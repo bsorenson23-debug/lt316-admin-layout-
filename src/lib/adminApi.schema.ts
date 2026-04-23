@@ -68,6 +68,10 @@ export const bodyGeometryContractSchema = z.object({
     leftBodyOutlineCaptured: z.boolean().optional(),
     mirroredBodyGenerated: z.boolean().optional(),
     blockedRegionCount: z.number().int().nonnegative().optional(),
+    lookupDimensionAuthorityStatus: z.enum(["pass", "warn", "fail", "unknown"]).optional(),
+    referenceLayersExcluded: z.array(z.string()).optional(),
+    nonBodyGenerationExclusions: z.array(z.string()).optional(),
+    fallbackGenerationModeAvailable: z.boolean().optional(),
     generationSourceMode: z.enum(["v1-approved-contour", "v2-mirrored-profile"]).optional(),
   }),
   glb: z.object({
@@ -126,6 +130,10 @@ export const bodyGeometryAuditArtifactSchema = z.object({
     leftBodyOutlineCaptured: z.boolean().optional(),
     mirroredBodyGenerated: z.boolean().optional(),
     blockedRegionCount: z.number().int().nonnegative().optional(),
+    lookupDimensionAuthorityStatus: z.enum(["pass", "warn", "fail", "unknown"]).optional(),
+    referenceLayersExcluded: z.array(z.string()).optional(),
+    nonBodyGenerationExclusions: z.array(z.string()).optional(),
+    fallbackGenerationModeAvailable: z.boolean().optional(),
     generationSourceMode: z.enum(["v1-approved-contour", "v2-mirrored-profile"]).optional(),
   }),
   glb: z.object({
