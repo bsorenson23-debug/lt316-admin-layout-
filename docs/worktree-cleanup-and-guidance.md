@@ -38,7 +38,14 @@ git branch --show-current
 Expected clean-state pattern for the preferred queue worktree:
 
 - no tracked source changes
-- only local runtime artifacts such as `.codex-diagnostics/` and `.local/`
+- only these local artifact paths when they are intentionally present:
+  - `.codex-diagnostics/`
+  - `.local/`
+  - `.playwright-mcp/`
+  - `storage/`
+  - screenshots, logs, or other runtime captures
+
+If other local artifact folders show up, clean them before treating the worktree as the preferred queue-ready checkout.
 
 If a generated GLB shows up as modified, restore it before switching branches or merging:
 
@@ -81,6 +88,13 @@ Before using any older worktree:
 3. If it is not `main` or the exact branch you intend to use, stop and switch to the correct worktree instead.
 
 Do not start a new feature in a historical worktree just because it is already open. That is how branch stacks get crossed and queue state becomes hard to trust.
+
+## Docker Note
+
+Do not assume the preferred clean worktree must be mounted into Docker.
+
+- Leave existing Docker mounts unchanged unless a task explicitly requires container access to this checkout.
+- If a task is local-only, keep using the preferred clean worktree without editing Docker compose or mount paths.
 
 ## Cleaning Old Worktree Directories
 
