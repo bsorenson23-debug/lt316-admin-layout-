@@ -654,11 +654,23 @@
   gap: 6px;
 }
 
+.actionReasonList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .reviewScaffoldNote,
 .previewPlaceholderNote {
   font-size: 11px;
   line-height: 1.4;
   color: var(--text-secondary);
+}
+
+.actionDisabledReason {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warning);
 }
 
 .reviewScaffoldInlineMeta {

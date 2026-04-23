@@ -36,10 +36,18 @@ import {
   deriveTemplateCreateWorkflowStep,
   getTemplateCreateGenerateGateReason,
   getTemplateCreateNextActionHint,
-  getTemplateCreatePreviewGateNotes,
   getTemplateCreateSaveGateReason,
   getTemplateCreateSourceReadiness,
 } from "@/lib/templateCreateFlow";
+import {
+  formatTemplateCreateDisabledActionLabels,
+  getTemplateCreateLookupActionReason,
+  getTemplateCreatePreviewActionReason,
+  getTemplateCreateReviewAcceptActionReason,
+  getTemplateCreateV2SeedActionReason,
+  groupTemplateCreateDisabledActionReasons,
+  resolveTemplateCreateBlockedActionReason,
+} from "@/lib/templateCreateActionReasons";
 import {
   BODY_REFERENCE_CONTRACT_VERSION,
   deriveBodyReferencePipeline,
@@ -1404,12 +1412,12 @@ export function TemplateCreateForm({
     () => getTemplateCreateSaveGateReason(workflowInput),
     [workflowInput],
   );
-  const previewModeGateNotes = React.useMemo(
-    () => getTemplateCreatePreviewGateNotes({
-      hasSourceModel: hasSourceModelForPreview,
-      hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+  const lookupActionReason = React.useMemo(
+    () => getTemplateCreateLookupActionReason({
+      lookupInput,
+      lookingUp: lookingUpItem,
     }),
-    [activeDrinkwareGlbStatus, hasSourceModelForPreview],
+    [lookupInput, lookingUpItem],
   );
 
   React.useEffect(() => {
@@ -1778,15 +1786,6 @@ export function TemplateCreateForm({
   const bodyReferenceFineTuneDraftPendingAcceptance =
     bodyReferenceFineTuneModeEnabled &&
     bodyReferenceFineTuneDraftHasChanges;
-  const acceptBodyReferenceGateReason = React.useMemo(() => {
-    if (hasAcceptedBodyReferenceReview) {
-      return "BODY REFERENCE review is already locked for the current v1 source.";
-    }
-    if (!liveBodyReferencePipeline) {
-      return "Run lookup or auto-detect first so BODY REFERENCE review has a contour to accept.";
-    }
-    return null;
-  }, [hasAcceptedBodyReferenceReview, liveBodyReferencePipeline]);
   const generateBodyCutoutGateReason = React.useMemo(
     () => getTemplateCreateGenerateGateReason({
       productType,
@@ -1800,6 +1799,20 @@ export function TemplateCreateForm({
       hasAcceptedBodyReferenceReview,
       productType,
     ],
+  );
+  const acceptBodyReferenceActionReason = React.useMemo(
+    () => getTemplateCreateReviewAcceptActionReason({
+      hasAcceptedReview: hasAcceptedBodyReferenceReview,
+      hasLivePipeline: Boolean(liveBodyReferencePipeline),
+    }),
+    [hasAcceptedBodyReferenceReview, liveBodyReferencePipeline],
+  );
+  const generateBodyCutoutActionReason = React.useMemo(
+    () => resolveTemplateCreateBlockedActionReason({
+      busy: generatingReviewedBodyReferenceGlb,
+      blockedReason: generateBodyCutoutGateReason,
+    }),
+    [generateBodyCutoutGateReason, generatingReviewedBodyReferenceGlb],
   );
   const previewModeTransitionNote = React.useMemo(
     () => previewModeDowngradeActive
@@ -1826,6 +1839,26 @@ export function TemplateCreateForm({
       hasBodyLeft: bodyReferenceV2Summary.bodyLeftCaptured,
     }),
     [bodyReferenceV2Draft.centerline, bodyReferenceV2Summary.bodyLeftCaptured],
+  );
+  const bodyReferenceV2AcceptDraftActionReason = React.useMemo(
+    () => resolveTemplateCreateBlockedActionReason({
+      busy: false,
+      blockedReason: bodyReferenceV2AcceptDraftGateReason,
+    }),
+    [bodyReferenceV2AcceptDraftGateReason],
+  );
+  const bodyReferenceV2GenerateActionReason = React.useMemo(
+    () => resolveTemplateCreateBlockedActionReason({
+      busy: generatingReviewedBodyReferenceGlb,
+      blockedReason: bodyReferenceV2GenerateGateReason,
+    }),
+    [bodyReferenceV2GenerateGateReason, generatingReviewedBodyReferenceGlb],
+  );
+  const bodyReferenceV2SeedActionReason = React.useMemo(
+    () => getTemplateCreateV2SeedActionReason({
+      hasApprovedBodyOutline: Boolean(approvedBodyOutline),
+    }),
+    [approvedBodyOutline],
   );
   const bodyReferenceV2CurrentQaSourceLabel = React.useMemo(
     () => getBodyReferenceV2CurrentQaSourceLabel(isBodyReferenceV2CurrentQaSource),
@@ -1869,6 +1902,81 @@ export function TemplateCreateForm({
       warnings: bodyReferenceV2GenerationReadiness.warnings,
     }),
     [bodyReferenceV2GenerationReadiness.errors, bodyReferenceV2GenerationReadiness.warnings],
+  );
+  const reviewDisabledActionReasonGroups = React.useMemo(
+    () => groupTemplateCreateDisabledActionReasons([
+      {
+        label: "Accept BODY REFERENCE (v1)",
+        reason: acceptBodyReferenceActionReason,
+      },
+      {
+        label: "Generate BODY CUTOUT QA GLB (v1)",
+        reason: generateBodyCutoutActionReason,
+      },
+    ]),
+    [acceptBodyReferenceActionReason, generateBodyCutoutActionReason],
+  );
+  const previewDisabledActionReasonGroups = React.useMemo(
+    () => groupTemplateCreateDisabledActionReasons([
+      {
+        label: "BODY CUTOUT QA",
+        reason: getTemplateCreatePreviewActionReason({
+          action: "body-cutout-qa",
+          hasSourceModel: hasSourceModelForPreview,
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+        }),
+      },
+      {
+        label: "WRAP / EXPORT",
+        reason: getTemplateCreatePreviewActionReason({
+          action: "wrap-export",
+          hasSourceModel: hasSourceModelForPreview,
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+        }),
+      },
+      {
+        label: "Full model",
+        reason: getTemplateCreatePreviewActionReason({
+          action: "full-model",
+          hasSourceModel: hasSourceModelForPreview,
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+        }),
+      },
+      {
+        label: "Source compare",
+        reason: getTemplateCreatePreviewActionReason({
+          action: "source-compare",
+          hasSourceModel: hasSourceModelForPreview,
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+        }),
+      },
+    ]),
+    [activeDrinkwareGlbStatus, hasSourceModelForPreview],
+  );
+  const bodyReferenceV2DisabledActionReasonGroups = React.useMemo(
+    () => groupTemplateCreateDisabledActionReasons([
+      {
+        label: "Capture / seed centerline",
+        reason: bodyReferenceV2SeedActionReason,
+      },
+      {
+        label: "Set body-left from accepted BODY REFERENCE",
+        reason: bodyReferenceV2SeedActionReason,
+      },
+      {
+        label: "Accept v2 draft",
+        reason: bodyReferenceV2AcceptDraftActionReason,
+      },
+      {
+        label: "Generate BODY CUTOUT QA from v2 mirrored profile",
+        reason: bodyReferenceV2GenerateActionReason,
+      },
+    ]),
+    [
+      bodyReferenceV2AcceptDraftActionReason,
+      bodyReferenceV2GenerateActionReason,
+      bodyReferenceV2SeedActionReason,
+    ],
   );
   const approvedBodyReferenceOutlineBounds = React.useMemo(
     () => resolveOutlineBounds(approvedBodyOutline),
@@ -2476,11 +2584,17 @@ export function TemplateCreateForm({
                 className={styles.detectBtn}
                 onClick={() => void handleItemLookup()}
                 disabled={lookingUpItem || !lookupInput.trim()}
+                title={lookupActionReason ?? undefined}
                 data-testid="template-create-run-lookup"
               >
                 {lookingUpItem ? "Looking up..." : "Run lookup"}
               </button>
             </div>
+            {lookupActionReason && (
+              <div className={styles.actionDisabledReason}>
+                Run lookup: {lookupActionReason}
+              </div>
+            )}
 
             {activeLookupDimensions && (
               <div className={styles.lookupSummary}>
@@ -2709,6 +2823,7 @@ export function TemplateCreateForm({
                 type="button"
                 className={styles.detectBtn}
                 disabled={!liveBodyReferencePipeline || hasAcceptedBodyReferenceReview}
+                title={acceptBodyReferenceActionReason ?? undefined}
                 onClick={() => {
                   if (!liveBodyReferencePipeline) return;
                   resetBodyReferenceFineTuneState();
@@ -2744,6 +2859,7 @@ export function TemplateCreateForm({
                   generatingReviewedBodyReferenceGlb ||
                   bodyReferenceFineTuneDraftPendingAcceptance
                 }
+                title={generateBodyCutoutActionReason ?? undefined}
                 onClick={() => {
                   void handleGenerateReviewedBodyReferenceGlb();
                 }}
@@ -2752,18 +2868,20 @@ export function TemplateCreateForm({
                 {generatingReviewedBodyReferenceGlb ? "Generating BODY CUTOUT QA GLB…" : "Generate BODY CUTOUT QA GLB (v1)"}
               </button>
             </div>
+            {reviewDisabledActionReasonGroups.length > 0 && (
+              <div className={styles.actionReasonList}>
+                {reviewDisabledActionReasonGroups.map((group) => (
+                  <div
+                    key={`review-disabled-reason-${group.reason}`}
+                    className={styles.actionDisabledReason}
+                  >
+                    {formatTemplateCreateDisabledActionLabels(group.labels)}: {group.reason}
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className={styles.reviewScaffoldMeta}>
-              {acceptBodyReferenceGateReason && (
-                <div className={styles.reviewScaffoldNote}>
-                  {acceptBodyReferenceGateReason}
-                </div>
-              )}
-              {generateBodyCutoutGateReason && (
-                <div className={styles.reviewScaffoldNote}>
-                  {generateBodyCutoutGateReason}
-                </div>
-              )}
               {!workflowInput.hasStagedDetectResult && !liveBodyReferencePipeline && (
                 <div className={styles.reviewScaffoldNote}>
                   Run auto-detect or lookup first so BODY REFERENCE review has a real canonical contour to accept.
@@ -2882,6 +3000,11 @@ export function TemplateCreateForm({
                   type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "body-cutout-qa" ? styles.detectBtnActive : ""}`}
                   disabled={!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)}
+                  title={getTemplateCreatePreviewActionReason({
+                    action: "body-cutout-qa",
+                    hasSourceModel: hasSourceModelForPreview,
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                  }) ?? undefined}
                   aria-pressed={previewModelMode === "body-cutout-qa"}
                   onClick={() => setPreviewModelMode("body-cutout-qa")}
                   data-testid="preview-mode-body-cutout-qa"
@@ -2892,6 +3015,11 @@ export function TemplateCreateForm({
                   type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "wrap-export" ? styles.detectBtnActive : ""}`}
                   disabled={!glbPath.trim()}
+                  title={getTemplateCreatePreviewActionReason({
+                    action: "wrap-export",
+                    hasSourceModel: hasSourceModelForPreview,
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                  }) ?? undefined}
                   aria-pressed={previewModelMode === "wrap-export"}
                   onClick={() => setPreviewModelMode("wrap-export")}
                   data-testid="preview-mode-wrap-export"
@@ -2910,6 +3038,11 @@ export function TemplateCreateForm({
                   type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "full-model" ? styles.detectBtnActive : ""}`}
                   disabled={!glbPath.trim()}
+                  title={getTemplateCreatePreviewActionReason({
+                    action: "full-model",
+                    hasSourceModel: hasSourceModelForPreview,
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                  }) ?? undefined}
                   aria-pressed={previewModelMode === "full-model"}
                   onClick={() => setPreviewModelMode("full-model")}
                 >
@@ -2919,6 +3052,11 @@ export function TemplateCreateForm({
                   type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "source-traced" ? styles.detectBtnActive : ""}`}
                   disabled={!glbPath.trim()}
+                  title={getTemplateCreatePreviewActionReason({
+                    action: "source-compare",
+                    hasSourceModel: hasSourceModelForPreview,
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                  }) ?? undefined}
                   aria-pressed={previewModelMode === "source-traced"}
                   onClick={() => setPreviewModelMode("source-traced")}
                 >
@@ -2926,11 +3064,18 @@ export function TemplateCreateForm({
                 </button>
               </div>
 
-              {previewModeGateNotes.map((note) => (
-                <div key={note} className={styles.previewPlaceholderNote}>
-                  {note}
+              {previewDisabledActionReasonGroups.length > 0 && (
+                <div className={styles.actionReasonList}>
+                  {previewDisabledActionReasonGroups.map((group) => (
+                    <div
+                      key={`preview-disabled-reason-${group.reason}`}
+                      className={styles.actionDisabledReason}
+                    >
+                      {formatTemplateCreateDisabledActionLabels(group.labels)}: {group.reason}
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
 
               {wrapExportSummaryVisible && (
                 <div
@@ -3474,6 +3619,7 @@ export function TemplateCreateForm({
                   className={styles.detectBtn}
                   data-testid="body-reference-v2-seed-centerline"
                   disabled={!approvedBodyOutline}
+                  title={bodyReferenceV2SeedActionReason ?? undefined}
                   onClick={handleSeedBodyReferenceV2Centerline}
                 >
                   Capture / seed centerline
@@ -3483,6 +3629,7 @@ export function TemplateCreateForm({
                   className={styles.detectBtn}
                   data-testid="body-reference-v2-seed-body-left"
                   disabled={!approvedBodyOutline}
+                  title={bodyReferenceV2SeedActionReason ?? undefined}
                   onClick={handleSeedBodyReferenceV2BodyLeft}
                 >
                   Set body-left from accepted BODY REFERENCE
@@ -3492,6 +3639,7 @@ export function TemplateCreateForm({
                   className={styles.detectBtn}
                   data-testid="body-reference-v2-accept-draft"
                   disabled={!bodyReferenceV2Draft.centerline && !bodyReferenceV2Summary.bodyLeftCaptured}
+                  title={bodyReferenceV2AcceptDraftActionReason ?? undefined}
                   onClick={handleAcceptBodyReferenceV2Draft}
                 >
                   Accept v2 draft
@@ -3505,6 +3653,20 @@ export function TemplateCreateForm({
                   Reset v2 draft
                 </button>
               </div>
+              {bodyReferenceV2DisabledActionReasonGroups.length > 0 && (
+                <div className={styles.actionReasonList}>
+                  {bodyReferenceV2DisabledActionReasonGroups
+                    .filter((group) => group.reason !== bodyReferenceV2GenerateActionReason)
+                    .map((group) => (
+                      <div
+                        key={`body-reference-v2-disabled-reason-${group.reason}`}
+                        className={styles.actionDisabledReason}
+                      >
+                        {formatTemplateCreateDisabledActionLabels(group.labels)}: {group.reason}
+                      </div>
+                    ))}
+                </div>
+              )}
 
               <div className={styles.fieldRow}>
                 <label className={styles.fieldLabel}>Centerline axis X</label>
@@ -3598,12 +3760,6 @@ export function TemplateCreateForm({
               <div className={styles.reviewScaffoldNote}>
                 {getBodyReferenceV2WrapExportDistinctionNote()}
               </div>
-              {bodyReferenceV2AcceptDraftGateReason && (
-                <div className={styles.reviewScaffoldNote}>
-                  {bodyReferenceV2AcceptDraftGateReason}
-                </div>
-              )}
-
               {bodyReferenceV2SummaryGuidanceMessages.length > 0 && (
                 <div className={styles.cutoutFitWarningList}>
                   {bodyReferenceV2SummaryGuidanceMessages.map((entry) => (
@@ -3837,6 +3993,7 @@ export function TemplateCreateForm({
                       generatingReviewedBodyReferenceGlb ||
                       bodyReferenceFineTuneDraftPendingAcceptance
                     }
+                    title={bodyReferenceV2GenerateActionReason ?? undefined}
                     onClick={() => {
                       void handleGenerateReviewedBodyReferenceGlb("v2-mirrored-profile");
                     }}
@@ -3851,10 +4008,11 @@ export function TemplateCreateForm({
                           : "Generate BODY CUTOUT QA from v2 mirrored profile"}
                   </button>
                 </div>
-
-                {bodyReferenceV2GenerateGateReason && (
-                  <div className={styles.reviewScaffoldNote}>
-                    {bodyReferenceV2GenerateGateReason}
+                {bodyReferenceV2GenerateActionReason && (
+                  <div className={styles.actionReasonList}>
+                    <div className={styles.actionDisabledReason}>
+                      Generate BODY CUTOUT QA from v2 mirrored profile: {bodyReferenceV2GenerateActionReason}
+                    </div>
                   </div>
                 )}
 
