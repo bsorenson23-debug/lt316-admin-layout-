@@ -108,6 +108,16 @@ import {
   summarizeBodyReferenceV2ScaleMirrorPreview,
 } from "@/lib/bodyReferenceV2ScaleMirror";
 import { summarizeProductDimensionAuthority } from "@/lib/productDimensionAuthority";
+import {
+  buildBodyReferenceV2GuidanceMessages,
+  formatBodyReferenceV2ScaleSourceLabel,
+  getBodyReferenceV2AcceptDraftReason,
+  getBodyReferenceV2CurrentQaSourceLabel,
+  getBodyReferenceV2GenerateGateReason,
+  getBodyReferenceV2ReferenceOnlyNote,
+  getBodyReferenceV2SourceAuthorityNote,
+  getBodyReferenceV2WrapExportDistinctionNote,
+} from "@/lib/bodyReferenceV2Guidance";
 import { BodyReferenceFineTuneEditor } from "./BodyReferenceFineTuneEditor";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -1120,6 +1130,7 @@ export function TemplateCreateForm({
     }
     return null;
   }, [wrapExportContract]);
+  const isBodyReferenceV2CurrentQaSource = activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile";
   const templateArtworkPlacementMapping = React.useMemo(
     () => buildWrapExportSurfaceMapping(wrapExportContract, appearanceReferenceSummary.frontCenterAngleDeg),
     [appearanceReferenceSummary.frontCenterAngleDeg, wrapExportContract],
@@ -1727,25 +1738,68 @@ export function TemplateCreateForm({
     [effectivePreviewModeLabel, previewModeDowngradeActive, requestedPreviewModeLabel],
   );
   const bodyReferenceV2GenerateGateReason = React.useMemo(() => {
-    if (bodyReferenceFineTuneDraftPendingAcceptance) {
-      return "Accept corrected v1 cutout changes before generating BODY CUTOUT QA from v2.";
-    }
-    if (!bodyReferenceV2CaptureReadiness.accepted) {
-      return "Accept the v2 draft to unlock optional BODY CUTOUT QA generation from v2.";
-    }
-    if (bodyReferenceV2CaptureReadiness.hasDraftChanges) {
-      return "Accept or reset pending v2 draft changes before generating from v2.";
-    }
-    if (!bodyReferenceV2CaptureReadiness.generationReady) {
-      return "Complete centerline, body-left, and lookup-diameter readiness before generating from v2.";
-    }
-    return null;
+    return getBodyReferenceV2GenerateGateReason({
+      hasPendingV1FineTune: bodyReferenceFineTuneDraftPendingAcceptance,
+      accepted: bodyReferenceV2CaptureReadiness.accepted,
+      hasDraftChanges: bodyReferenceV2CaptureReadiness.hasDraftChanges,
+      generationReady: bodyReferenceV2CaptureReadiness.generationReady,
+    });
   }, [
     bodyReferenceFineTuneDraftPendingAcceptance,
     bodyReferenceV2CaptureReadiness.accepted,
     bodyReferenceV2CaptureReadiness.generationReady,
     bodyReferenceV2CaptureReadiness.hasDraftChanges,
   ]);
+  const bodyReferenceV2AcceptDraftGateReason = React.useMemo(
+    () => getBodyReferenceV2AcceptDraftReason({
+      hasCenterline: Boolean(bodyReferenceV2Draft.centerline),
+      hasBodyLeft: bodyReferenceV2Summary.bodyLeftCaptured,
+    }),
+    [bodyReferenceV2Draft.centerline, bodyReferenceV2Summary.bodyLeftCaptured],
+  );
+  const bodyReferenceV2CurrentQaSourceLabel = React.useMemo(
+    () => getBodyReferenceV2CurrentQaSourceLabel(isBodyReferenceV2CurrentQaSource),
+    [isBodyReferenceV2CurrentQaSource],
+  );
+  const bodyReferenceV2SourceAuthorityNote = React.useMemo(
+    () => getBodyReferenceV2SourceAuthorityNote({
+      isCurrentGenerationSource: isBodyReferenceV2CurrentQaSource,
+      hasDraftChanges: bodyReferenceV2CaptureReadiness.hasDraftChanges,
+    }),
+    [bodyReferenceV2CaptureReadiness.hasDraftChanges, isBodyReferenceV2CurrentQaSource],
+  );
+  const bodyReferenceV2SummaryGuidanceMessages = React.useMemo(
+    () => buildBodyReferenceV2GuidanceMessages({
+      errors: [
+        ...bodyReferenceV2Summary.validation.errors,
+        ...bodyReferenceV2CaptureReadiness.errors,
+      ],
+      warnings: [
+        ...bodyReferenceV2Summary.validation.warnings,
+        ...bodyReferenceV2CaptureReadiness.warnings,
+      ],
+    }),
+    [
+      bodyReferenceV2CaptureReadiness.errors,
+      bodyReferenceV2CaptureReadiness.warnings,
+      bodyReferenceV2Summary.validation.errors,
+      bodyReferenceV2Summary.validation.warnings,
+    ],
+  );
+  const bodyReferenceV2MirrorGuidanceMessages = React.useMemo(
+    () => buildBodyReferenceV2GuidanceMessages({
+      errors: bodyReferenceV2ScaleMirrorPreview.errors,
+      warnings: bodyReferenceV2ScaleMirrorPreview.warnings,
+    }),
+    [bodyReferenceV2ScaleMirrorPreview.errors, bodyReferenceV2ScaleMirrorPreview.warnings],
+  );
+  const bodyReferenceV2GenerationGuidanceMessages = React.useMemo(
+    () => buildBodyReferenceV2GuidanceMessages({
+      errors: bodyReferenceV2GenerationReadiness.errors,
+      warnings: bodyReferenceV2GenerationReadiness.warnings,
+    }),
+    [bodyReferenceV2GenerationReadiness.errors, bodyReferenceV2GenerationReadiness.warnings],
+  );
   const approvedBodyReferenceOutlineBounds = React.useMemo(
     () => resolveOutlineBounds(approvedBodyOutline),
     [approvedBodyOutline],
@@ -3330,9 +3384,9 @@ export function TemplateCreateForm({
             >
               <div className={styles.cutoutFitSummaryHeader}>
                 <div>
-                  <div className={styles.cutoutFitSummaryTitle}>Optional BODY REFERENCE v2 capture</div>
+                  <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 capture (optional)</div>
                   <div className={styles.cutoutFitSummaryHint}>
-                    Capture centerline and body-left here when you want to test the optional v2 path. v1 BODY CUTOUT QA stays current until you explicitly generate from v2.
+                    Use v2 when you want an operator-reviewed centerline plus body-left profile. BODY CUTOUT QA stays on the accepted v1 contour until you accept the v2 draft and explicitly generate from it.
                   </div>
                 </div>
                 <span
@@ -3387,7 +3441,7 @@ export function TemplateCreateForm({
               </div>
 
               <div className={styles.fieldRow}>
-                <label className={styles.fieldLabel}>Centerline X</label>
+                <label className={styles.fieldLabel}>Centerline axis X</label>
                 <input
                   className={styles.textInput}
                   type="number"
@@ -3404,35 +3458,35 @@ export function TemplateCreateForm({
 
               <div className={styles.cutoutFitSummaryGrid}>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Centerline</span>
+                  <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.centerlineCaptured ? "captured" : "missing"}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Body-left</span>
+                  <span className={styles.cutoutFitMetricLabel}>Body-left outline</span>
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.bodyLeftCaptured ? "captured" : "missing"}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Body-right mirrored</span>
-                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.bodyRightMirroredPresent ? "present" : "missing"}</span>
+                  <span className={styles.cutoutFitMetricLabel}>Mirrored right side</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.bodyRightMirroredPresent ? "derived" : "missing"}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Lid reference layers</span>
+                  <span className={styles.cutoutFitMetricLabel}>Lid references (excluded)</span>
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lidReferenceCount}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Handle reference layers</span>
+                  <span className={styles.cutoutFitMetricLabel}>Handle references (excluded)</span>
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.handleReferenceCount}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Blocked regions</span>
+                  <span className={styles.cutoutFitMetricLabel}>Blocked regions (reference-only)</span>
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.blockedRegionCount}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Scale source</span>
-                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.scaleSource}</span>
+                  <span className={styles.cutoutFitMetricLabel}>Scale authority</span>
+                  <span className={styles.cutoutFitMetricValue}>{formatBodyReferenceV2ScaleSourceLabel(bodyReferenceV2Summary.scaleSource)}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Lookup diameter</span>
+                  <span className={styles.cutoutFitMetricLabel}>Lookup diameter ready</span>
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lookupDiameterPresent ? "present" : "missing"}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
@@ -3449,52 +3503,39 @@ export function TemplateCreateForm({
                 </div>
                 <div className={styles.cutoutFitMetric}>
                   <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
-                  <span className={styles.cutoutFitMetricValue}>
-                    {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile" ? "yes" : "no"}
-                  </span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
                   <span className={styles.cutoutFitMetricLabel}>v1 BODY CUTOUT QA</span>
-                  <span className={styles.cutoutFitMetricValue}>current default</span>
+                  <span className={styles.cutoutFitMetricValue}>available fallback</span>
                 </div>
               </div>
 
               <div className={styles.reviewScaffoldNote}>
                 {approvedBodyOutline
-                  ? "Seed v2 capture from the accepted BODY REFERENCE contour, then accept the v2 draft before generation can unlock."
-                  : "Accept BODY REFERENCE review first to seed the v2 centerline and body-left outline."}
+                  ? "Centerline = mirror axis. Body-left = the operator-reviewed left wall. The right side is derived automatically and stays read-only."
+                  : "Accept BODY REFERENCE review first if you want to seed the v2 centerline and body-left outline from the accepted v1 contour."}
               </div>
               <div className={styles.reviewScaffoldNote}>
-                Not current BODY CUTOUT QA source. Existing v1 BODY CUTOUT QA remains active until the accepted v2 draft is explicitly generated.
+                {getBodyReferenceV2ReferenceOnlyNote()}
               </div>
               <div className={styles.reviewScaffoldNote}>
-                Direct point editing, mirror-derived defaulting, and BODY CUTOUT QA validation changes remain out of scope in this scaffold.
+                {getBodyReferenceV2WrapExportDistinctionNote()}
               </div>
-
-              {(bodyReferenceV2Summary.validation.errors.length > 0 || bodyReferenceV2Summary.validation.warnings.length > 0) && (
-                <div className={styles.cutoutFitWarningList}>
-                  {bodyReferenceV2Summary.validation.errors.map((error) => (
-                    <div key={`body-reference-v2-error-${error}`} className={styles.cutoutFitWarningError}>
-                      {error}
-                    </div>
-                  ))}
-                  {bodyReferenceV2Summary.validation.warnings.map((warning) => (
-                    <div key={`body-reference-v2-warning-${warning}`} className={styles.cutoutFitWarning}>
-                      {warning}
-                    </div>
-                  ))}
+              {bodyReferenceV2AcceptDraftGateReason && (
+                <div className={styles.reviewScaffoldNote}>
+                  {bodyReferenceV2AcceptDraftGateReason}
                 </div>
               )}
-              {(bodyReferenceV2CaptureReadiness.errors.length > 0 || bodyReferenceV2CaptureReadiness.warnings.length > 0) && (
+
+              {bodyReferenceV2SummaryGuidanceMessages.length > 0 && (
                 <div className={styles.cutoutFitWarningList}>
-                  {bodyReferenceV2CaptureReadiness.errors.map((error) => (
-                    <div key={`body-reference-v2-capture-error-${error}`} className={styles.cutoutFitWarningError}>
-                      {error}
-                    </div>
-                  ))}
-                  {bodyReferenceV2CaptureReadiness.warnings.map((warning) => (
-                    <div key={`body-reference-v2-capture-warning-${warning}`} className={styles.cutoutFitWarning}>
-                      {warning}
+                  {bodyReferenceV2SummaryGuidanceMessages.map((entry) => (
+                    <div
+                      key={`body-reference-v2-guidance-${entry.level}-${entry.message}`}
+                      className={entry.level === "error" ? styles.cutoutFitWarningError : styles.cutoutFitWarning}
+                    >
+                      {entry.message}
                     </div>
                   ))}
                 </div>
@@ -3509,7 +3550,7 @@ export function TemplateCreateForm({
                   <div>
                     <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 Mirror Preview</div>
                     <div className={styles.cutoutFitSummaryHint}>
-                      Lookup-diameter calibration and mirrored-right preview only. This stays reference-only until you explicitly generate from v2.
+                      Preview only. Centerline plus body-left define the mirrored right side and lookup-diameter scale. This does not change BODY CUTOUT QA until you explicitly generate from v2.
                     </div>
                   </div>
                   <span
@@ -3527,14 +3568,14 @@ export function TemplateCreateForm({
 
                 {(bodyReferenceV2ScaleMirrorPreview.centerline == null && bodyReferenceV2ScaleMirrorPreview.leftBodyPointCount === 0) ? (
                   <div className={styles.cutoutFitWarningList}>
-                    <div className={styles.cutoutFitWarning}>Centerline not captured.</div>
-                    <div className={styles.cutoutFitWarning}>Body-left outline not captured.</div>
-                    <div className={styles.cutoutFitWarning}>Current v1 BODY CUTOUT QA remains active.</div>
+                    <div className={styles.cutoutFitWarning}>Capture the centerline axis.</div>
+                    <div className={styles.cutoutFitWarning}>Capture or seed the body-left outline.</div>
+                    <div className={styles.cutoutFitWarning}>BODY CUTOUT QA stays on the accepted v1 contour until v2 is generated.</div>
                   </div>
                 ) : (
                   <div className={styles.cutoutFitSummaryGrid}>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Centerline</span>
+                      <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
                       <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.centerline ? "captured" : "missing"}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
@@ -3554,7 +3595,7 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{formatLookupSize(bodyReferenceV2ScaleMirrorPreview.lookupSizeOz)}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Diameter authority</span>
+                      <span className={styles.cutoutFitMetricLabel}>Lookup diameter authority</span>
                       <span className={styles.cutoutFitMetricValue}>{formatLookupAuthority(bodyReferenceV2ScaleMirrorPreview.lookupDimensionAuthority)}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
@@ -3579,27 +3620,26 @@ export function TemplateCreateForm({
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile" ? "yes" : "no"}
-                      </span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                     </div>
                   </div>
                 )}
 
                 <div className={styles.reviewScaffoldNote}>
-                  Not current BODY CUTOUT QA source. Existing v1 BODY CUTOUT QA remains active.
+                  Mirrored-right is derived automatically. You do not edit it directly.
+                </div>
+                <div className={styles.reviewScaffoldNote}>
+                  Full product height is context only here. Lookup diameter remains the v2 scale authority.
                 </div>
 
-                {(bodyReferenceV2ScaleMirrorPreview.errors.length > 0 || bodyReferenceV2ScaleMirrorPreview.warnings.length > 0) && (
+                {bodyReferenceV2MirrorGuidanceMessages.length > 0 && (
                   <div className={styles.cutoutFitWarningList}>
-                    {bodyReferenceV2ScaleMirrorPreview.errors.map((error) => (
-                      <div key={`body-reference-v2-mirror-error-${error}`} className={styles.cutoutFitWarningError}>
-                        {error}
-                      </div>
-                    ))}
-                    {bodyReferenceV2ScaleMirrorPreview.warnings.map((warning) => (
-                      <div key={`body-reference-v2-mirror-warning-${warning}`} className={styles.cutoutFitWarning}>
-                        {warning}
+                    {bodyReferenceV2MirrorGuidanceMessages.map((entry) => (
+                      <div
+                        key={`body-reference-v2-mirror-guidance-${entry.level}-${entry.message}`}
+                        className={entry.level === "error" ? styles.cutoutFitWarningError : styles.cutoutFitWarning}
+                      >
+                        {entry.message}
                       </div>
                     ))}
                   </div>
@@ -3615,7 +3655,7 @@ export function TemplateCreateForm({
                   <div>
                     <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 Generation Readiness</div>
                     <div className={styles.cutoutFitSummaryHint}>
-                      Accepted v2 draft gate for optional body-only generation. Existing v1 BODY CUTOUT QA remains the default until v2 is explicitly generated.
+                      v2 generation unlocks only after the accepted v2 capture passes centerline, body-left, lookup-diameter scale, and mirror checks. BODY CUTOUT QA stays body-only and excludes reference and artwork layers.
                     </div>
                   </div>
                   <span
@@ -3633,14 +3673,14 @@ export function TemplateCreateForm({
 
                 {(bodyReferenceV2GenerationReadiness.centerlineCaptured === false && bodyReferenceV2GenerationReadiness.leftBodyPointCount === 0) ? (
                   <div className={styles.cutoutFitWarningList}>
-                    <div className={styles.cutoutFitWarning}>Centerline not captured.</div>
-                    <div className={styles.cutoutFitWarning}>Body-left outline not captured.</div>
-                    <div className={styles.cutoutFitWarning}>Current v1 BODY CUTOUT QA remains active.</div>
+                    <div className={styles.cutoutFitWarning}>Capture the centerline axis.</div>
+                    <div className={styles.cutoutFitWarning}>Capture or seed the body-left outline.</div>
+                    <div className={styles.cutoutFitWarning}>BODY CUTOUT QA stays on the accepted v1 contour until v2 is generated.</div>
                   </div>
                 ) : (
                   <div className={styles.cutoutFitSummaryGrid}>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Centerline</span>
+                      <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
                       <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.centerlineCaptured ? "captured" : "missing"}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
@@ -3685,9 +3725,7 @@ export function TemplateCreateForm({
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile" ? "yes" : "no"}
-                      </span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                     </div>
                   </div>
                 )}
@@ -3724,21 +3762,23 @@ export function TemplateCreateForm({
                 <div className={styles.reviewScaffoldNote}>
                   {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile"
                     ? "Current source authority: BODY REFERENCE v2 mirrored profile."
-                    : bodyReferenceV2CaptureReadiness.hasDraftChanges
-                      ? "Draft changes are pending acceptance. v2 generation stays locked to the last accepted v2 draft."
-                      : "Not current BODY CUTOUT QA source. Existing v1 BODY CUTOUT QA remains active until this optional path is explicitly generated."}
+                    : bodyReferenceV2SourceAuthorityNote}
+                </div>
+                <div className={styles.reviewScaffoldNote}>
+                  {getBodyReferenceV2ReferenceOnlyNote()}
+                </div>
+                <div className={styles.reviewScaffoldNote}>
+                  {getBodyReferenceV2WrapExportDistinctionNote()}
                 </div>
 
-                {(bodyReferenceV2GenerationReadiness.errors.length > 0 || bodyReferenceV2GenerationReadiness.warnings.length > 0) && (
+                {bodyReferenceV2GenerationGuidanceMessages.length > 0 && (
                   <div className={styles.cutoutFitWarningList}>
-                    {bodyReferenceV2GenerationReadiness.errors.map((error) => (
-                      <div key={`body-reference-v2-generation-error-${error}`} className={styles.cutoutFitWarningError}>
-                        {error}
-                      </div>
-                    ))}
-                    {bodyReferenceV2GenerationReadiness.warnings.map((warning) => (
-                      <div key={`body-reference-v2-generation-warning-${warning}`} className={styles.cutoutFitWarning}>
-                        {warning}
+                    {bodyReferenceV2GenerationGuidanceMessages.map((entry) => (
+                      <div
+                        key={`body-reference-v2-generation-guidance-${entry.level}-${entry.message}`}
+                        className={entry.level === "error" ? styles.cutoutFitWarningError : styles.cutoutFitWarning}
+                      >
+                        {entry.message}
                       </div>
                     ))}
                   </div>
