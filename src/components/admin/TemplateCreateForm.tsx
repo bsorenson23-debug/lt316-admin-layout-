@@ -80,6 +80,9 @@ import {
   getWrapExportPreviewStatusLabel,
 } from "@/lib/wrapExportPreviewState";
 import {
+  summarizeWrapExportProductionReadiness,
+} from "@/lib/wrapExportProductionValidation";
+import {
   buildEngravingOverlayPreviewState,
   ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN,
 } from "@/lib/engravingOverlayPreview";
@@ -1162,6 +1165,28 @@ export function TemplateCreateForm({
       persistedArtworkPlacements,
       savedArtworkPlacementSignature,
       templateArtworkPlacementMapping,
+    ],
+  );
+  const wrapExportProductionReadiness = React.useMemo(
+    () => summarizeWrapExportProductionReadiness({
+      contract: wrapExportContract,
+      placements: persistedArtworkPlacements,
+      mapping: templateArtworkPlacementMapping,
+      savedSignature: savedArtworkPlacementSignature ?? null,
+      previewMode: effectivePreviewModelMode,
+      overlayState: engravingOverlayPreviewState,
+      appearanceReferenceLayers: templateAppearanceReferenceLayers,
+    }),
+    [
+      effectivePreviewModelMode,
+      editingTemplate?.engravingPreviewState?.mappingSignature,
+      engravingOverlayPreviewState,
+      persistedArtworkPlacements,
+      savedArtworkPlacementSignature,
+      templateAppearanceReferenceLayers,
+      templateArtworkPlacementMapping,
+      wrapExportContract,
+      workspaceArtworkPlacements,
     ],
   );
   const overlayPreviewPlacedItems = React.useMemo<PlacedItem[]>(
@@ -2690,6 +2715,10 @@ export function TemplateCreateForm({
                   data-engraving-overlay-count={engravingOverlayPreviewState.visibleCount}
                   data-engraving-overlay-first-angle={engravingOverlayPreviewState.items[0]?.angleDeg ?? ""}
                   data-engraving-overlay-first-body-y={engravingOverlayPreviewState.items[0]?.bodyYMm ?? ""}
+                  data-wrap-export-authority={wrapExportProductionReadiness.exportAuthority}
+                  data-wrap-export-body-cutout-qa-proof={wrapExportProductionReadiness.notBodyCutoutQa ? "no" : "yes"}
+                  data-wrap-export-body-bounds-source={wrapExportProductionReadiness.bodyBoundsSource}
+                  data-wrap-export-mapping-freshness={wrapExportProductionReadiness.mappingFreshness}
                 >
                   <div className={styles.cutoutFitSummaryHeader}>
                     <div>
@@ -2700,16 +2729,16 @@ export function TemplateCreateForm({
                     </div>
                     <span
                       className={
-                        wrapExportPreviewState.status === "pass"
+                        wrapExportProductionReadiness.status === "pass"
                           ? styles.reviewStatusReady
-                          : wrapExportPreviewState.status === "fail"
+                          : wrapExportProductionReadiness.status === "fail"
                             ? styles.reviewStatusFail
-                            : wrapExportPreviewState.status === "warn"
+                            : wrapExportProductionReadiness.status === "warn"
                               ? styles.reviewStatusPending
                               : styles.previewScaffoldBadge
                       }
                     >
-                      {getWrapExportPreviewStatusLabel(wrapExportPreviewState.status)}
+                      {getWrapExportPreviewStatusLabel(wrapExportProductionReadiness.status)}
                     </span>
                   </div>
 
@@ -2717,24 +2746,38 @@ export function TemplateCreateForm({
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Mapping status</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {getWrapExportMappingStatusLabel(wrapExportPreviewState.mappingStatus)}
+                        {getWrapExportMappingStatusLabel(wrapExportProductionReadiness.mappingStatus)}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Ready for preview</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportPreviewState.readyForPreview ? "yes" : "no"}
+                        {wrapExportProductionReadiness.readyForPreview ? "yes" : "no"}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Ready for exact placement</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportPreviewState.readyForExactPlacement ? "yes" : "no"}
+                        {wrapExportProductionReadiness.readyForExactPlacement ? "yes" : "no"}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Viewer agreement ready</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {wrapExportProductionReadiness.readyForViewerAgreement ? "yes" : "no"}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>BODY CUTOUT QA proof</span>
-                      <span className={styles.cutoutFitMetricValue}>no</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {wrapExportProductionReadiness.notBodyCutoutQa ? "no" : "yes"}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Export authority</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {wrapExportProductionReadiness.exportAuthority}
+                      </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Wrap diameter</span>
@@ -2774,21 +2817,25 @@ export function TemplateCreateForm({
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Freshness</span>
-                      <span className={styles.cutoutFitMetricValue}>{wrapExportPreviewState.freshness}</span>
+                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.mappingFreshness}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Body bounds source</span>
+                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.bodyBoundsSource}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Saved artwork placements</span>
-                      <span className={styles.cutoutFitMetricValue}>{persistedArtworkPlacements.length}</span>
+                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.placementCount}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Artwork overlay items</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {engravingOverlayPreviewState.visibleCount} / {engravingOverlayPreviewState.totalCount}
+                        {wrapExportProductionReadiness.overlayCount} / {wrapExportProductionReadiness.overlayTotalCount}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Overlay enabled</span>
-                      <span className={styles.cutoutFitMetricValue}>{engravingOverlayPreviewState.enabled ? "yes" : "no"}</span>
+                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.overlayEnabled ? "yes" : "no"}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Overlay material</span>
@@ -2802,9 +2849,13 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricLabel}>Saved mapping freshness</span>
                       <span className={styles.cutoutFitMetricValue}>
                         {hasSavedArtworkPlacements
-                          ? engravingOverlayPreviewState.freshness
+                          ? wrapExportProductionReadiness.mappingFreshness
                           : "unknown"}
                       </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Stale mapping warnings</span>
+                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.staleMappingWarningCount}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Source hash</span>
@@ -2822,7 +2873,8 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricLabel}>Saved mapping signature</span>
                       <span className={styles.cutoutFitMetricValue}>
                         {formatShortHash(
-                          templateArtworkPlacementMappingSignature
+                          wrapExportProductionReadiness.mappingSignature
+                          ?? templateArtworkPlacementMappingSignature
                           ?? editingTemplate?.engravingPreviewState?.mappingSignature,
                         )}
                       </span>
@@ -2830,6 +2882,12 @@ export function TemplateCreateForm({
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Appearance references</span>
                       <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.totalLayers}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Appearance refs context only</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {wrapExportProductionReadiness.appearanceReferenceContextOnly ? "yes" : "no"}
+                      </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Top finish band</span>
@@ -2964,6 +3022,7 @@ export function TemplateCreateForm({
                       canonicalBodyProfile={approvedCanonicalBodyProfile}
                       canonicalDimensionCalibration={approvedCanonicalDimensionCalibration}
                       bodyGeometryContractSeed={generatedReviewedBodyGeometryContract}
+                      wrapExportProductionReadiness={wrapExportProductionReadiness}
                       onBodyGeometryContractChange={setLoadedBodyGeometryContract}
                     />
                   </div>

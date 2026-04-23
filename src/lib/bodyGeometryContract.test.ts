@@ -1979,6 +1979,92 @@ test("BODY CUTOUT QA validation ignores reference-only appearance layers attache
   assert.equal(isContractPassing(contract), true);
 });
 
+test("BODY CUTOUT QA validation ignores saved artwork placements attached out of band", () => {
+  const contractWithArtworkPlacements = {
+    ...createEmptyBodyGeometryContract(),
+    mode: "body-cutout-qa",
+    source: {
+      type: "approved-svg" as const,
+      hash: "json:source",
+      detectedBodyOnly: true,
+    },
+    glb: {
+      path: "/api/admin/models/generated/body-only.glb",
+      hash: "json:glb",
+      sourceHash: "json:source",
+      freshRelativeToSource: true,
+    },
+    meshes: {
+      names: ["body_mesh"],
+      bodyMeshNames: [],
+      accessoryMeshNames: [],
+      fallbackMeshNames: [],
+      fallbackDetected: false,
+      unexpectedMeshes: [],
+    },
+    dimensionsMm: {
+      bodyBounds: {
+        width: 88.98,
+        height: 225,
+        depth: 88.98,
+      },
+      bodyBoundsUnits: "mm" as const,
+      expectedBodyWidthMm: 88.98,
+      expectedBodyHeightMm: 225,
+      wrapDiameterMm: 86.36,
+      wrapWidthMm: 271.31,
+      frontVisibleWidthMm: 88.98,
+    },
+    validation: {
+      status: "unknown" as const,
+      errors: [],
+      warnings: [],
+    },
+    artworkPlacements: [{
+      id: "art-1",
+      assetId: "asset-1",
+      name: "Saved artwork",
+      xMm: 24,
+      yMm: 18,
+      widthMm: 42,
+      heightMm: 38,
+      rotationDeg: 15,
+      visible: true,
+      mappingSignature: "laser-bed-surface-mapping:demo",
+      assetSnapshot: {
+        svgText: "<svg viewBox=\"0 0 100 100\"><rect width=\"100\" height=\"100\" fill=\"#000\"/></svg>",
+        sourceSvgText: "<svg viewBox=\"0 0 100 100\"><rect width=\"100\" height=\"100\" fill=\"#000\"/></svg>",
+        documentBounds: { x: 0, y: 0, width: 100, height: 100 },
+        artworkBounds: { x: 0, y: 0, width: 100, height: 100 },
+      },
+    }],
+  } as BodyGeometryContract & {
+    artworkPlacements: Array<{
+      id: string;
+      assetId: string;
+      name: string;
+      xMm: number;
+      yMm: number;
+      widthMm: number;
+      heightMm: number;
+      rotationDeg: number;
+      visible: boolean;
+      mappingSignature: string;
+      assetSnapshot: {
+        svgText: string;
+        sourceSvgText: string;
+        documentBounds: { x: number; y: number; width: number; height: number };
+        artworkBounds: { x: number; y: number; width: number; height: number };
+      };
+    }>;
+  };
+
+  const contract = updateContractValidation(contractWithArtworkPlacements);
+
+  assert.equal(contract.validation.status, "pass");
+  assert.equal(isContractPassing(contract), true);
+});
+
 test("BODY CUTOUT QA validation ignores preview-only engraving overlay metadata attached out of band", () => {
   const mapping = {
     mode: "cylindrical-v1" as const,

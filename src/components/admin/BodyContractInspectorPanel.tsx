@@ -17,12 +17,14 @@ import {
   getWrapExportMappingStatusLabel,
   getWrapExportPreviewStatusLabel,
 } from "@/lib/wrapExportPreviewState";
+import type { WrapExportProductionReadinessSummary } from "@/lib/wrapExportProductionValidation";
 import packageJson from "../../../package.json";
 import styles from "./BodyContractInspectorPanel.module.css";
 
 interface BodyContractInspectorPanelProps {
   contract: BodyGeometryContract | null;
   auditArtifact?: BodyGeometryAuditArtifactLike | null;
+  wrapExportProductionReadiness?: WrapExportProductionReadinessSummary | null;
 }
 
 function shortenHash(value: string | undefined): string {
@@ -243,6 +245,7 @@ function ListField({
 export function BodyContractInspectorPanel({
   contract,
   auditArtifact = null,
+  wrapExportProductionReadiness = null,
 }: BodyContractInspectorPanelProps) {
   const pathname = usePathname();
   const [browserContext, setBrowserContext] = React.useState<{
@@ -269,6 +272,7 @@ export function BodyContractInspectorPanel({
     () => buildBodyGeometryDebugReport({
       contract,
       auditArtifact,
+      wrapExport: wrapExportProductionReadiness,
       exportedAt,
       environment: {
         appVersion: packageJson.version ?? null,
@@ -282,15 +286,16 @@ export function BodyContractInspectorPanel({
         featureFlags,
       },
     }),
-    [auditArtifact, browserContext.href, browserContext.userAgent, contract, exportedAt, featureFlags, pathname],
+    [auditArtifact, browserContext.href, browserContext.userAgent, contract, exportedAt, featureFlags, pathname, wrapExportProductionReadiness],
   );
   const rawJson = React.useMemo(() => stringifyJson(debugReport), [debugReport]);
   const wrapExportPreviewState = React.useMemo(
     () => buildWrapExportPreviewState(contract),
     [contract],
   );
+  const wrapExportReadiness = wrapExportProductionReadiness;
   const validationStatus = contract?.mode === "wrap-export"
-    ? wrapExportPreviewState.status
+    ? (wrapExportReadiness?.status ?? wrapExportPreviewState.status)
     : contract?.validation.status ?? "unknown";
   const bodyBoundsUnits = contract?.dimensionsMm.bodyBoundsUnits;
   const showBodyUnitsWarning = bodyBoundsUnits === "scene-units";
@@ -515,7 +520,7 @@ export function BodyContractInspectorPanel({
                     <div className={styles.fieldList}>
                       <Field
                         label="Status"
-                        value={getWrapExportPreviewStatusLabel(wrapExportPreviewState.status)}
+                        value={getWrapExportPreviewStatusLabel(wrapExportReadiness?.status ?? wrapExportPreviewState.status)}
                         testId="body-contract-inspector-wrap-export-status"
                       />
                       <Field
@@ -525,18 +530,28 @@ export function BodyContractInspectorPanel({
                       />
                       <Field
                         label="Ready for preview"
-                        value={formatBoolean(wrapExportPreviewState.readyForPreview)}
+                        value={formatBoolean(wrapExportReadiness?.readyForPreview ?? wrapExportPreviewState.readyForPreview)}
                         testId="body-contract-inspector-wrap-export-ready-preview"
                       />
                       <Field
                         label="Ready for exact placement"
-                        value={formatBoolean(wrapExportPreviewState.readyForExactPlacement)}
+                        value={formatBoolean(wrapExportReadiness?.readyForExactPlacement ?? wrapExportPreviewState.readyForExactPlacement)}
                         testId="body-contract-inspector-wrap-export-ready-exact"
                       />
                       <Field
+                        label="Ready for viewer agreement"
+                        value={formatBoolean(wrapExportReadiness?.readyForViewerAgreement)}
+                        testId="body-contract-inspector-wrap-export-ready-viewer-agreement"
+                      />
+                      <Field
                         label="Is BODY CUTOUT QA proof"
-                        value={formatBoolean(wrapExportPreviewState.isBodyCutoutQaProof)}
+                        value={wrapExportReadiness ? formatBoolean(!wrapExportReadiness.notBodyCutoutQa) : formatBoolean(wrapExportPreviewState.isBodyCutoutQaProof)}
                         testId="body-contract-inspector-wrap-export-is-qa-proof"
+                      />
+                      <Field
+                        label="Export authority"
+                        value={wrapExportReadiness?.exportAuthority ?? "laser-bed-mm-placement"}
+                        testId="body-contract-inspector-wrap-export-authority"
                       />
                       <Field
                         label="Wrap diameter"
@@ -584,9 +599,44 @@ export function BodyContractInspectorPanel({
                         testId="body-contract-inspector-wrap-export-scale-source"
                       />
                       <Field
+                        label="Body bounds source"
+                        value={wrapExportReadiness?.bodyBoundsSource ?? "unavailable"}
+                        testId="body-contract-inspector-wrap-export-body-bounds-source"
+                      />
+                      <Field
                         label="Freshness"
-                        value={wrapExportPreviewState.freshness}
+                        value={wrapExportReadiness?.mappingFreshness ?? wrapExportPreviewState.freshness}
                         testId="body-contract-inspector-wrap-export-freshness"
+                      />
+                      <Field
+                        label="Placement count"
+                        value={wrapExportReadiness ? String(wrapExportReadiness.placementCount) : "n/a"}
+                        testId="body-contract-inspector-wrap-export-placement-count"
+                      />
+                      <Field
+                        label="Overlay count"
+                        value={wrapExportReadiness ? `${wrapExportReadiness.overlayCount} / ${wrapExportReadiness.overlayTotalCount}` : "n/a"}
+                        testId="body-contract-inspector-wrap-export-overlay-count"
+                      />
+                      <Field
+                        label="Overlay enabled"
+                        value={wrapExportReadiness ? formatBoolean(wrapExportReadiness.overlayEnabled) : "unknown"}
+                        testId="body-contract-inspector-wrap-export-overlay-enabled"
+                      />
+                      <Field
+                        label="Outside printable warnings"
+                        value={wrapExportReadiness ? String(wrapExportReadiness.outsidePrintableAreaWarningCount) : "n/a"}
+                        testId="body-contract-inspector-wrap-export-outside-printable"
+                      />
+                      <Field
+                        label="Stale mapping warnings"
+                        value={wrapExportReadiness ? String(wrapExportReadiness.staleMappingWarningCount) : "n/a"}
+                        testId="body-contract-inspector-wrap-export-stale-warnings"
+                      />
+                      <HashField
+                        label="Mapping signature"
+                        value={wrapExportReadiness?.mappingSignature}
+                        testId="body-contract-inspector-wrap-export-mapping-signature"
                       />
                       <HashField
                         label="Source hash"
@@ -600,12 +650,12 @@ export function BodyContractInspectorPanel({
                       />
                     </div>
                     <div className={styles.validationList} data-testid="body-contract-inspector-wrap-export-messages">
-                      {wrapExportPreviewState.errors.map((error) => (
+                      {(wrapExportReadiness?.errors ?? wrapExportPreviewState.errors).map((error) => (
                         <div key={`wrap-error-${error}`} className={`${styles.message} ${styles.messageError}`}>
                           {error}
                         </div>
                       ))}
-                      {wrapExportPreviewState.warnings.map((warning) => (
+                      {(wrapExportReadiness?.warnings ?? wrapExportPreviewState.warnings).map((warning) => (
                         <div key={`wrap-warn-${warning}`} className={`${styles.message} ${styles.messageWarn}`}>
                           {warning}
                         </div>

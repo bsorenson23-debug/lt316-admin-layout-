@@ -54,6 +54,7 @@ import {
   mergeAuditContractWithLoadedInspection,
   updateContractValidation,
 } from "@/lib/bodyGeometryContract";
+import type { WrapExportProductionReadinessSummary } from "@/lib/wrapExportProductionValidation";
 import { buildBodyCutoutQaGuardState } from "@/lib/bodyCutoutQaGuard";
 import type { BodyGeometryAuditArtifactLike } from "@/lib/bodyGeometryDebugReport";
 import { hashArrayBufferSha256, hashFileSha256, hashJsonSha256 } from "@/lib/hashSha256";
@@ -141,6 +142,7 @@ export interface ModelViewerProps {
   canonicalBodyProfile?: CanonicalBodyProfile | null;
   canonicalDimensionCalibration?: CanonicalDimensionCalibration | null;
   bodyGeometryContractSeed?: BodyGeometryContractSeed | null;
+  wrapExportProductionReadiness?: WrapExportProductionReadinessSummary | null;
   showModelDebug?: boolean;
   onBodyGeometryContractChange?: (contract: BodyGeometryContract | null) => void;
 }
@@ -740,6 +742,7 @@ export default function ModelViewer({
   canonicalBodyProfile = null,
   canonicalDimensionCalibration = null,
   bodyGeometryContractSeed = null,
+  wrapExportProductionReadiness = null,
   showModelDebug = false,
   onBodyGeometryContractChange,
 }: ModelViewerProps) {
@@ -1509,6 +1512,7 @@ export default function ModelViewer({
               <BodyContractInspectorPanel
                 contract={viewerRuntimeBodyGeometryContract}
                 auditArtifact={viewerRuntimeGlbAudit}
+                wrapExportProductionReadiness={wrapExportProductionReadiness}
               />
             </div>
           )}
