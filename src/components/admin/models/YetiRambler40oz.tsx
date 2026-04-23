@@ -175,7 +175,15 @@ function buildWrapTexture(
   };
 
   placedItems.forEach((item) => {
-    if (!item.canvas || item.gridW <= 0 || item.gridH <= 0) return;
+    if (
+      !item.canvas ||
+      item.canvas.width <= 0 ||
+      item.canvas.height <= 0 ||
+      item.gridW <= 0 ||
+      item.gridH <= 0
+    ) {
+      return;
+    }
 
     const wPx = Math.max(1, Math.round(item.gridW * WRAP_TEXTURE_PX_PER_MM));
     const hPx = Math.max(1, Math.round(item.gridH * WRAP_TEXTURE_PX_PER_MM));

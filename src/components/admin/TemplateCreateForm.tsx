@@ -27,7 +27,10 @@ import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
 import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "@/data/rotaryPlacementPresets";
 import { saveTemplate, updateTemplate } from "@/lib/templateStorage";
-import { generateThumbnail } from "@/lib/generateThumbnail";
+import {
+  DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL,
+  generateThumbnail,
+} from "@/lib/generateThumbnail";
 import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHandleArcDeg } from "@/data/tumblerProfiles";
 import { getDefaultLaserSettings } from "@/lib/scopedDefaults";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
@@ -163,6 +166,7 @@ interface Props {
   onCancel: () => void;
   editingTemplate?: ProductTemplate;
   workspaceArtworkPlacements?: LaserBedArtworkPlacement[] | null;
+  surfaceMode?: "modal" | "page";
 }
 
 function round2(n: number): number {
@@ -530,6 +534,7 @@ export function TemplateCreateForm({
   onCancel,
   editingTemplate,
   workspaceArtworkPlacements = null,
+  surfaceMode = "modal",
 }: Props) {
   const isEdit = Boolean(editingTemplate);
   const searchParams = useSearchParams();
@@ -559,7 +564,9 @@ export function TemplateCreateForm({
   );
 
   // ── Files ────────────────────────────────────────────────────────
-  const [thumbDataUrl, setThumbDataUrl] = React.useState(editingTemplate?.thumbnailDataUrl ?? "");
+  const [thumbDataUrl, setThumbDataUrl] = React.useState(
+    editingTemplate?.thumbnailDataUrl ?? DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL,
+  );
   const [glbPath, setGlbPath] = React.useState(editingTemplate?.glbPath ?? "");
   const [glbFileName, setGlbFileName] = React.useState<string | null>(null);
   const [glbUploading, setGlbUploading] = React.useState(false);
@@ -2408,7 +2415,7 @@ export function TemplateCreateForm({
       capacity: capacity.trim(),
       laserType,
       productType,
-      thumbnailDataUrl: thumbDataUrl,
+      thumbnailDataUrl: thumbDataUrl || DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL,
       productPhotoFullUrl: productPhotoFullUrl || undefined,
       glbPath,
       glbStatus: activeDrinkwareGlbStatus ?? undefined,
@@ -2475,7 +2482,11 @@ export function TemplateCreateForm({
   };
 
   return (
-    <div className={styles.form}>
+    <div
+      className={`${styles.form} ${surfaceMode === "page" ? styles.formPage : ""}`}
+      data-testid="template-create-form"
+      data-template-create-surface-mode={surfaceMode}
+    >
       {/* ── Product identity ──────────────────────────────────────── */}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Product identity</div>

@@ -1,6 +1,6 @@
 const SIZE = 120;
 
-const GRAY_PLACEHOLDER =
+export const DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL =
   `data:image/svg+xml,${encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}">` +
       `<rect width="${SIZE}" height="${SIZE}" fill="#333"/>` +
@@ -19,7 +19,7 @@ export async function generateThumbnail(file: File): Promise<string> {
         canvas.height = SIZE;
         const ctx = canvas.getContext("2d");
         if (!ctx) {
-          resolve(GRAY_PLACEHOLDER);
+          resolve(DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL);
           return;
         }
 
@@ -35,7 +35,7 @@ export async function generateThumbnail(file: File): Promise<string> {
         ctx.drawImage(img, dx, dy, drawW, drawH);
         resolve(canvas.toDataURL("image/png"));
       } catch {
-        resolve(GRAY_PLACEHOLDER);
+        resolve(DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL);
       } finally {
         URL.revokeObjectURL(img.src);
       }
@@ -43,7 +43,7 @@ export async function generateThumbnail(file: File): Promise<string> {
 
     img.onerror = () => {
       URL.revokeObjectURL(img.src);
-      resolve(GRAY_PLACEHOLDER);
+      resolve(DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL);
     };
 
     img.src = URL.createObjectURL(file);
