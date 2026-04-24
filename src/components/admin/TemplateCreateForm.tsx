@@ -511,6 +511,17 @@ function resolveDefaultPreviewModelMode(args: {
   return "alignment-model";
 }
 
+function getTemplateCreateWorkflowStatusLabel(status: "ready" | "action" | "review"): string {
+  switch (status) {
+    case "ready":
+      return "Ready";
+    case "action":
+      return "Do next";
+    default:
+      return "Waiting";
+  }
+}
+
 function buildPreviewTumblerDimensions(args: {
   productType: ProductTemplate["productType"];
   diameterMm: number;
@@ -1454,6 +1465,58 @@ export function TemplateCreateForm({
     }
     return "Source, Detect, Review, BODY CUTOUT QA, and WRAP / EXPORT";
   }, [productType]);
+  const workflowCurrentStepDisplayLabel = React.useMemo(
+    () => workflowCurrentStepLabel.replace(/^\d+\.\s*/, ""),
+    [workflowCurrentStepLabel],
+  );
+  const reviewStageLabel = React.useMemo(() => {
+    if (hasAcceptedBodyReferenceReview) {
+      return "BODY REFERENCE locked";
+    }
+    if (workflowInput.hasStagedDetectResult) {
+      return "Review pending";
+    }
+    return "Review blocked";
+  }, [hasAcceptedBodyReferenceReview, workflowInput.hasStagedDetectResult]);
+  const qaStageLabel = React.useMemo(() => {
+    if (hasReviewedBodyCutoutQaGlb) {
+      return "QA ready";
+    }
+    if (hasAcceptedBodyReferenceReview) {
+      return "Generate QA GLB";
+    }
+    return "Await review";
+  }, [hasAcceptedBodyReferenceReview, hasReviewedBodyCutoutQaGlb]);
+  const wrapExportStageLabel = React.useMemo(() => {
+    if (!hasSourceModelForPreview) {
+      return "Source model needed";
+    }
+    return getWrapExportPreviewStatusLabel(wrapExportProductionReadiness.status);
+  }, [hasSourceModelForPreview, wrapExportProductionReadiness.status]);
+  const bodyReferenceV2StageLabel = React.useMemo(() => {
+    if (bodyReferenceV2CaptureReadiness.generationReady) {
+      return "Optional v2 ready";
+    }
+    if (bodyReferenceV2CaptureReadiness.accepted) {
+      return "Accepted v2 draft";
+    }
+    if (bodyReferenceV2CaptureReadiness.hasDraftChanges) {
+      return "Draft pending";
+    }
+    return "Optional path idle";
+  }, [
+    bodyReferenceV2CaptureReadiness.accepted,
+    bodyReferenceV2CaptureReadiness.generationReady,
+    bodyReferenceV2CaptureReadiness.hasDraftChanges,
+  ]);
+  const appearanceReferenceStageLabel = React.useMemo(() => {
+    if (appearanceReferenceSummary.totalLayers <= 0) {
+      return "No references saved";
+    }
+    return `${appearanceReferenceSummary.totalLayers} reference layer${
+      appearanceReferenceSummary.totalLayers === 1 ? "" : "s"
+    }`;
+  }, [appearanceReferenceSummary.totalLayers]);
 
   React.useEffect(() => {
     if (previewModelMode !== "body-cutout-qa") return;
@@ -2522,11 +2585,11 @@ export function TemplateCreateForm({
               <div className={styles.modeWorkflowEyebrow}>Template workflow</div>
               <div className={styles.modeWorkflowTitle}>{templateModeWorkflowHeading}</div>
               <div className={styles.modeWorkflowHint}>
-                Keep source inputs first, then move through BODY REFERENCE review, reviewed body-only QA, and WRAP / EXPORT checks without mixing those proofs together.
+                Keep product setup first, then move through review and proof in order without mixing BODY CUTOUT QA and WRAP / EXPORT.
               </div>
             </div>
             <div className={styles.modeWorkflowHeaderMeta}>
-              <span className={styles.modeWorkflowCurrent}>Current step: {workflowCurrentStepLabel}</span>
+              <span className={styles.modeWorkflowCurrent}>Current step: {workflowCurrentStepDisplayLabel}</span>
               <span
                 className={
                   templateCreateSourceReadiness.sourceReady
@@ -2567,7 +2630,12 @@ export function TemplateCreateForm({
                   </span>
                   <span className={styles.modeWorkflowStepLabel}>{step.label.replace(/^\d+\.\s*/, "")}</span>
                 </div>
-                <div className={styles.modeWorkflowStepDetail}>{step.detail}</div>
+                <div className={styles.modeWorkflowStepMeta}>
+                  {getTemplateCreateWorkflowStatusLabel(step.status)}
+                </div>
+                <div className={styles.modeWorkflowStepDetail}>
+                  {workflowCurrentStep === step.step ? step.detail : `${getTemplateCreateWorkflowStatusLabel(step.status)} stage`}
+                </div>
               </div>
             ))}
           </div>
@@ -2582,8 +2650,11 @@ export function TemplateCreateForm({
         </section>
       )}
 
+      <div className={inDedicatedTemplateMode ? styles.pageWorkspace : undefined}>
+      <div className={inDedicatedTemplateMode ? styles.pageMainColumn : undefined}>
+
       {/* ── Product identity ──────────────────────────────────────── */}
-      <div className={styles.section}>
+      <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
         <div className={styles.sectionTitle}>
           {inDedicatedTemplateMode ? "Step 1 · Source details" : "Product identity"}
         </div>
@@ -2655,7 +2726,7 @@ export function TemplateCreateForm({
       </div>
 
       {/* ── Product image + auto-detect ──────────────────────────── */}
-      <div className={styles.section}>
+      <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
         <div className={styles.sectionTitle}>
           {inDedicatedTemplateMode
             ? isTemplateCreateReviewFlowProductType(productType)
@@ -2861,7 +2932,10 @@ export function TemplateCreateForm({
       </div>
 
       {productType !== "flat" && (
-        <div className={styles.section} data-body-reference-review-scaffold="present">
+        <div
+          className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}
+          data-body-reference-review-scaffold="present"
+        >
           <div className={styles.sectionTitle}>
             {inDedicatedTemplateMode
               ? "Steps 3-5 · Review, BODY CUTOUT QA, and WRAP / EXPORT"
@@ -4261,9 +4335,11 @@ export function TemplateCreateForm({
         </div>
       )}
 
+      <div className={inDedicatedTemplateMode ? styles.pageSecondaryGrid : undefined}>
+
       {/* ── Front / Back face photos ─────────────────────────────── */}
       {productType !== "flat" && (
-        <div className={styles.section}>
+        <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
           <div className={styles.sectionTitle}>Face photos (grid overlay)</div>
 
           {/* ── FRONT ── */}
@@ -4482,7 +4558,7 @@ export function TemplateCreateForm({
       )}
 
       {/* ── 3D Model file ──────────────────────────────────────────── */}
-      <div className={styles.section}>
+      <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
         <div className={styles.sectionTitle}>3D Model</div>
 
         <div className={styles.fieldRow}>
@@ -4556,7 +4632,7 @@ export function TemplateCreateForm({
       </div>
 
       {/* ── Physical dimensions ───────────────────────────────────── */}
-      <div className={styles.section}>
+      <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
         <div className={styles.sectionTitle}>Physical dimensions</div>
 
         <div className={styles.fieldRow}>
@@ -4619,7 +4695,7 @@ export function TemplateCreateForm({
 
       {/* ── Engravable zone editor ──────────────────────────────── */}
       {productType !== "flat" && frontPhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
-        <div className={styles.section}>
+        <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
           <div className={styles.sectionTitle}>Engravable zone</div>
           <EngravableZoneEditor
             photoDataUrl={frontPhotoDataUrl}
@@ -4648,7 +4724,7 @@ export function TemplateCreateForm({
       )}
 
       {/* ── Default laser settings ────────────────────────────────── */}
-      <div className={styles.section}>
+      <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
         <div className={styles.sectionTitle}>Default laser settings</div>
 
         <div className={styles.fieldRow}>
@@ -4733,8 +4809,10 @@ export function TemplateCreateForm({
         </div>
       </div>
 
+      </div>
+
       {/* ── Errors ────────────────────────────────────────────────── */}
-      {errors.length > 0 && (
+      {!inDedicatedTemplateMode && errors.length > 0 && (
         <div>
           {errors.map((err) => (
             <div key={err} className={styles.error}>{err}</div>
@@ -4743,18 +4821,152 @@ export function TemplateCreateForm({
       )}
 
       {/* ── Buttons ───────────────────────────────────────────────── */}
-      <div className={styles.btnRow}>
-        <button type="button" className={styles.cancelBtn} onClick={onCancel}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className={styles.saveBtn}
-          onClick={handleSave}
-          data-testid="template-create-save"
-        >
-          {isEdit ? "Save changes" : "Save template"}
-        </button>
+      {!inDedicatedTemplateMode && (
+        <div className={styles.btnRow}>
+          <button type="button" className={styles.cancelBtn} onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={styles.saveBtn}
+            onClick={handleSave}
+            data-testid="template-create-save"
+          >
+            {isEdit ? "Save changes" : "Save template"}
+          </button>
+        </div>
+      )}
+
+      </div>
+      {inDedicatedTemplateMode && (
+        <aside className={styles.pageSidebar}>
+          <div className={styles.pageSidebarSticky}>
+            <section className={styles.pageSidebarCard}>
+              <div className={styles.pageSidebarEyebrow}>Current step</div>
+              <div className={styles.pageSidebarTitle}>{workflowCurrentStepDisplayLabel}</div>
+              <div className={styles.pageSidebarLead}>{workflowNextActionHint}</div>
+              <div className={styles.pageSidebarStatusGrid}>
+                <div className={styles.pageSidebarStatusItem}>
+                  <span className={styles.pageSidebarStatusLabel}>Source</span>
+                  <span
+                    className={
+                      templateCreateSourceReadiness.sourceReady
+                        ? styles.workflowReadinessReady
+                        : styles.workflowReadinessPending
+                    }
+                  >
+                    {templateCreateSourceReadiness.sourceReady ? "Ready" : "Pending"}
+                  </span>
+                </div>
+                <div className={styles.pageSidebarStatusItem}>
+                  <span className={styles.pageSidebarStatusLabel}>Detect</span>
+                  <span
+                    className={
+                      templateCreateSourceReadiness.detectReady
+                        ? styles.workflowReadinessReady
+                        : styles.workflowReadinessPending
+                    }
+                  >
+                    {templateCreateSourceReadiness.detectReady ? "Actionable" : "Blocked"}
+                  </span>
+                </div>
+                <div className={styles.pageSidebarStatusItem}>
+                  <span className={styles.pageSidebarStatusLabel}>Review</span>
+                  <span
+                    className={
+                      hasAcceptedBodyReferenceReview
+                        ? styles.workflowReadinessReady
+                        : styles.workflowReadinessPending
+                    }
+                  >
+                    {reviewStageLabel}
+                  </span>
+                </div>
+                <div className={styles.pageSidebarStatusItem}>
+                  <span className={styles.pageSidebarStatusLabel}>BODY CUTOUT QA</span>
+                  <span
+                    className={
+                      hasReviewedBodyCutoutQaGlb
+                        ? styles.workflowReadinessReady
+                        : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {qaStageLabel}
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <section className={`${styles.pageSidebarCard} ${styles.pageActionCard}`}>
+              <div className={styles.pageSidebarEyebrow}>Pinned actions</div>
+              <div className={styles.pageSidebarTitle}>Save or back out cleanly</div>
+              <div className={styles.pageSidebarLead}>
+                {saveGateReason
+                  ? `Save blocked: ${saveGateReason}`
+                  : isEdit
+                    ? "Changes are ready to save whenever the operator pass is complete."
+                    : "Save the template whenever the operator pass is complete."}
+              </div>
+              {errors.length > 0 && (
+                <div className={styles.pageActionErrorList}>
+                  {errors.map((err) => (
+                    <div key={err} className={styles.error}>{err}</div>
+                  ))}
+                </div>
+              )}
+              <div className={styles.pageActionButtons}>
+                <button
+                  type="button"
+                  className={`${styles.cancelBtn} ${styles.pageActionButton}`}
+                  onClick={onCancel}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.saveBtn} ${styles.pageActionButton}`}
+                  onClick={handleSave}
+                  data-testid="template-create-save"
+                >
+                  {isEdit ? "Save changes" : "Save template"}
+                </button>
+              </div>
+            </section>
+
+            <section className={styles.pageSidebarCard}>
+              <div className={styles.pageSidebarEyebrow}>Operator checks</div>
+              <div className={styles.pageSidebarMiniGrid}>
+                <div className={styles.pageSidebarMetric}>
+                  <span className={styles.pageSidebarMetricLabel}>WRAP / EXPORT</span>
+                  <span className={styles.pageSidebarMetricValue}>{wrapExportStageLabel}</span>
+                </div>
+                <div className={styles.pageSidebarMetric}>
+                  <span className={styles.pageSidebarMetricLabel}>Appearance refs</span>
+                  <span className={styles.pageSidebarMetricValue}>{appearanceReferenceStageLabel}</span>
+                </div>
+                <div className={styles.pageSidebarMetric}>
+                  <span className={styles.pageSidebarMetricLabel}>BODY REFERENCE v2</span>
+                  <span className={styles.pageSidebarMetricValue}>{bodyReferenceV2StageLabel}</span>
+                </div>
+                <div className={styles.pageSidebarMetric}>
+                  <span className={styles.pageSidebarMetricLabel}>Exit path</span>
+                  <span className={styles.pageSidebarMetricValue}>Shared save/cancel/back</span>
+                </div>
+              </div>
+            </section>
+
+            <section className={styles.pageSidebarCard}>
+              <div className={styles.pageSidebarEyebrow}>Mode boundaries</div>
+              <ul className={styles.pageSidebarList}>
+                <li>BODY CUTOUT QA stays body proof only.</li>
+                <li>WRAP / EXPORT stays placement and export proof only.</li>
+                <li>BODY REFERENCE v2 stays optional beneath accepted v1 by default.</li>
+                <li>Advanced and debug detail stay inside disclosures unless debug mode exposes them.</li>
+              </ul>
+            </section>
+          </div>
+        </aside>
+      )}
       </div>
 
       {/* ── Tumbler mapping wizard modal ── */}

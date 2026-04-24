@@ -8,7 +8,187 @@
 
 .formPage {
   width: 100%;
-  max-width: min(1120px, 100%);
+  max-width: min(1360px, 100%);
+}
+
+.pageWorkspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+  gap: 20px;
+  align-items: start;
+}
+
+.pageMainColumn {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.pageSection {
+  padding: 16px 18px;
+  border: 1px solid var(--border-normal);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 94%, var(--bg-hover)) 0%, var(--bg-card) 100%);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+.pageSection .sectionTitle {
+  font-size: 11px;
+  color: var(--text-primary);
+  border-bottom-color: var(--border-normal);
+}
+
+.pageSection .sectionLead {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.pageSection .fieldRow {
+  align-items: flex-start;
+}
+
+.pageSection .fieldLabel {
+  width: 132px;
+  padding-top: 7px;
+}
+
+.pageSecondaryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.pageSidebar {
+  min-width: 0;
+}
+
+.pageSidebarSticky {
+  position: sticky;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pageSidebarCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-normal);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 94%, var(--bg-hover)) 0%, var(--bg-card) 100%);
+}
+
+.pageActionCard {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 88%, var(--accent-dim)) 0%, var(--bg-card) 100%);
+}
+
+.pageSidebarEyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.pageSidebarTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pageSidebarLead {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.pageSidebarStatusGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.pageSidebarStatusItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-input);
+}
+
+.pageSidebarStatusLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.pageActionButtons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pageActionButton {
+  width: 100%;
+  justify-content: center;
+  text-align: center;
+}
+
+.pageActionErrorList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pageSidebarMiniGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pageSidebarMetric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-input);
+}
+
+.pageSidebarMetricLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.pageSidebarMetricValue {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.pageSidebarList {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 
 .modeWorkflowOverview {
@@ -78,8 +258,8 @@
 .modeWorkflowStepCard {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px;
+  gap: 5px;
+  padding: 11px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
   background: var(--bg-input);
@@ -89,6 +269,14 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.modeWorkflowStepMeta {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
 }
 
 .modeWorkflowStepNumber {
@@ -115,7 +303,7 @@
 }
 
 .modeWorkflowStepDetail {
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.45;
   color: var(--text-secondary);
 }
@@ -904,6 +1092,23 @@
 }
 
 @media (max-width: 900px) {
+  .pageWorkspace {
+    grid-template-columns: 1fr;
+  }
+
+  .pageSecondaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .pageSidebarSticky {
+    position: static;
+  }
+
+  .pageActionButtons,
+  .pageSidebarMiniGrid {
+    grid-template-columns: 1fr;
+  }
+
   .modeWorkflowHeader {
     flex-direction: column;
   }
