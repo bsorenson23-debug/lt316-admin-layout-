@@ -7,6 +7,10 @@ import {
   buildBodyReferenceSvgQualityVisualizationFromOutline,
 } from "@/lib/bodyReferenceSvgQuality";
 import {
+  buildBodyReferenceGuideCandidateReport,
+  type BodyReferenceGuideCandidate,
+} from "@/lib/bodyReferenceGuideCandidates";
+import {
   buildOutlineGeometrySignature,
   canDeleteFineTunePoint,
   cloneOutline,
@@ -192,6 +196,62 @@ function formatQualityStatus(status: BodyReferenceSvgQualityReport["status"] | u
   return "SVG quality unavailable";
 }
 
+function formatGuideStatus(status: string): string {
+  if (status === "pass") return "Guides ready";
+  if (status === "warn") return "Guides need review";
+  if (status === "fail") return "Guides unavailable";
+  return "Guide readiness unknown";
+}
+
+function getGuideCandidateTestId(candidate: BodyReferenceGuideCandidate): string {
+  if (candidate.kind === "top-bridge") return "body-reference-guide-top-bridge";
+  if (candidate.kind === "bottom-bridge") return "body-reference-guide-bottom-bridge";
+  if (candidate.kind === "centerline") return "body-reference-guide-centerline";
+  if (candidate.kind === "outline") return "body-reference-guide-outline";
+  return "body-reference-guide-body-bounds";
+}
+
+function getGuideCandidateClassName(candidate: BodyReferenceGuideCandidate): string {
+  if (candidate.kind === "top-bridge") return styles.guideTopBridge;
+  if (candidate.kind === "bottom-bridge") return styles.guideBottomBridge;
+  if (candidate.kind === "centerline") return styles.guideCenterline;
+  if (candidate.kind === "outline") return styles.guideOutline;
+  return styles.guideBounds;
+}
+
+function renderGuideCandidate(candidate: BodyReferenceGuideCandidate) {
+  if (candidate.points.length < 2) return null;
+  const testId = getGuideCandidateTestId(candidate);
+  const className = getGuideCandidateClassName(candidate);
+  const [start, end] = candidate.points;
+  if (!start || !end) return null;
+  if (candidate.kind === "outline" && candidate.points.length > 2) {
+    return (
+      <polyline
+        key={candidate.id}
+        points={candidate.points.map((point) => `${point.x},${point.y}`).join(" ")}
+        className={className}
+        data-testid={testId}
+        data-guide-id={candidate.id}
+        data-coordinate-space={candidate.coordinateSpace}
+      />
+    );
+  }
+  return (
+    <line
+      key={candidate.id}
+      x1={start.x}
+      y1={start.y}
+      x2={end.x}
+      y2={end.y}
+      className={className}
+      data-testid={testId}
+      data-guide-id={candidate.id}
+      data-coordinate-space={candidate.coordinateSpace}
+    />
+  );
+}
+
 export function BodyReferenceFineTuneEditor({
   outline,
   approvedOutline = null,
@@ -221,6 +281,7 @@ export function BodyReferenceFineTuneEditor({
     bridgeGuides: true,
     qualityWarnings: true,
   });
+  const [guideOverlayVisible, setGuideOverlayVisible] = React.useState(true);
 
   const sourceImagePlacement = React.useMemo(
     () => buildSourceImagePlacement(outline),
@@ -283,6 +344,19 @@ export function BodyReferenceFineTuneEditor({
         : []
     ),
     [svgQualityReport],
+  );
+  const guideCandidateReport = React.useMemo(
+    () => buildBodyReferenceGuideCandidateReport({
+      outline,
+      svgQualityReport,
+    }),
+    [outline, svgQualityReport],
+  );
+  const bridgeGuideCandidateCount = React.useMemo(
+    () => guideCandidateReport.candidates.filter((candidate) => (
+      candidate.kind === "top-bridge" || candidate.kind === "bottom-bridge"
+    )).length,
+    [guideCandidateReport.candidates],
   );
 
   React.useEffect(() => {
@@ -555,6 +629,66 @@ export function BodyReferenceFineTuneEditor({
         </div>
       </div>
 
+      <div
+        className={styles.guidesPanel}
+        data-testid="body-reference-guides-panel"
+        data-guide-status={guideCandidateReport.status}
+        data-coordinate-space={guideCandidateReport.coordinateSpace}
+      >
+        <div className={styles.guidesHeader}>
+          <div>
+            <div className={styles.guidesEyebrow}>Outline guides</div>
+            <div className={styles.guidesTitle}>
+              UI-only guide overlay
+            </div>
+          </div>
+          <span className={styles.guidesBadge}>
+            {formatGuideStatus(guideCandidateReport.status)}
+          </span>
+        </div>
+        <div className={styles.guidesSummary}>
+          <span>Coordinate space: {guideCandidateReport.coordinateSpace}</span>
+          <span>Bridge candidates: {bridgeGuideCandidateCount}/2</span>
+          <span>Expected bridge segments: {guideCandidateReport.expectedBridgeSegmentCount}</span>
+          <span>Suspicious jumps: {guideCandidateReport.suspiciousJumpCount}</span>
+        </div>
+        <div className={styles.guidesActions}>
+          <button
+            type="button"
+            className={guideOverlayVisible ? styles.toggleButtonActive : styles.toggleButton}
+            data-testid="body-reference-guides-toggle"
+            disabled={guideCandidateReport.candidates.length === 0}
+            onClick={() => {
+              setGuideOverlayVisible((current) => !current);
+              focusEditor();
+            }}
+          >
+            {guideOverlayVisible ? "Hide UI-only guides" : "Show UI-only guides"}
+          </button>
+          <span
+            className={styles.guidesNote}
+            data-testid="body-reference-guides-ui-only-note"
+          >
+            UI-only guide overlay. Does not affect approved SVG or BODY CUTOUT QA GLB.
+          </span>
+        </div>
+        <div
+          className={styles.guidesNote}
+          data-testid="body-reference-guides-source-hash-note"
+        >
+          Guide rendering is read-only and excluded from source hash, GLB input, WRAP / EXPORT, and v2 authority.
+        </div>
+        {(guideCandidateReport.warnings.length > 0 || guideCandidateReport.errors.length > 0) && (
+          <div className={styles.guidesMessages}>
+            {[...guideCandidateReport.errors, ...guideCandidateReport.warnings].map((message) => (
+              <div key={message} className={styles.guidesMessage}>
+                {message}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {overlayState.qualityWarnings && qualityMessages.length > 0 && (
         <div className={styles.warningList}>
           {qualityMessages.map((warning) => (
@@ -627,6 +761,16 @@ export function BodyReferenceFineTuneEditor({
           y2={viewBox.minY + viewBox.height}
           className={styles.centerLine}
         />
+
+        {guideOverlayVisible && guideCandidateReport.candidates.length > 0 && (
+          <g
+            className={styles.guideOverlay}
+            data-testid="body-reference-guide-overlay"
+            data-guide-status={guideCandidateReport.status}
+          >
+            {guideCandidateReport.candidates.map(renderGuideCandidate)}
+          </g>
+        )}
 
         {overlayState.detectedContour && detectedPath && (
           <path d={detectedPath} className={styles.detectedPath} />
