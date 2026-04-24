@@ -69,6 +69,7 @@ import {
   resolveOutlineBounds,
   resolveOutlinePointCount,
 } from "@/lib/bodyReferenceFineTune";
+import { summarizeBodyReferenceFineTuneLifecycle } from "@/lib/bodyReferenceFineTuneLifecycle";
 import { buildBodyReferenceSvgQualityReportFromOutline } from "@/lib/bodyReferenceSvgQuality";
 import {
   getBodyReferencePreviewModeHint,
@@ -2172,30 +2173,34 @@ export function TemplateCreateForm({
       reviewedBodyCutoutQaGeneratedSourceSignature,
     ],
   );
-  const reviewedBodyReferenceGlbFreshnessLabel = React.useMemo(() => {
-    if (reviewedBodyReferenceGlbFreshness.status === "current") {
-      return "Reviewed GLB is fresh against the accepted BODY REFERENCE cutout.";
-    }
-    if (reviewedBodyReferenceGlbFreshness.status === "stale") {
-      return "Reviewed GLB is stale and should be regenerated from the accepted cutout.";
-    }
-    if (reviewedBodyReferenceGlbFreshness.status === "draft-pending") {
-      return "Draft contour edits are pending acceptance.";
-    }
-    return "Reviewed GLB freshness is unavailable until an accepted BODY REFERENCE exists.";
-  }, [reviewedBodyReferenceGlbFreshness.status]);
-  const bodyReferenceFineTuneStatusLabel = React.useMemo(() => {
-    if (bodyReferenceFineTuneDraftPendingAcceptance) {
-      return "Draft pending";
-    }
-    if (reviewedBodyReferenceGlbFreshness.status === "current") {
-      return "Reviewed GLB fresh";
-    }
-    if (reviewedBodyReferenceGlbFreshness.status === "stale") {
-      return "Reviewed GLB stale / needs regeneration";
-    }
-    return "Accepted cutout is current";
-  }, [bodyReferenceFineTuneDraftPendingAcceptance, reviewedBodyReferenceGlbFreshness.status]);
+  const bodyReferenceFineTuneLifecycle = React.useMemo(
+    () => summarizeBodyReferenceFineTuneLifecycle({
+      hasAcceptedCutout: hasAcceptedBodyReferenceReview && Boolean(approvedBodyOutline),
+      isDraftDirty: bodyReferenceFineTuneDraftPendingAcceptance,
+      hasAcceptedCorrectedCutout:
+        reviewedBodyReferenceGlbFreshness.status === "stale" &&
+        reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
+      hasReviewedGlb: reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
+      acceptedSourceHash: currentReviewedBodyReferenceSourceSignature,
+      reviewedGlbSourceHash: reviewedBodyReferenceGlbSourceHash,
+      reviewedGlbFreshRelativeToSource:
+        reviewedBodyReferenceGlbFreshness.status === "current"
+          ? true
+          : reviewedBodyReferenceGlbFreshness.status === "stale"
+            ? false
+            : null,
+    }),
+    [
+      approvedBodyOutline,
+      bodyReferenceFineTuneDraftPendingAcceptance,
+      currentReviewedBodyReferenceSourceSignature,
+      hasAcceptedBodyReferenceReview,
+      reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
+      reviewedBodyReferenceGlbFreshness.status,
+      reviewedBodyReferenceGlbSourceHash,
+    ],
+  );
+  const bodyReferenceFineTuneStatusLabel = bodyReferenceFineTuneLifecycle.label;
   const bodyReferenceFineTuneVisualWarnings = React.useMemo(() => {
     const warnings: Array<{ level: "warn" | "error"; message: string }> = [];
     if (activeBodyReferenceSvgQuality.status === "fail") {
@@ -3745,6 +3750,74 @@ export function TemplateCreateForm({
                   </button>
                 </div>
 
+                <div
+                  className={styles.fineTuneLifecyclePanel}
+                  data-testid="body-reference-fine-tune-lifecycle"
+                >
+                  <div className={styles.fineTuneLifecycleHeader}>
+                    <div>
+                      <div className={styles.fineTuneLifecycleEyebrow}>Draft lifecycle</div>
+                      <div className={styles.fineTuneLifecycleTitle}>
+                        {bodyReferenceFineTuneLifecycle.label}
+                      </div>
+                    </div>
+                    <span
+                      className={
+                        bodyReferenceFineTuneLifecycle.status === "reviewed-glb-fresh" ||
+                        bodyReferenceFineTuneLifecycle.status === "no-draft"
+                          ? styles.reviewStatusReady
+                          : styles.reviewStatusPending
+                      }
+                    >
+                      GLB {bodyReferenceFineTuneLifecycle.glbFreshnessLabel}
+                    </span>
+                  </div>
+                  <div className={styles.fineTuneLifecycleMessage}>
+                    {bodyReferenceFineTuneLifecycle.operatorMessage}
+                  </div>
+                  <div className={styles.fineTuneLifecycleGrid}>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Accepted source hash</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {bodyReferenceFineTuneLifecycle.acceptedSourceHashLabel}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB source hash</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {bodyReferenceFineTuneLifecycle.reviewedGlbSourceHashLabel}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>GLB freshness</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {bodyReferenceFineTuneLifecycle.glbFreshnessLabel}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Next action</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {bodyReferenceFineTuneLifecycle.nextActionLabel ?? "No regeneration required"}
+                      </span>
+                    </div>
+                  </div>
+                  {bodyReferenceFineTuneLifecycle.warnings.length > 0 && (
+                    <div className={styles.fineTuneLifecycleWarnings}>
+                      {bodyReferenceFineTuneLifecycle.warnings.map((warning) => (
+                        <div key={warning} className={styles.cutoutFitWarning}>
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className={styles.fineTuneActionConsequences}>
+                  <span>Accept corrected cutout: Replace accepted cutout and mark reviewed GLB stale.</span>
+                  <span>Reset draft: Reset draft to accepted cutout.</span>
+                  <span>Cancel draft: Discard draft edits and keep the accepted cutout.</span>
+                </div>
+
                 <div className={styles.cutoutFitSummary}>
                   <div className={styles.cutoutFitSummaryHeader}>
                     <div>
@@ -3834,9 +3907,9 @@ export function TemplateCreateForm({
                   </details>
 
                   <div className={styles.reviewScaffoldNote}>
-                    {reviewedBodyReferenceGlbFreshnessLabel}
-                    {bodyReferenceFineTuneDraftPendingAcceptance
-                      ? " Accept corrected cutout before regenerating the reviewed GLB."
+                    {bodyReferenceFineTuneLifecycle.operatorMessage}
+                    {bodyReferenceFineTuneLifecycle.nextActionLabel
+                      ? ` Next action: ${bodyReferenceFineTuneLifecycle.nextActionLabel}.`
                       : ""}
                   </div>
 

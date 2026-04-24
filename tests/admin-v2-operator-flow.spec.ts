@@ -199,6 +199,7 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
 
   const fineTuneMetricLabels = ["Reviewed GLB freshness", "Source hash", "GLB source hash"];
   const fineTunePanel = page.locator('[data-body-reference-fine-tune-panel="present"]');
+  const fineTuneLifecycle = page.getByTestId("body-reference-fine-tune-lifecycle");
 
   await test.step("accept BODY REFERENCE v1 and generate reviewed BODY CUTOUT QA", async () => {
     const acceptV1Button = page.getByTestId("body-reference-v1-accept");
@@ -224,6 +225,8 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
       timeout: 120_000,
     });
     await expect(page.getByTestId("body-geometry-status-badge-status")).toHaveText("PASS");
+    await expect(fineTuneLifecycle).toContainText("Reviewed GLB fresh");
+    await expect(fineTuneLifecycle).toContainText("Reviewed GLB is fresh relative to accepted cutout.");
 
     const normalReport = await buildProgrammaticBodyContractDebugReport(
       initialGeneratedPayload,
@@ -258,16 +261,24 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     const fineTuneDraft = await readMetricMap(fineTunePanel, fineTuneMetricLabels);
     expect(fineTuneDraft["Reviewed GLB freshness"]).toBe("Draft pending");
     expect(fineTuneDraft["Source hash"]).toBe(sourceHashBeforeAccept);
+    await expect(fineTuneLifecycle).toContainText("Draft pending");
+    await expect(fineTuneLifecycle).toContainText("Editing draft only - current BODY CUTOUT QA GLB is unchanged.");
+    await expect(fineTuneLifecycle).toContainText("Accepting this cutout will mark the reviewed GLB stale.");
 
     const acceptCorrectedButton = page.getByTestId("body-reference-fine-tune-accept");
     await (await waitForLocatorEnabled(acceptCorrectedButton)).click();
     await page.waitForTimeout(500);
 
     const fineTuneAccepted = await readMetricMap(fineTunePanel, fineTuneMetricLabels);
-    expect(fineTuneAccepted["Reviewed GLB freshness"]).toBe("Reviewed GLB stale / needs regeneration");
+    expect(fineTuneAccepted["Reviewed GLB freshness"]).toBe("Reviewed GLB stale");
     expect(fineTuneAccepted["Source hash"]).toBeDefined();
     expect(fineTuneAccepted["GLB source hash"]).toBeDefined();
     expect(fineTuneAccepted["Source hash"]).not.toBe(fineTuneAccepted["GLB source hash"]);
+    await expect(fineTuneLifecycle).toContainText("Corrected cutout accepted. Regenerate BODY CUTOUT QA GLB.");
+    await expect(fineTuneLifecycle).toContainText("Reviewed GLB is stale relative to accepted cutout.");
+    await expect(fineTunePanel).toContainText("Accept corrected cutout: Replace accepted cutout and mark reviewed GLB stale.");
+    await expect(fineTunePanel).toContainText("Reset draft: Reset draft to accepted cutout.");
+    await expect(fineTunePanel).toContainText("Cancel draft: Discard draft edits and keep the accepted cutout.");
 
     await page.getByTestId("preview-mode-body-cutout-qa").click();
     await expect(page.getByTestId("body-geometry-status-badge-glb")).toContainText("Stale");
@@ -286,6 +297,8 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     await page.getByTestId("preview-mode-body-cutout-qa").click();
     const fineTuneRegenerated = await readMetricMap(fineTunePanel, fineTuneMetricLabels);
     expect(fineTuneRegenerated["Reviewed GLB freshness"]).toBe("Reviewed GLB fresh");
+    await expect(fineTuneLifecycle).toContainText("Reviewed GLB fresh");
+    await expect(fineTuneLifecycle).toContainText("Reviewed GLB is fresh relative to accepted cutout.");
     await expect(page.getByTestId("body-geometry-status-badge-status")).toHaveText("PASS");
   });
 
