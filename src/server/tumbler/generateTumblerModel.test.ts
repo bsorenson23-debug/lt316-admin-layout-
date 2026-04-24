@@ -15,7 +15,13 @@ import {
   createBodyReferenceV2Layer,
   createCenterlineAxis,
 } from "../../lib/bodyReferenceV2Layers.ts";
-import { generateBodyReferenceGlb, type GenerateBodyReferenceGlbInput } from "./generateTumblerModel.ts";
+import {
+  deriveStanleyIceFlowBodyTraceExtents,
+  deriveStanleyIceFlowEngravingStartGuidePx,
+  deriveStanleyIceFlowReferenceMeasurementBand,
+  generateBodyReferenceGlb,
+  type GenerateBodyReferenceGlbInput,
+} from "./generateTumblerModel.ts";
 
 const BODY_PROFILE: CanonicalBodyProfile = {
   symmetrySource: "left",
@@ -133,6 +139,97 @@ function createInput(overrides: Partial<GenerateBodyReferenceGlbInput> = {}): Ge
     ...overrides,
   };
 }
+
+test("Stanley IceFlow reference measurement band uses seam body rows instead of wider lid rows", () => {
+  const centerXPx = 250;
+  const bodyTopPx = 170;
+  const bodyBottomPx = 620;
+  const runs = Array.from({ length: bodyBottomPx - bodyTopPx + 1 }, (_, index) => {
+    const y = bodyTopPx + index;
+    const seamBand = y >= 172 && y <= 188;
+    const width = seamBand ? 181 : 160;
+    const left = centerXPx - Math.floor(width / 2);
+    const right = left + width - 1;
+    return { y, left, right, width };
+  });
+  const widerLidHalfWidthPx = 140;
+
+  const band = deriveStanleyIceFlowReferenceMeasurementBand({
+    runs,
+    bodyTopPx,
+    bodyBottomPx,
+    centerXPx,
+    fallbackHalfWidthPx: widerLidHalfWidthPx,
+  });
+
+  assert.equal(band.usedFallback, false);
+  assert.equal(band.rowCount > 0, true);
+  assert.equal(band.widthPx <= widerLidHalfWidthPx * 2, true);
+  assert.equal(band.referenceHalfWidthPx, band.widthPx / 2);
+  assert.equal(band.referenceHalfWidthPx < widerLidHalfWidthPx, true);
+  assert.equal(band.widthPx <= 280, true);
+});
+
+test("Stanley IceFlow reference measurement band falls back deterministically when seam rows are unavailable", () => {
+  const band = deriveStanleyIceFlowReferenceMeasurementBand({
+    runs: [],
+    bodyTopPx: 170,
+    bodyBottomPx: 620,
+    centerXPx: 250,
+    fallbackHalfWidthPx: 140,
+  });
+
+  assert.equal(band.usedFallback, true);
+  assert.equal(band.referenceHalfWidthPx, 140);
+  assert.equal(band.widthPx, 280);
+  assert.equal(band.centerXPx, 250);
+});
+
+test("Stanley IceFlow engraving start guide is the midpoint between rim bottom and painted body top", () => {
+  assert.equal(deriveStanleyIceFlowEngravingStartGuidePx({
+    rimBottomPx: 168,
+    paintedBodyTopPx: 182,
+  }), 175);
+});
+
+test("Stanley IceFlow engraving start guide prefers the seam-adjacent silver edge", () => {
+  assert.equal(deriveStanleyIceFlowEngravingStartGuidePx({
+    rimBottomPx: 168,
+    seamSilverBottomPx: 180,
+    paintedBodyTopPx: 184,
+  }), 182);
+});
+
+test("Stanley IceFlow body trace reaches lower rounded body beyond color-matched sidewall", () => {
+  const centerXPx = 250;
+  const paintedBodyTopPx = 182;
+  const colorBodyBottomPx = 540;
+  const roundedBottomPx = 628;
+  const maxCenterWidthPx = 190;
+  const runs = Array.from({ length: roundedBottomPx - paintedBodyTopPx + 1 }, (_, index) => {
+    const y = paintedBodyTopPx + index;
+    const taperT = Math.max(0, (y - colorBodyBottomPx) / Math.max(1, roundedBottomPx - colorBodyBottomPx));
+    const width = y <= colorBodyBottomPx
+      ? 180
+      : Math.max(28, Math.round(180 - taperT * 145));
+    const left = centerXPx - Math.floor(width / 2);
+    const right = left + width - 1;
+    return { y, left, right, width };
+  });
+
+  const trace = deriveStanleyIceFlowBodyTraceExtents({
+    runs,
+    paintedBodyTopPx,
+    colorBodyBottomPx,
+    centerXPx,
+    maxCenterWidthPx,
+  });
+
+  assert.equal(trace.usedFallback, false);
+  assert.equal(trace.topPx, paintedBodyTopPx);
+  assert.equal(trace.bottomPx, roundedBottomPx);
+  assert.equal(trace.bottomPx > colorBodyBottomPx, true);
+});
 
 function createV2Draft(overrides: Partial<BodyReferenceV2Draft> = {}): BodyReferenceV2Draft {
   return {

@@ -2,6 +2,7 @@
 
 import React from "react";
 import type { TumblerItemLookupFitDebug } from "@/types/tumblerItemLookup";
+import { buildTumblerLookupDebugGuideModel } from "@/lib/tumblerLookupDebugGuides";
 import styles from "./TumblerLookupDebugPanel.module.css";
 
 interface Props {
@@ -31,9 +32,18 @@ export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
   const viewBox = `0 0 ${debug.imageWidthPx} ${debug.imageHeightPx}`;
   const silhouetteWidth = debug.silhouetteBoundsPx.maxX - debug.silhouetteBoundsPx.minX;
   const silhouetteHeight = debug.silhouetteBoundsPx.maxY - debug.silhouetteBoundsPx.minY;
-  const bodyHeight = debug.bodyBottomPx - debug.bodyTopPx;
+  const bodyTraceTopPx = debug.bodyTraceTopPx ?? debug.bodyTopPx;
+  const bodyTraceBottomPx = debug.bodyTraceBottomPx ?? debug.bodyBottomPx;
+  const bodyHeight = bodyTraceBottomPx - bodyTraceTopPx;
   const rightProfile = buildEdgePolyline(debug, "right");
   const leftProfile = buildEdgePolyline(debug, "left");
+  const guideModel = buildTumblerLookupDebugGuideModel(debug);
+  const measurementBand = guideModel.measurementBand;
+  const measurementBandTopPx = measurementBand?.topPx ?? debug.referenceBandTopPx;
+  const measurementBandBottomPx = measurementBand?.bottomPx ?? debug.referenceBandBottomPx;
+  const measurementBandLeftPx = measurementBand?.leftPx ?? Math.max(0, debug.centerXPx - debug.referenceHalfWidthPx);
+  const measurementBandRightPx = measurementBand?.rightPx ?? Math.min(debug.imageWidthPx, debug.centerXPx + debug.referenceHalfWidthPx);
+  const measurementBandWidthPx = measurementBand?.widthPx ?? Math.max(1, measurementBandRightPx - measurementBandLeftPx + 1);
 
   return (
     <div className={styles.panel}>
@@ -78,8 +88,13 @@ export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
         </figure>
 
         <figure className={styles.card}>
-          <figcaption className={styles.cardTitle}>2. Rim split and body band</figcaption>
-          <svg viewBox={viewBox} className={styles.preview} aria-label="Rim split and body band">
+          <figcaption className={styles.cardTitle}>2. Rim split and diameter band</figcaption>
+          <svg
+            viewBox={viewBox}
+            className={styles.preview}
+            aria-label="Rim split and diameter band"
+            data-bottom-body-guide={guideModel.showBottomBodyGuide ? "present" : "absent"}
+          >
             <image href={imageUrl} x="0" y="0" width={debug.imageWidthPx} height={debug.imageHeightPx} />
             <rect
               x={debug.silhouetteBoundsPx.minX}
@@ -89,16 +104,30 @@ export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
               className={styles.rimBand}
             />
             <rect
-              x={debug.silhouetteBoundsPx.minX}
-              y={debug.bodyTopPx}
-              width={silhouetteWidth}
-              height={Math.max(1, bodyHeight)}
+              x={measurementBandLeftPx}
+              y={measurementBandTopPx}
+              width={measurementBandWidthPx}
+              height={Math.max(1, measurementBandBottomPx - measurementBandTopPx)}
               className={styles.bodyBand}
             />
             <line x1={0} y1={debug.rimTopPx} x2={debug.imageWidthPx} y2={debug.rimTopPx} className={styles.rimLine} />
             <line x1={0} y1={debug.rimBottomPx} x2={debug.imageWidthPx} y2={debug.rimBottomPx} className={styles.rimLine} />
-            <line x1={0} y1={debug.bodyTopPx} x2={debug.imageWidthPx} y2={debug.bodyTopPx} className={styles.bodyLine} />
-            <line x1={0} y1={debug.bodyBottomPx} x2={debug.imageWidthPx} y2={debug.bodyBottomPx} className={styles.bodyLine} />
+            <line
+              x1={0}
+              y1={guideModel.engravingStartGuideYPx}
+              x2={debug.imageWidthPx}
+              y2={guideModel.engravingStartGuideYPx}
+              className={styles.bodyLine}
+            />
+            {guideModel.showBottomBodyGuide && guideModel.bottomBodyGuideYPx != null && (
+              <line
+                x1={0}
+                y1={guideModel.bottomBodyGuideYPx}
+                x2={debug.imageWidthPx}
+                y2={guideModel.bottomBodyGuideYPx}
+                className={styles.bodyLine}
+              />
+            )}
             <line
               x1={debug.centerXPx}
               y1={debug.silhouetteBoundsPx.minY}
@@ -107,7 +136,7 @@ export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
               className={styles.centerLine}
             />
           </svg>
-          <div className={styles.caption}>Silver rim split and the body region used for the revolve profile.</div>
+          <div className={styles.caption}>{guideModel.caption}</div>
         </figure>
 
         <figure className={styles.card}>
@@ -128,19 +157,19 @@ export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
                 <circle
                   cx={debug.centerXPx - point.radiusPx}
                   cy={point.yPx}
-                  r="3"
+                  r="1.8"
                   className={styles.profilePoint}
                 />
                 <circle
                   cx={debug.centerXPx + point.radiusPx}
                   cy={point.yPx}
-                  r="3"
+                  r="1.8"
                   className={styles.profilePoint}
                 />
               </React.Fragment>
             ))}
-            <line x1={0} y1={debug.bodyTopPx} x2={debug.imageWidthPx} y2={debug.bodyTopPx} className={styles.bodyLine} />
-            <line x1={0} y1={debug.bodyBottomPx} x2={debug.imageWidthPx} y2={debug.bodyBottomPx} className={styles.bodyLine} />
+            <line x1={0} y1={bodyTraceTopPx} x2={debug.imageWidthPx} y2={bodyTraceTopPx} className={styles.bodyLine} />
+            <line x1={0} y1={bodyTraceBottomPx} x2={debug.imageWidthPx} y2={bodyTraceBottomPx} className={styles.bodyLine} />
           </svg>
           <div className={styles.caption}>Sampled lathe profile points that become the generated body mesh.</div>
         </figure>

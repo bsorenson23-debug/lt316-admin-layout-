@@ -72,6 +72,34 @@ type CenterRun = {
   whole: RowBounds;
 };
 
+export type StanleyIceFlowReferenceMeasurementRun = {
+  y: number;
+  left: number;
+  right: number;
+  width: number;
+};
+
+export interface StanleyIceFlowReferenceMeasurementBand {
+  topPx: number;
+  bottomPx: number;
+  centerYPx: number;
+  centerXPx: number;
+  leftPx: number;
+  rightPx: number;
+  widthPx: number;
+  referenceHalfWidthPx: number;
+  rowCount: number;
+  widthStdDevPx: number;
+  usedFallback: boolean;
+}
+
+export interface StanleyIceFlowBodyTraceExtents {
+  topPx: number;
+  bottomPx: number;
+  rowCount: number;
+  usedFallback: boolean;
+}
+
 type StanleySilhouetteFit = {
   bodyProfile: Array<{ yMm: number; radiusMm: number }>;
   bodyTopYmm: number;
@@ -160,6 +188,12 @@ function normalizeScore(value: number): number {
 function avg(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function stdDev(values: number[]): number {
+  if (values.length === 0) return 0;
+  const mean = avg(values);
+  return Math.sqrt(avg(values.map((value) => (value - mean) ** 2)));
 }
 
 function median(values: number[]): number {
@@ -408,6 +442,160 @@ function smoothSeries(values: number[], radius: number): number[] {
   });
 }
 
+export function deriveStanleyIceFlowReferenceMeasurementBand(args: {
+  runs: StanleyIceFlowReferenceMeasurementRun[];
+  bodyTopPx: number;
+  bodyBottomPx: number;
+  centerXPx: number;
+  fallbackHalfWidthPx: number;
+}): StanleyIceFlowReferenceMeasurementBand {
+  const bodyHeightPx = Math.max(1, args.bodyBottomPx - args.bodyTopPx + 1);
+  const bandTopPx = Math.round(args.bodyTopPx + Math.max(1, bodyHeightPx * 0.004));
+  const bandHeightPx = Math.max(6, Math.min(24, Math.round(bodyHeightPx * 0.035)));
+  const bandBottomPx = Math.round(Math.min(
+    args.bodyBottomPx,
+    bandTopPx + bandHeightPx - 1,
+  ));
+  const fallbackHalfWidthPx = Math.max(1, args.fallbackHalfWidthPx);
+
+  const bandRows = args.runs
+    .filter((run) =>
+      run.y >= bandTopPx &&
+      run.y <= bandBottomPx &&
+      run.left < args.centerXPx &&
+      run.right > args.centerXPx &&
+      run.width > 0,
+    )
+    .map((run) => ({
+      ...run,
+      centerXPx: (run.left + run.right) / 2,
+      widthPx: run.right - run.left + 1,
+    }));
+
+  if (bandRows.length === 0) {
+    return {
+      topPx: bandTopPx,
+      bottomPx: bandBottomPx,
+      centerYPx: round2((bandTopPx + bandBottomPx) / 2),
+      centerXPx: round2(args.centerXPx),
+      leftPx: round2(args.centerXPx - fallbackHalfWidthPx),
+      rightPx: round2(args.centerXPx + fallbackHalfWidthPx),
+      widthPx: round2(fallbackHalfWidthPx * 2),
+      referenceHalfWidthPx: round2(fallbackHalfWidthPx),
+      rowCount: 0,
+      widthStdDevPx: 0,
+      usedFallback: true,
+    };
+  }
+
+  const medianWidthPx = median(bandRows.map((run) => run.widthPx));
+  const maxWidthDeltaPx = Math.max(5, medianWidthPx * 0.08);
+  const stableRows = bandRows.filter((run) => Math.abs(run.widthPx - medianWidthPx) <= maxWidthDeltaPx);
+  const selectedRows = stableRows.length >= 3 ? stableRows : bandRows;
+  const leftPx = avg(selectedRows.map((run) => run.left));
+  const rightPx = avg(selectedRows.map((run) => run.right));
+  const widthPx = Math.max(1, rightPx - leftPx + 1);
+
+  return {
+    topPx: Math.min(...selectedRows.map((run) => run.y)),
+    bottomPx: Math.max(...selectedRows.map((run) => run.y)),
+    centerYPx: round2(avg(selectedRows.map((run) => run.y))),
+    centerXPx: round2(avg(selectedRows.map((run) => run.centerXPx))),
+    leftPx: round2(leftPx),
+    rightPx: round2(rightPx),
+    widthPx: round2(widthPx),
+    referenceHalfWidthPx: round2(widthPx / 2),
+    rowCount: selectedRows.length,
+    widthStdDevPx: round2(stdDev(selectedRows.map((run) => run.widthPx))),
+    usedFallback: false,
+  };
+}
+
+export function deriveStanleyIceFlowEngravingStartGuidePx(args: {
+  rimBottomPx: number;
+  paintedBodyTopPx: number;
+  seamSilverBottomPx?: number | null;
+}): number {
+  const seamSilverBottomPx = Number.isFinite(args.seamSilverBottomPx)
+    ? Number(args.seamSilverBottomPx)
+    : null;
+  const silverEdgePx = seamSilverBottomPx != null && seamSilverBottomPx < args.paintedBodyTopPx
+    ? Math.max(args.rimBottomPx, seamSilverBottomPx)
+    : args.rimBottomPx;
+  return round2((silverEdgePx + args.paintedBodyTopPx) / 2);
+}
+
+function deriveStanleyIceFlowSeamSilverBottomPx(args: {
+  runs: CenterRun[];
+  paintedBodyTopPx: number;
+  bodyColor: Rgb;
+  bodyLuma: number;
+  maxCenterWidthPx: number;
+  fullTopPx: number;
+  fullHeightPx: number;
+}): number | null {
+  const searchTopPx = Math.max(
+    args.fullTopPx,
+    Math.round(args.paintedBodyTopPx - Math.max(8, args.fullHeightPx * 0.045)),
+  );
+  const seamRows = args.runs
+    .filter((run) => {
+      if (run.y < searchTopPx || run.y >= args.paintedBodyTopPx) return false;
+      if (run.width < args.maxCenterWidthPx * 0.28) return false;
+      const luma = run.sampleColor[0] * 0.2126 + run.sampleColor[1] * 0.7152 + run.sampleColor[2] * 0.0722;
+      const distanceFromBody = colorDistance(run.sampleColor, args.bodyColor);
+      return distanceFromBody > 18 || luma > args.bodyLuma + 6;
+    })
+    .map((run) => run.y)
+    .sort((a, b) => a - b);
+
+  if (seamRows.length === 0) return null;
+
+  let segmentStartPx = seamRows[seamRows.length - 1];
+  const segmentEndPx = seamRows[seamRows.length - 1];
+  for (let index = seamRows.length - 2; index >= 0; index -= 1) {
+    if (segmentStartPx - seamRows[index] > 2) break;
+    segmentStartPx = seamRows[index];
+  }
+
+  return segmentEndPx;
+}
+
+export function deriveStanleyIceFlowBodyTraceExtents(args: {
+  runs: StanleyIceFlowReferenceMeasurementRun[];
+  paintedBodyTopPx: number;
+  colorBodyBottomPx: number;
+  centerXPx: number;
+  maxCenterWidthPx: number;
+}): StanleyIceFlowBodyTraceExtents {
+  const minTraceWidthPx = Math.max(10, args.maxCenterWidthPx * 0.12);
+  const traceRows = args.runs
+    .filter((run) =>
+      run.y >= args.paintedBodyTopPx &&
+      run.left < args.centerXPx &&
+      run.right > args.centerXPx &&
+      run.width >= minTraceWidthPx,
+    )
+    .map((run) => run.y);
+  const segment = findLongestRowSegment(traceRows);
+
+  if (!segment || segment.start > args.paintedBodyTopPx + 8) {
+    return {
+      topPx: args.paintedBodyTopPx,
+      bottomPx: args.colorBodyBottomPx,
+      rowCount: Math.max(0, args.colorBodyBottomPx - args.paintedBodyTopPx + 1),
+      usedFallback: true,
+    };
+  }
+
+  return {
+    topPx: args.paintedBodyTopPx,
+    bottomPx: Math.max(args.colorBodyBottomPx, segment.end),
+    rowCount: segment.end - segment.start + 1,
+    usedFallback: false,
+  };
+}
+
 function findLongestRowSegment(rows: number[]): { start: number; end: number } | null {
   if (rows.length === 0) return null;
   const sorted = [...rows].sort((a, b) => a - b);
@@ -460,7 +648,7 @@ function buildLatheProfileFromRows(args: {
   const mmPerPxY = profile.overallHeightMm / Math.max(1, fullHeightPx);
   const bodyRuns = runs.filter((run) => run.y >= bodyTop && run.y <= bodyBottom);
   const widths = smoothSeries(
-    bodyRuns.map((run) => Math.max(1, run.whole.right - centerX)),
+    bodyRuns.map((run) => Math.max(1, centerX - run.left, run.right - centerX)),
     2,
   );
   const topRadiusMm = (profile.topDiameterMm ?? profile.outsideDiameterMm ?? 88.9) / 2;
@@ -569,26 +757,59 @@ async function fitStanleyIceFlow30FromImage(
     .map((run) => run.y);
   const silverSegment = findLongestRowSegment(silverRowYs);
 
-  const bodyTop = silverSegment ? silverSegment.end + 1 : bodySegment.start;
-  const bodyBottom = bodySegment.end;
+  const rimTop = silverSegment ? silverSegment.start : fullTop;
+  const rimBottom = silverSegment ? silverSegment.end : Math.max(fullTop, bodySegment.start - 1);
+  const paintedBodyTop = bodySegment.start;
+  const colorBodyBottom = bodySegment.end;
+  if (colorBodyBottom - paintedBodyTop < fullHeightPx * 0.5) return null;
+
+  const seamSilverBottomPx = deriveStanleyIceFlowSeamSilverBottomPx({
+    runs,
+    paintedBodyTopPx: paintedBodyTop,
+    bodyColor,
+    bodyLuma,
+    maxCenterWidthPx: maxCenterWidth,
+    fullTopPx: fullTop,
+    fullHeightPx,
+  });
+  const engravingStartGuidePx = deriveStanleyIceFlowEngravingStartGuidePx({
+    rimBottomPx: rimBottom,
+    paintedBodyTopPx: paintedBodyTop,
+    seamSilverBottomPx,
+  });
+  const bodyTrace = deriveStanleyIceFlowBodyTraceExtents({
+    runs,
+    paintedBodyTopPx: paintedBodyTop,
+    colorBodyBottomPx: colorBodyBottom,
+    centerXPx: centerX,
+    maxCenterWidthPx: maxCenterWidth,
+  });
+  const bodyTop = bodyTrace.topPx;
+  const bodyBottom = bodyTrace.bottomPx;
   if (bodyBottom - bodyTop < fullHeightPx * 0.5) return null;
 
   const bodyRuns = runs.filter((run) => run.y >= bodyTop && run.y <= bodyBottom);
-
-  const rimTop = silverSegment ? silverSegment.start : fullTop;
-  const rimBottom = silverSegment ? silverSegment.end : Math.max(fullTop, bodyTop - 1);
+  const profileFullBottom = Math.max(fullBottom, bodyBottom);
+  const profileFullHeightPx = profileFullBottom - fullTop + 1;
   const rimRows = runs.filter((run) => run.y >= rimTop && run.y <= rimBottom);
   const rimHalfWidthPx = avg(rimRows.map((run) => Math.max(1, run.whole.right - centerX)));
+  const measurementBand = deriveStanleyIceFlowReferenceMeasurementBand({
+    runs,
+    bodyTopPx: paintedBodyTop,
+    bodyBottomPx: bodyBottom,
+    centerXPx: centerX,
+    fallbackHalfWidthPx: Number.isFinite(rimHalfWidthPx) && rimHalfWidthPx > 0 ? rimHalfWidthPx : maxCenterWidth / 2,
+  });
 
   const profileFit = buildLatheProfileFromRows({
     profile,
     runs,
     fullTop,
-    fullHeightPx,
+    fullHeightPx: profileFullHeightPx,
     bodyTop,
     bodyBottom,
     centerX,
-    referenceHalfWidthPx: rimHalfWidthPx > 0 ? rimHalfWidthPx : maxCenterWidth / 2,
+    referenceHalfWidthPx: measurementBand.referenceHalfWidthPx,
   });
 
   const rimHeightMm = round2(Math.max(4, (rimBottom - rimTop + 1) * profileFit.mmPerPxY));
@@ -597,23 +818,21 @@ async function fitStanleyIceFlow30FromImage(
   const overallTopYmm = profile.overallHeightMm / 2;
   const rimTopYmm = round2(overallTopYmm - (rimTop - fullTop) * profileFit.mmPerPxY);
   const rimBottomYmm = round2(overallTopYmm - (rimBottom - fullTop) * profileFit.mmPerPxY);
-  const referenceBandCenterYPx = Math.round(bodyTop + ((bodyBottom - bodyTop) * 0.22));
-  const referenceBandHeightPx = Math.max(12, Math.round((bodyBottom - bodyTop + 1) * 0.12));
-  const referenceBandTopPx = Math.max(bodyTop, referenceBandCenterYPx - Math.floor(referenceBandHeightPx / 2));
-  const referenceBandBottomPx = Math.min(bodyBottom, referenceBandTopPx + referenceBandHeightPx - 1);
   const centerOffsetScore = normalizeScore(1 - Math.abs(centerX - width / 2) / Math.max(1, width * 0.18));
   const portraitRatio = width / Math.max(1, height);
   const portraitScore = normalizeScore(1 - Math.abs(portraitRatio - 0.44) / 0.32);
-  const bodyCoverage = (bodyBottom - bodyTop + 1) / Math.max(1, fullHeightPx);
+  const bodyCoverage = (bodyBottom - bodyTop + 1) / Math.max(1, profileFullHeightPx);
   const bodyCoverageScore = normalizeScore(1 - Math.abs(bodyCoverage - 0.74) / 0.2);
   const symmetryScore = normalizeScore(avg(bodyRuns.map((run) => {
-    const leftSpan = centerX - run.whole.left;
-    const rightSpan = run.whole.right - centerX;
+    const leftSpan = centerX - run.left;
+    const rightSpan = run.right - centerX;
     const maxSpan = Math.max(1, Math.max(leftSpan, rightSpan));
     return 1 - Math.abs(leftSpan - rightSpan) / maxSpan;
   })));
-  const topBodyRadius = bodyRuns[0] ? Math.max(1, bodyRuns[0].whole.right - centerX) : rimHalfWidthPx;
-  const bottomBodyRadius = bodyRuns[bodyRuns.length - 1] ? Math.max(1, bodyRuns[bodyRuns.length - 1].whole.right - centerX) : topBodyRadius;
+  const topBodyRadius = bodyRuns[0] ? Math.max(1, centerX - bodyRuns[0].left, bodyRuns[0].right - centerX) : rimHalfWidthPx;
+  const bottomBodyRadius = bodyRuns[bodyRuns.length - 1]
+    ? Math.max(1, centerX - bodyRuns[bodyRuns.length - 1].left, bodyRuns[bodyRuns.length - 1].right - centerX)
+    : topBodyRadius;
   const taperRatio = bottomBodyRadius / Math.max(1, topBodyRadius);
   const taperScore = normalizeScore(1 - Math.abs(taperRatio - 0.82) / 0.18);
   const silverScore = silverSegment ? 1 : 0.2;
@@ -634,17 +853,32 @@ async function fitStanleyIceFlow30FromImage(
     silhouetteBoundsPx: bounds,
     centerXPx: round2(centerX),
     fullTopPx: fullTop,
-    fullBottomPx: fullBottom,
+    fullBottomPx: profileFullBottom,
     bodyTopPx: bodyTop,
     bodyBottomPx: bodyBottom,
+    paintedBodyTopPx: paintedBodyTop,
+    colorBodyBottomPx: colorBodyBottom,
+    bodyTraceTopPx: bodyTrace.topPx,
+    bodyTraceBottomPx: bodyTrace.bottomPx,
+    engravingStartGuidePx,
+    seamSilverBottomPx,
     rimTopPx: rimTop,
     rimBottomPx: rimBottom,
-    referenceBandTopPx,
-    referenceBandBottomPx,
-    referenceBandCenterYPx,
-    referenceBandWidthPx: round2(maxCenterWidth),
+    referenceBandTopPx: measurementBand.topPx,
+    referenceBandBottomPx: measurementBand.bottomPx,
+    referenceBandCenterYPx: measurementBand.centerYPx,
+    referenceBandWidthPx: measurementBand.widthPx,
+    measurementBandTopPx: measurementBand.topPx,
+    measurementBandBottomPx: measurementBand.bottomPx,
+    measurementBandCenterYPx: measurementBand.centerYPx,
+    measurementBandCenterXPx: measurementBand.centerXPx,
+    measurementBandWidthPx: measurementBand.widthPx,
+    measurementBandLeftPx: measurementBand.leftPx,
+    measurementBandRightPx: measurementBand.rightPx,
+    measurementBandRowCount: measurementBand.rowCount,
+    measurementBandWidthStdDevPx: measurementBand.widthStdDevPx,
     maxCenterWidthPx: round2(maxCenterWidth),
-    referenceHalfWidthPx: round2(rimHalfWidthPx > 0 ? rimHalfWidthPx : maxCenterWidth / 2),
+    referenceHalfWidthPx: measurementBand.referenceHalfWidthPx,
     fitScore,
     profilePoints: profileFit.debugProfilePoints,
   };
@@ -837,12 +1071,23 @@ export async function ensureGeneratedTumblerGlb(
 
   let fit: StanleySilhouetteFit = buildFallbackBodyProfile(profile);
 
+  const primaryImageUrl = options?.imageUrl ?? null;
   const candidateImageUrls = [
     ...(options?.imageUrls ?? []),
-    ...(options?.imageUrl ? [options.imageUrl] : []),
-  ].filter((value, index, array): value is string => Boolean(value) && array.indexOf(value) === index);
+  ].filter((value, index, array): value is string => Boolean(value) && value !== primaryImageUrl && array.indexOf(value) === index);
 
-  if (candidateImageUrls.length > 0) {
+  if (primaryImageUrl) {
+    try {
+      const primaryFit = await fitStanleyIceFlow30FromImage(profile, primaryImageUrl);
+      if (primaryFit) {
+        fit = primaryFit;
+      }
+    } catch (error) {
+      console.warn("[generateTumblerModel] selected variant fit failed:", primaryImageUrl, error);
+    }
+  }
+
+  if (!fit.fitDebug && candidateImageUrls.length > 0) {
     try {
       const silhouetteFit = await fitBestStanleyIceFlow30FromImages(profile, candidateImageUrls);
       if (silhouetteFit) {

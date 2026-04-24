@@ -494,6 +494,34 @@ function formatLookupAuthority(value: DimensionAuthority | null | undefined): st
   }
 }
 
+function formatLookupVariantStatus(
+  value: ReturnType<typeof summarizeProductDimensionAuthority>["variantStatus"],
+): string {
+  switch (value) {
+    case "exact":
+      return "Exact variant";
+    case "generic":
+      return "Generic variant";
+    case "ambiguous":
+      return "Ambiguous variant";
+    case "mismatch":
+      return "Variant mismatch";
+    default:
+      return "Variant unknown";
+  }
+}
+
+function buildLookupTemplateName(result: TumblerItemLookupResponse, fallback: string): string {
+  const parts: string[] = [];
+  if (result.brand) parts.push(result.brand);
+  if (result.model) parts.push(result.model);
+  const normalizedModel = result.model?.toLowerCase() ?? "";
+  if (result.capacityOz && !normalizedModel.includes(`${result.capacityOz}oz`) && !normalizedModel.includes(`${result.capacityOz} oz`)) {
+    parts.push(`${result.capacityOz}oz`);
+  }
+  return parts.length > 0 ? parts.join(" ") : result.title ?? fallback;
+}
+
 function resolveDefaultPreviewModelMode(args: {
   glbPath: string;
   glbStatus?: ProductTemplate["glbStatus"] | null;
@@ -1662,11 +1690,7 @@ export function TemplateCreateForm({
       setLookupResult(result);
       setLookupDimensionsSnapshot(result.dimensions);
 
-      const parts: string[] = [];
-      if (result.brand) parts.push(result.brand);
-      if (result.model) parts.push(result.model);
-      if (result.capacityOz) parts.push(`${result.capacityOz}oz`);
-      setName(parts.length > 0 ? parts.join(" ") : result.title ?? raw);
+      setName(buildLookupTemplateName(result, raw));
       if (result.brand) setBrand(result.brand);
       if (result.capacityOz) setCapacity(`${result.capacityOz}oz`);
       setProductType("tumbler");
@@ -2831,22 +2855,37 @@ export function TemplateCreateForm({
                 </div>
                 <div className={styles.lookupMetrics}>
                   {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm) && (
-                    <span>Dia {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm)}</span>
-                  )}
-                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm) && (
-                    <span>Body {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm)}</span>
+                    <span>Diameter authority {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm)}</span>
                   )}
                   <span>{formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
-                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm) && (
-                    <span>Full {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm)}</span>
+                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.wrapWidthMm) && (
+                    <span>Wrap width {formatLookupMeasurement(lookupDimensionAuthoritySummary.wrapWidthMm)} = Math.PI * diameter</span>
                   )}
                   {(lookupResult?.glbPath || glbPath) && <span>3D ready</span>}
                 </div>
                 <div className={styles.lookupMetrics}>
                   <span>Variant {activeLookupDimensions.selectedVariantLabel || "n/a"}</span>
                   <span>Selected size {formatLookupSize(lookupDimensionAuthoritySummary.selectedSizeOz)}</span>
-                  <span>Authority {formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
+                  <span>{formatLookupVariantStatus(lookupDimensionAuthoritySummary.variantStatus)}</span>
                 </div>
+                <details className={styles.compactDetails}>
+                  <summary className={styles.compactDetailsSummary}>
+                    Reference dimensions
+                  </summary>
+                  <div className={styles.compactDetailsContent}>
+                    <div className={styles.lookupMetrics}>
+                      {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm) && (
+                        <span>Reference body band {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm)}</span>
+                      )}
+                      {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm) && (
+                        <span>Reference full height {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm)}</span>
+                      )}
+                      {lookupDimensionAuthoritySummary.heightIgnoredForScale && (
+                        <span>Height is reference only and is not used for body scale authority.</span>
+                      )}
+                    </div>
+                  </div>
+                </details>
                 {(lookupDimensionAuthoritySummary.errors.length > 0 || lookupDimensionAuthoritySummary.warnings.length > 0) && (
                   <div className={styles.cutoutFitWarningList}>
                     {lookupDimensionAuthoritySummary.errors.map((error) => (
@@ -4706,7 +4745,10 @@ export function TemplateCreateForm({
 
       {/* ── Physical dimensions ───────────────────────────────────── */}
       <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
-        <div className={styles.sectionTitle}>Physical dimensions</div>
+        <div className={styles.sectionTitle}>Diameter authority</div>
+        <div className={styles.sectionLead}>
+          Diameter is the only body scale authority. Other measurements are reference context and do not prove BODY CUTOUT QA scale.
+        </div>
 
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>Diameter (mm) *</label>
@@ -4720,56 +4762,67 @@ export function TemplateCreateForm({
         </div>
 
         <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Print height (mm) *</label>
-          <input
-            className={styles.numInput}
-            type="number"
-            value={printHeightMm || ""}
-            step={0.1}
-            onChange={(e) => setPrintHeightMm(Number(e.target.value) || 0)}
-          />
-        </div>
-
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Template width</label>
+          <label className={styles.fieldLabel}>Wrap width</label>
           <span className={styles.readOnly}>
             {templateWidthMm > 0 ? `${templateWidthMm} mm` : "\u2014"}{" "}
-            <span className={styles.fieldHint}>(auto-calculated)</span>
+            <span className={styles.fieldHint}>(Math.PI * diameter)</span>
           </span>
         </div>
 
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Handle arc (&deg;)</label>
-          <input
-            className={styles.numInput}
-            type="number"
-            value={handleArcDeg}
-            step={1}
-            min={0}
-            max={360}
-            onChange={(e) => setHandleArcDeg(Number(e.target.value) || 0)}
-          />
-          <span className={styles.fieldHint}>0 = no handle, 90 = YETI Rambler style</span>
-        </div>
+        <details className={styles.compactDetails}>
+          <summary className={styles.compactDetailsSummary}>
+            Reference dimensions
+          </summary>
+          <div className={styles.compactDetailsContent}>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Reference printable band</label>
+              <input
+                className={styles.numInput}
+                type="number"
+                value={printHeightMm || ""}
+                step={0.1}
+                onChange={(e) => setPrintHeightMm(Number(e.target.value) || 0)}
+              />
+              <span className={styles.fieldHint}>Used for workspace/export context, not body scale authority.</span>
+            </div>
 
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Taper correction</label>
-          <select
-            className={styles.selectInput}
-            value={taperCorrection}
-            onChange={(e) => setTaperCorrection(e.target.value as "none" | "top-narrow" | "bottom-narrow")}
-          >
-            <option value="none">None</option>
-            <option value="top-narrow">Top narrow</option>
-            <option value="bottom-narrow">Bottom narrow</option>
-          </select>
-        </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Handle arc (&deg;)</label>
+              <input
+                className={styles.numInput}
+                type="number"
+                value={handleArcDeg}
+                step={1}
+                min={0}
+                max={360}
+                onChange={(e) => setHandleArcDeg(Number(e.target.value) || 0)}
+              />
+              <span className={styles.fieldHint}>Reference only for product context.</span>
+            </div>
+
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Taper correction</label>
+              <select
+                className={styles.selectInput}
+                value={taperCorrection}
+                onChange={(e) => setTaperCorrection(e.target.value as "none" | "top-narrow" | "bottom-narrow")}
+              >
+                <option value="none">None</option>
+                <option value="top-narrow">Top narrow</option>
+                <option value="bottom-narrow">Bottom narrow</option>
+              </select>
+            </div>
+          </div>
+        </details>
       </div>
 
       {/* ── Engravable zone editor ──────────────────────────────── */}
       {productType !== "flat" && frontPhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
         <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
-          <div className={styles.sectionTitle}>Engravable zone</div>
+          <div className={styles.sectionTitle}>Reference engravable zone</div>
+          <div className={styles.sectionLead}>
+            This visual band helps workspace/export context. BODY CUTOUT QA scale still comes from diameter plus accepted BODY REFERENCE.
+          </div>
           <EngravableZoneEditor
             photoDataUrl={frontPhotoDataUrl}
             overallHeightMm={overallHeightMm}

@@ -15,6 +15,7 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 import { computeWrapWidthFromDiameterMm } from "@/lib/productDimensionAuthority";
 import { ensureGeneratedTumblerGlb } from "@/server/tumbler/generateTumblerModel";
+import { extractShopifySelectedVariant } from "@/server/tumbler/shopifyProductVariant";
 
 const IMAGE_META_NAMES = [
   "og:image",
@@ -522,7 +523,7 @@ function matchProfileFromText(lookupText: string) {
 
 async function glbAssetExists(glbPath: string): Promise<boolean> {
   if (!glbPath) return false;
-  const normalized = glbPath.replace(/^\/+/, "").replace(/\//g, path.sep);
+const normalized = glbPath.replace(/^\/+/, "").replace(/\//g, path.sep);
   const absolute = path.join(process.cwd(), "public", normalized);
   try {
     await access(absolute);
@@ -612,12 +613,20 @@ export async function lookupTumblerItem(args: {
   let lookupText = lookupInput;
   let titleSizeOz = parseCapacityOz(lookupInput);
   let selectedColorOrFinish = inferColorOrFinish(lookupInput);
+  let selectedVariantId: string | null = null;
+  let selectedVariantImageUrl: string | null = null;
 
   if (isLikelyUrl(lookupInput)) {
     const { html, finalUrl } = await fetchPage(lookupInput);
     resolvedUrl = finalUrl;
     title = extractTitle(html);
     imageUrls = extractImageUrls(html, finalUrl);
+    const selectedVariant = extractShopifySelectedVariant(html, finalUrl);
+    selectedVariantId = selectedVariant?.id ?? null;
+    selectedVariantImageUrl = selectedVariant?.imageUrl ?? null;
+    if (selectedVariantImageUrl && !imageUrls.includes(selectedVariantImageUrl)) {
+      imageUrls = [selectedVariantImageUrl, ...imageUrls];
+    }
     lookupText = [lookupInput, title, html.slice(0, 12_000)].filter(Boolean).join(" ");
 
     if (/stanley1913\.com/i.test(finalUrl)) sourceKind = "official";
@@ -626,7 +635,9 @@ export async function lookupTumblerItem(args: {
 
     sources = buildSources(finalUrl, sourceKind, title);
     titleSizeOz = parseCapacityOz(title ?? lookupInput);
-    selectedColorOrFinish = inferColorOrFinish([title, lookupInput].filter(Boolean).join(" "));
+    selectedColorOrFinish =
+      selectedVariant?.selectedColorOrFinish ??
+      inferColorOrFinish([title, lookupInput].filter(Boolean).join(" "));
     const availableSizeOz = extractAllCapacitiesOz(lookupText);
     scrapedDims = parseTripletDimensionsMm({
       text: lookupText,
@@ -638,7 +649,7 @@ export async function lookupTumblerItem(args: {
       availableSizeOz,
       lookupProductId: finalUrl,
     });
-    selectedImageUrl = await selectBestProductImage({
+    selectedImageUrl = selectedVariantImageUrl ?? await selectBestProductImage({
       imageUrls,
       lookupText,
     });
@@ -703,11 +714,11 @@ export async function lookupTumblerItem(args: {
       dimensions: {
         lookupProductId: matchedProfile.id,
         productUrl: resolvedUrl,
-        selectedVariantId: normalizeVariantId(variantLabel),
+        selectedVariantId: selectedVariantId ?? normalizeVariantId(variantLabel),
         selectedVariantLabel: variantLabel,
         selectedSizeOz: matchedProfile.capacityOz,
         selectedColorOrFinish,
-        availableVariantLabels: [`${matchedProfile.capacityOz} oz`],
+        availableVariantLabels: variantLabel ? [variantLabel] : [`${matchedProfile.capacityOz} oz`],
         availableSizeOz: [matchedProfile.capacityOz],
         dimensionSourceUrl: resolvedUrl,
         dimensionSourceText: `Matched internal profile ${matchedProfile.label}`,
@@ -742,7 +753,7 @@ export async function lookupTumblerItem(args: {
   const safeDims = scrapedDims ?? {
     lookupProductId: resolvedUrl ?? lookupInput,
     productUrl: resolvedUrl,
-    selectedVariantId: normalizeVariantId(buildVariantLabel({
+    selectedVariantId: selectedVariantId ?? normalizeVariantId(buildVariantLabel({
       selectedSizeOz: titleSizeOz,
       selectedColorOrFinish,
       fallbackLabel: title,
