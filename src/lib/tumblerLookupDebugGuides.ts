@@ -17,6 +17,7 @@ export interface TumblerLookupMeasurementBandGuide {
 export interface TumblerLookupDebugGuideModel {
   measurementBand: TumblerLookupMeasurementBandGuide | null;
   engravingStartGuideYPx: number;
+  revolvedProfileTopGuideYPx: number;
   showBottomBodyGuide: boolean;
   bottomBodyGuideYPx: number | null;
   caption: string;
@@ -53,6 +54,7 @@ export function buildTumblerLookupDebugGuideModel(
     engravingStartGuideYPx: isFiniteNumber(debug.engravingStartGuidePx)
       ? debug.engravingStartGuidePx
       : debug.referenceBandCenterYPx,
+    revolvedProfileTopGuideYPx: debug.rimBottomPx,
     showBottomBodyGuide: hasBaseBandGuide,
     bottomBodyGuideYPx: hasBaseBandGuide ? debug.baseBandTopPx! : null,
     caption: hasBaseBandGuide

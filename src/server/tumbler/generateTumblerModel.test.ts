@@ -16,9 +16,9 @@ import {
   createCenterlineAxis,
 } from "../../lib/bodyReferenceV2Layers.ts";
 import {
-  deriveStanleyIceFlowBodyTraceExtents,
-  deriveStanleyIceFlowEngravingStartGuidePx,
-  deriveStanleyIceFlowReferenceMeasurementBand,
+  deriveBodyTraceExtents,
+  deriveEngravingStartGuidePx,
+  deriveReferenceMeasurementBand,
   generateBodyReferenceGlb,
   type GenerateBodyReferenceGlbInput,
 } from "./generateTumblerModel.ts";
@@ -83,6 +83,38 @@ const DIMENSION_CALIBRATION: CanonicalDimensionCalibration = {
     unitsPerMm: 1,
   },
 };
+
+const BRAND_REPEATABILITY_PRODUCTION_FILES = [
+  new URL("./generateTumblerModel.ts", import.meta.url),
+  new URL("./lookupTumblerItem.ts", import.meta.url),
+  new URL("../../components/admin/TumblerLookupDebugPanel.tsx", import.meta.url),
+];
+
+test("lookup refinement production control flow has no branded literals", async () => {
+  const disallowedLiterals = [
+    "Stanley",
+    "stanley",
+    "IceFlow",
+    "iceflow",
+    "YETI",
+    "yeti",
+    "Quencher",
+    "quencher",
+    "Rambler",
+    "rambler",
+  ];
+
+  for (const fileUrl of BRAND_REPEATABILITY_PRODUCTION_FILES) {
+    const source = await readFile(fileUrl, "utf8");
+    for (const literal of disallowedLiterals) {
+      assert.equal(
+        source.includes(literal),
+        false,
+        `${fileUrl.pathname} contains disallowed production literal ${literal}`,
+      );
+    }
+  }
+});
 
 function createOutline(widthMm = 44.45): EditableBodyOutline {
   const scale = widthMm / 49.9;
@@ -154,7 +186,7 @@ test("Stanley IceFlow reference measurement band uses seam body rows instead of 
   });
   const widerLidHalfWidthPx = 140;
 
-  const band = deriveStanleyIceFlowReferenceMeasurementBand({
+  const band = deriveReferenceMeasurementBand({
     runs,
     bodyTopPx,
     bodyBottomPx,
@@ -170,8 +202,38 @@ test("Stanley IceFlow reference measurement band uses seam body rows instead of 
   assert.equal(band.widthPx <= 280, true);
 });
 
+test("generic profile metadata controls reference measurement band derivation", () => {
+  const centerXPx = 250;
+  const bodyTopPx = 100;
+  const bodyBottomPx = 500;
+  const runs = Array.from({ length: bodyBottomPx - bodyTopPx + 1 }, (_, index) => {
+    const y = bodyTopPx + index;
+    const genericMetadataBand = y >= 220 && y <= 240;
+    const width = genericMetadataBand ? 200 : 150;
+    const left = centerXPx - Math.floor(width / 2);
+    const right = left + width - 1;
+    return { y, left, right, width };
+  });
+
+  const band = deriveReferenceMeasurementBand({
+    runs,
+    bodyTopPx,
+    bodyBottomPx,
+    centerXPx,
+    fallbackHalfWidthPx: 130,
+    bandTopRatio: 0.3,
+    bandHeightRatio: 0.05,
+  });
+
+  assert.equal(band.usedFallback, false);
+  assert.equal(band.topPx >= 220, true);
+  assert.equal(band.bottomPx <= 240, true);
+  assert.equal(band.widthPx, 200);
+  assert.equal(band.referenceHalfWidthPx, 100);
+});
+
 test("Stanley IceFlow reference measurement band falls back deterministically when seam rows are unavailable", () => {
-  const band = deriveStanleyIceFlowReferenceMeasurementBand({
+  const band = deriveReferenceMeasurementBand({
     runs: [],
     bodyTopPx: 170,
     bodyBottomPx: 620,
@@ -186,14 +248,14 @@ test("Stanley IceFlow reference measurement band falls back deterministically wh
 });
 
 test("Stanley IceFlow engraving start guide is the midpoint between rim bottom and painted body top", () => {
-  assert.equal(deriveStanleyIceFlowEngravingStartGuidePx({
+  assert.equal(deriveEngravingStartGuidePx({
     rimBottomPx: 168,
     paintedBodyTopPx: 182,
   }), 175);
 });
 
 test("Stanley IceFlow engraving start guide prefers the seam-adjacent silver edge", () => {
-  assert.equal(deriveStanleyIceFlowEngravingStartGuidePx({
+  assert.equal(deriveEngravingStartGuidePx({
     rimBottomPx: 168,
     seamSilverBottomPx: 180,
     paintedBodyTopPx: 184,
@@ -217,7 +279,7 @@ test("Stanley IceFlow body trace reaches lower rounded body beyond color-matched
     return { y, left, right, width };
   });
 
-  const trace = deriveStanleyIceFlowBodyTraceExtents({
+  const trace = deriveBodyTraceExtents({
     runs,
     paintedBodyTopPx,
     colorBodyBottomPx,

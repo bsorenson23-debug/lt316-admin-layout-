@@ -17,14 +17,20 @@ function round1(value: number): number {
 function buildEdgePolyline(
   debug: TumblerItemLookupFitDebug,
   direction: "left" | "right",
+  topGuideYPx?: number,
 ): string {
-  return debug.profilePoints
-    .map((point) => {
+  const points = debug.profilePoints.map((point) => {
       const x = direction === "left"
         ? debug.centerXPx - point.radiusPx
         : debug.centerXPx + point.radiusPx;
-      return `${round1(x)},${round1(point.yPx)}`;
-    })
+      return { x, y: point.yPx };
+    });
+  const firstPoint = points[0];
+  if (firstPoint && topGuideYPx != null && topGuideYPx < firstPoint.y) {
+    points.unshift({ x: firstPoint.x, y: topGuideYPx });
+  }
+  return points
+    .map((point) => `${round1(point.x)},${round1(point.y)}`)
     .join(" ");
 }
 
@@ -35,9 +41,9 @@ export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
   const bodyTraceTopPx = debug.bodyTraceTopPx ?? debug.bodyTopPx;
   const bodyTraceBottomPx = debug.bodyTraceBottomPx ?? debug.bodyBottomPx;
   const bodyHeight = bodyTraceBottomPx - bodyTraceTopPx;
-  const rightProfile = buildEdgePolyline(debug, "right");
-  const leftProfile = buildEdgePolyline(debug, "left");
   const guideModel = buildTumblerLookupDebugGuideModel(debug);
+  const rightProfile = buildEdgePolyline(debug, "right", guideModel.revolvedProfileTopGuideYPx);
+  const leftProfile = buildEdgePolyline(debug, "left", guideModel.revolvedProfileTopGuideYPx);
   const measurementBand = guideModel.measurementBand;
   const measurementBandTopPx = measurementBand?.topPx ?? debug.referenceBandTopPx;
   const measurementBandBottomPx = measurementBand?.bottomPx ?? debug.referenceBandBottomPx;
@@ -51,7 +57,7 @@ export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
         <div>
           <div className={styles.title}>Auto-fit debug</div>
           <div className={styles.hint}>
-            These are the actual checkpoints the Stanley auto-generator used to build the lathed body.
+            These are the profile-driven checkpoints used to build the lathed body.
           </div>
         </div>
         <div className={styles.scorePill}>Fit {debug.fitScore.toFixed(1)}</div>
@@ -168,7 +174,13 @@ export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
                 />
               </React.Fragment>
             ))}
-            <line x1={0} y1={bodyTraceTopPx} x2={debug.imageWidthPx} y2={bodyTraceTopPx} className={styles.bodyLine} />
+            <line
+              x1={0}
+              y1={guideModel.revolvedProfileTopGuideYPx}
+              x2={debug.imageWidthPx}
+              y2={guideModel.revolvedProfileTopGuideYPx}
+              className={styles.bodyLine}
+            />
             <line x1={0} y1={bodyTraceBottomPx} x2={debug.imageWidthPx} y2={bodyTraceBottomPx} className={styles.bodyLine} />
           </svg>
           <div className={styles.caption}>Sampled lathe profile points that become the generated body mesh.</div>

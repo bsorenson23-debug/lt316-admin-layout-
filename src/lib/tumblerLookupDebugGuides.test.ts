@@ -67,6 +67,18 @@ test("lookup debug guide model uses engraving start guide instead of measurement
   assert.equal(model.engravingStartGuideYPx, 175);
 });
 
+test("lookup debug guide model uses lid-to-silver seam for revolved profile top guide", () => {
+  const model = buildTumblerLookupDebugGuideModel(createDebug({
+    rimTopPx: 120,
+    rimBottomPx: 168,
+    bodyTraceTopPx: 182,
+    engravingStartGuidePx: 175,
+  }));
+
+  assert.equal(model.revolvedProfileTopGuideYPx, 168);
+  assert.notEqual(model.revolvedProfileTopGuideYPx, model.engravingStartGuideYPx);
+});
+
 test("lookup debug guide model shows bottom guide only when base-band data is present", () => {
   const model = buildTumblerLookupDebugGuideModel(createDebug({
     baseBandTopPx: 610,

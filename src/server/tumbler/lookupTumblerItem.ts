@@ -14,6 +14,7 @@ import type {
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { computeWrapWidthFromDiameterMm } from "@/lib/productDimensionAuthority";
+import { generatedModelExists } from "@/server/models/generatedModelStorage";
 import { ensureGeneratedTumblerGlb } from "@/server/tumbler/generateTumblerModel";
 import { extractShopifySelectedVariant } from "@/server/tumbler/shopifyProductVariant";
 
@@ -160,30 +161,6 @@ function buildVariantLabel(args: {
 interface ParsedDimensionCandidate {
   dimensions: TumblerItemLookupDimensions;
   score: number;
-}
-
-function inferBrand(text: string): string | null {
-  if (/stanley/i.test(text)) return "Stanley";
-  if (/yeti/i.test(text)) return "YETI";
-  if (/rtic/i.test(text)) return "RTIC";
-  if (/ozark/i.test(text)) return "Ozark Trail";
-  return null;
-}
-
-function inferModel(text: string, brand: string | null, capacityOz: number | null): string | null {
-  const normalized = normalizeText(text);
-  if (brand === "Stanley") {
-    if (normalized.includes("iceflow")) {
-      return capacityOz ? `IceFlow Flip Straw ${capacityOz}oz` : "IceFlow Flip Straw";
-    }
-    if (normalized.includes("quencher")) {
-      return capacityOz ? `Quencher H2.0 ${capacityOz}oz` : "Quencher H2.0";
-    }
-  }
-  if (brand === "YETI" && normalized.includes("rambler")) {
-    return capacityOz ? `Rambler ${capacityOz}oz` : "Rambler";
-  }
-  return null;
 }
 
 function extractMetaContent(html: string, metaName: string): string | null {
@@ -493,10 +470,59 @@ function scoreProfileMatch(profileText: string, lookupText: string): number {
   return hits / profileTokens.size;
 }
 
+function buildProfileLookupText(profile: (typeof KNOWN_TUMBLER_PROFILES)[number]): string {
+  return [
+    profile.brand,
+    profile.model,
+    profile.label,
+    `${profile.capacityOz}oz`,
+    `${profile.capacityOz} oz`,
+    ...(profile.lookupAliases ?? []),
+  ].join(" ");
+}
+
+function uniqueCatalogBrands(): string[] {
+  return [...new Set(
+    KNOWN_TUMBLER_PROFILES
+      .map((profile) => profile.brand.trim())
+      .filter(Boolean),
+  )];
+}
+
+function inferBrandFromCatalogText(lookupText: string): string | null {
+  const normalizedLookup = ` ${normalizeText(lookupText)} `;
+  const matches = uniqueCatalogBrands()
+    .map((brand) => {
+      const normalizedBrand = normalizeText(brand);
+      if (!normalizedBrand) return null;
+      const brandTokens = normalizedBrand.split(" ").filter(Boolean);
+      const score = brandTokens.filter((token) => normalizedLookup.includes(` ${token} `)).length / brandTokens.length;
+      return score > 0 ? { brand, score } : null;
+    })
+    .filter((value): value is { brand: string; score: number } => Boolean(value))
+    .sort((left, right) => right.score - left.score);
+
+  return matches[0]?.score === 1 ? matches[0].brand : null;
+}
+
+function inferModelFromCatalogText(lookupText: string, brand: string | null, capacityOz: number | null): string | null {
+  const candidates = KNOWN_TUMBLER_PROFILES
+    .filter((profile) => !brand || normalizeText(profile.brand) === normalizeText(brand))
+    .map((profile) => ({
+      profile,
+      score: scoreProfileMatch(buildProfileLookupText(profile), lookupText) +
+        (capacityOz && profile.capacityOz === capacityOz ? 0.2 : 0),
+    }))
+    .sort((left, right) => right.score - left.score);
+
+  const best = candidates[0];
+  return best && best.score >= 0.42 ? best.profile.model : null;
+}
+
 function matchProfileFromText(lookupText: string) {
-  const brand = inferBrand(lookupText);
+  const brand = inferBrandFromCatalogText(lookupText);
   const capacityOz = parseCapacityOz(lookupText);
-  const model = inferModel(lookupText, brand, capacityOz);
+  const model = inferModelFromCatalogText(lookupText, brand, capacityOz);
 
   const directProfileId = findTumblerProfileIdForBrandModel({
     brand,
@@ -510,7 +536,7 @@ function matchProfileFromText(lookupText: string) {
   let bestProfile = null as ReturnType<typeof getTumblerProfileById>;
   let bestScore = 0;
   for (const profile of KNOWN_TUMBLER_PROFILES) {
-    const profileText = `${profile.brand} ${profile.model} ${profile.capacityOz}oz ${profile.label}`;
+    const profileText = buildProfileLookupText(profile);
     const score = scoreProfileMatch(profileText, lookupText);
     if (score > bestScore) {
       bestScore = score;
@@ -523,7 +549,12 @@ function matchProfileFromText(lookupText: string) {
 
 async function glbAssetExists(glbPath: string): Promise<boolean> {
   if (!glbPath) return false;
-const normalized = glbPath.replace(/^\/+/, "").replace(/\//g, path.sep);
+  if (glbPath.startsWith("/api/admin/models/generated/")) {
+    const fileName = glbPath.split("/").pop();
+    return fileName ? generatedModelExists(decodeURIComponent(fileName)) : false;
+  }
+
+  const normalized = glbPath.replace(/^\/+/, "").replace(/\//g, path.sep);
   const absolute = path.join(process.cwd(), "public", normalized);
   try {
     await access(absolute);
@@ -535,16 +566,13 @@ const normalized = glbPath.replace(/^\/+/, "").replace(/\//g, path.sep);
 
 async function pickFallbackGlbPath(args: {
   matchedProfileId: string | null;
-  capacityOz: number | null;
-  brand: string | null;
-  model: string | null;
-  hasHandle: boolean | null;
   imageUrl?: string | null;
   imageUrls?: string[];
 }): Promise<{ glbPath: string; fitDebug: TumblerItemLookupFitDebug | null }> {
-  if (args.matchedProfileId === "stanley-iceflow-30") {
+  const matchedProfile = args.matchedProfileId ? getTumblerProfileById(args.matchedProfileId) : null;
+  if (matchedProfile?.generatedModelPolicy?.strategy === "body-band-lathe") {
     try {
-      const generated = await ensureGeneratedTumblerGlb(args.matchedProfileId, {
+      const generated = await ensureGeneratedTumblerGlb(matchedProfile.id, {
         imageUrl: args.imageUrl,
         imageUrls: args.imageUrls,
       });
@@ -552,14 +580,12 @@ async function pickFallbackGlbPath(args: {
         return generated;
       }
     } catch (error) {
-      console.warn("[lookupTumblerItem] generated Stanley model failed:", error);
+      console.warn("[lookupTumblerItem] generated profile model failed:", error);
     }
   }
 
   const candidates = [
-    args.matchedProfileId === "yeti-rambler-40"
-      ? "/models/templates/yeti-40oz-body.glb"
-      : null,
+    matchedProfile?.templateGlbPath ?? null,
   ].filter((value): value is string => Boolean(value));
 
   for (const candidate of candidates) {
@@ -580,6 +606,22 @@ function buildSources(url: string | null, kind: TumblerSourceLink["kind"], title
       kind,
     },
   ];
+}
+
+function sourceUrlMatchesOfficialCatalogDomain(url: string): boolean {
+  let hostname = "";
+  try {
+    hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return false;
+  }
+
+  return KNOWN_TUMBLER_PROFILES.some((profile) =>
+    (profile.officialDomains ?? []).some((domain) => {
+      const normalizedDomain = domain.toLowerCase().replace(/^www\./, "");
+      return hostname === normalizedDomain || hostname.endsWith(`.${normalizedDomain}`);
+    }),
+  );
 }
 
 async function fetchPage(url: string): Promise<{ html: string; finalUrl: string }> {
@@ -629,7 +671,7 @@ export async function lookupTumblerItem(args: {
     }
     lookupText = [lookupInput, title, html.slice(0, 12_000)].filter(Boolean).join(" ");
 
-    if (/stanley1913\.com/i.test(finalUrl)) sourceKind = "official";
+    if (sourceUrlMatchesOfficialCatalogDomain(finalUrl)) sourceKind = "official";
     else if (/academy\.com/i.test(finalUrl)) sourceKind = "retailer";
     else if (/amazon\.com|walmart\.com|dickssportinggoods\.com/i.test(finalUrl)) sourceKind = "retailer";
 
@@ -663,8 +705,8 @@ export async function lookupTumblerItem(args: {
 
   const matchedProfile = matchProfileFromText(lookupText);
   const capacityOz = parseCapacityOz(lookupText) ?? matchedProfile?.capacityOz ?? null;
-  const brand = inferBrand(lookupText) ?? matchedProfile?.brand ?? null;
-  const model = inferModel(lookupText, brand, capacityOz) ?? matchedProfile?.model ?? title;
+  const brand = matchedProfile?.brand ?? inferBrandFromCatalogText(lookupText);
+  const model = matchedProfile?.model ?? inferModelFromCatalogText(lookupText, brand, capacityOz) ?? title;
 
   if (matchedProfile) {
     const topMarginMm = matchedProfile.guideBand?.upperGrooveYmm ?? round2((matchedProfile.overallHeightMm - matchedProfile.usableHeightMm) / 2);
@@ -682,10 +724,6 @@ export async function lookupTumblerItem(args: {
 
     const fallbackAsset = await pickFallbackGlbPath({
       matchedProfileId: matchedProfile.id,
-      capacityOz: matchedProfile.capacityOz,
-      brand: matchedProfile.brand,
-      model: matchedProfile.model,
-      hasHandle: matchedProfile.hasHandle,
       imageUrl: selectedImageUrl,
       imageUrls,
     });
@@ -806,10 +844,6 @@ export async function lookupTumblerItem(args: {
 
   const fallbackAsset = await pickFallbackGlbPath({
     matchedProfileId: null,
-    capacityOz,
-    brand,
-    model,
-    hasHandle: brand === "Stanley" ? true : null,
     imageUrl: selectedImageUrl,
     imageUrls,
   });
