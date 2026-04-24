@@ -11,6 +11,127 @@
   max-width: min(1120px, 100%);
 }
 
+.modeWorkflowOverview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--border-normal);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 92%, var(--accent-dim)) 0%, var(--bg-card) 100%);
+}
+
+.modeWorkflowHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.modeWorkflowEyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.modeWorkflowTitle {
+  margin-top: 6px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modeWorkflowHint {
+  margin-top: 6px;
+  max-width: 720px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.modeWorkflowHeaderMeta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modeWorkflowCurrent {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+}
+
+.modeWorkflowStepGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
+  gap: 10px;
+}
+
+.modeWorkflowStepCard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-input);
+}
+
+.modeWorkflowStepHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modeWorkflowStepNumber {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-dim) 72%, var(--bg-base));
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.modeWorkflowStepLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.modeWorkflowStepDetail {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.modeWorkflowFooter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.modeWorkflowNextAction {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
 /* ── Sections ──────────────────────────────────────────────────── */
 .section {
   display: flex;
@@ -576,6 +697,29 @@
   color: var(--text-secondary);
 }
 
+.workflowContextBar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--bg-hover));
+}
+
+.workflowContextRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workflowContextSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: center;
+}
+
 .reviewScaffoldCard,
 .previewScaffold {
   display: flex;
@@ -757,6 +901,16 @@
   font-size: 11px;
   line-height: 1.4;
   color: var(--text-dim);
+}
+
+@media (max-width: 900px) {
+  .modeWorkflowHeader {
+    flex-direction: column;
+  }
+
+  .modeWorkflowHeaderMeta {
+    justify-content: flex-start;
+  }
 }
 
 .cutoutFitSummaryGrid {
