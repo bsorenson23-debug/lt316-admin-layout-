@@ -240,6 +240,31 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
   let overlaySummaryBeforeSave = { enabled: "no", count: 0, firstAngle: "", firstBodyY: "" };
 
   await test.step("fine tune the contour, force stale lineage, and regenerate to fresh", async () => {
+    await expect(page.getByTestId("body-reference-guides-panel")).toBeVisible();
+    await expect(page.getByTestId("body-reference-guides-panel")).toContainText("UI-only guide overlay");
+    await expect(page.getByTestId("body-reference-guides-ui-only-note")).toContainText(
+      "Does not affect approved SVG or BODY CUTOUT QA GLB",
+    );
+    await expect(page.getByTestId("body-reference-guides-source-hash-note")).toContainText(
+      "excluded from source hash, GLB input, WRAP / EXPORT, and v2 authority",
+    );
+    await expect(page.getByTestId("body-reference-guide-overlay")).toBeVisible();
+    await expect(page.getByTestId("body-reference-guide-top-bridge")).toHaveCount(1);
+    await expect(page.getByTestId("body-reference-guide-bottom-bridge")).toHaveCount(1);
+    await expect(page.getByTestId("body-reference-guide-centerline")).toHaveCount(1);
+
+    const fineTuneBeforeGuideToggle = await readMetricMap(fineTunePanel, fineTuneMetricLabels);
+    await page.getByTestId("body-reference-guides-toggle").click();
+    await expect(page.getByTestId("body-reference-guide-overlay")).toBeHidden();
+    await page.getByTestId("body-reference-guides-toggle").click();
+    await expect(page.getByTestId("body-reference-guide-overlay")).toBeVisible();
+    const fineTuneAfterGuideToggle = await readMetricMap(fineTunePanel, fineTuneMetricLabels);
+    expect(fineTuneAfterGuideToggle["Reviewed GLB freshness"]).toBe(fineTuneBeforeGuideToggle["Reviewed GLB freshness"]);
+    expect(fineTuneAfterGuideToggle["Source hash"]).toBe(fineTuneBeforeGuideToggle["Source hash"]);
+    expect(fineTuneAfterGuideToggle["GLB source hash"]).toBe(fineTuneBeforeGuideToggle["GLB source hash"]);
+    expect(fineTuneAfterGuideToggle["Reviewed GLB freshness"]).toBe("Reviewed GLB fresh");
+    await expect(page.getByTestId("body-reference-fine-tune-accept")).toBeDisabled();
+
     await page.getByTestId("body-reference-fine-tune-edit").click();
     await page.locator('svg[aria-label="BODY REFERENCE cutout fine-tune editor"]').waitFor({
       state: "visible",
