@@ -113,6 +113,7 @@
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: 0;
+  overflow: hidden;
 }
 
 .rail {
@@ -122,6 +123,7 @@
   padding: 22px 18px 24px 24px;
   border-right: 1px solid var(--border-normal);
   background: color-mix(in srgb, var(--bg-panel) 96%, var(--accent-dim));
+  overflow-y: auto;
 }
 
 .railCard {
@@ -139,6 +141,13 @@
   color: var(--text-dim);
 }
 
+.railIntro {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
 .phaseList {
   display: flex;
   flex-direction: column;
@@ -149,7 +158,7 @@
 .phaseCard {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   padding: 10px 11px;
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
@@ -184,7 +193,7 @@
 }
 
 .phaseDetail {
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.45;
   color: var(--text-secondary);
 }

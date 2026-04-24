@@ -26,35 +26,41 @@ export function TemplateModeSurface({
     {
       step: "01",
       title: "Source",
-      detail: "Identity, lookup, source imagery, and the starting model inputs stay together here.",
+      detail: "Pick the product, confirm the source model, and keep lookup plus imagery together.",
     },
     {
       step: "02",
       title: "Detect",
-      detail: "Lookup and photo auto-detect stay clearly ahead of BODY REFERENCE review.",
+      detail: "Run lookup or photo detect before you move into contour review.",
     },
     {
       step: "03",
       title: "Review",
-      detail: "Accept BODY REFERENCE before QA generation so the current contour stays explicit.",
+      detail: "Lock the accepted BODY REFERENCE so the current contour stays explicit.",
     },
     {
       step: "04",
       title: "BODY CUTOUT QA",
-      detail: "Generate and inspect the reviewed body-only GLB without mixing in WRAP / EXPORT proof.",
+      detail: "Generate and inspect the reviewed body-only GLB without mixing export proof.",
     },
     {
       step: "05",
       title: "WRAP / EXPORT",
-      detail: "Placement, saved artwork persistence, overlay preview, and export agreement stay separate.",
+      detail: "Check placement, persistence, overlays, and export agreement separately.",
     },
+  ] as const;
+  const operatorRules = [
+    "Create and edit stay on this same dedicated surface.",
+    "Save, cancel, and back still use one shared exit path.",
+    "BODY CUTOUT QA stays separate from WRAP / EXPORT proof.",
+    "Advanced and debug detail stay secondary to the operator path.",
   ] as const;
   const isEdit = mode.intent === "edit";
   const editingTemplate = mode.editingTemplate ?? undefined;
   const title = isEdit ? "Edit template" : "Create new template";
   const subtitle = isEdit
-    ? "Template mode keeps template authoring as the primary workspace instead of layering it over the production job shell."
-    : "Template mode keeps new template authoring as the primary workspace instead of layering it over the production job shell.";
+    ? "Template mode keeps template authoring in a dedicated operator workspace instead of layering it over the production shell."
+    : "Template mode keeps new template authoring in a dedicated operator workspace instead of layering it over the production shell.";
   const exitLabel =
     mode.returnTarget === "gallery"
       ? "Back to product browser"
@@ -104,7 +110,10 @@ export function TemplateModeSurface({
       <div className={styles.body}>
         <aside className={styles.rail}>
           <section className={styles.railCard}>
-            <div className={styles.railTitle}>Template-first workflow</div>
+            <div className={styles.railTitle}>Operator route</div>
+            <div className={styles.railIntro}>
+              Follow the product-first path, then keep proof modes clearly separated.
+            </div>
             <div className={styles.phaseList}>
               {workflowPhases.map((phase) => (
                 <div key={phase.step} className={styles.phaseCard}>
@@ -118,11 +127,11 @@ export function TemplateModeSurface({
             </div>
           </section>
           <section className={styles.railCard}>
-            <div className={styles.railTitle}>Mode rules</div>
+            <div className={styles.railTitle}>Guardrails</div>
             <ul className={styles.railList}>
-              <li>Production-only workspace chrome stays secondary until you exit template mode.</li>
-              <li>Save, cancel, and the header back button still use one shared template-mode exit path.</li>
-              <li>BODY CUTOUT QA, WRAP / EXPORT, v2 capture, product appearance references, and overlay semantics stay unchanged.</li>
+              {operatorRules.map((rule) => (
+                <li key={rule}>{rule}</li>
+              ))}
             </ul>
           </section>
         </aside>
