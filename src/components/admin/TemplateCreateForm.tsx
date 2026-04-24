@@ -41,6 +41,7 @@ import {
   getTemplateCreateNextActionHint,
   getTemplateCreateSaveGateReason,
   getTemplateCreateSourceReadiness,
+  isTemplateCreateReviewFlowProductType,
 } from "@/lib/templateCreateFlow";
 import {
   formatTemplateCreateDisabledActionLabels,
@@ -536,6 +537,7 @@ export function TemplateCreateForm({
   workspaceArtworkPlacements = null,
   surfaceMode = "modal",
 }: Props) {
+  const inDedicatedTemplateMode = surfaceMode === "page";
   const isEdit = Boolean(editingTemplate);
   const searchParams = useSearchParams();
   const routeDebugEnabled = searchParams.get("debug") === "1";
@@ -1407,6 +1409,26 @@ export function TemplateCreateForm({
     () => deriveTemplateCreateWorkflowStep(workflowInput),
     [workflowInput],
   );
+  const workflowSourceStep = React.useMemo(
+    () => workflowSteps.find((step) => step.step === "source") ?? null,
+    [workflowSteps],
+  );
+  const workflowDetectStep = React.useMemo(
+    () => workflowSteps.find((step) => step.step === "detect") ?? null,
+    [workflowSteps],
+  );
+  const workflowReviewStep = React.useMemo(
+    () => workflowSteps.find((step) => step.step === "review") ?? null,
+    [workflowSteps],
+  );
+  const workflowGenerateStep = React.useMemo(
+    () => workflowSteps.find((step) => step.step === "generate") ?? null,
+    [workflowSteps],
+  );
+  const workflowPreviewStep = React.useMemo(
+    () => workflowSteps.find((step) => step.step === "preview") ?? null,
+    [workflowSteps],
+  );
   const workflowCurrentStepLabel = React.useMemo(
     () => workflowSteps.find((step) => step.step === workflowCurrentStep)?.label ?? workflowCurrentStep,
     [workflowCurrentStep, workflowSteps],
@@ -1426,6 +1448,12 @@ export function TemplateCreateForm({
     }),
     [lookupInput, lookingUpItem],
   );
+  const templateModeWorkflowHeading = React.useMemo(() => {
+    if (!isTemplateCreateReviewFlowProductType(productType)) {
+      return "Source and template details";
+    }
+    return "Source, Detect, Review, BODY CUTOUT QA, and WRAP / EXPORT";
+  }, [productType]);
 
   React.useEffect(() => {
     if (previewModelMode !== "body-cutout-qa") return;
@@ -2487,9 +2515,83 @@ export function TemplateCreateForm({
       data-testid="template-create-form"
       data-template-create-surface-mode={surfaceMode}
     >
+      {inDedicatedTemplateMode && (
+        <section className={styles.modeWorkflowOverview}>
+          <div className={styles.modeWorkflowHeader}>
+            <div>
+              <div className={styles.modeWorkflowEyebrow}>Template workflow</div>
+              <div className={styles.modeWorkflowTitle}>{templateModeWorkflowHeading}</div>
+              <div className={styles.modeWorkflowHint}>
+                Keep source inputs first, then move through BODY REFERENCE review, reviewed body-only QA, and WRAP / EXPORT checks without mixing those proofs together.
+              </div>
+            </div>
+            <div className={styles.modeWorkflowHeaderMeta}>
+              <span className={styles.modeWorkflowCurrent}>Current step: {workflowCurrentStepLabel}</span>
+              <span
+                className={
+                  templateCreateSourceReadiness.sourceReady
+                    ? styles.workflowReadinessReady
+                    : styles.workflowReadinessPending
+                }
+              >
+                {templateCreateSourceReadiness.sourceReady ? "Source ready" : "Source pending"}
+              </span>
+              <span
+                className={
+                  templateCreateSourceReadiness.detectReady
+                    ? styles.workflowReadinessReady
+                    : styles.workflowReadinessPending
+                }
+              >
+                {templateCreateSourceReadiness.detectReady ? "Detect actionable" : "Detect blocked"}
+              </span>
+            </div>
+          </div>
+          <div className={styles.modeWorkflowStepGrid}>
+            {workflowSteps.map((step) => (
+              <div
+                key={`mode-workflow-${step.step}`}
+                className={[
+                  styles.modeWorkflowStepCard,
+                  step.status === "ready"
+                    ? styles.workflowStepReady
+                    : step.status === "action"
+                      ? styles.workflowStepAction
+                      : styles.workflowStepReview,
+                  workflowCurrentStep === step.step ? styles.workflowStepCurrent : "",
+                ].join(" ")}
+              >
+                <div className={styles.modeWorkflowStepHeader}>
+                  <span className={styles.modeWorkflowStepNumber}>
+                    {step.label.split(".")[0]}
+                  </span>
+                  <span className={styles.modeWorkflowStepLabel}>{step.label.replace(/^\d+\.\s*/, "")}</span>
+                </div>
+                <div className={styles.modeWorkflowStepDetail}>{step.detail}</div>
+              </div>
+            ))}
+          </div>
+          <div className={styles.modeWorkflowFooter}>
+            <div className={styles.modeWorkflowNextAction}>Next action: {workflowNextActionHint}</div>
+            {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
+              <div className={styles.workflowBlockedNote}>
+                {templateCreateSourceReadiness.blockedReason}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* ── Product identity ──────────────────────────────────────── */}
       <div className={styles.section}>
-        <div className={styles.sectionTitle}>Product identity</div>
+        <div className={styles.sectionTitle}>
+          {inDedicatedTemplateMode ? "Step 1 · Source details" : "Product identity"}
+        </div>
+        {inDedicatedTemplateMode && (
+          <div className={styles.sectionLead}>
+            Set the template name, product type, and base identity first. The downstream detect and review steps depend on this source context.
+          </div>
+        )}
 
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>Product name *</label>
@@ -2554,7 +2656,18 @@ export function TemplateCreateForm({
 
       {/* ── Product image + auto-detect ──────────────────────────── */}
       <div className={styles.section}>
-        <div className={styles.sectionTitle}>Product image</div>
+        <div className={styles.sectionTitle}>
+          {inDedicatedTemplateMode
+            ? isTemplateCreateReviewFlowProductType(productType)
+              ? "Step 2 · Source imagery and detect inputs"
+              : "Source imagery"
+            : "Product image"}
+        </div>
+        {inDedicatedTemplateMode && (
+          <div className={styles.sectionLead}>
+            Keep lookup, product imagery, and photo auto-detect together so Source and Detect stay visually upstream from BODY REFERENCE review.
+          </div>
+        )}
 
         {productType !== "flat" && (
           <div className={styles.lookupBlock}>
@@ -2749,66 +2862,157 @@ export function TemplateCreateForm({
 
       {productType !== "flat" && (
         <div className={styles.section} data-body-reference-review-scaffold="present">
-          <div className={styles.sectionTitle}>BODY REFERENCE workflow</div>
+          <div className={styles.sectionTitle}>
+            {inDedicatedTemplateMode
+              ? "Steps 3-5 · Review, BODY CUTOUT QA, and WRAP / EXPORT"
+              : "BODY REFERENCE workflow"}
+          </div>
           <div className={styles.sectionLead}>
-            Move through the drinkware flow in order: stage the source, review BODY REFERENCE, generate BODY CUTOUT QA, then switch preview modes for QA or WRAP / EXPORT checks.
+            {inDedicatedTemplateMode
+              ? "Review and lock BODY REFERENCE first, then generate the body-only QA GLB, and only then switch into BODY CUTOUT QA or WRAP / EXPORT proof."
+              : "Move through the drinkware flow in order: stage the source, review BODY REFERENCE, generate BODY CUTOUT QA, then switch preview modes for QA or WRAP / EXPORT checks."}
           </div>
 
-          <div className={styles.workflowScaffold}>
-            <div className={styles.workflowStepRow}>
-              {workflowSteps.map((step) => (
-                <div
-                  key={step.step}
-                  className={[
-                    styles.workflowStepCard,
-                    step.status === "ready"
-                      ? styles.workflowStepReady
-                      : step.status === "action"
-                        ? styles.workflowStepAction
-                        : styles.workflowStepReview,
-                    workflowCurrentStep === step.step ? styles.workflowStepCurrent : "",
-                  ].join(" ")}
-                >
-                  <div className={styles.workflowStepLabel}>{step.label}</div>
-                  <div className={styles.workflowStepDetail}>{step.detail}</div>
-                </div>
-              ))}
-            </div>
-
-            <div className={styles.workflowReadinessRow}>
-              <span
-                className={
-                  templateCreateSourceReadiness.sourceReady
-                    ? styles.workflowReadinessReady
-                    : styles.workflowReadinessPending
-                }
-              >
-                {templateCreateSourceReadiness.sourceReady ? "Source ready" : "Source pending"}
-              </span>
-              <span
-                className={
-                  templateCreateSourceReadiness.detectReady
-                    ? styles.workflowReadinessReady
-                    : styles.workflowReadinessPending
-                }
-              >
-                {templateCreateSourceReadiness.detectReady ? "Detect actionable" : "Detect blocked"}
-              </span>
-              <span className={styles.workflowReadinessCurrent}>
-                Current step: {workflowCurrentStepLabel}
-              </span>
-            </div>
-
-            <div className={styles.workflowNextNote}>
-              Next action: {workflowNextActionHint}
-            </div>
-
-            {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
-              <div className={styles.workflowBlockedNote}>
-                {templateCreateSourceReadiness.blockedReason}
+          {inDedicatedTemplateMode ? (
+            <div className={styles.workflowContextBar}>
+              <div className={styles.workflowContextRow}>
+                {workflowSourceStep && (
+                  <span
+                    className={
+                      workflowSourceStep.status === "ready"
+                        ? styles.workflowReadinessReady
+                        : workflowSourceStep.status === "action"
+                          ? styles.workflowReadinessPending
+                          : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {workflowSourceStep.label.replace(/^\d+\.\s*/, "")}
+                  </span>
+                )}
+                {workflowDetectStep && (
+                  <span
+                    className={
+                      workflowDetectStep.status === "ready"
+                        ? styles.workflowReadinessReady
+                        : workflowDetectStep.status === "action"
+                          ? styles.workflowReadinessPending
+                          : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {workflowDetectStep.label.replace(/^\d+\.\s*/, "")}
+                  </span>
+                )}
+                {workflowReviewStep && (
+                  <span
+                    className={
+                      workflowReviewStep.status === "ready"
+                        ? styles.workflowReadinessReady
+                        : workflowReviewStep.status === "action"
+                          ? styles.workflowReadinessPending
+                          : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {workflowReviewStep.label.replace(/^\d+\.\s*/, "")}
+                  </span>
+                )}
+                {workflowGenerateStep && (
+                  <span
+                    className={
+                      workflowGenerateStep.status === "ready"
+                        ? styles.workflowReadinessReady
+                        : workflowGenerateStep.status === "action"
+                          ? styles.workflowReadinessPending
+                          : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {workflowGenerateStep.label.replace(/^\d+\.\s*/, "")}
+                  </span>
+                )}
+                {workflowPreviewStep && (
+                  <span
+                    className={
+                      workflowPreviewStep.status === "ready"
+                        ? styles.workflowReadinessReady
+                        : workflowPreviewStep.status === "action"
+                          ? styles.workflowReadinessPending
+                          : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {workflowPreviewStep.label.replace(/^\d+\.\s*/, "")}
+                  </span>
+                )}
               </div>
-            )}
-          </div>
+              <div className={styles.workflowContextSummary}>
+                <span className={styles.workflowReadinessCurrent}>
+                  Current step: {workflowCurrentStepLabel}
+                </span>
+                <span className={styles.workflowNextNote}>
+                  Next action: {workflowNextActionHint}
+                </span>
+              </div>
+              {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
+                <div className={styles.workflowBlockedNote}>
+                  {templateCreateSourceReadiness.blockedReason}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className={styles.workflowScaffold}>
+              <div className={styles.workflowStepRow}>
+                {workflowSteps.map((step) => (
+                  <div
+                    key={step.step}
+                    className={[
+                      styles.workflowStepCard,
+                      step.status === "ready"
+                        ? styles.workflowStepReady
+                        : step.status === "action"
+                          ? styles.workflowStepAction
+                          : styles.workflowStepReview,
+                      workflowCurrentStep === step.step ? styles.workflowStepCurrent : "",
+                    ].join(" ")}
+                  >
+                    <div className={styles.workflowStepLabel}>{step.label}</div>
+                    <div className={styles.workflowStepDetail}>{step.detail}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className={styles.workflowReadinessRow}>
+                <span
+                  className={
+                    templateCreateSourceReadiness.sourceReady
+                      ? styles.workflowReadinessReady
+                      : styles.workflowReadinessPending
+                  }
+                >
+                  {templateCreateSourceReadiness.sourceReady ? "Source ready" : "Source pending"}
+                </span>
+                <span
+                  className={
+                    templateCreateSourceReadiness.detectReady
+                      ? styles.workflowReadinessReady
+                      : styles.workflowReadinessPending
+                  }
+                >
+                  {templateCreateSourceReadiness.detectReady ? "Detect actionable" : "Detect blocked"}
+                </span>
+                <span className={styles.workflowReadinessCurrent}>
+                  Current step: {workflowCurrentStepLabel}
+                </span>
+              </div>
+
+              <div className={styles.workflowNextNote}>
+                Next action: {workflowNextActionHint}
+              </div>
+
+              {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
+                <div className={styles.workflowBlockedNote}>
+                  {templateCreateSourceReadiness.blockedReason}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className={styles.reviewScaffoldCard}>
             <div className={styles.reviewScaffoldHeader}>
@@ -3148,18 +3352,6 @@ export function TemplateCreateForm({
                         {getWrapExportExportAuthorityLabel(wrapExportProductionReadiness.exportAuthority)}
                       </span>
                     </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Overlay enabled</span>
-                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.overlayEnabled ? "yes" : "no"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Outside printable placements</span>
-                      <span className={styles.cutoutFitMetricValue}>{engravingOverlayPreviewState.outsidePrintableAreaCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Appearance references</span>
-                      <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.totalLayers}</span>
-                    </div>
                   </div>
 
                   <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
@@ -3239,8 +3431,20 @@ export function TemplateCreateForm({
                           </span>
                         </div>
                         <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Overlay enabled</span>
+                          <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.overlayEnabled ? "yes" : "no"}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
                           <span className={styles.cutoutFitMetricLabel}>Overlay material</span>
                           <span className={styles.cutoutFitMetricValue}>{ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Outside printable placements</span>
+                          <span className={styles.cutoutFitMetricValue}>{engravingOverlayPreviewState.outsidePrintableAreaCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Appearance references</span>
+                          <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.totalLayers}</span>
                         </div>
                         <div className={styles.cutoutFitMetric}>
                           <span className={styles.cutoutFitMetricLabel}>Stale mapping warnings</span>
@@ -3709,16 +3913,8 @@ export function TemplateCreateForm({
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.accepted ? "yes" : "no"}</span>
                 </div>
                 <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Draft pending acceptance</span>
-                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.hasDraftChanges ? "yes" : "no"}</span>
-                </div>
-                <div className={styles.cutoutFitMetric}>
                   <span className={styles.cutoutFitMetricLabel}>v2 generation ready</span>
                   <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.generationReady ? "yes" : "no"}</span>
-                </div>
-                <div className={styles.cutoutFitMetric}>
-                  <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
-                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                 </div>
               </div>
 
@@ -3753,8 +3949,16 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lookupDiameterPresent ? "present" : "missing"}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Draft pending acceptance</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.hasDraftChanges ? "yes" : "no"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>v1 BODY CUTOUT QA</span>
                       <span className={styles.cutoutFitMetricValue}>available fallback</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                     </div>
                   </div>
                 </div>
@@ -3821,18 +4025,10 @@ export function TemplateCreateForm({
                         <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
                         <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.centerline ? "captured" : "missing"}</span>
                       </div>
-                      <div className={styles.cutoutFitMetric}>
-                        <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
-                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.leftBodyPointCount}</span>
-                      </div>
-                      <div className={styles.cutoutFitMetric}>
-                        <span className={styles.cutoutFitMetricLabel}>Lookup diameter authority</span>
-                        <span className={styles.cutoutFitMetricValue}>{formatLookupAuthority(bodyReferenceV2ScaleMirrorPreview.lookupDimensionAuthority)}</span>
-                      </div>
-                      <div className={styles.cutoutFitMetric}>
-                        <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
-                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
-                      </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.leftBodyPointCount}</span>
+                    </div>
                     </div>
 
                     <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
@@ -3872,6 +4068,14 @@ export function TemplateCreateForm({
                           <div className={styles.cutoutFitMetric}>
                             <span className={styles.cutoutFitMetricLabel}>Mirrored-right points</span>
                             <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.mirroredRightPointCount}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Lookup diameter authority</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatLookupAuthority(bodyReferenceV2ScaleMirrorPreview.lookupDimensionAuthority)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                           </div>
                         </div>
                       </div>
@@ -3937,23 +4141,15 @@ export function TemplateCreateForm({
                         <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
                         <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.centerlineCaptured ? "captured" : "missing"}</span>
                       </div>
-                      <div className={styles.cutoutFitMetric}>
-                        <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
-                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.leftBodyPointCount}</span>
-                      </div>
-                      <div className={styles.cutoutFitMetric}>
-                        <span className={styles.cutoutFitMetricLabel}>Accepted draft</span>
-                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.accepted ? "yes" : "no"}</span>
-                      </div>
-                      <div className={styles.cutoutFitMetric}>
-                        <span className={styles.cutoutFitMetricLabel}>Accepted draft ready</span>
-                        <span className={styles.cutoutFitMetricValue}>{acceptedBodyReferenceV2GenerationReadiness?.ready ? "yes" : "no"}</span>
-                      </div>
-                      <div className={styles.cutoutFitMetric}>
-                        <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
-                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
-                      </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.leftBodyPointCount}</span>
                     </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Accepted draft</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.accepted ? "yes" : "no"}</span>
+                    </div>
+                  </div>
 
                     <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
                       <summary className={styles.compactDetailsSummary}>
@@ -3988,6 +4184,14 @@ export function TemplateCreateForm({
                           <div className={styles.cutoutFitMetric}>
                             <span className={styles.cutoutFitMetricLabel}>Draft pending acceptance</span>
                             <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.hasDraftChanges ? "yes" : "no"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Accepted draft ready</span>
+                            <span className={styles.cutoutFitMetricValue}>{acceptedBodyReferenceV2GenerationReadiness?.ready ? "yes" : "no"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                           </div>
                         </div>
                       </div>
