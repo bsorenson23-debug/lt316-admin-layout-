@@ -4,6 +4,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 import {
   clickAndReadJsonResponse,
+  downloadBodyContractDebugReport,
+  openBodyContractInspector,
   openTemplateGallery,
   readMetricMap,
   readOverlaySummaryState,
@@ -93,6 +95,45 @@ function expectNormalBodyContractDebugReport(report: Record<string, unknown>): v
   expect(svgQuality.expectedBridgeSegmentCount).toBe(2);
 }
 
+async function createLookupTemplateFromSource(page: Page, templateName: string): Promise<void> {
+  const productImage = getOperatorProductImageUpload();
+
+  await expect(page.getByTestId("browse-products-button")).toBeVisible();
+  await openTemplateGallery(page);
+  await page.getByTestId("template-gallery-create-new").click();
+
+  await expect(page.getByText("Source pending", { exact: true })).toBeVisible();
+  await expect(page.getByText("Detect blocked", { exact: true })).toBeVisible();
+  const missingSourceImageCopy = "Upload a product image in Source before photo auto-detect.";
+  const missingSourceImageBlockers = page.locator('[class*="workflowBlockedNote"]').filter({
+    hasText: missingSourceImageCopy,
+  });
+  await expect(missingSourceImageBlockers).toHaveCount(2);
+  await expect(missingSourceImageBlockers.first()).toBeVisible();
+
+  const lookupInput = page.getByPlaceholder(
+    "https://www.academy.com/... or Stanley IceFlow 30 oz Classic Flip Straw Tumbler",
+  );
+  await lookupInput.fill("YETI Rambler 40 oz");
+  await page.getByTestId("template-create-run-lookup").click();
+
+  await expect(page.getByText("Selected size 40 oz", { exact: true })).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText("Authority Diameter primary", { exact: true })).toBeVisible({ timeout: 120_000 });
+  await expect(
+    page.getByText(
+      "Full product height is stored for context and ignored for lookup-based body contour scale.",
+      { exact: true },
+    ).first(),
+  ).toBeVisible({ timeout: 120_000 });
+
+  await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles(productImage);
+  await expect(page.getByText("Source ready", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText("Detect actionable", { exact: true })).toBeVisible();
+  await waitForTextGone(page, missingSourceImageCopy);
+
+  await page.getByPlaceholder("YETI Rambler 40oz").fill(templateName);
+}
+
 function expectV2BodyContractDebugReport(report: Record<string, unknown>): void {
   const summary = asRecord(report.summary);
   const contract = asRecord(report.contract);
@@ -153,6 +194,70 @@ async function waitForCreateFlowToReturnToWorkspace(page: Page): Promise<void> {
   throw new Error("Timed out waiting for template create flow to return to the workspace.");
 }
 
+test("normal operator mode keeps diagnostics out of the default path", async ({ page }, testInfo) => {
+  test.setTimeout(8 * 60 * 1000);
+
+  await page.addInitScript(() => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  });
+  await ensureWebGlSupport(page, testInfo, "admin-v2-normal-density");
+
+  const templateName = `Codex Normal Density ${Date.now()}`;
+
+  await page.goto("/admin", { waitUntil: "networkidle", timeout: 120_000 });
+  await createLookupTemplateFromSource(page, templateName);
+
+  await expect(page.getByText("Review diagnostics and runtime detail", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Mapping, overlay, and signature detail", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Cutout geometry and hash detail", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("v2 reference and scale detail", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Mirror scale and lookup detail", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("v2 generation metric detail", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("body-contract-inspector")).toHaveCount(0);
+  await expect(page.getByTestId("body-contract-download-debug-report")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy JSON" })).toHaveCount(0);
+
+  const acceptV1Button = page.getByTestId("body-reference-v1-accept");
+  await waitForLocatorEnabled(acceptV1Button, 120_000);
+  await acceptV1Button.click();
+  await expect(acceptV1Button).toContainText("BODY REFERENCE (v1) locked", { timeout: 60_000 });
+
+  const generateV1Button = page.getByTestId("body-reference-v1-generate");
+  const generatedPayload = await clickAndReadJsonResponse<GeneratedBodyReferenceResponse>(
+    page,
+    async () => {
+      await (await waitForLocatorEnabled(generateV1Button, 120_000)).click();
+    },
+    "/api/admin/tumbler/generate-body-reference-glb",
+    120_000,
+  );
+  expect(generatedPayload.bodyGeometryContract?.source?.type).toBe("approved-svg");
+
+  await page.getByTestId("preview-mode-body-cutout-qa").click();
+  await expect(page.getByTestId("body-geometry-status-badge-title")).toHaveText("BODY CUTOUT QA", {
+    timeout: 120_000,
+  });
+  await expect(page.getByTestId("body-geometry-status-badge-status")).toHaveText("PASS");
+  await expect(page.getByTestId("body-geometry-status-badge-note")).toContainText("Valid for body contour QA");
+  await expect(page.getByTestId("body-contract-inspector")).toHaveCount(0);
+
+  await expect(page.getByTestId("body-reference-v2-summary")).toBeVisible();
+  await expect(page.getByTestId("body-reference-v2-mirror-preview")).toBeVisible();
+  await expect(page.getByTestId("body-reference-v2-generation-readiness")).toBeVisible();
+  await expect(page.getByTestId("body-reference-v2-generate")).toBeDisabled();
+
+  await page.getByTestId("preview-mode-wrap-export").click();
+  await expect(page.getByText("WRAP / EXPORT PREVIEW", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("wrap-export-summary")).toContainText(
+    "WRAP / EXPORT checks saved artwork placement and export preview.",
+  );
+  await expect(page.getByTestId("appearance-reference-summary")).toContainText("reference-only");
+  await expect(page.getByText("Saved artwork placements", { exact: true })).toBeVisible();
+  await expect(page.getByText("Mapping, overlay, and signature detail", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("body-contract-inspector")).toHaveCount(0);
+});
+
 test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and persistence", async ({
   page,
 }, testInfo) => {
@@ -167,45 +272,10 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
   await ensureWebGlSupport(page, testInfo, "admin-v2-operator-flow");
 
   const templateName = `Codex Playwright V2 ${Date.now()}`;
-  const productImage = getOperatorProductImageUpload();
-
   await page.goto("/admin?debug=1", { waitUntil: "networkidle", timeout: 120_000 });
 
   await test.step("create a new template and verify source/detect gating", async () => {
-    await expect(page.getByTestId("browse-products-button")).toBeVisible();
-    await openTemplateGallery(page);
-    await page.getByTestId("template-gallery-create-new").click();
-
-    await expect(page.getByText("Source pending", { exact: true })).toBeVisible();
-    await expect(page.getByText("Detect blocked", { exact: true })).toBeVisible();
-    const missingSourceImageCopy = "Upload a product image in Source before photo auto-detect.";
-    const missingSourceImageBlockers = page.locator('[class*="workflowBlockedNote"]').filter({
-      hasText: missingSourceImageCopy,
-    });
-    await expect(missingSourceImageBlockers).toHaveCount(2);
-    await expect(missingSourceImageBlockers.first()).toBeVisible();
-
-    const lookupInput = page.getByPlaceholder(
-      "https://www.academy.com/... or Stanley IceFlow 30 oz Classic Flip Straw Tumbler",
-    );
-    await lookupInput.fill("YETI Rambler 40 oz");
-    await page.getByTestId("template-create-run-lookup").click();
-
-    await expect(page.getByText("Selected size 40 oz", { exact: true })).toBeVisible({ timeout: 120_000 });
-    await expect(page.getByText("Authority Diameter primary", { exact: true })).toBeVisible({ timeout: 120_000 });
-    await expect(
-      page.getByText(
-        "Full product height is stored for context and ignored for lookup-based body contour scale.",
-        { exact: true },
-      ).first(),
-    ).toBeVisible({ timeout: 120_000 });
-
-    await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles(productImage);
-    await expect(page.getByText("Source ready", { exact: true })).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText("Detect actionable", { exact: true })).toBeVisible();
-    await waitForTextGone(page, "Upload a product image in Source before photo auto-detect.");
-
-    await page.getByPlaceholder("YETI Rambler 40oz").fill(templateName);
+    await createLookupTemplateFromSource(page, templateName);
   });
 
   const fineTuneMetricLabels = ["Reviewed GLB freshness", "Source hash", "GLB source hash"];
@@ -238,6 +308,10 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     await expect(page.getByTestId("body-geometry-status-badge-status")).toHaveText("PASS");
     await expect(fineTuneLifecycle).toContainText("Reviewed GLB fresh");
     await expect(fineTuneLifecycle).toContainText("Reviewed GLB is fresh relative to accepted cutout.");
+    await expect(page.getByText("Review diagnostics and runtime detail", { exact: true })).toBeVisible();
+    await openBodyContractInspector(page);
+    await expect(page.getByTestId("body-contract-download-debug-report")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy JSON" })).toBeVisible();
 
     const normalReport = await buildProgrammaticBodyContractDebugReport(
       initialGeneratedPayload,
@@ -245,6 +319,11 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
       page.url(),
     );
     expectNormalBodyContractDebugReport(normalReport);
+    const downloadedNormalReport = await downloadBodyContractDebugReport(
+      page,
+      testInfo.outputPath("downloaded-normal-body-contract-debug-report.json"),
+    );
+    expectNormalBodyContractDebugReport(downloadedNormalReport);
   });
 
   let sourceHashBeforeAccept = "";
@@ -471,6 +550,8 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     );
     await expect(page.getByTestId("body-geometry-status-badge-title")).toHaveText("BODY CUTOUT QA");
     await expect(page.getByTestId("body-geometry-status-badge-status")).toHaveText("PASS");
+    await openBodyContractInspector(page);
+    await expect(page.getByTestId("body-contract-inspector-source-type")).toContainText("body-reference-v2");
 
     const v2Report = await buildProgrammaticBodyContractDebugReport(
       v2GeneratedPayload,

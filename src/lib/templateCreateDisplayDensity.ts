@@ -28,3 +28,10 @@ export function shouldAutoOpenTemplateCreateDiagnostics(args: {
 }): boolean {
   return args.adminDebugEnabled || Boolean(args.routeDebugEnabled);
 }
+
+export function shouldShowTemplateCreateDiagnostics(args: {
+  adminDebugEnabled: boolean;
+  routeDebugEnabled?: boolean;
+}): boolean {
+  return shouldAutoOpenTemplateCreateDiagnostics(args);
+}
