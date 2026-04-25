@@ -1,5 +1,7 @@
 import type {
   EditableBodyOutline,
+  EditableBodyOutlineContourBounds,
+  EditableBodyOutlineContourFrame,
   EditableBodyOutlineContourPoint,
   EditableBodyOutlinePoint,
   EditableOutlineHandle,
@@ -250,6 +252,10 @@ const KNOWN_TUMBLER_OUTLINE_PRESETS: Record<KnownTumblerOutlineFamily, KnownTumb
 
 function round1(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+function round4(value: number): number {
+  return Math.round(value * 10000) / 10000;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -709,6 +715,15 @@ type ContourSegment = {
   centerX: number;
 };
 
+type DiameterScaledContour = {
+  contour: EditableBodyOutlineContourPoint[];
+  sourceContour: EditableBodyOutlineContourPoint[];
+  sourceBounds: EditableBodyOutlineContourBounds;
+  contourBounds: EditableBodyOutlineContourBounds;
+  sourceDiameterUnits: number;
+  mmPerSourceUnit: number;
+};
+
 function getContourSegmentsAtY(
   contour: EditableBodyOutlineContourPoint[],
   y: number,
@@ -845,6 +860,179 @@ function estimateReferenceWidth(contour: EditableBodyOutlineContourPoint[]): num
 
   if (widths.length === 0) return bounds.width;
   return Math.max(0.1, round1(median(widths)));
+}
+
+function estimateContourDiameterUnits(contour: EditableBodyOutlineContourPoint[]): number {
+  const bounds = getBounds(contour);
+  if (!bounds) return 0;
+
+  const sampleCount = Math.max(32, Math.min(180, Math.round(bounds.height * 0.75)));
+  const widths: number[] = [];
+  for (let index = 0; index < sampleCount; index += 1) {
+    const t = sampleCount === 1 ? 0 : index / (sampleCount - 1);
+    const y = round1(bounds.minY + (bounds.height * t));
+    const segments = getContourSegmentsAtY(contour, y);
+    if (segments.length === 0) continue;
+    const widest = segments.reduce((best, segment) =>
+      segment.width > best.width ? segment : best,
+    );
+    widths.push(widest.width);
+  }
+
+  if (widths.length === 0) return bounds.width;
+  return Math.max(0.1, round1(Math.max(...widths)));
+}
+
+function addRaisedTopBridgeInSourceSpace(args: {
+  contour: EditableBodyOutlineContourPoint[];
+  topBridgeY: number | null | undefined;
+}): EditableBodyOutlineContourPoint[] {
+  const { contour, topBridgeY } = args;
+  const bounds = getBounds(contour);
+  if (
+    !bounds ||
+    contour.length < 4 ||
+    typeof topBridgeY !== "number" ||
+    !Number.isFinite(topBridgeY) ||
+    topBridgeY >= bounds.minY - 0.5
+  ) {
+    return contour;
+  }
+
+  const raisedSourceUnits = bounds.minY - topBridgeY;
+  const maxSafeRaiseUnits = Math.max(2, Math.min(40, bounds.height * 0.12));
+  if (raisedSourceUnits > maxSafeRaiseUnits) {
+    return contour;
+  }
+
+  const first = contour[0];
+  const last = contour[contour.length - 1];
+  if (!first || !last) return contour;
+
+  const topTolerance = Math.max(2, bounds.height * 0.03);
+  if (
+    Math.abs(first.y - bounds.minY) > topTolerance ||
+    Math.abs(last.y - bounds.minY) > topTolerance
+  ) {
+    return contour;
+  }
+
+  return dedupeContourPoints([
+    { x: round1(first.x), y: round1(topBridgeY) },
+    ...contour,
+    { x: round1(last.x), y: round1(topBridgeY) },
+  ]);
+}
+
+function cloneContourBounds(
+  bounds: EditableBodyOutlineContourBounds | null | undefined,
+): EditableBodyOutlineContourBounds | undefined {
+  if (!bounds) return undefined;
+  return {
+    minX: round1(bounds.minX),
+    minY: round1(bounds.minY),
+    maxX: round1(bounds.maxX),
+    maxY: round1(bounds.maxY),
+    width: round1(bounds.width),
+    height: round1(bounds.height),
+  };
+}
+
+function buildDiameterScaledBodyOnlyContour(args: {
+  sourceContour: EditableBodyOutlineContourPoint[];
+  diameterMm: number;
+  bodyTopFromOverallMm: number;
+  sourceDiameterUnits?: number | null;
+  topBridgeSourceY?: number | null;
+}): DiameterScaledContour | null {
+  const initialSourceBounds = getBounds(args.sourceContour);
+  if (!initialSourceBounds || args.sourceContour.length < 3 || !(args.diameterMm > 0)) {
+    return null;
+  }
+
+  const sourceDiameterUnits =
+    args.sourceDiameterUnits && args.sourceDiameterUnits > 0
+      ? args.sourceDiameterUnits
+      : estimateContourDiameterUnits(args.sourceContour);
+  if (!(sourceDiameterUnits > 0)) return null;
+
+  const mmPerSourceUnit = args.diameterMm / sourceDiameterUnits;
+  const sourceContour = addRaisedTopBridgeInSourceSpace({
+    contour: args.sourceContour,
+    topBridgeY: args.topBridgeSourceY,
+  });
+  const sourceBounds = getBounds(sourceContour);
+  if (!sourceBounds || sourceContour.length < 3) return null;
+
+  const centerX = estimateBodyCenterX(sourceContour);
+  const topMm = round1(
+    Math.max(0, args.bodyTopFromOverallMm) +
+    ((sourceBounds.minY - initialSourceBounds.minY) * mmPerSourceUnit),
+  );
+  const contour = dedupeContourPoints(sourceContour.map((point) => ({
+    x: round1((point.x - centerX) * mmPerSourceUnit),
+    y: round1(topMm + ((point.y - sourceBounds.minY) * mmPerSourceUnit)),
+  })));
+  const contourBounds = getBounds(contour);
+  if (!contourBounds || contour.length < 3) return null;
+
+  return {
+    contour,
+    sourceContour,
+    sourceBounds,
+    contourBounds,
+    sourceDiameterUnits: round1(sourceDiameterUnits),
+    mmPerSourceUnit,
+  };
+}
+
+function buildContourFrameDiagnostics(args: {
+  kind: EditableBodyOutlineContourFrame["kind"];
+  sourceCoordinateSpace: EditableBodyOutlineContourFrame["sourceCoordinateSpace"];
+  boundsBeforeBandCrop?: EditableBodyOutlineContourBounds | null;
+  boundsAfterBandCrop?: EditableBodyOutlineContourBounds | null;
+  acceptedPreviewBounds?: EditableBodyOutlineContourBounds | null;
+  glbInputBounds?: EditableBodyOutlineContourBounds | null;
+  canonicalInputBounds?: EditableBodyOutlineContourBounds | null;
+  bandCropApplied: boolean;
+  bandCropReason?: string;
+  bodyOnlyReCropSkipped: boolean;
+  authoritativeForBodyCutoutQa: boolean;
+  authoritativeForPrintableBand: boolean;
+  sourceDiameterUnits?: number | null;
+  mmPerSourceUnit?: number | null;
+}): EditableBodyOutlineContourFrame {
+  const before = cloneContourBounds(args.boundsBeforeBandCrop);
+  const after = cloneContourBounds(args.boundsAfterBandCrop);
+  const croppedAwayTopUnits =
+    before && after ? round1(Math.max(0, after.minY - before.minY)) : undefined;
+  const croppedAwayBottomUnits =
+    before && after ? round1(Math.max(0, before.maxY - after.maxY)) : undefined;
+  const scale = args.mmPerSourceUnit && args.mmPerSourceUnit > 0 ? args.mmPerSourceUnit : null;
+
+  return {
+    kind: args.kind,
+    authoritativeForBodyCutoutQa: args.authoritativeForBodyCutoutQa,
+    authoritativeForPrintableBand: args.authoritativeForPrintableBand,
+    sourceCoordinateSpace: args.sourceCoordinateSpace,
+    boundsBeforeBandCrop: before,
+    boundsAfterBandCrop: after,
+    bandCropApplied: args.bandCropApplied,
+    bandCropReason: args.bandCropReason,
+    bodyOnlyReCropSkipped: args.bodyOnlyReCropSkipped,
+    acceptedPreviewBounds: cloneContourBounds(args.acceptedPreviewBounds),
+    glbInputBounds: cloneContourBounds(args.glbInputBounds),
+    canonicalInputBounds: cloneContourBounds(args.canonicalInputBounds),
+    croppedAwayTopUnits,
+    croppedAwayBottomUnits,
+    croppedAwayTopMm: scale && croppedAwayTopUnits != null ? round1(croppedAwayTopUnits * scale) : undefined,
+    croppedAwayBottomMm: scale && croppedAwayBottomUnits != null ? round1(croppedAwayBottomUnits * scale) : undefined,
+    sourceDiameterUnits:
+      args.sourceDiameterUnits && args.sourceDiameterUnits > 0
+        ? round1(args.sourceDiameterUnits)
+        : undefined,
+    mmPerSourceUnit: scale ? round4(scale) : undefined,
+  };
 }
 
 function selectCenteredContourSegment(
@@ -1742,6 +1930,18 @@ export function cloneEditableBodyOutline(
     directContour: outline.directContour?.map((point) => ({ ...point })),
     sourceContour: outline.sourceContour?.map((point) => ({ ...point })),
     sourceContourBounds: outline.sourceContourBounds ? { ...outline.sourceContourBounds } : undefined,
+    printableBandContour: outline.printableBandContour?.map((point) => ({ ...point })),
+    printableBandContourBounds: outline.printableBandContourBounds ? { ...outline.printableBandContourBounds } : undefined,
+    contourFrame: outline.contourFrame
+      ? {
+          ...outline.contourFrame,
+          boundsBeforeBandCrop: cloneContourBounds(outline.contourFrame.boundsBeforeBandCrop),
+          boundsAfterBandCrop: cloneContourBounds(outline.contourFrame.boundsAfterBandCrop),
+          acceptedPreviewBounds: cloneContourBounds(outline.contourFrame.acceptedPreviewBounds),
+          glbInputBounds: cloneContourBounds(outline.contourFrame.glbInputBounds),
+          canonicalInputBounds: cloneContourBounds(outline.contourFrame.canonicalInputBounds),
+        }
+      : undefined,
     sourceContourMode: outline.sourceContourMode,
     sourceContourViewport: outline.sourceContourViewport ? { ...outline.sourceContourViewport } : undefined,
   };
@@ -1764,6 +1964,20 @@ export function normalizeMeasurementContour(args: {
   const mirroredContour = usesBodyOnlyContour
     ? baseContour
     : (buildMirroredSourceContour(baseContour) ?? baseContour);
+  if (usesBodyOnlyContour) {
+    const bounds = getBounds(mirroredContour);
+    if (!bounds) return null;
+    return {
+      contour: mirroredContour,
+      bounds,
+      mirrored: mirroredContour !== baseContour,
+      bodyOnly: true,
+      bodyOnlyReCropSkipped: true,
+      bandCropApplied: false,
+      boundsBeforeBandCrop: bounds,
+      boundsAfterBandCrop: bounds,
+    };
+  }
   const croppedBodyContour = buildBodyOnlySourceContour({
     contour: mirroredContour,
     overallHeightMm: args.overallHeightMm,
@@ -1821,6 +2035,87 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
 
   const fitProfilePoints = args.fitDebug?.profilePoints ?? null;
   if (fitProfilePoints && fitProfilePoints.length > 1) {
+    const fitDebug = args.fitDebug!;
+    const sourceContour = [
+      ...fitProfilePoints.map((point) => ({
+        x: round1((fitDebug.centerXPx ?? 0) + point.radiusPx),
+        y: round1(point.yPx),
+      })),
+      ...[...fitProfilePoints].reverse().map((point) => ({
+        x: round1((fitDebug.centerXPx ?? 0) - point.radiusPx),
+        y: round1(point.yPx),
+      })),
+    ];
+    const sourceContourBounds = getBounds(sourceContour) ?? {
+      minX: fitDebug.silhouetteBoundsPx.minX,
+      minY: fitDebug.bodyTopPx,
+      maxX: fitDebug.silhouetteBoundsPx.maxX,
+      maxY: fitDebug.bodyBottomPx,
+      width: Math.max(1, fitDebug.silhouetteBoundsPx.maxX - fitDebug.silhouetteBoundsPx.minX),
+      height: Math.max(1, fitDebug.bodyBottomPx - fitDebug.bodyTopPx),
+    };
+    const scaledBodyContour = buildDiameterScaledBodyOnlyContour({
+      sourceContour,
+      diameterMm: args.diameterMm,
+      bodyTopFromOverallMm: args.bodyTopFromOverallMm,
+      sourceDiameterUnits:
+        fitDebug.measurementBandWidthPx ??
+        fitDebug.referenceBandWidthPx ??
+        fitDebug.maxCenterWidthPx ??
+        null,
+      topBridgeSourceY: fitDebug.rimBottomPx,
+    });
+
+    if (scaledBodyContour) {
+      const bodyTopFromOverallMm = scaledBodyContour.contourBounds.minY;
+      const bodyBottomFromOverallMm = scaledBodyContour.contourBounds.maxY;
+      const points = buildProfilePointsFromContour({
+        contour: scaledBodyContour.contour,
+        bodyTopFromOverallMm,
+        bodyBottomFromOverallMm,
+        diameterMm: args.diameterMm,
+        matchedProfileId: args.matchedProfileId,
+        topOuterHalfWidthMm: round1(args.diameterMm / 2),
+        baseDiameterMm: args.baseDiameterMm ?? null,
+        shoulderDiameterMm: args.shoulderDiameterMm ?? null,
+        taperUpperDiameterMm: args.taperUpperDiameterMm ?? null,
+        taperLowerDiameterMm: args.taperLowerDiameterMm ?? null,
+        bevelDiameterMm: args.bevelDiameterMm ?? null,
+      });
+
+      return {
+        closed: true,
+        version: 1,
+        points,
+        directContour: scaledBodyContour.contour,
+        sourceContour: scaledBodyContour.sourceContour,
+        sourceContourBounds: scaledBodyContour.sourceBounds,
+        sourceContourMode: "body-only",
+        sourceContourViewport: {
+          minX: 0,
+          minY: 0,
+          width: Math.max(1, fitDebug.imageWidthPx),
+          height: Math.max(1, fitDebug.imageHeightPx),
+        },
+        contourFrame: buildContourFrameDiagnostics({
+          kind: "full-body-only-source",
+          sourceCoordinateSpace: "raw-image-px",
+          boundsBeforeBandCrop: scaledBodyContour.sourceBounds,
+          boundsAfterBandCrop: null,
+          acceptedPreviewBounds: scaledBodyContour.contourBounds,
+          glbInputBounds: scaledBodyContour.contourBounds,
+          canonicalInputBounds: scaledBodyContour.contourBounds,
+          bandCropApplied: false,
+          bandCropReason: "fit-debug source contour is already body-only; printable band is metadata only",
+          bodyOnlyReCropSkipped: true,
+          authoritativeForBodyCutoutQa: true,
+          authoritativeForPrintableBand: false,
+          sourceDiameterUnits: scaledBodyContour.sourceDiameterUnits,
+          mmPerSourceUnit: scaledBodyContour.mmPerSourceUnit,
+        }),
+      };
+    }
+
     const points = anchors.map(({ role, y, pointType, seedHalfWidthMm }) => {
       const measuredRadiusMm = interpolateFitDebugRadius(fitProfilePoints, y);
       const blendedRadiusMm = Math.max(0.1, resolveFitDebugAnchorRadius({
@@ -1849,25 +2144,6 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
         role,
       };
     });
-    const fitDebug = args.fitDebug!;
-    const sourceContour = [
-      ...fitProfilePoints.map((point) => ({
-        x: round1((fitDebug.centerXPx ?? 0) + point.radiusPx),
-        y: round1(point.yPx),
-      })),
-      ...[...fitProfilePoints].reverse().map((point) => ({
-        x: round1((fitDebug.centerXPx ?? 0) - point.radiusPx),
-        y: round1(point.yPx),
-      })),
-    ];
-    const sourceContourBounds = getBounds(sourceContour) ?? {
-      minX: fitDebug.silhouetteBoundsPx.minX,
-      minY: fitDebug.bodyTopPx,
-      maxX: fitDebug.silhouetteBoundsPx.maxX,
-      maxY: fitDebug.bodyBottomPx,
-      width: Math.max(1, fitDebug.silhouetteBoundsPx.maxX - fitDebug.silhouetteBoundsPx.minX),
-      height: Math.max(1, fitDebug.bodyBottomPx - fitDebug.bodyTopPx),
-    };
 
     return {
       closed: true,
@@ -1926,6 +2202,72 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
     width: Math.max(1, traceDebug.silhouetteBoundsPx.maxX - traceDebug.silhouetteBoundsPx.minX),
     height: Math.max(1, traceDebug.silhouetteBoundsPx.maxY - traceDebug.silhouetteBoundsPx.minY),
   };
+  const fullBodySourceContour =
+    buildImportedBodySeedContour(rawSourceContour, args.matchedProfileId) ?? rawSourceContour;
+  const printableBandContour = buildExactBodyBandSourceContour({
+    contour: rawSourceContour,
+    overallHeightMm,
+    bodyTopFromOverallMm,
+    bodyBottomFromOverallMm,
+  }) ?? null;
+  const printableBandContourBounds = printableBandContour ? getBounds(printableBandContour) : null;
+  const scaledFullBodyContour = buildDiameterScaledBodyOnlyContour({
+    sourceContour: fullBodySourceContour,
+    diameterMm,
+    bodyTopFromOverallMm,
+  });
+  if (scaledFullBodyContour) {
+    const scaledBodyTopMm = scaledFullBodyContour.contourBounds.minY;
+    const scaledBodyBottomMm = scaledFullBodyContour.contourBounds.maxY;
+    const points = buildProfilePointsFromContour({
+      contour: scaledFullBodyContour.contour,
+      bodyTopFromOverallMm: scaledBodyTopMm,
+      bodyBottomFromOverallMm: scaledBodyBottomMm,
+      diameterMm,
+      matchedProfileId: args.matchedProfileId,
+      topOuterHalfWidthMm: round1(diameterMm / 2),
+      baseDiameterMm: null,
+      shoulderDiameterMm: null,
+      taperUpperDiameterMm: null,
+      taperLowerDiameterMm: null,
+      bevelDiameterMm: null,
+    });
+
+    return {
+      closed: true,
+      version: 1,
+      points,
+      directContour: scaledFullBodyContour.contour,
+      sourceContour: fullBodySourceContour.map((point) => ({ ...point })),
+      sourceContourBounds: scaledFullBodyContour.sourceBounds,
+      printableBandContour: printableBandContour?.map((point) => ({ ...point })),
+      printableBandContourBounds: printableBandContourBounds ?? undefined,
+      sourceContourMode: "body-only",
+      sourceContourViewport: {
+        minX: 0,
+        minY: 0,
+        width: Math.max(1, traceDebug.imageWidthPx),
+        height: Math.max(1, traceDebug.imageHeightPx),
+      },
+      contourFrame: buildContourFrameDiagnostics({
+        kind: "full-body-only-source",
+        sourceCoordinateSpace: "raw-image-px",
+        boundsBeforeBandCrop: rawBounds,
+        boundsAfterBandCrop: printableBandContourBounds,
+        acceptedPreviewBounds: scaledFullBodyContour.contourBounds,
+        glbInputBounds: scaledFullBodyContour.contourBounds,
+        canonicalInputBounds: scaledFullBodyContour.contourBounds,
+        bandCropApplied: false,
+        bandCropReason: "trace body-only contour preserves the accepted body shell; printable band is stored separately",
+        bodyOnlyReCropSkipped: true,
+        authoritativeForBodyCutoutQa: true,
+        authoritativeForPrintableBand: false,
+        sourceDiameterUnits: scaledFullBodyContour.sourceDiameterUnits,
+        mmPerSourceUnit: scaledFullBodyContour.mmPerSourceUnit,
+      }),
+    };
+  }
+
   const bandSourceContour = buildExactBodyBandSourceContour({
     contour: rawSourceContour,
     overallHeightMm,
@@ -2031,6 +2373,69 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
   const normalizedSourceContour = sourceMode === "body-only"
     ? sourceContour
     : (buildMirroredSourceContour(sourceContour) ?? sourceContour);
+  if (sourceMode === "body-only") {
+    const fullBodySourceContour =
+      buildImportedBodySeedContour(normalizedSourceContour, args.matchedProfileId) ?? normalizedSourceContour;
+    const printableBandContour = buildExactBodyBandSourceContour({
+      contour: normalizedSourceContour,
+      overallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+    }) ?? null;
+    const printableBandContourBounds = printableBandContour ? getBounds(printableBandContour) : null;
+    const scaledFullBodyContour = buildDiameterScaledBodyOnlyContour({
+      sourceContour: fullBodySourceContour,
+      diameterMm,
+      bodyTopFromOverallMm,
+    });
+    if (scaledFullBodyContour) {
+      const scaledBodyTopMm = scaledFullBodyContour.contourBounds.minY;
+      const scaledBodyBottomMm = scaledFullBodyContour.contourBounds.maxY;
+      const points = buildProfilePointsFromContour({
+        contour: scaledFullBodyContour.contour,
+        bodyTopFromOverallMm: scaledBodyTopMm,
+        bodyBottomFromOverallMm: scaledBodyBottomMm,
+        diameterMm,
+        matchedProfileId: args.matchedProfileId,
+        topOuterHalfWidthMm: round1((topOuterDiameterMm && topOuterDiameterMm > 0 ? topOuterDiameterMm : diameterMm) / 2),
+        baseDiameterMm: args.baseDiameterMm ?? null,
+        shoulderDiameterMm: args.shoulderDiameterMm ?? null,
+        taperUpperDiameterMm: args.taperUpperDiameterMm ?? null,
+        taperLowerDiameterMm: args.taperLowerDiameterMm ?? null,
+        bevelDiameterMm: args.bevelDiameterMm ?? null,
+      });
+
+      return {
+        closed: true,
+        version: 1,
+        points,
+        directContour: scaledFullBodyContour.contour,
+        sourceContour: fullBodySourceContour.map((point) => ({ ...point })),
+        sourceContourBounds: scaledFullBodyContour.sourceBounds,
+        printableBandContour: printableBandContour?.map((point) => ({ ...point })),
+        printableBandContourBounds: printableBandContourBounds ?? undefined,
+        sourceContourMode: "body-only",
+        sourceContourViewport: source.viewport,
+        contourFrame: buildContourFrameDiagnostics({
+          kind: "full-body-only-source",
+          sourceCoordinateSpace: "svg-px",
+          boundsBeforeBandCrop: source.bounds,
+          boundsAfterBandCrop: printableBandContourBounds,
+          acceptedPreviewBounds: scaledFullBodyContour.contourBounds,
+          glbInputBounds: scaledFullBodyContour.contourBounds,
+          canonicalInputBounds: scaledFullBodyContour.contourBounds,
+          bandCropApplied: false,
+          bandCropReason: "imported body-only contour preserves full accepted shell; printable band is stored separately",
+          bodyOnlyReCropSkipped: true,
+          authoritativeForBodyCutoutQa: true,
+          authoritativeForPrintableBand: false,
+          sourceDiameterUnits: scaledFullBodyContour.sourceDiameterUnits,
+          mmPerSourceUnit: scaledFullBodyContour.mmPerSourceUnit,
+        }),
+      };
+    }
+  }
+
   const seamAnchoredSourceContour = sourceMode === "body-only"
     ? (
         buildExactBodyBandSourceContour({

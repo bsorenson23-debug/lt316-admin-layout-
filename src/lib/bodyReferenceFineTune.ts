@@ -1,4 +1,5 @@
 import type { EditableBodyOutline } from "../types/productTemplate.ts";
+import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
 import { stableStringifyForHash } from "./hashSha256.ts";
 import { resolveBodyReferenceGlbReviewState } from "./bodyReferenceGlbSource.ts";
 import {
@@ -34,6 +35,30 @@ export function cloneOutline(outline: EditableBodyOutline | null | undefined): E
     sourceContour: outline.sourceContour?.map((point) => ({ ...point })) ?? undefined,
     sourceContourBounds: outline.sourceContourBounds
       ? { ...outline.sourceContourBounds }
+      : undefined,
+    printableBandContour: outline.printableBandContour?.map((point) => ({ ...point })) ?? undefined,
+    printableBandContourBounds: outline.printableBandContourBounds
+      ? { ...outline.printableBandContourBounds }
+      : undefined,
+    contourFrame: outline.contourFrame
+      ? {
+          ...outline.contourFrame,
+          boundsBeforeBandCrop: outline.contourFrame.boundsBeforeBandCrop
+            ? { ...outline.contourFrame.boundsBeforeBandCrop }
+            : undefined,
+          boundsAfterBandCrop: outline.contourFrame.boundsAfterBandCrop
+            ? { ...outline.contourFrame.boundsAfterBandCrop }
+            : undefined,
+          acceptedPreviewBounds: outline.contourFrame.acceptedPreviewBounds
+            ? { ...outline.contourFrame.acceptedPreviewBounds }
+            : undefined,
+          glbInputBounds: outline.contourFrame.glbInputBounds
+            ? { ...outline.contourFrame.glbInputBounds }
+            : undefined,
+          canonicalInputBounds: outline.contourFrame.canonicalInputBounds
+            ? { ...outline.contourFrame.canonicalInputBounds }
+            : undefined,
+        }
       : undefined,
     sourceContourViewport: outline.sourceContourViewport
       ? { ...outline.sourceContourViewport }
@@ -88,6 +113,119 @@ function resolveBoundsFromPoints(points: Array<{ x: number; y: number }> | undef
     maxY: round2(maxY),
     width: round2(Math.max(0, maxX - minX)),
     height: round2(Math.max(0, maxY - minY)),
+  };
+}
+
+export type BodyReferenceVisualContourSource =
+  | "direct-contour"
+  | "control-points"
+  | "source-contour";
+
+export interface BodyReferencePrimaryVisualContour {
+  points: Array<{ x: number; y: number }>;
+  source: BodyReferenceVisualContourSource;
+  bounds: NonNullable<ReturnType<typeof resolveBoundsFromPoints>>;
+  topGuideY: number;
+}
+
+export interface BodyReferenceUiOnlyRimReferenceGuide {
+  y: number;
+  source: "rim-reference-ui-only";
+  authority: "visual-only";
+  excludedFromBodyCutout: true;
+  affectsSourceHash: false;
+  affectsGlbInput: false;
+  affectsWrapExport: false;
+  affectsV2Authority: false;
+  sourceField: "fitDebug.rimBottomPx";
+  coordinateSpace: "contour-units";
+  warnings: string[];
+}
+
+export function resolvePrimaryBodyReferenceVisualContour(
+  outline: EditableBodyOutline | null | undefined,
+): BodyReferencePrimaryVisualContour | null {
+  if (!outline) return null;
+  const authoritativeContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
+  if (authoritativeContour && authoritativeContour.length >= 3) {
+    const bounds = resolveBoundsFromPoints(authoritativeContour);
+    if (bounds) {
+      return {
+        points: authoritativeContour.map((point) => ({ x: point.x, y: point.y })),
+        source: authoritativeContour === outline.directContour ? "direct-contour" : "control-points",
+        bounds,
+        topGuideY: bounds.minY,
+      };
+    }
+  }
+
+  if (outline.sourceContour && outline.sourceContour.length >= 3) {
+    const bounds = resolveBoundsFromPoints(outline.sourceContour);
+    if (bounds) {
+      return {
+        points: outline.sourceContour.map((point) => ({ x: point.x, y: point.y })),
+        source: "source-contour",
+        bounds,
+        topGuideY: bounds.minY,
+      };
+    }
+  }
+
+  const profilePoints = outline.points.map((point) => ({ x: point.x, y: point.y }));
+  if (profilePoints.length >= 2) {
+    const bounds = resolveBoundsFromPoints(profilePoints);
+    if (bounds) {
+      return {
+        points: profilePoints,
+        source: "control-points",
+        bounds,
+        topGuideY: bounds.minY,
+      };
+    }
+  }
+
+  return null;
+}
+
+export function resolveUiOnlyRimReferenceGuide(args: {
+  outline: EditableBodyOutline | null | undefined;
+  fitDebug?: TumblerItemLookupFitDebug | null;
+}): BodyReferenceUiOnlyRimReferenceGuide | null {
+  const outline = args.outline;
+  const fitDebug = args.fitDebug ?? null;
+  if (!outline || !fitDebug || !Number.isFinite(fitDebug.rimBottomPx)) {
+    return null;
+  }
+  const outlineBounds = resolvePrimaryBodyReferenceVisualContour(outline)?.bounds ?? null;
+  const sourceBounds = outline.sourceContourBounds;
+  if (
+    !outlineBounds ||
+    !sourceBounds ||
+    !Number.isFinite(sourceBounds.minY) ||
+    !Number.isFinite(sourceBounds.height) ||
+    sourceBounds.height <= 0
+  ) {
+    return null;
+  }
+
+  const y = round2(outlineBounds.minY + ((fitDebug.rimBottomPx - sourceBounds.minY) * (outlineBounds.height / sourceBounds.height)));
+  const warnings: string[] = [];
+  if (y > outlineBounds.minY + 0.5) {
+    warnings.push("Rim reference guide overlaps the accepted body contour; keep it visual-only and do not promote it to BODY CUTOUT geometry.");
+  }
+
+  return {
+    y,
+    source: "rim-reference-ui-only",
+    authority: "visual-only",
+    excludedFromBodyCutout: true,
+    affectsSourceHash: false,
+    affectsGlbInput: false,
+    affectsWrapExport: false,
+    affectsV2Authority: false,
+    sourceField: "fitDebug.rimBottomPx",
+    coordinateSpace: "contour-units",
+    warnings,
   };
 }
 
