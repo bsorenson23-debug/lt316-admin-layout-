@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildTemplateOperatorSectionStates,
   buildTemplateCreateWorkflowSteps,
   deriveTemplateCreateWorkflowStep,
+  getTemplateBodyCutoutQaGlbLifecycle,
+  getTemplateBodyReferenceV2OperatorState,
   getTemplateCreateGenerateGateReason,
   getTemplateCreateNextActionHint,
   getTemplateCreatePreviewGateNotes,
@@ -234,4 +237,130 @@ test("preview gate notes explain why preview buttons stay disabled", () => {
     }),
     ["BODY CUTOUT QA preview unlocks after generating the reviewed body-only GLB."],
   );
+});
+
+test("BODY CUTOUT QA GLB lifecycle distinguishes missing generated state from stale state", () => {
+  assert.deepEqual(
+    getTemplateBodyCutoutQaGlbLifecycle({
+      hasAcceptedBodyReference: true,
+      hasReviewedGlb: false,
+      hasPendingSourceDraft: false,
+      freshnessStatus: "stale",
+    }),
+    {
+      status: "not-generated",
+      label: "BODY CUTOUT QA GLB: not generated yet",
+      nextActionLabel: "Generate BODY CUTOUT QA GLB",
+      canRequestGeneration: true,
+      canShowFullBodyCutoutQaPass: false,
+    },
+  );
+});
+
+test("BODY CUTOUT QA GLB lifecycle reports fresh and stale reviewed artifacts", () => {
+  const fresh = getTemplateBodyCutoutQaGlbLifecycle({
+    hasAcceptedBodyReference: true,
+    hasReviewedGlb: true,
+    hasPendingSourceDraft: false,
+    freshnessStatus: "current",
+    runtimeInspectionStatus: "complete",
+    validationStatus: "pass",
+  });
+
+  assert.equal(fresh.status, "fresh");
+  assert.equal(fresh.label, "BODY CUTOUT QA GLB: fresh");
+  assert.equal(fresh.nextActionLabel, null);
+  assert.equal(fresh.canShowFullBodyCutoutQaPass, true);
+
+  const stale = getTemplateBodyCutoutQaGlbLifecycle({
+    hasAcceptedBodyReference: true,
+    hasReviewedGlb: true,
+    hasPendingSourceDraft: false,
+    freshnessStatus: "stale",
+  });
+
+  assert.equal(stale.status, "stale");
+  assert.equal(stale.label, "BODY CUTOUT QA GLB: stale");
+  assert.equal(stale.nextActionLabel, "Regenerate BODY CUTOUT QA GLB");
+  assert.equal(stale.canShowFullBodyCutoutQaPass, false);
+});
+
+test("pending fine-tune draft blocks BODY CUTOUT QA regeneration until accepted", () => {
+  const state = getTemplateBodyCutoutQaGlbLifecycle({
+    hasAcceptedBodyReference: true,
+    hasReviewedGlb: true,
+    hasPendingSourceDraft: true,
+    freshnessStatus: "current",
+    runtimeInspectionStatus: "complete",
+    validationStatus: "pass",
+  });
+
+  assert.equal(state.status, "waiting-for-accepted-cutout");
+  assert.equal(state.label, "BODY CUTOUT QA GLB: waiting for accepted cutout");
+  assert.equal(state.nextActionLabel, "Accept corrected cutout");
+  assert.equal(state.canRequestGeneration, false);
+  assert.equal(state.canShowFullBodyCutoutQaPass, false);
+});
+
+test("BODY CUTOUT QA cannot show full pass before runtime inspection completes", () => {
+  const state = getTemplateBodyCutoutQaGlbLifecycle({
+    hasAcceptedBodyReference: true,
+    hasReviewedGlb: true,
+    hasPendingSourceDraft: false,
+    glbFreshRelativeToSource: true,
+    runtimeInspectionStatus: "idle",
+    validationStatus: "pass",
+  });
+
+  assert.equal(state.status, "fresh");
+  assert.equal(state.canShowFullBodyCutoutQaPass, false);
+  assert.equal(state.nextActionLabel, "Run BODY CUTOUT QA runtime inspection");
+});
+
+test("inactive BODY REFERENCE v2 remains optional and does not promote errors to the main path", () => {
+  const state = getTemplateBodyReferenceV2OperatorState({
+    isActiveGenerationSource: false,
+    accepted: false,
+    generationReady: false,
+    hasDraftChanges: false,
+    errorCount: 2,
+    warningCount: 1,
+  });
+
+  assert.equal(state.status, "optional-inactive");
+  assert.equal(state.label, "BODY REFERENCE v2 optional · not active");
+  assert.equal(state.promoteMessagesToMainPath, false);
+});
+
+test("active BODY REFERENCE v2 promotes readiness errors", () => {
+  const state = getTemplateBodyReferenceV2OperatorState({
+    isActiveGenerationSource: true,
+    accepted: true,
+    generationReady: false,
+    hasDraftChanges: false,
+    errorCount: 1,
+    warningCount: 0,
+  });
+
+  assert.equal(state.status, "active-blocked");
+  assert.equal(state.promoteMessagesToMainPath, true);
+});
+
+test("template operator sections keep debug collapsed by default", () => {
+  const sections = buildTemplateOperatorSectionStates({
+    debugVisible: true,
+    bodyReferenceV2Active: false,
+  });
+
+  const debug = sections.find((section) => section.id === "advanced-debug");
+  const v2 = sections.find((section) => section.id === "body-reference-v2");
+  const qa = sections.find((section) => section.id === "body-cutout-qa");
+
+  assert.equal(debug?.category, "debug");
+  assert.equal(debug?.defaultCollapsed, true);
+  assert.equal(v2?.category, "optional");
+  assert.equal(v2?.defaultCollapsed, true);
+  assert.equal(v2?.visibleInMainPath, false);
+  assert.equal(qa?.category, "proof");
+  assert.equal(qa?.visibleInMainPath, true);
 });

@@ -37,6 +37,8 @@ import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import {
   buildTemplateCreateWorkflowSteps,
   deriveTemplateCreateWorkflowStep,
+  getTemplateBodyCutoutQaGlbLifecycle,
+  getTemplateBodyReferenceV2OperatorState,
   getTemplateCreateGenerateGateReason,
   getTemplateCreateNextActionHint,
   getTemplateCreateSaveGateReason,
@@ -1523,7 +1525,7 @@ export function TemplateCreateForm({
     if (!isTemplateCreateReviewFlowProductType(productType)) {
       return "Source and template details";
     }
-    return "Source, Detect, Review, BODY CUTOUT QA, and WRAP / EXPORT";
+    return "Template operator flow";
   }, [productType]);
   const workflowCurrentStepDisplayLabel = React.useMemo(
     () => workflowCurrentStepLabel.replace(/^\d+\.\s*/, ""),
@@ -1531,44 +1533,19 @@ export function TemplateCreateForm({
   );
   const reviewStageLabel = React.useMemo(() => {
     if (hasAcceptedBodyReferenceReview) {
-      return "BODY REFERENCE locked";
+      return "BODY REFERENCE accepted";
     }
     if (workflowInput.hasStagedDetectResult) {
       return "Review pending";
     }
     return "Review blocked";
   }, [hasAcceptedBodyReferenceReview, workflowInput.hasStagedDetectResult]);
-  const qaStageLabel = React.useMemo(() => {
-    if (hasReviewedBodyCutoutQaGlb) {
-      return "QA ready";
-    }
-    if (hasAcceptedBodyReferenceReview) {
-      return "Generate QA GLB";
-    }
-    return "Await review";
-  }, [hasAcceptedBodyReferenceReview, hasReviewedBodyCutoutQaGlb]);
   const wrapExportStageLabel = React.useMemo(() => {
     if (!hasSourceModelForPreview) {
       return "Source model needed";
     }
     return getWrapExportPreviewStatusLabel(wrapExportProductionReadiness.status);
   }, [hasSourceModelForPreview, wrapExportProductionReadiness.status]);
-  const bodyReferenceV2StageLabel = React.useMemo(() => {
-    if (bodyReferenceV2CaptureReadiness.generationReady) {
-      return "Optional v2 ready";
-    }
-    if (bodyReferenceV2CaptureReadiness.accepted) {
-      return "Accepted v2 draft";
-    }
-    if (bodyReferenceV2CaptureReadiness.hasDraftChanges) {
-      return "Draft pending";
-    }
-    return "Optional path idle";
-  }, [
-    bodyReferenceV2CaptureReadiness.accepted,
-    bodyReferenceV2CaptureReadiness.generationReady,
-    bodyReferenceV2CaptureReadiness.hasDraftChanges,
-  ]);
   const appearanceReferenceStageLabel = React.useMemo(() => {
     if (appearanceReferenceSummary.totalLayers <= 0) {
       return "No references saved";
@@ -2063,6 +2040,34 @@ export function TemplateCreateForm({
     }),
     [bodyReferenceV2GenerationReadiness.errors, bodyReferenceV2GenerationReadiness.warnings],
   );
+  const bodyReferenceV2OperatorState = React.useMemo(
+    () => getTemplateBodyReferenceV2OperatorState({
+      isActiveGenerationSource: isBodyReferenceV2CurrentQaSource,
+      accepted: bodyReferenceV2CaptureReadiness.accepted,
+      generationReady: bodyReferenceV2CaptureReadiness.generationReady,
+      hasDraftChanges: bodyReferenceV2CaptureReadiness.hasDraftChanges,
+      errorCount:
+        bodyReferenceV2Summary.validation.errors.length +
+        bodyReferenceV2CaptureReadiness.errors.length +
+        bodyReferenceV2GenerationReadiness.errors.length,
+      warningCount:
+        bodyReferenceV2Summary.validation.warnings.length +
+        bodyReferenceV2CaptureReadiness.warnings.length +
+        bodyReferenceV2GenerationReadiness.warnings.length,
+    }),
+    [
+      bodyReferenceV2CaptureReadiness.accepted,
+      bodyReferenceV2CaptureReadiness.errors.length,
+      bodyReferenceV2CaptureReadiness.generationReady,
+      bodyReferenceV2CaptureReadiness.hasDraftChanges,
+      bodyReferenceV2CaptureReadiness.warnings.length,
+      bodyReferenceV2GenerationReadiness.errors.length,
+      bodyReferenceV2GenerationReadiness.warnings.length,
+      bodyReferenceV2Summary.validation.errors.length,
+      bodyReferenceV2Summary.validation.warnings.length,
+      isBodyReferenceV2CurrentQaSource,
+    ],
+  );
   const reviewDisabledActionReasonGroups = React.useMemo(
     () => groupTemplateCreateDisabledActionReasons([
       {
@@ -2321,6 +2326,31 @@ export function TemplateCreateForm({
       reviewedBodyCutoutQaGeneratedSourceSignature,
     ],
   );
+  const bodyCutoutQaGlbLifecycle = React.useMemo(
+    () => getTemplateBodyCutoutQaGlbLifecycle({
+      hasAcceptedBodyReference: hasAcceptedBodyReferenceReview,
+      hasReviewedGlb: hasReviewedBodyCutoutQaGlb,
+      hasPendingSourceDraft: bodyReferenceFineTuneDraftPendingAcceptance,
+      freshnessStatus: reviewedBodyReferenceGlbFreshness.status,
+      glbFreshRelativeToSource: loadedBodyGeometryContract?.glb.freshRelativeToSource ?? null,
+      runtimeInspectionStatus: loadedBodyGeometryContract?.runtimeInspection?.status ?? null,
+      validationStatus: loadedBodyGeometryContract?.validation.status ?? null,
+    }),
+    [
+      bodyReferenceFineTuneDraftPendingAcceptance,
+      hasAcceptedBodyReferenceReview,
+      hasReviewedBodyCutoutQaGlb,
+      loadedBodyGeometryContract?.glb.freshRelativeToSource,
+      loadedBodyGeometryContract?.runtimeInspection?.status,
+      loadedBodyGeometryContract?.validation.status,
+      reviewedBodyReferenceGlbFreshness.status,
+    ],
+  );
+  const qaStageLabel = bodyCutoutQaGlbLifecycle.label.replace(/^BODY CUTOUT QA GLB:\s*/, "");
+  const operatorNextActionHint =
+    hasAcceptedBodyReferenceReview && bodyCutoutQaGlbLifecycle.nextActionLabel
+      ? bodyCutoutQaGlbLifecycle.nextActionLabel
+      : workflowNextActionHint;
   const bodyReferenceFineTuneLifecycle = React.useMemo(
     () => summarizeBodyReferenceFineTuneLifecycle({
       hasAcceptedCutout: hasAcceptedBodyReferenceReview && Boolean(approvedBodyOutline),
@@ -2390,7 +2420,10 @@ export function TemplateCreateForm({
         message: "Draft contour changes the BODY REFERENCE source hash but remains non-authoritative until accepted.",
       });
     }
-    if (reviewedBodyReferenceGlbFreshness.status === "stale") {
+    if (
+      reviewedBodyReferenceGlbFreshness.status === "stale" &&
+      reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact
+    ) {
       warnings.push({
         level: "warn",
         message: "Accepted cutout is newer than the reviewed GLB. Regenerate BODY CUTOUT QA before saving or exporting.",
@@ -2404,6 +2437,7 @@ export function TemplateCreateForm({
     currentReviewedBodyReferenceSourceSignature,
     draftBodyReferenceOutlineBounds,
     draftBodyReferencePointCount,
+    reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
     reviewedBodyReferenceGlbFreshness.status,
   ]);
 
@@ -3068,12 +3102,19 @@ export function TemplateCreateForm({
 
             {lookupError && <div className={styles.detectErrorBanner}>{lookupError}</div>}
 
-            {lookupResult?.fitDebug && lookupDebugImageUrl && (
-              <TumblerLookupDebugPanel
-                debug={lookupResult.fitDebug}
-                imageUrl={lookupDebugImageUrl}
-                guideFrame={bodyReferenceGuideFrame}
-              />
+            {lookupResult?.fitDebug && lookupDebugImageUrl && templateCreateDiagnosticsVisible && (
+              <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                <summary className={styles.compactDetailsSummary}>
+                  Advanced debug · lookup fit and detection guides
+                </summary>
+                <div className={styles.compactDetailsContent}>
+                  <TumblerLookupDebugPanel
+                    debug={lookupResult.fitDebug}
+                    imageUrl={lookupDebugImageUrl}
+                    guideFrame={bodyReferenceGuideFrame}
+                  />
+                </div>
+              </details>
             )}
           </div>
         )}
@@ -3229,7 +3270,7 @@ export function TemplateCreateForm({
                   Current step: {workflowCurrentStepLabel}
                 </span>
                 <span className={styles.workflowNextNote}>
-                  Next action: {workflowNextActionHint}
+                  Next action: {operatorNextActionHint}
                 </span>
               </div>
               {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
@@ -3288,7 +3329,7 @@ export function TemplateCreateForm({
               </div>
 
               <div className={styles.workflowNextNote}>
-                Next action: {workflowNextActionHint}
+                Next action: {operatorNextActionHint}
               </div>
 
               {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
@@ -3312,12 +3353,12 @@ export function TemplateCreateForm({
               </div>
               <span
                 className={
-                  hasAcceptedBodyReferenceReview
+                  bodyCutoutQaGlbLifecycle.status === "fresh"
                     ? styles.reviewStatusReady
                     : styles.reviewStatusPending
                 }
               >
-                {hasAcceptedBodyReferenceReview ? "v1 locked" : "Pending v1 review"}
+                {hasAcceptedBodyReferenceReview ? qaStageLabel : "Pending BODY REFERENCE"}
               </span>
             </div>
 
@@ -3365,7 +3406,11 @@ export function TemplateCreateForm({
                 }}
                 data-testid="body-reference-v1-generate"
               >
-                {generatingReviewedBodyReferenceGlb ? "Generating BODY CUTOUT QA GLB…" : "Generate BODY CUTOUT QA GLB (v1)"}
+                {generatingReviewedBodyReferenceGlb
+                  ? "Generating BODY CUTOUT QA GLB…"
+                  : bodyCutoutQaGlbLifecycle.status === "stale"
+                    ? "Regenerate BODY CUTOUT QA GLB"
+                    : "Generate BODY CUTOUT QA GLB"}
               </button>
             </div>
             {reviewDisabledActionReasonGroups.length > 0 && (
@@ -3398,7 +3443,10 @@ export function TemplateCreateForm({
               )}
               {hasAcceptedBodyReferenceReview && (
                 <div className={styles.reviewScaffoldNote}>
-                  BODY REFERENCE (v1) is locked. Generate the reviewed body-only GLB next to unlock BODY CUTOUT QA preview.
+                  BODY REFERENCE accepted. {bodyCutoutQaGlbLifecycle.label}
+                  {bodyCutoutQaGlbLifecycle.nextActionLabel
+                    ? `. Next action: ${bodyCutoutQaGlbLifecycle.nextActionLabel}.`
+                    : "."}
                 </div>
               )}
               {approvedBodyReferenceWarnings.length > 0 && (
@@ -3947,24 +3995,26 @@ export function TemplateCreateForm({
                   >
                     Discard draft
                   </button>
-                  <button
-                    type="button"
-                    className={styles.detectBtn}
-                    disabled={
-                      !canGenerateReviewedBodyReferenceGlb ||
-                      generatingReviewedBodyReferenceGlb ||
-                      bodyReferenceFineTuneDraftPendingAcceptance ||
-                      !reviewedBodyReferenceGlbFreshness.canRequestGeneration
-                    }
-                    onClick={() => {
-                      void handleGenerateReviewedBodyReferenceGlb();
-                    }}
-                    data-testid="body-reference-fine-tune-regenerate"
-                  >
-                    {generatingReviewedBodyReferenceGlb
-                      ? "Regenerating reviewed GLB…"
-                      : "Regenerate reviewed GLB from corrected cutout"}
-                  </button>
+                  {reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact && (
+                    <button
+                      type="button"
+                      className={styles.detectBtn}
+                      disabled={
+                        !canGenerateReviewedBodyReferenceGlb ||
+                        generatingReviewedBodyReferenceGlb ||
+                        bodyReferenceFineTuneDraftPendingAcceptance ||
+                        !reviewedBodyReferenceGlbFreshness.canRequestGeneration
+                      }
+                      onClick={() => {
+                        void handleGenerateReviewedBodyReferenceGlb();
+                      }}
+                      data-testid="body-reference-fine-tune-regenerate"
+                    >
+                      {generatingReviewedBodyReferenceGlb
+                        ? "Regenerating BODY CUTOUT QA GLB…"
+                        : "Regenerate BODY CUTOUT QA GLB"}
+                    </button>
+                  )}
                 </div>
 
                 <div
@@ -3993,18 +4043,6 @@ export function TemplateCreateForm({
                     {bodyReferenceFineTuneLifecycle.operatorMessage}
                   </div>
                   <div className={styles.fineTuneLifecycleGrid}>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Accepted source hash</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {bodyReferenceFineTuneLifecycle.acceptedSourceHashLabel}
-                      </span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB source hash</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {bodyReferenceFineTuneLifecycle.reviewedGlbSourceHashLabel}
-                      </span>
-                    </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>GLB freshness</span>
                       <span className={styles.cutoutFitMetricValue}>
@@ -4170,11 +4208,28 @@ export function TemplateCreateForm({
               </div>
             )}
 
-            <div
-              className={styles.cutoutFitSummary}
+            <details
+              className={`${styles.cutoutFitSummary} ${styles.optionalPanel}`}
               data-testid="body-reference-v2-summary"
               data-body-reference-v2-status={bodyReferenceV2Summary.status}
+              data-body-reference-v2-operator-status={bodyReferenceV2OperatorState.status}
+              open={isBodyReferenceV2CurrentQaSource}
             >
+              <summary className={styles.optionalPanelSummary}>
+                <span>Optional BODY REFERENCE v2</span>
+                <span
+                  className={
+                    bodyReferenceV2OperatorState.promoteMessagesToMainPath
+                      ? bodyReferenceV2OperatorState.status === "active-ready"
+                        ? styles.reviewStatusReady
+                        : styles.reviewStatusPending
+                      : styles.workflowReadinessCurrent
+                  }
+                >
+                  {bodyReferenceV2OperatorState.label}
+                </span>
+              </summary>
+              <div className={styles.optionalPanelBody}>
               <div className={styles.cutoutFitSummaryHeader}>
                 <div>
                   <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 capture (optional)</div>
@@ -4639,7 +4694,8 @@ export function TemplateCreateForm({
                   </div>
                 )}
               </div>
-            </div>
+              </div>
+            </details>
           </div>
         </div>
       )}
@@ -5271,7 +5327,7 @@ export function TemplateCreateForm({
                 </div>
                 <div className={styles.pageSidebarMetric}>
                   <span className={styles.pageSidebarMetricLabel}>BODY REFERENCE v2</span>
-                  <span className={styles.pageSidebarMetricValue}>{bodyReferenceV2StageLabel}</span>
+                  <span className={styles.pageSidebarMetricValue}>{bodyReferenceV2OperatorState.label}</span>
                 </div>
                 <div className={styles.pageSidebarMetric}>
                   <span className={styles.pageSidebarMetricLabel}>Exit path</span>

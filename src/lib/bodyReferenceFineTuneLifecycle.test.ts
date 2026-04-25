@@ -22,7 +22,7 @@ test("no draft reports the accepted cutout as the current source", () => {
   );
   assert.equal(summary.reviewedGlbFreshRelativeToSource, null);
   assert.equal(summary.glbFreshnessLabel, "unavailable");
-  assert.equal(summary.nextActionLabel, "Regenerate BODY CUTOUT QA GLB");
+  assert.equal(summary.nextActionLabel, "Generate BODY CUTOUT QA GLB");
 });
 
 test("dirty draft reports draft-only lifecycle copy", () => {
@@ -91,7 +91,7 @@ test("explicit GLB freshness wins when display hashes use different domains", ()
   assert.equal(summary.glbFreshnessLabel, "fresh");
 });
 
-test("missing reviewed GLB keeps freshness unavailable and points at regeneration", () => {
+test("missing reviewed GLB keeps freshness unavailable and points at first generation", () => {
   const summary = summarizeBodyReferenceFineTuneLifecycle({
     hasAcceptedCutout: true,
     isDraftDirty: false,
@@ -103,8 +103,9 @@ test("missing reviewed GLB keeps freshness unavailable and points at regeneratio
   assert.equal(summary.status, "no-draft");
   assert.equal(summary.glbFreshnessLabel, "unavailable");
   assert.equal(summary.reviewedGlbFreshRelativeToSource, null);
-  assert.equal(summary.nextActionLabel, "Regenerate BODY CUTOUT QA GLB");
+  assert.equal(summary.nextActionLabel, "Generate BODY CUTOUT QA GLB");
   assert.equal(summary.warnings.length, 1);
+  assert.equal(summary.warnings[0], "BODY CUTOUT QA GLB is not generated yet.");
 });
 
 test("hash labels are shortened and safe for missing hashes", () => {

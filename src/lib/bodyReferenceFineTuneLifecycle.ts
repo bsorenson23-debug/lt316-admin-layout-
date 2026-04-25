@@ -142,7 +142,7 @@ export function summarizeBodyReferenceFineTuneLifecycle(args: {
     label: "No draft",
     operatorMessage: "No fine-tune draft is active. The accepted BODY REFERENCE cutout is the current source.",
     nextActionLabel: args.hasAcceptedCutout && !args.hasReviewedGlb
-      ? "Regenerate BODY CUTOUT QA GLB"
+      ? "Generate BODY CUTOUT QA GLB"
       : "Edit contour",
     isDraftDirty: false,
     hasAcceptedCorrectedCutout: false,
@@ -152,7 +152,7 @@ export function summarizeBodyReferenceFineTuneLifecycle(args: {
     reviewedGlbSourceHashLabel,
     glbFreshnessLabel,
     warnings: args.hasAcceptedCutout && !args.hasReviewedGlb
-      ? ["Reviewed GLB freshness is unavailable until BODY CUTOUT QA GLB is generated."]
+      ? ["BODY CUTOUT QA GLB is not generated yet."]
       : [],
   };
 }
