@@ -1,108 +1,142 @@
 # Worktree Cleanup And Guidance
 
-This repo now has more than one local worktree. Use this file to keep new work on the right checkout, restore local generated artifacts safely, and retire old worktrees without mixing branch stacks.
+Use this checklist before starting branch work, before committing, and before opening a PR. It keeps local diagnostics, runtime caches, generated models, and sibling worktrees out of feature branches.
 
-## Current Recommended Worktree
+## Clean Worktree Gate
 
-- `C:\Users\brennen\Documents\GitHub\lt316-admin-layout-laserbed-clean`
-  - Current clean worktree.
-  - Attached to `main`.
-  - Use this path when starting a new queue task unless the task explicitly says otherwise.
-
-## Historical Or Do-Not-Use Worktrees
-
-- `C:\Users\brennen\Documents\GitHub\lt316-admin-layout-runtime-truth-clean`
-  - Historical branch-attached worktree.
-  - Keep only if you still need its old branch context.
-  - Do not start new feature or polish work here.
-
-- `C:\Users\brennen\Documents\GitHub\lt316-admin-layout-`
-  - Older branch-attached worktree with unrelated local dirt.
-  - Treat as historical unless you intentionally need that exact branch state.
-  - Do not use it as the default checkout for new queued work.
-
-- `C:\Users\brennen\.codex\worktrees\843f\lt316-admin-layout-`
-  - Detached Codex temp worktree.
-  - Remove or prune it if it is no longer active.
-
-## Quick Status Check
-
-From the worktree you plan to use:
+Start from the intended checkout:
 
 ```powershell
-git status --short
-git rev-parse HEAD
-git branch --show-current
-```
-
-Expected clean-state pattern for the preferred queue worktree:
-
-- no tracked source changes
-- only these local artifact paths when they are intentionally present:
-  - `.codex-diagnostics/`
-  - `.local/`
-  - `.playwright-mcp/`
-  - `storage/`
-  - screenshots, logs, or other runtime captures
-
-If other local artifact folders show up, clean them before treating the worktree as the preferred queue-ready checkout.
-
-If a generated GLB shows up as modified, restore it before switching branches or merging:
-
-```powershell
-git restore -- public/models/generated/stanley-iceflow-30-bodyfit-v5.glb
-git status --short
-```
-
-Use the same `git restore -- <path>` pattern for any tracked generated GLB that should remain at the committed version.
-
-## Safe Main Sync
-
-When preparing a clean worktree for the next task:
-
-```powershell
+cd C:\Users\brennen\Documents\GitHub\lt316-admin-layout-laserbed-clean
 git switch main
-git fetch origin
 git pull --ff-only origin main
 git status --short
+git branch --show-current
 git rev-parse HEAD
 ```
 
-If your local Git config ever causes `git pull --ff-only origin main` to complain about multiple branches, confirm that `main` still matches `origin/main` before doing anything broader:
+Continue only when tracked source files are clean. If a tracked source file is dirty before the task starts, stop unless that file is explicitly part of the current task.
+
+Allowed local artifacts may remain untracked, but they must not be staged or committed:
+
+- `.codex-diagnostics/`
+- `.local/`
+- `.playwright-mcp/`
+- `public/models/generated/` runtime captures, when untracked
+- `public/models/test-fixtures/` only for intentional fixture or test generation
+- `storage/`
+- `test-results/`
+- screenshots, logs, and runtime captures
+- `.next/`
+
+## Never Commit
+
+Do not commit these paths or values unless the task explicitly says fixture or artifact changes are in scope:
+
+- generated GLBs or generated audit sidecars
+- `.local/`
+- `.codex-diagnostics/`
+- `.playwright-mcp/`
+- `.next/`
+- `test-results/`
+- screenshots
+- runtime logs
+- temporary files
+- credentials, secrets, tokens, cookies, or local environment values
+
+## Before Commit
+
+Run:
 
 ```powershell
-git rev-parse HEAD
-git rev-parse origin/main
+git diff --name-only
+git diff --stat
+git diff --check
+git status --short
 ```
 
-If those hashes match, the worktree is already current.
+Confirm:
 
-## Switching Between Worktrees Safely
+- the diff only contains task-scope files
+- no diagnostics, generated artifacts, local caches, screenshots, logs, or runtime storage files are staged
+- generated GLBs and audits are absent unless explicitly in scope
+- staging is explicit, for example `git add docs/worktree-cleanup-and-guidance.md README.md`
 
-Use `git worktree list --porcelain` to see every attached checkout and what branch it is pinned to.
+If a file was staged by mistake:
 
-Before using any older worktree:
+```powershell
+git restore --staged <path>
+```
 
-1. Run `git status --short`.
-2. Check its branch with `git branch --show-current`.
-3. If it is not `main` or the exact branch you intend to use, stop and switch to the correct worktree instead.
+If an unrelated tracked file changed locally and should return to the committed version:
 
-Do not start a new feature in a historical worktree just because it is already open. That is how branch stacks get crossed and queue state becomes hard to trust.
+```powershell
+git restore <path>
+```
 
-## Docker Note
+Do not use broad restore commands against paths you have not inspected.
 
-Do not assume the preferred clean worktree must be mounted into Docker.
+## Before PR
 
-- Leave existing Docker mounts unchanged unless a task explicitly requires container access to this checkout.
-- If a task is local-only, keep using the preferred clean worktree without editing Docker compose or mount paths.
+Choose validation for the touched surface:
 
-## Cleaning Old Worktree Directories
+```powershell
+npx tsc --noEmit --pretty false
+npm run build
+npm run test:body-reference-contract
+npm run validate:gltf
+```
+
+Add targeted Node tests when helper files changed. Run Playwright when UI or e2e selectors changed. Run a real UI smoke when an operator flow changed.
+
+In the PR body, include:
+
+- summary
+- files changed
+- validation results
+- Playwright result, or why it was skipped
+- UI smoke result, or why it was skipped
+- out-of-scope confirmation
+- remaining local artifacts
+- confirmation that diagnostics, local caches, generated artifacts, screenshots, logs, and runtime storage files were not committed
+
+## Safe Cleanup Checks
+
+Use dry runs first:
+
+```powershell
+git clean -ndX
+git clean -nd
+```
+
+Review every path before deleting anything. Do not use `git clean -fdx` as a casual default.
+
+If `.next/` needs cleanup, stop any running `next dev` process first. Removing `.next/` while the dev server is live can corrupt the active Turbopack session and produce misleading route errors.
+
+For generated model noise, prefer restoring tracked generated files instead of editing or deleting them:
+
+```powershell
+git restore public/models/generated/<file>.glb
+git restore public/models/generated/<file>.audit.json
+```
+
+If the repo later adds a cleanup script, read its help or source before running it and keep behavior changes out of docs-only branches.
+
+## Worktree Safety
 
 List attached worktrees:
 
 ```powershell
 git worktree list --porcelain
 ```
+
+Before using any older worktree:
+
+1. Run `git status --short`.
+2. Check its branch with `git branch --show-current`.
+3. Use it only if it is on `main` or the exact branch required by the task.
+
+Do not start a new feature in a historical worktree just because it is already open.
 
 Remove a worktree only after its branch is no longer needed and the worktree is clean:
 
@@ -112,30 +146,32 @@ git worktree remove C:\path\to\worktree
 git worktree prune
 ```
 
-Use `git worktree prune` to clear stale metadata for removed or missing worktrees, especially under `.codex\worktrees\...`.
+## Branch And PR Handoff
 
-## Recommended Naming
+Use this final report shape for branch handoff:
 
-Keep branch names and local worktree folders paired.
+- Branch
+- Commit
+- PR URL
+- Files changed
+- Validation
+- Playwright
+- Normal-mode smoke
+- Debug-mode smoke
+- Diff scope confirmation
+- Remaining local artifacts
+- Final status
 
-- Branches:
-  - `codex/<task-name>`
-  - Example: `codex/cleanup-local-worktree-guidance-docs`
+## Feature Boundaries
 
-- Local clean worktree folders:
-  - `lt316-admin-layout-<topic>-clean`
-  - Keep one clearly preferred clean queue worktree on `main`.
-  - Reserve historical folders for branch-specific archaeology only.
+Cleanup and hygiene branches must not change:
 
-Examples:
-
-- branch: `codex/polish-disabled-action-reasons`
-- worktree folder: `lt316-admin-layout-laserbed-clean`
-
-## Simple Rules
-
-- Start new queued work from the preferred clean `main` worktree.
-- Do not mix new features into old historical worktrees.
-- Restore tracked generated GLBs with `git restore` instead of editing or deleting them.
-- Use `git status --short` before branching, before merging, and before switching worktrees.
-- Remove detached temp worktrees when they are no longer needed.
+- BODY CUTOUT QA validation
+- GLB generation
+- BODY REFERENCE v1/v2 generation
+- v2 readiness rules
+- WRAP / EXPORT behavior
+- artwork persistence
+- engraving overlay behavior
+- product appearance references
+- Docker/dev infrastructure, unless explicitly in scope
