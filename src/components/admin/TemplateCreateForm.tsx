@@ -116,6 +116,7 @@ import {
 import {
   dedupeTemplateCreateDisplayMessages,
   shouldAutoOpenTemplateCreateDiagnostics,
+  shouldShowTemplateCreateDiagnostics,
 } from "@/lib/templateCreateDisplayDensity";
 import {
   buildEngravingOverlayPreviewState,
@@ -605,6 +606,11 @@ export function TemplateCreateForm({
   const isEdit = Boolean(editingTemplate);
   const searchParams = useSearchParams();
   const routeDebugEnabled = searchParams.get("debug") === "1";
+  const templateCreateDiagnosticsVisible =
+    shouldShowTemplateCreateDiagnostics({
+      adminDebugEnabled: TEMPLATE_CREATE_DEBUG_DETAILS_ENABLED,
+      routeDebugEnabled,
+    });
   const templateCreateDiagnosticsExpanded =
     shouldAutoOpenTemplateCreateDiagnostics({
       adminDebugEnabled: TEMPLATE_CREATE_DEBUG_DETAILS_ENABLED,
@@ -3391,7 +3397,7 @@ export function TemplateCreateForm({
                   Save remains blocked: {saveGateReason}
                 </div>
               )}
-              {(approvedBodyReferenceQa || loadedBodyGeometryContract || getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)) && (
+              {templateCreateDiagnosticsVisible && (approvedBodyReferenceQa || loadedBodyGeometryContract || getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)) && (
                 <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
                   <summary className={styles.compactDetailsSummary}>
                     Review diagnostics and runtime detail
@@ -3618,11 +3624,12 @@ export function TemplateCreateForm({
                     </div>
                   </div>
 
-                  <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
-                    <summary className={styles.compactDetailsSummary}>
-                      Mapping, overlay, and signature detail
-                    </summary>
-                    <div className={styles.compactDetailsContent}>
+                  {templateCreateDiagnosticsVisible && (
+                    <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                      <summary className={styles.compactDetailsSummary}>
+                        Mapping, overlay, and signature detail
+                      </summary>
+                      <div className={styles.compactDetailsContent}>
                       <div className={styles.cutoutFitSummaryGrid}>
                         <div className={styles.cutoutFitMetric}>
                           <span className={styles.cutoutFitMetricLabel}>Ready for preview</span>
@@ -3759,8 +3766,9 @@ export function TemplateCreateForm({
                           <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.backLogoReferencePresent ? "present" : "none"}</span>
                         </div>
                       </div>
-                    </div>
-                  </details>
+                      </div>
+                    </details>
+                  )}
 
                   <div className={styles.reviewScaffoldNote}>
                     {getWrapExportAuthorityNote()}
@@ -3841,6 +3849,7 @@ export function TemplateCreateForm({
                       canonicalDimensionCalibration={approvedCanonicalDimensionCalibration}
                       bodyGeometryContractSeed={generatedReviewedBodyGeometryContract}
                       wrapExportProductionReadiness={wrapExportProductionReadiness}
+                      showModelDebug={templateCreateDiagnosticsVisible}
                       onBodyGeometryContractChange={setLoadedBodyGeometryContract}
                     />
                   </div>
@@ -4041,11 +4050,12 @@ export function TemplateCreateForm({
                     </div>
                   </div>
 
-                  <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
-                    <summary className={styles.compactDetailsSummary}>
-                      Cutout geometry and hash detail
-                    </summary>
-                    <div className={styles.compactDetailsContent}>
+                  {templateCreateDiagnosticsVisible && (
+                    <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                      <summary className={styles.compactDetailsSummary}>
+                        Cutout geometry and hash detail
+                      </summary>
+                      <div className={styles.compactDetailsContent}>
                       <div className={styles.cutoutFitSummaryGrid}>
                         <div className={styles.cutoutFitMetric}>
                           <span className={styles.cutoutFitMetricLabel}>Approved point count</span>
@@ -4088,8 +4098,9 @@ export function TemplateCreateForm({
                           <span className={styles.cutoutFitMetricValue}>{formatShortHash(reviewedBodyReferenceGlbSourceHash)}</span>
                         </div>
                       </div>
-                    </div>
-                  </details>
+                      </div>
+                    </details>
+                  )}
 
                   <div className={styles.reviewScaffoldNote}>
                     {bodyReferenceFineTuneLifecycle.operatorMessage}
@@ -4251,11 +4262,12 @@ export function TemplateCreateForm({
                 </div>
               </div>
 
-              <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
-                <summary className={styles.compactDetailsSummary}>
-                  v2 reference and scale detail
-                </summary>
-                <div className={styles.compactDetailsContent}>
+              {templateCreateDiagnosticsVisible && (
+                <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                  <summary className={styles.compactDetailsSummary}>
+                    v2 reference and scale detail
+                  </summary>
+                  <div className={styles.compactDetailsContent}>
                   <div className={styles.cutoutFitSummaryGrid}>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Mirrored right side</span>
@@ -4294,8 +4306,9 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                     </div>
                   </div>
-                </div>
-              </details>
+                  </div>
+                </details>
+              )}
 
               <div className={styles.reviewScaffoldNote}>
                 {approvedBodyOutline
@@ -4364,11 +4377,12 @@ export function TemplateCreateForm({
                     </div>
                     </div>
 
-                    <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
-                      <summary className={styles.compactDetailsSummary}>
-                        Mirror scale and lookup detail
-                      </summary>
-                      <div className={styles.compactDetailsContent}>
+                    {templateCreateDiagnosticsVisible && (
+                      <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                        <summary className={styles.compactDetailsSummary}>
+                          Mirror scale and lookup detail
+                        </summary>
+                        <div className={styles.compactDetailsContent}>
                         <div className={styles.cutoutFitSummaryGrid}>
                           <div className={styles.cutoutFitMetric}>
                             <span className={styles.cutoutFitMetricLabel}>Lookup diameter</span>
@@ -4411,8 +4425,9 @@ export function TemplateCreateForm({
                             <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                           </div>
                         </div>
-                      </div>
-                    </details>
+                        </div>
+                      </details>
+                    )}
                   </>
                 )}
 
@@ -4484,11 +4499,12 @@ export function TemplateCreateForm({
                     </div>
                   </div>
 
-                    <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
-                      <summary className={styles.compactDetailsSummary}>
-                        v2 generation metric detail
-                      </summary>
-                      <div className={styles.compactDetailsContent}>
+                    {templateCreateDiagnosticsVisible && (
+                      <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                        <summary className={styles.compactDetailsSummary}>
+                          v2 generation metric detail
+                        </summary>
+                        <div className={styles.compactDetailsContent}>
                         <div className={styles.cutoutFitSummaryGrid}>
                           <div className={styles.cutoutFitMetric}>
                             <span className={styles.cutoutFitMetricLabel}>Mirrored-right points</span>
@@ -4527,8 +4543,9 @@ export function TemplateCreateForm({
                             <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
                           </div>
                         </div>
-                      </div>
-                    </details>
+                        </div>
+                      </details>
+                    )}
                   </>
                 )}
 
@@ -5236,7 +5253,7 @@ export function TemplateCreateForm({
                 <li>BODY CUTOUT QA stays body proof only.</li>
                 <li>WRAP / EXPORT stays placement and export proof only.</li>
                 <li>BODY REFERENCE v2 stays optional beneath accepted v1 by default.</li>
-                <li>Advanced and debug detail stay inside disclosures unless debug mode exposes them.</li>
+                <li>Debug mode exposes audit and hash detail; normal mode keeps operator checks visible.</li>
               </ul>
             </section>
           </div>

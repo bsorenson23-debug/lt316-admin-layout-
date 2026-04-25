@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   dedupeTemplateCreateDisplayMessages,
   shouldAutoOpenTemplateCreateDiagnostics,
+  shouldShowTemplateCreateDiagnostics,
 } from "./templateCreateDisplayDensity.ts";
 
 test("dedupeTemplateCreateDisplayMessages keeps first-seen severity and removes duplicates", () => {
@@ -43,5 +44,29 @@ test("shouldAutoOpenTemplateCreateDiagnostics follows debug mode", () => {
       routeDebugEnabled: false,
     }),
     false,
+  );
+});
+
+test("shouldShowTemplateCreateDiagnostics keeps normal mode clean", () => {
+  assert.equal(
+    shouldShowTemplateCreateDiagnostics({
+      adminDebugEnabled: false,
+      routeDebugEnabled: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldShowTemplateCreateDiagnostics({
+      adminDebugEnabled: false,
+      routeDebugEnabled: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldShowTemplateCreateDiagnostics({
+      adminDebugEnabled: true,
+      routeDebugEnabled: false,
+    }),
+    true,
   );
 });
