@@ -38,46 +38,31 @@ test("disabled actions explain exactly why they are blocked during template crea
 
   const productImage = getOperatorProductImageUpload();
 
-  await page.goto("/admin?debug=1", { waitUntil: "networkidle", timeout: 120_000 });
+  await page.goto("/admin", { waitUntil: "networkidle", timeout: 120_000 });
 
   await openTemplateGallery(page);
   await page.getByTestId("template-gallery-create-new").click();
 
   await expect(page.getByText("Source pending", { exact: true })).toBeVisible();
   await expect(page.getByText("Detect blocked", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText("Run lookup: Paste a product URL or exact tumbler name to enable lookup.", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText(
-      "BODY CUTOUT QA: Generate the reviewed body-only GLB first to unlock BODY CUTOUT QA.",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  await expect(
-    page.getByText(
-      "WRAP / EXPORT: Load a source model first to unlock WRAP / EXPORT preview.",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  await expect(
-    page.getByText(
-      "Full model: Load a source model first to unlock Full model preview.",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  await expect(
-    page.getByText(
-      "Source compare: Load a source model first to unlock Source compare preview.",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  await expect(
-    page.getByText(
-      "Capture / seed centerline and Set body-left from accepted BODY REFERENCE: Accept BODY REFERENCE (v1) first, then seed v2 capture from the accepted contour.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await expect(page.getByTestId("template-create-lookup-action-reason")).toContainText(
+    "Enter a product URL or exact tumbler name first.",
+  );
+  await expect(page.getByTestId("template-create-preview-action-reasons")).toContainText(
+    "BODY CUTOUT QA: Generate reviewed GLB first.",
+  );
+  await expect(page.getByTestId("template-create-preview-action-reasons")).toContainText(
+    "WRAP / EXPORT, Full model, and Source compare: Load or generate a model first.",
+  );
+  await expect(page.getByTestId("body-reference-v2-action-reasons")).toContainText(
+    "Capture / seed centerline and Set body-left from accepted BODY REFERENCE: Accept BODY REFERENCE (v1) first.",
+  );
+  await expect(page.getByTestId("body-reference-v2-action-reasons")).toContainText(
+    "Accept v2 draft: Capture centerline or body-left outline first.",
+  );
+  await expect(page.getByTestId("body-reference-v2-generate-action-reasons")).toContainText(
+    "Generate BODY CUTOUT QA from v2 mirrored profile: Capture centerline first.",
+  );
 
   await waitForLocatorDisabledState(page.getByTestId("template-create-run-lookup"), true, 30_000);
   await waitForLocatorDisabledState(page.getByTestId("preview-mode-body-cutout-qa"), true, 30_000);
@@ -99,40 +84,28 @@ test("disabled actions explain exactly why they are blocked during template crea
   await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles(productImage);
   await expect(page.getByText("Source ready", { exact: true })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText("Detect actionable", { exact: true })).toBeVisible();
-  await waitForTextGone(page, "Upload a product image in Source before photo auto-detect.");
+  await waitForTextGone(page, "Upload a product photo first.");
 
-  await expect(
-    page.getByText(
-      "Generate BODY CUTOUT QA GLB (v1): Accept BODY REFERENCE review before generating BODY CUTOUT QA.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await expect(page.getByTestId("template-create-review-action-reasons")).toContainText(
+    "Generate BODY CUTOUT QA GLB (v1): Accept BODY REFERENCE first.",
+  );
   await waitForLocatorDisabledState(page.getByTestId("body-reference-v1-generate"), true, 30_000);
 
   await page.getByPlaceholder("YETI Rambler 40oz").fill(`Disabled Reason Smoke ${Date.now()}`);
   await (await waitForLocatorEnabled(page.getByTestId("body-reference-v1-accept"), 120_000)).click();
 
-  await expect(
-    page.getByText(
-      "Capture / seed centerline and Set body-left from accepted BODY REFERENCE: Accept BODY REFERENCE (v1) first, then seed v2 capture from the accepted contour.",
-      { exact: true },
-    ),
-  ).toHaveCount(0);
-  await expect(
-    page.getByText(
-      "Generate BODY CUTOUT QA from v2 mirrored profile: Accept the current v2 draft first. v2 generation only uses the accepted v2 capture.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await expect(page.getByTestId("body-reference-v2-action-reasons")).not.toContainText(
+    "Accept BODY REFERENCE (v1) first.",
+  );
+  await expect(page.getByTestId("body-reference-v2-generate-action-reasons")).toContainText(
+    "Generate BODY CUTOUT QA from v2 mirrored profile: Capture centerline first.",
+  );
   await waitForLocatorEnabled(page.getByTestId("body-reference-v2-seed-centerline"), 30_000);
   await waitForLocatorEnabled(page.getByTestId("body-reference-v2-seed-body-left"), 30_000);
   await waitForLocatorDisabledState(page.getByTestId("body-reference-v2-generate"), true, 30_000);
-  await expect(
-    page.getByText(
-      "BODY CUTOUT QA: Generate the reviewed body-only GLB first to unlock BODY CUTOUT QA.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await expect(page.getByTestId("template-create-preview-action-reasons")).toContainText(
+    "BODY CUTOUT QA: Generate reviewed GLB first.",
+  );
 
   const generatedPayload = await clickAndReadJsonResponse<GeneratedBodyReferenceResponse>(
     page,
@@ -149,12 +122,7 @@ test("disabled actions explain exactly why they are blocked during template crea
     timeout: 120_000,
   });
   await expect(page.getByTestId("body-geometry-status-badge-status")).toHaveText("PASS");
-  await expect(
-    page.getByText(
-      "BODY CUTOUT QA: Generate the reviewed body-only GLB first to unlock BODY CUTOUT QA.",
-      { exact: true },
-    ),
-  ).toHaveCount(0);
+  await expect(page.getByText("BODY CUTOUT QA: Generate reviewed GLB first.", { exact: true })).toHaveCount(0);
 
   await (await waitForLocatorEnabled(page.getByTestId("preview-mode-wrap-export"), 120_000)).click();
   await expect(page.getByText("WRAP / EXPORT PREVIEW", { exact: true })).toBeVisible({ timeout: 30_000 });

@@ -29,7 +29,7 @@ export function getTemplateCreateLookupActionReason(args: {
 }): string | null {
   if (args.lookingUp) return null;
   if (!args.lookupInput.trim()) {
-    return "Paste a product URL or exact tumbler name to enable lookup.";
+    return "Enter a product URL or exact tumbler name first.";
   }
   return null;
 }
@@ -40,7 +40,7 @@ export function getTemplateCreateReviewAcceptActionReason(args: {
 }): string | null {
   if (args.hasAcceptedReview) return null;
   if (!args.hasLivePipeline) {
-    return "Run lookup or auto-detect first so BODY REFERENCE review has a contour to accept.";
+    return "Run lookup or auto-detect before accepting BODY REFERENCE.";
   }
   return null;
 }
@@ -53,7 +53,7 @@ export function getTemplateCreatePreviewActionReason(args: {
   if (args.action === "body-cutout-qa") {
     return args.hasQaPreview
       ? null
-      : "Generate the reviewed body-only GLB first to unlock BODY CUTOUT QA.";
+      : "Generate reviewed GLB first.";
   }
 
   if (args.hasSourceModel) {
@@ -62,11 +62,11 @@ export function getTemplateCreatePreviewActionReason(args: {
 
   switch (args.action) {
     case "wrap-export":
-      return "Load a source model first to unlock WRAP / EXPORT preview.";
+      return "Load or generate a model first.";
     case "full-model":
-      return "Load a source model first to unlock Full model preview.";
+      return "Load or generate a model first.";
     case "source-compare":
-      return "Load a source model first to unlock Source compare preview.";
+      return "Load or generate a model first.";
     default:
       return null;
   }
@@ -77,7 +77,7 @@ export function getTemplateCreateV2SeedActionReason(args: {
 }): string | null {
   return args.hasApprovedBodyOutline
     ? null
-    : "Accept BODY REFERENCE (v1) first, then seed v2 capture from the accepted contour.";
+    : "Accept BODY REFERENCE (v1) first.";
 }
 
 export function groupTemplateCreateDisabledActionReasons(

@@ -1977,6 +1977,9 @@ export function TemplateCreateForm({
   const bodyReferenceV2GenerateGateReason = React.useMemo(() => {
     return getBodyReferenceV2GenerateGateReason({
       hasPendingV1FineTune: bodyReferenceFineTuneDraftPendingAcceptance,
+      hasCenterline: bodyReferenceV2GenerationReadiness.centerlineCaptured,
+      hasBodyLeft: bodyReferenceV2GenerationReadiness.leftBodyPointCount > 0,
+      lookupDiameterReady: bodyReferenceV2GenerationReadiness.lookupDiameterMm != null,
       accepted: bodyReferenceV2CaptureReadiness.accepted,
       hasDraftChanges: bodyReferenceV2CaptureReadiness.hasDraftChanges,
       generationReady: bodyReferenceV2CaptureReadiness.generationReady,
@@ -1986,6 +1989,9 @@ export function TemplateCreateForm({
     bodyReferenceV2CaptureReadiness.accepted,
     bodyReferenceV2CaptureReadiness.generationReady,
     bodyReferenceV2CaptureReadiness.hasDraftChanges,
+    bodyReferenceV2GenerationReadiness.centerlineCaptured,
+    bodyReferenceV2GenerationReadiness.leftBodyPointCount,
+    bodyReferenceV2GenerationReadiness.lookupDiameterMm,
   ]);
   const bodyReferenceV2AcceptDraftGateReason = React.useMemo(
     () => getBodyReferenceV2AcceptDraftReason({
@@ -2965,7 +2971,10 @@ export function TemplateCreateForm({
               </button>
             </div>
             {lookupActionReason && (
-              <div className={styles.actionDisabledReason}>
+              <div
+                className={styles.actionDisabledReason}
+                data-testid="template-create-lookup-action-reason"
+              >
                 Run lookup: {lookupActionReason}
               </div>
             )}
@@ -3224,7 +3233,10 @@ export function TemplateCreateForm({
                 </span>
               </div>
               {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
-                <div className={styles.workflowBlockedNote}>
+                <div
+                  className={styles.workflowBlockedNote}
+                  data-testid="template-create-source-blocked-reason"
+                >
                   {templateCreateSourceReadiness.blockedReason}
                 </div>
               )}
@@ -3280,7 +3292,10 @@ export function TemplateCreateForm({
               </div>
 
               {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
-                <div className={styles.workflowBlockedNote}>
+                <div
+                  className={styles.workflowBlockedNote}
+                  data-testid="template-create-source-blocked-reason"
+                >
                   {templateCreateSourceReadiness.blockedReason}
                 </div>
               )}
@@ -3354,11 +3369,15 @@ export function TemplateCreateForm({
               </button>
             </div>
             {reviewDisabledActionReasonGroups.length > 0 && (
-              <div className={styles.actionReasonList}>
+              <div
+                className={styles.actionReasonList}
+                data-testid="template-create-review-action-reasons"
+              >
                 {reviewDisabledActionReasonGroups.map((group) => (
                   <div
                     key={`review-disabled-reason-${group.reason}`}
                     className={styles.actionDisabledReason}
+                    data-testid="template-create-review-action-reason"
                   >
                     {formatTemplateCreateDisabledActionLabels(group.labels)}: {group.reason}
                   </div>
@@ -3550,11 +3569,15 @@ export function TemplateCreateForm({
               </div>
 
               {previewDisabledActionReasonGroups.length > 0 && (
-                <div className={styles.actionReasonList}>
+                <div
+                  className={styles.actionReasonList}
+                  data-testid="template-create-preview-action-reasons"
+                >
                   {previewDisabledActionReasonGroups.map((group) => (
                     <div
                       key={`preview-disabled-reason-${group.reason}`}
                       className={styles.actionDisabledReason}
+                      data-testid="template-create-preview-action-reason"
                     >
                       {formatTemplateCreateDisabledActionLabels(group.labels)}: {group.reason}
                     </div>
@@ -4213,13 +4236,17 @@ export function TemplateCreateForm({
                 </button>
               </div>
               {bodyReferenceV2DisabledActionReasonGroups.length > 0 && (
-                <div className={styles.actionReasonList}>
+                <div
+                  className={styles.actionReasonList}
+                  data-testid="body-reference-v2-action-reasons"
+                >
                   {bodyReferenceV2DisabledActionReasonGroups
                     .filter((group) => group.reason !== bodyReferenceV2GenerateActionReason)
                     .map((group) => (
                       <div
                         key={`body-reference-v2-disabled-reason-${group.reason}`}
                         className={styles.actionDisabledReason}
+                        data-testid="body-reference-v2-action-reason"
                       >
                         {formatTemplateCreateDisabledActionLabels(group.labels)}: {group.reason}
                       </div>
@@ -4574,8 +4601,14 @@ export function TemplateCreateForm({
                   </button>
                 </div>
                 {bodyReferenceV2GenerateActionReason && (
-                  <div className={styles.actionReasonList}>
-                    <div className={styles.actionDisabledReason}>
+                  <div
+                    className={styles.actionReasonList}
+                    data-testid="body-reference-v2-generate-action-reasons"
+                  >
+                    <div
+                      className={styles.actionDisabledReason}
+                      data-testid="body-reference-v2-generate-action-reason"
+                    >
                       Generate BODY CUTOUT QA from v2 mirrored profile: {bodyReferenceV2GenerateActionReason}
                     </div>
                   </div>

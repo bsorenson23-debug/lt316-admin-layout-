@@ -104,12 +104,24 @@ async function createLookupTemplateFromSource(page: Page, templateName: string):
 
   await expect(page.getByText("Source pending", { exact: true })).toBeVisible();
   await expect(page.getByText("Detect blocked", { exact: true })).toBeVisible();
-  const missingSourceImageCopy = "Upload a product image in Source before photo auto-detect.";
+  const missingSourceImageCopy = "Upload a product photo first.";
   const missingSourceImageBlockers = page.locator('[class*="workflowBlockedNote"]').filter({
     hasText: missingSourceImageCopy,
   });
   await expect(missingSourceImageBlockers).toHaveCount(2);
   await expect(missingSourceImageBlockers.first()).toBeVisible();
+  await expect(page.getByTestId("template-create-lookup-action-reason")).toContainText(
+    "Enter a product URL or exact tumbler name first.",
+  );
+  await expect(page.getByTestId("template-create-preview-action-reasons")).toContainText(
+    "Generate reviewed GLB first.",
+  );
+  await expect(page.getByTestId("body-reference-v2-action-reasons")).toContainText(
+    "Accept BODY REFERENCE (v1) first.",
+  );
+  await expect(page.getByTestId("body-reference-v2-generate-action-reasons")).toContainText(
+    "Capture centerline first.",
+  );
 
   const lookupInput = page.getByPlaceholder(
     "https://www.academy.com/... or Stanley IceFlow 30 oz Classic Flip Straw Tumbler",

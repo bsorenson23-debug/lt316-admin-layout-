@@ -33,26 +33,38 @@ export function getBodyReferenceV2AcceptDraftReason(args: {
   if (args.hasCenterline || args.hasBodyLeft) {
     return null;
   }
-  return "Capture a centerline axis or a body-left outline before accepting the v2 draft.";
+  return "Capture centerline or body-left outline first.";
 }
 
 export function getBodyReferenceV2GenerateGateReason(args: {
   hasPendingV1FineTune: boolean;
+  hasCenterline?: boolean;
+  hasBodyLeft?: boolean;
+  lookupDiameterReady?: boolean;
   accepted: boolean;
   hasDraftChanges: boolean;
   generationReady: boolean;
 }): string | null {
   if (args.hasPendingV1FineTune) {
-    return "Accept corrected v1 cutout changes first. v2 generation only runs from the current accepted v1 review.";
+    return "Accept corrected v1 cutout changes first.";
+  }
+  if (args.hasCenterline === false) {
+    return "Capture centerline first.";
+  }
+  if (args.hasBodyLeft === false) {
+    return "Capture body-left outline first.";
+  }
+  if (args.lookupDiameterReady === false) {
+    return "Lookup diameter is required.";
   }
   if (!args.accepted) {
-    return "Accept the current v2 draft first. v2 generation only uses the accepted v2 capture.";
+    return "Accept v2 draft first.";
   }
   if (args.hasDraftChanges) {
-    return "Accept or reset pending v2 draft changes. Generation still points at the last accepted v2 capture.";
+    return "Accept or reset v2 draft changes first.";
   }
   if (!args.generationReady) {
-    return "v2 generation stays disabled until centerline, body-left, lookup-diameter scale, and mirror validation all pass.";
+    return "Resolve v2 readiness issues first.";
   }
   return null;
 }

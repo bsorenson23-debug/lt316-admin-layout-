@@ -52,7 +52,7 @@ export function getTemplateCreateSourceReadiness(
       sourceReady: false,
       detectReady: false,
       missing: ["productType"],
-      blockedReason: "Choose a drinkware product type in Source first.",
+      blockedReason: "Choose a drinkware product type first.",
     };
   }
 
@@ -69,7 +69,7 @@ export function getTemplateCreateSourceReadiness(
       sourceReady: false,
       detectReady: false,
       missing: ["productImage"],
-      blockedReason: "Upload a product image in Source before photo auto-detect.",
+      blockedReason: "Upload a product photo first.",
     };
   }
 
@@ -262,13 +262,13 @@ export function getTemplateCreateGenerateGateReason(
     return null;
   }
   if (!input.hasAcceptedReview) {
-    return "Accept BODY REFERENCE review before generating BODY CUTOUT QA.";
+    return "Accept BODY REFERENCE first.";
   }
   if (!input.canGenerate) {
-    return "Finish BODY REFERENCE review data before generating BODY CUTOUT QA.";
+    return "Finish BODY REFERENCE review data first.";
   }
   if (input.hasPendingSourceDraft) {
-    return "Accept corrected cutout changes before generating BODY CUTOUT QA.";
+    return "Accept corrected cutout changes first.";
   }
   return null;
 }

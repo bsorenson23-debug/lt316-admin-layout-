@@ -52,7 +52,7 @@ test("getBodyReferenceV2GenerateGateReason explains accepted draft gating", () =
       hasDraftChanges: true,
       generationReady: true,
     }),
-    "Accept the current v2 draft first. v2 generation only uses the accepted v2 capture.",
+    "Accept v2 draft first.",
   );
 });
 
@@ -60,11 +60,38 @@ test("getBodyReferenceV2GenerateGateReason explains readiness requirements", () 
   assert.equal(
     getBodyReferenceV2GenerateGateReason({
       hasPendingV1FineTune: false,
+      hasCenterline: false,
+      hasBodyLeft: false,
+      lookupDiameterReady: false,
       accepted: true,
       hasDraftChanges: false,
       generationReady: false,
     }),
-    "v2 generation stays disabled until centerline, body-left, lookup-diameter scale, and mirror validation all pass.",
+    "Capture centerline first.",
+  );
+  assert.equal(
+    getBodyReferenceV2GenerateGateReason({
+      hasPendingV1FineTune: false,
+      hasCenterline: true,
+      hasBodyLeft: false,
+      lookupDiameterReady: false,
+      accepted: true,
+      hasDraftChanges: false,
+      generationReady: false,
+    }),
+    "Capture body-left outline first.",
+  );
+  assert.equal(
+    getBodyReferenceV2GenerateGateReason({
+      hasPendingV1FineTune: false,
+      hasCenterline: true,
+      hasBodyLeft: true,
+      lookupDiameterReady: false,
+      accepted: true,
+      hasDraftChanges: false,
+      generationReady: false,
+    }),
+    "Lookup diameter is required.",
   );
 });
 
@@ -74,7 +101,7 @@ test("getBodyReferenceV2AcceptDraftReason explains empty draft state", () => {
       hasCenterline: false,
       hasBodyLeft: false,
     }),
-    "Capture a centerline axis or a body-left outline before accepting the v2 draft.",
+    "Capture centerline or body-left outline first.",
   );
   assert.equal(
     getBodyReferenceV2AcceptDraftReason({

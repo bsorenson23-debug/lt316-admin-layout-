@@ -17,7 +17,7 @@ test("lookup reason explains empty lookup input", () => {
       lookupInput: "   ",
       lookingUp: false,
     }),
-    "Paste a product URL or exact tumbler name to enable lookup.",
+    "Enter a product URL or exact tumbler name first.",
   );
   assert.equal(
     getTemplateCreateLookupActionReason({
@@ -34,7 +34,7 @@ test("review accept reason only appears before v1 review is available", () => {
       hasAcceptedReview: false,
       hasLivePipeline: false,
     }),
-    "Run lookup or auto-detect first so BODY REFERENCE review has a contour to accept.",
+    "Run lookup or auto-detect before accepting BODY REFERENCE.",
   );
   assert.equal(
     getTemplateCreateReviewAcceptActionReason({
@@ -52,7 +52,7 @@ test("preview action reasons stay specific to the blocked control", () => {
       hasSourceModel: false,
       hasQaPreview: false,
     }),
-    "Generate the reviewed body-only GLB first to unlock BODY CUTOUT QA.",
+    "Generate reviewed GLB first.",
   );
   assert.equal(
     getTemplateCreatePreviewActionReason({
@@ -60,7 +60,7 @@ test("preview action reasons stay specific to the blocked control", () => {
       hasSourceModel: false,
       hasQaPreview: false,
     }),
-    "Load a source model first to unlock WRAP / EXPORT preview.",
+    "Load or generate a model first.",
   );
 });
 
@@ -68,49 +68,41 @@ test("blocked action reasons hide while an action is already busy", () => {
   assert.equal(
     resolveTemplateCreateBlockedActionReason({
       busy: true,
-      blockedReason: "Accept BODY REFERENCE review before generating BODY CUTOUT QA.",
+      blockedReason: "Accept BODY REFERENCE first.",
     }),
     null,
   );
   assert.equal(
     resolveTemplateCreateBlockedActionReason({
       busy: false,
-      blockedReason: "Accept BODY REFERENCE review before generating BODY CUTOUT QA.",
+      blockedReason: "Accept BODY REFERENCE first.",
     }),
-    "Accept BODY REFERENCE review before generating BODY CUTOUT QA.",
+    "Accept BODY REFERENCE first.",
   );
 });
 
 test("grouping combines repeated disabled reasons and formats labels cleanly", () => {
   const grouped = groupTemplateCreateDisabledActionReasons([
-    { label: "WRAP / EXPORT", reason: "Load a source model first to unlock WRAP / EXPORT preview." },
-    { label: "Full model", reason: "Load a source model first to unlock Full model preview." },
-    { label: "Source compare", reason: "Load a source model first to unlock Source compare preview." },
-    { label: "Capture / seed centerline", reason: "Accept BODY REFERENCE (v1) first, then seed v2 capture from the accepted contour." },
-    { label: "Set body-left from accepted BODY REFERENCE", reason: "Accept BODY REFERENCE (v1) first, then seed v2 capture from the accepted contour." },
+    { label: "WRAP / EXPORT", reason: "Load or generate a model first." },
+    { label: "Full model", reason: "Load or generate a model first." },
+    { label: "Source compare", reason: "Load or generate a model first." },
+    { label: "Capture / seed centerline", reason: "Accept BODY REFERENCE (v1) first." },
+    { label: "Set body-left from accepted BODY REFERENCE", reason: "Accept BODY REFERENCE (v1) first." },
   ]);
 
   assert.deepEqual(grouped, [
     {
-      labels: ["WRAP / EXPORT"],
-      reason: "Load a source model first to unlock WRAP / EXPORT preview.",
-    },
-    {
-      labels: ["Full model"],
-      reason: "Load a source model first to unlock Full model preview.",
-    },
-    {
-      labels: ["Source compare"],
-      reason: "Load a source model first to unlock Source compare preview.",
+      labels: ["WRAP / EXPORT", "Full model", "Source compare"],
+      reason: "Load or generate a model first.",
     },
     {
       labels: ["Capture / seed centerline", "Set body-left from accepted BODY REFERENCE"],
-      reason: "Accept BODY REFERENCE (v1) first, then seed v2 capture from the accepted contour.",
+      reason: "Accept BODY REFERENCE (v1) first.",
     },
   ]);
 
   assert.equal(
-    formatTemplateCreateDisabledActionLabels(grouped[3]?.labels ?? []),
+    formatTemplateCreateDisabledActionLabels(grouped[1]?.labels ?? []),
     "Capture / seed centerline and Set body-left from accepted BODY REFERENCE",
   );
 });
@@ -118,7 +110,7 @@ test("grouping combines repeated disabled reasons and formats labels cleanly", (
 test("v2 seed reason stays explicit", () => {
   assert.equal(
     getTemplateCreateV2SeedActionReason({ hasApprovedBodyOutline: false }),
-    "Accept BODY REFERENCE (v1) first, then seed v2 capture from the accepted contour.",
+    "Accept BODY REFERENCE (v1) first.",
   );
   assert.equal(getTemplateCreateV2SeedActionReason({ hasApprovedBodyOutline: true }), null);
 });
