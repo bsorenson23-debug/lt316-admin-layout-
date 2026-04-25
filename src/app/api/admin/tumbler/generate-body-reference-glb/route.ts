@@ -138,6 +138,41 @@ const bodyReferenceV2ScaleCalibrationSchema = z.object({
   expectedBodyWidthMm: nullableFiniteNumber,
 }).passthrough();
 
+const bodyHeightAuthorityInputSchema = z.object({
+  manualBodyHeightMm: nullableFiniteNumber,
+  diameterAuthorityKind: z.string().optional().nullable(),
+  diameterAuthorityValueMm: nullableFiniteNumber,
+  diameterAuthoritySourceField: z.string().optional().nullable(),
+  sourceDiameterUnits: nullableFiniteNumber,
+  sourceContourHeightUnits: nullableFiniteNumber,
+  mmPerSourceUnit: nullableFiniteNumber,
+  uniformScaleApplied: z.boolean().optional().nullable(),
+  derivedBodyHeightMm: nullableFiniteNumber,
+  svgPhysicalMmTrusted: z.boolean().optional().nullable(),
+  svgToPhotoTransformPresent: z.boolean().optional().nullable(),
+  rejectedHeightSources: z.array(z.string()).optional().nullable(),
+  lookupBodyHeightMm: nullableFiniteNumber,
+  lookupBodyHeightSource: z.enum(["physical-body-height", "usable-height", "printable-height", "unknown"]).optional().nullable(),
+  lookupFullProductHeightMm: nullableFiniteNumber,
+  templateDimensionsHeightMm: nullableFiniteNumber,
+  templateDimensionsPrintHeightMm: nullableFiniteNumber,
+  printableHeightMm: nullableFiniteNumber,
+  engravableHeightMm: nullableFiniteNumber,
+  approvedSvgBoundsHeightMm: nullableFiniteNumber,
+  approvedSvgMarkedPhysicalMm: z.boolean().optional().nullable(),
+  v2ExpectedBodyHeightMm: nullableFiniteNumber,
+  v2ProfileBoundsHeightMm: nullableFiniteNumber,
+  referenceBandHeightPx: nullableFiniteNumber,
+  generatedBodyBoundsHeightMm: nullableFiniteNumber,
+  canonicalBodyHeightMm: nullableFiniteNumber,
+  bodyTopFromOverallMm: nullableFiniteNumber,
+  bodyBottomFromOverallMm: nullableFiniteNumber,
+  diameterAuthority: z.string().optional().nullable(),
+  yScaleSource: z.string().optional().nullable(),
+  radialScaleSource: z.string().optional().nullable(),
+  sourceFunction: z.string().optional().nullable(),
+}).passthrough();
+
 const bodyReferenceV2DraftSchema = z.object({
   sourceImageUrl: z.string().optional(),
   centerline: centerlineAxisSchema.nullable(),
@@ -153,6 +188,7 @@ const baseRequestSchema = z.object({
   generationSourceMode: z.enum(["v1-approved-contour", "v2-mirrored-profile"]).optional().nullable(),
   bodyColorHex: z.string().optional().nullable(),
   rimColorHex: z.string().optional().nullable(),
+  bodyHeightAuthorityInput: bodyHeightAuthorityInputSchema.optional().nullable(),
 });
 
 const v1RequestSchema = baseRequestSchema.extend({

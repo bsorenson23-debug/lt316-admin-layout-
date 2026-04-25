@@ -303,6 +303,7 @@ export function BodyContractInspectorPanel({
     ? (wrapExportReadiness?.status ?? wrapExportPreviewState.status)
     : contract?.validation.status ?? "unknown";
   const bodyBoundsUnits = contract?.dimensionsMm.bodyBoundsUnits;
+  const bodyHeightAuthority = contract?.dimensionsMm.bodyHeightAuthority;
   const showBodyUnitsWarning = bodyBoundsUnits === "scene-units";
   const showUnknownScaleSourceWarning = !contract?.dimensionsMm.scaleSource || contract.dimensionsMm.scaleSource === "unknown";
   const hasWarnings = (contract?.validation.warnings.length ?? 0) > 0;
@@ -499,7 +500,54 @@ export function BodyContractInspectorPanel({
                     <Field label="Wrap width" value={formatNumber(contract.dimensionsMm.wrapWidthMm)} testId="body-contract-inspector-wrap-width" />
                     <Field label="Expected width" value={formatNumber(contract.dimensionsMm.expectedBodyWidthMm)} testId="body-contract-inspector-expected-width" />
                     <Field label="Expected height" value={formatNumber(contract.dimensionsMm.expectedBodyHeightMm)} testId="body-contract-inspector-expected-height" />
+                    <Field
+                      label="Height authority"
+                      value={bodyHeightAuthority ? `${bodyHeightAuthority.status} / ${bodyHeightAuthority.kind}` : "n/a"}
+                      testId="body-contract-inspector-height-authority"
+                    />
+                    <Field
+                      label="Height source field"
+                      value={bodyHeightAuthority?.sourceField ?? "n/a"}
+                      testId="body-contract-inspector-height-authority-source"
+                    />
+                    <Field
+                      label="Physical body height"
+                      value={formatBoolean(bodyHeightAuthority?.isPhysicalBodyHeight)}
+                      testId="body-contract-inspector-height-authority-physical"
+                    />
+                    <Field
+                      label="Diameter authority"
+                      value={bodyHeightAuthority?.diameterAuthority.valueMm != null
+                        ? `${bodyHeightAuthority.diameterAuthority.kind} / ${formatNumber(bodyHeightAuthority.diameterAuthority.valueMm)}`
+                        : bodyHeightAuthority?.diameterAuthority.kind ?? "n/a"}
+                      testId="body-contract-inspector-diameter-authority"
+                    />
+                    <Field
+                      label="Source diameter units"
+                      value={formatNumber(bodyHeightAuthority?.sourceDiameterUnits)}
+                      testId="body-contract-inspector-source-diameter-units"
+                    />
+                    <Field
+                      label="mm per source unit"
+                      value={formatNumber(bodyHeightAuthority?.mmPerSourceUnit)}
+                      testId="body-contract-inspector-mm-per-source-unit"
+                    />
+                    <Field
+                      label="Uniform scale applied"
+                      value={formatBoolean(bodyHeightAuthority?.uniformScaleApplied)}
+                      testId="body-contract-inspector-uniform-scale-applied"
+                    />
+                    <Field
+                      label="Derived body height"
+                      value={formatNumber(bodyHeightAuthority?.derivedBodyHeightMm)}
+                      testId="body-contract-inspector-derived-body-height"
+                    />
                     <Field label="Bounds units" value={contract.dimensionsMm.bodyBoundsUnits ?? "unknown"} testId="body-contract-inspector-bounds-units" />
+                    <ListField
+                      label="Height authority warnings"
+                      values={bodyHeightAuthority?.warnings ?? []}
+                      testId="body-contract-inspector-height-authority-warnings"
+                    />
                   </div>
                   {showBodyUnitsWarning ? (
                     <div className={styles.note} data-testid="body-contract-inspector-units-warning">

@@ -197,6 +197,33 @@ test("suspicious jumps do not become bridge guide candidates silently", () => {
   assert.match(report.warnings.join(" "), /Suspicious jump segments/);
 });
 
+test("one clean bridge warning does not demote approved direct contour outline", () => {
+  const outline = createOutline();
+  const svgQualityReport = {
+    ...buildBodyReferenceSvgQualityReportFromOutline({ outline }),
+    status: "warn" as const,
+    expectedBridgeSegmentCount: 1,
+    suspiciousJumpCount: 0,
+    warnings: ["Expected 2 clean bridge segments but found 1 expected bridge segment(s)."],
+  };
+
+  const report = buildBodyReferenceGuideCandidateReport({
+    outline,
+    svgQualityReport,
+  });
+
+  const outlineCandidate = report.candidates.find((candidate) => candidate.id === "outline-source");
+  assert.equal(report.status, "warn");
+  assert.ok(outlineCandidate);
+  assert.equal(outlineCandidate!.kind, "outline");
+  assert.equal(outlineCandidate!.source, "direct-contour");
+  assert.equal(outlineCandidate!.confidence, "high");
+  assertCandidateReadOnly(outlineCandidate!);
+  assert.equal(report.candidates.some((candidate) => candidate.kind === "top-bridge"), false);
+  assert.equal(report.candidates.some((candidate) => candidate.kind === "bottom-bridge"), false);
+  assert.match(report.warnings.join(" "), /Expected 2 clean bridge segments/);
+});
+
 test("missing svg quality returns unknown instead of inventing bridge guides", () => {
   const report = buildBodyReferenceGuideCandidateReport({
     outline: createOutline(),

@@ -212,7 +212,7 @@ test("BODY REFERENCE GLB source signature ignores source image and view bookkeep
   );
 });
 
-test("BODY REFERENCE GLB source signature ignores source contour metadata when approved geometry is unchanged", () => {
+test("BODY REFERENCE GLB source signature changes when body-only source contour authority changes", () => {
   const changedOutline: EditableBodyOutline = {
     ...baseOutline,
     sourceContour: [
@@ -235,7 +235,7 @@ test("BODY REFERENCE GLB source signature ignores source contour metadata when a
     },
   };
 
-  assert.equal(
+  assert.notEqual(
     signature(),
     signature({
       referencePaths: {

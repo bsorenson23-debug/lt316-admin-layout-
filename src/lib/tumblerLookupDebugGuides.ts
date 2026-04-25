@@ -1,4 +1,5 @@
 import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
+import type { BodyReferenceGuideFrame } from "./bodyReferenceGuideFrame.ts";
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -15,6 +16,8 @@ export interface TumblerLookupMeasurementBandGuide {
 }
 
 export interface TumblerLookupDebugGuideModel {
+  guideSource: BodyReferenceGuideFrame["guideSource"] | "legacy-fit-debug";
+  resolvedGuideFrameBounds: TumblerLookupMeasurementBandGuide | null;
   measurementBand: TumblerLookupMeasurementBandGuide | null;
   engravingStartGuideYPx: number;
   revolvedProfileTopGuideYPx: number;
@@ -25,7 +28,22 @@ export interface TumblerLookupDebugGuideModel {
 
 export function buildTumblerLookupDebugGuideModel(
   debug: TumblerItemLookupFitDebug,
+  guideFrame?: BodyReferenceGuideFrame | null,
 ): TumblerLookupDebugGuideModel {
+  const frameBounds = guideFrame?.coordinateSpace === "raw-image-px"
+    ? guideFrame.rawImageBounds
+    : null;
+  const resolvedGuideFrameBounds = frameBounds
+    ? {
+        topPx: frameBounds.top,
+        bottomPx: frameBounds.bottom,
+        centerYPx: frameBounds.centerY,
+        centerXPx: frameBounds.centerX,
+        leftPx: frameBounds.left,
+        rightPx: frameBounds.right,
+        widthPx: frameBounds.width,
+      }
+    : null;
   const hasMeasurementBand =
     isFiniteNumber(debug.measurementBandTopPx) &&
     isFiniteNumber(debug.measurementBandBottomPx) &&
@@ -40,6 +58,8 @@ export function buildTumblerLookupDebugGuideModel(
     debug.baseBandBottomPx > debug.baseBandTopPx;
 
   return {
+    guideSource: guideFrame?.guideSource ?? "legacy-fit-debug",
+    resolvedGuideFrameBounds,
     measurementBand: hasMeasurementBand
       ? {
           topPx: debug.measurementBandTopPx!,

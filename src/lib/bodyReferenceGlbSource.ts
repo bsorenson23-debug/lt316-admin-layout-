@@ -22,6 +22,26 @@ function normalizePoint(point: { x: number; y: number }) {
   };
 }
 
+function normalizeBounds(bounds: {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  width: number;
+  height: number;
+} | null | undefined) {
+  return bounds
+    ? {
+        minX: round2(bounds.minX),
+        minY: round2(bounds.minY),
+        maxX: round2(bounds.maxX),
+        maxY: round2(bounds.maxY),
+        width: round2(bounds.width),
+        height: round2(bounds.height),
+      }
+    : null;
+}
+
 function normalizeOutline(outline: EditableBodyOutline | null | undefined) {
   if (!outline) return null;
   const directContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
@@ -37,6 +57,20 @@ function normalizeOutline(outline: EditableBodyOutline | null | undefined) {
       outHandle: point.outHandle ? normalizePoint(point.outHandle) : null,
     })),
     directContour: directContour?.map(normalizePoint) ?? null,
+    sourceContour: outline.sourceContour?.map(normalizePoint) ?? null,
+    sourceContourBounds: normalizeBounds(outline.sourceContourBounds),
+    printableBandContour: outline.printableBandContour?.map(normalizePoint) ?? null,
+    printableBandContourBounds: normalizeBounds(outline.printableBandContourBounds),
+    contourFrame: outline.contourFrame
+      ? {
+          ...outline.contourFrame,
+          boundsBeforeBandCrop: normalizeBounds(outline.contourFrame.boundsBeforeBandCrop),
+          boundsAfterBandCrop: normalizeBounds(outline.contourFrame.boundsAfterBandCrop),
+          acceptedPreviewBounds: normalizeBounds(outline.contourFrame.acceptedPreviewBounds),
+          glbInputBounds: normalizeBounds(outline.contourFrame.glbInputBounds),
+          canonicalInputBounds: normalizeBounds(outline.contourFrame.canonicalInputBounds),
+        }
+      : null,
     sourceContourMode: outline.sourceContourMode ?? null,
   };
 }

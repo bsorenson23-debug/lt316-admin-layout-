@@ -177,18 +177,22 @@ test("Stanley golden fixture keeps body bounds authoritative while preserving ri
   assert.equal(pipeline?.printableSurfaceResolution.topBoundarySource, "body-top-fallback");
   assert.equal(pipeline?.printableSurfaceResolution.automaticDetectionWeak, false);
 
-  const firstRows = pipeline?.canonicalBodyProfile.samples.slice(0, 8) ?? [];
-  assert.equal(firstRows.length, 8);
-  for (const row of firstRows) {
-    assert.ok(row.radiusPx > 80, `expected cleaned top contour width, got ${JSON.stringify(row)}`);
-    assert.ok(Math.abs(row.radiusMm - 49.91) <= 1.5, `expected top body radius to stay near Stanley diameter, got ${JSON.stringify(row)}`);
-  }
+  const widestRow = [...(pipeline?.canonicalBodyProfile.samples ?? [])]
+    .sort((left, right) => right.radiusMm - left.radiusMm)[0];
+  assert.ok(widestRow);
+  assert.ok(Math.abs((widestRow?.radiusMm ?? 0) - 49.91) <= 1.5, `expected widest body radius to stay near Stanley diameter, got ${JSON.stringify(widestRow)}`);
 
-  const sx = pipeline?.canonicalDimensionCalibration.photoToFrontTransform.matrix[0] ?? 0;
+  const transform = pipeline?.canonicalDimensionCalibration.photoToFrontTransform;
+  assert.equal(transform?.type, "similarity");
+  const sx = transform?.matrix[0] ?? 0;
+  const sy = transform?.matrix[4] ?? 0;
+  assert.equal(sx, sy);
   const stableRow = [...(pipeline?.canonicalBodyProfile.samples ?? [])]
     .sort((left, right) => right.radiusPx - left.radiusPx)[0];
   assert.ok(stableRow);
   assert.ok(Math.abs((stableRow?.radiusPx ?? 0) * sx - (stableRow?.radiusMm ?? 0)) <= 2);
+  const expectedUniformHeight = Math.round(((pipeline?.canonicalBodyProfile.axis.yBottom ?? 0) - (pipeline?.canonicalBodyProfile.axis.yTop ?? 0)) * sx * 100) / 100;
+  assert.ok(Math.abs((pipeline?.canonicalDimensionCalibration.bodyHeightMm ?? 0) - expectedUniformHeight) <= 0.02);
 });
 
 test("straight-wall fallback uses outline-only authority when no measurement contour exists", () => {
@@ -451,7 +455,7 @@ test("persisted BODY REFERENCE artifacts are rejected when sample radii drift fr
   const corruptedProfile = {
     ...live!.canonicalBodyProfile,
     samples: live!.canonicalBodyProfile.samples.map((sample, index) => (
-      index === 0
+      index === Math.floor(live!.canonicalBodyProfile.samples.length / 2)
         ? { ...sample, radiusMm: 4.1 }
         : sample
     )),

@@ -78,6 +78,7 @@ import {
   isBodyCutoutQaPreviewAvailable,
 } from "@/lib/bodyReferencePreviewIntent";
 import { buildBodyReferenceGlbSourceSignature } from "@/lib/bodyReferenceGlbSource";
+import { resolveBodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
 import { parseBodyReferenceGlbResponse } from "@/lib/adminApi.schema";
 import type { BodyGeometryContract } from "@/lib/bodyGeometryContract";
 import { inferGeneratedModelStatusFromSource } from "@/lib/generatedModelUrl";
@@ -140,6 +141,7 @@ import {
   summarizeBodyReferenceV2ScaleMirrorPreview,
 } from "@/lib/bodyReferenceV2ScaleMirror";
 import { summarizeProductDimensionAuthority } from "@/lib/productDimensionAuthority";
+import type { BodyHeightAuthorityInput, LookupBodyHeightSource } from "@/lib/bodyHeightAuthority";
 import {
   buildBodyReferenceV2GuidanceMessages,
   formatBodyReferenceV2ScaleSourceLabel,
@@ -192,6 +194,27 @@ function buildEffectiveBodyReferenceV2Draft(args: {
     blockedRegions: cloneSerializable(geometryDraft.blockedRegions ?? []),
     scaleCalibration: cloneSerializable(args.scaleCalibration),
   });
+}
+
+function resolveLookupBodyHeightSource(
+  dimensions: TumblerItemLookupDimensions | null | undefined,
+): LookupBodyHeightSource | undefined {
+  if (!dimensions) return undefined;
+  const bodyHeightMm = dimensions.bodyHeightMm;
+  const usableHeightMm = dimensions.usableHeightMm;
+  if (typeof bodyHeightMm !== "number" || !Number.isFinite(bodyHeightMm) || bodyHeightMm <= 0) {
+    return typeof usableHeightMm === "number" && Number.isFinite(usableHeightMm) && usableHeightMm > 0
+      ? "usable-height"
+      : undefined;
+  }
+  if (
+    typeof usableHeightMm === "number" &&
+    Number.isFinite(usableHeightMm) &&
+    Math.abs(usableHeightMm - bodyHeightMm) <= 0.05
+  ) {
+    return "usable-height";
+  }
+  return "unknown";
 }
 
 const ENGRAVING_OVERLAY_TEXTURE_PX_PER_MM = 4;
@@ -289,7 +312,7 @@ async function rasterizeOverlayTexture(item: PlacedItem, tintColor: string): Pro
 
 function formatBoundsLabel(bounds: ReturnType<typeof resolveOutlineBounds>): string {
   if (!bounds) return "n/a";
-  return `${bounds.width} x ${bounds.height} mm`;
+  return `${bounds.width} x ${bounds.height} contour units`;
 }
 
 function formatShortHash(value: string | null | undefined): string {
@@ -2123,6 +2146,54 @@ export function TemplateCreateForm({
     }),
     [activeBodyReferenceFineTuneOutline],
   );
+  const bodyHeightAuthorityInput = React.useMemo<BodyHeightAuthorityInput>(() => {
+    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
+    const bodyBottomFromOverallMm = round2(Math.max(bodyTopFromOverallMm, overallHeightMm - Math.max(0, bottomMarginMm)));
+    const referenceBandHeightPx =
+      typeof lookupResult?.fitDebug?.referenceBandTopPx === "number" &&
+      typeof lookupResult.fitDebug.referenceBandBottomPx === "number"
+        ? round2(Math.max(0, lookupResult.fitDebug.referenceBandBottomPx - lookupResult.fitDebug.referenceBandTopPx))
+        : undefined;
+
+    return {
+      lookupBodyHeightMm: lookupDimensionAuthoritySummary.bodyHeightMm,
+      lookupBodyHeightSource: resolveLookupBodyHeightSource(activeLookupDimensions),
+      lookupFullProductHeightMm: lookupDimensionAuthoritySummary.fullProductHeightMm,
+      templateDimensionsHeightMm: overallHeightMm > 0 ? round2(overallHeightMm) : undefined,
+      templateDimensionsPrintHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
+      printableHeightMm: approvedCanonicalDimensionCalibration?.printableSurfaceContract?.printableHeightMm,
+      engravableHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
+      approvedSvgBoundsHeightMm: activeBodyReferenceSvgQuality.bounds?.height,
+      approvedSvgMarkedPhysicalMm: false,
+      v2ExpectedBodyHeightMm: bodyReferenceV2ScaleCalibration.expectedBodyHeightMm,
+      referenceBandHeightPx,
+      canonicalBodyHeightMm: approvedCanonicalDimensionCalibration?.bodyHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      diameterAuthority:
+        lookupDimensionAuthoritySummary.readyForLookupScale
+          ? "lookup-diameter"
+          : "manual-diameter",
+      radialScaleSource: "diameterMm",
+      yScaleSource: "template body top/bottom",
+      sourceFunction: "TemplateCreateForm.bodyHeightAuthorityInput",
+    };
+  }, [
+    activeBodyReferenceSvgQuality.bounds?.height,
+    activeLookupDimensions,
+    approvedCanonicalDimensionCalibration?.bodyHeightMm,
+    approvedCanonicalDimensionCalibration?.printableSurfaceContract?.printableHeightMm,
+    bodyReferenceV2ScaleCalibration.expectedBodyHeightMm,
+    bottomMarginMm,
+    lookupDimensionAuthoritySummary.bodyHeightMm,
+    lookupDimensionAuthoritySummary.fullProductHeightMm,
+    lookupDimensionAuthoritySummary.readyForLookupScale,
+    lookupResult?.fitDebug?.referenceBandBottomPx,
+    lookupResult?.fitDebug?.referenceBandTopPx,
+    overallHeightMm,
+    printHeightMm,
+    topMarginMm,
+  ]);
   const currentReviewedBodyReferenceSourceSignature = React.useMemo(() => {
     if (
       !canGenerateReviewedBodyReferenceGlb ||
@@ -2181,6 +2252,20 @@ export function TemplateCreateForm({
     loadedBodyGeometryContract?.glb.sourceHash
     ?? generatedReviewedBodyGeometryContract?.glb.sourceHash
     ?? reviewedBodyCutoutQaGeneratedSourceSignature;
+  const bodyReferenceGuideFrame = React.useMemo(
+    () => resolveBodyReferenceGuideFrame({
+      acceptedBodyReferenceOutline: approvedBodyOutline,
+      acceptedSourceHash: currentReviewedBodyReferenceSourceSignature,
+      generatedSourceHash: reviewedBodyReferenceGlbSourceHash,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    }),
+    [
+      approvedBodyOutline,
+      currentReviewedBodyReferenceSourceSignature,
+      lookupResult?.fitDebug,
+      reviewedBodyReferenceGlbSourceHash,
+    ],
+  );
   const reviewedBodyReferenceGlbFreshness = React.useMemo(
     () => resolveFineTuneGlbReviewState({
       canGenerate: canGenerateReviewedBodyReferenceGlb,
@@ -2447,6 +2532,7 @@ export function TemplateCreateForm({
           renderMode: "body-cutout-qa",
           matchedProfileId: resolvedMatchedProfileId ?? null,
           generationSourceMode,
+          bodyHeightAuthorityInput,
           ...(requestingV2
             ? {
                 bodyReferenceV2Draft: acceptedBodyReferenceV2Draft,
@@ -2505,6 +2591,7 @@ export function TemplateCreateForm({
     approvedCanonicalBodyProfile,
     approvedCanonicalDimensionCalibration,
     bodyColorHex,
+    bodyHeightAuthorityInput,
     bodyReferenceV2CaptureReadiness.generationReady,
     name,
     productType,
@@ -2909,6 +2996,7 @@ export function TemplateCreateForm({
               <TumblerLookupDebugPanel
                 debug={lookupResult.fitDebug}
                 imageUrl={lookupDebugImageUrl}
+                guideFrame={bodyReferenceGuideFrame}
               />
             )}
           </div>
@@ -3976,6 +4064,7 @@ export function TemplateCreateForm({
                   detectedOutline={bodyReferenceFineTuneDetectedBaselineOutline}
                   overallHeightMm={overallHeightMm}
                   sourceImageUrl={productPhotoFullUrl || null}
+                  fitDebug={lookupResult?.fitDebug ?? null}
                   svgQualityReport={activeBodyReferenceSvgQuality}
                   interactive={bodyReferenceFineTuneModeEnabled}
                   canUndo={bodyReferenceFineTuneUndoStack.length > 0}
@@ -4834,6 +4923,7 @@ export function TemplateCreateForm({
             photoAnchorY={referencePhotoAnchorY}
             bodyColorHex={bodyColorHex}
             rimColorHex={rimColorHex}
+            guideFrame={bodyReferenceGuideFrame}
             onChange={(top, bottom) => {
               setTopMarginMm(top);
               setBottomMarginMm(bottom);

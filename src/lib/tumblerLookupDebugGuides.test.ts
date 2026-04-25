@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
+import { resolveBodyReferenceGuideFrame } from "./bodyReferenceGuideFrame.ts";
 import { buildTumblerLookupDebugGuideModel } from "./tumblerLookupDebugGuides.ts";
 
 function createDebug(overrides: Partial<TumblerItemLookupFitDebug> = {}): TumblerItemLookupFitDebug {
@@ -88,4 +89,71 @@ test("lookup debug guide model shows bottom guide only when base-band data is pr
   assert.equal(model.showBottomBodyGuide, true);
   assert.equal(model.bottomBodyGuideYPx, 610);
   assert.match(model.caption, /bottom base ring/i);
+});
+
+test("lookup debug guide model uses the shared guide frame when provided", () => {
+  const debug = createDebug({
+    measurementBandTopPx: 176,
+    measurementBandBottomPx: 226,
+    measurementBandCenterYPx: 201,
+    measurementBandCenterXPx: 250,
+    measurementBandLeftPx: 160,
+    measurementBandRightPx: 340,
+    measurementBandWidthPx: 180,
+    referenceBandTopPx: 190,
+    referenceBandBottomPx: 218,
+    referenceBandCenterYPx: 204,
+    referenceBandWidthPx: 164,
+  });
+  const guideFrame = resolveBodyReferenceGuideFrame({ fitDebug: debug });
+
+  const model = buildTumblerLookupDebugGuideModel(debug, guideFrame);
+
+  assert.equal(model.guideSource, "fit-debug-reference-band");
+  assert.equal(model.resolvedGuideFrameBounds?.topPx, 176);
+  assert.equal(model.resolvedGuideFrameBounds?.bottomPx, 226);
+  assert.equal(model.resolvedGuideFrameBounds?.widthPx, 180);
+  assert.equal(model.measurementBand?.topPx, 176);
+  assert.equal(model.measurementBand?.bottomPx, 226);
+  assert.equal(model.measurementBand?.widthPx, 180);
+  assert.equal(model.measurementBand?.centerXPx, 250);
+});
+
+test("accepted guide frame does not overwrite the visual diameter band", () => {
+  const debug = createDebug({
+    measurementBandTopPx: 176,
+    measurementBandBottomPx: 226,
+    measurementBandCenterYPx: 201,
+    measurementBandCenterXPx: 250,
+    measurementBandLeftPx: 160,
+    measurementBandRightPx: 340,
+    measurementBandWidthPx: 180,
+  });
+  const model = buildTumblerLookupDebugGuideModel(debug, {
+    guideSource: "accepted-body-reference",
+    coordinateSpace: "raw-image-px",
+    rawImageBounds: {
+      left: 150,
+      top: 180,
+      right: 350,
+      bottom: 630,
+      width: 200,
+      height: 450,
+      centerX: 250,
+      centerY: 405,
+    },
+    rawImageSize: { width: 500, height: 700 },
+    displayedImageBounds: null,
+    mappedDomOverlayBounds: null,
+    sourceHash: "accepted",
+    freshRelativeToGeneratedSource: null,
+    warnings: [],
+    errors: [],
+  });
+
+  assert.equal(model.guideSource, "accepted-body-reference");
+  assert.equal(model.resolvedGuideFrameBounds?.topPx, 180);
+  assert.equal(model.resolvedGuideFrameBounds?.bottomPx, 630);
+  assert.equal(model.measurementBand?.topPx, 176);
+  assert.equal(model.measurementBand?.bottomPx, 226);
 });

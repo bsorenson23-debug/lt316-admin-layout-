@@ -29,6 +29,10 @@ import {
   type BodyReferenceV2GenerationSource,
   type BodyReferenceV2MirroredProfile,
 } from "../../lib/bodyReferenceV2GenerationSource.ts";
+import {
+  resolveBodyHeightAuthority,
+  type BodyHeightAuthorityInput,
+} from "../../lib/bodyHeightAuthority.ts";
 import { hashArrayBufferSha256Node, hashJsonSha256Node } from "../../lib/hashSha256.node.ts";
 import { stableStringifyForHash } from "../../lib/hashSha256.ts";
 import { getGeneratedModelWriteAbsolutePath, writeGeneratedModelGlb } from "../models/generatedModelStorage.ts";
@@ -1128,6 +1132,7 @@ export interface GenerateBodyReferenceGlbInput {
   canonicalBodyProfile?: CanonicalBodyProfile | null;
   canonicalDimensionCalibration?: CanonicalDimensionCalibration | null;
   bodyReferenceV2Draft?: BodyReferenceV2Draft | null;
+  bodyHeightAuthorityInput?: BodyHeightAuthorityInput | null;
   bodyColorHex?: string | null;
   rimColorHex?: string | null;
 }
@@ -1305,6 +1310,93 @@ function buildV2BodyReferenceScene(args: {
   };
 }
 
+function resolveV1BodyHeightAuthority(args: {
+  input: GenerateBodyReferenceGlbInput;
+  bodyHeightMm: number;
+  sourceBoundsHeightMm?: number;
+  generatedBodyBoundsHeightMm?: number;
+}) {
+  const calibration = args.input.canonicalDimensionCalibration!;
+  const mmPerSourceUnit =
+    calibration.photoToFrontTransform.type === "similarity" &&
+    typeof calibration.photoToFrontTransform.matrix[0] === "number" &&
+    Number.isFinite(calibration.photoToFrontTransform.matrix[0]) &&
+    calibration.photoToFrontTransform.matrix[0] > 0
+      ? calibration.photoToFrontTransform.matrix[0]
+      : undefined;
+  const sourceDiameterUnits = mmPerSourceUnit
+    ? calibration.wrapDiameterMm / mmPerSourceUnit
+    : undefined;
+  const sourceContourHeightUnits = mmPerSourceUnit
+    ? args.bodyHeightMm / mmPerSourceUnit
+    : undefined;
+  return resolveBodyHeightAuthority({
+    ...(args.input.bodyHeightAuthorityInput ?? {}),
+    diameterAuthorityKind: "diameter-primary",
+    diameterAuthorityValueMm: calibration.wrapDiameterMm,
+    diameterAuthoritySourceField: "canonicalDimensionCalibration.wrapDiameterMm",
+    sourceDiameterUnits,
+    sourceContourHeightUnits,
+    mmPerSourceUnit,
+    uniformScaleApplied: calibration.photoToFrontTransform.type === "similarity",
+    derivedBodyHeightMm: args.bodyHeightMm,
+    svgPhysicalMmTrusted: false,
+    svgToPhotoTransformPresent: calibration.photoToFrontTransform.type === "similarity",
+    canonicalBodyHeightMm: args.bodyHeightMm,
+    bodyTopFromOverallMm: calibration.lidBodyLineMm,
+    bodyBottomFromOverallMm: calibration.bodyBottomMm,
+    templateDimensionsHeightMm: calibration.totalHeightMm,
+    printableHeightMm: calibration.printableSurfaceContract?.printableHeightMm,
+    approvedSvgBoundsHeightMm: args.sourceBoundsHeightMm,
+    approvedSvgMarkedPhysicalMm: false,
+    generatedBodyBoundsHeightMm: args.generatedBodyBoundsHeightMm,
+    diameterAuthority: "canonicalDimensionCalibration.wrapDiameterMm",
+    radialScaleSource: "canonicalDimensionCalibration.wrapDiameterMm",
+    yScaleSource: "canonicalDimensionCalibration.photoToFrontTransform.similarityScale",
+    sourceFunction: "buildV1BodyReferenceBodyGeometryContract",
+  });
+}
+
+function resolveV2BodyHeightAuthority(args: {
+  input: GenerateBodyReferenceGlbInput;
+  v2Source: BodyReferenceV2GenerationSource;
+  v2MirroredProfile: BodyReferenceV2MirroredProfile;
+  generatedBodyBoundsHeightMm?: number;
+}) {
+  const scaleCalibration = args.v2Source.scaleCalibration;
+  const sourceDiameterUnits =
+    args.v2Source.mmPerPx > 0
+      ? args.v2Source.wrapDiameterMm / args.v2Source.mmPerPx
+      : undefined;
+  const sourceContourHeightUnits = args.v2MirroredProfile.maxYPx - args.v2MirroredProfile.minYPx;
+  return resolveBodyHeightAuthority({
+    ...(args.input.bodyHeightAuthorityInput ?? {}),
+    diameterAuthorityKind: "diameter-primary",
+    diameterAuthorityValueMm: args.v2Source.wrapDiameterMm,
+    diameterAuthoritySourceField: "bodyReferenceV2.scaleCalibration.lookupDiameterMm",
+    sourceDiameterUnits,
+    sourceContourHeightUnits,
+    mmPerSourceUnit: args.v2Source.mmPerPx,
+    uniformScaleApplied: true,
+    derivedBodyHeightMm: args.v2MirroredProfile.bodyHeightMm,
+    svgPhysicalMmTrusted: false,
+    svgToPhotoTransformPresent: true,
+    lookupBodyHeightMm: scaleCalibration.lookupBodyHeightMm,
+    lookupBodyHeightSource: scaleCalibration.lookupBodyHeightMm
+      ? (scaleCalibration.lookupHeightIgnoredForScale ? "usable-height" : "unknown")
+      : undefined,
+    lookupFullProductHeightMm: scaleCalibration.lookupFullProductHeightMm,
+    templateDimensionsPrintHeightMm: scaleCalibration.expectedBodyHeightMm,
+    v2ExpectedBodyHeightMm: scaleCalibration.expectedBodyHeightMm,
+    v2ProfileBoundsHeightMm: args.v2MirroredProfile.bodyHeightMm,
+    generatedBodyBoundsHeightMm: args.generatedBodyBoundsHeightMm,
+    diameterAuthority: "bodyReferenceV2.scaleCalibration.lookupDiameterMm",
+    radialScaleSource: "lookup-diameter",
+    yScaleSource: "bodyReferenceV2.mmPerPx",
+    sourceFunction: "buildV2BodyReferenceBodyGeometryContract",
+  });
+}
+
 async function writeReviewedBodyReferenceGlb(
   fileName: string,
   scene: THREE.Scene,
@@ -1346,6 +1438,12 @@ function buildV1BodyReferenceBodyGeometryContract(args: {
     sourceHash: args.sourceHash,
     label: args.input.templateName ?? args.input.matchedProfileId ?? undefined,
   });
+  const bodyHeightAuthority = resolveV1BodyHeightAuthority({
+    input: args.input,
+    bodyHeightMm,
+    sourceBoundsHeightMm: svgQuality.bounds?.height,
+    generatedBodyBoundsHeightMm: args.bodyMeshBounds?.sizeMm.y,
+  });
 
   return updateContractValidation({
     ...createEmptyBodyGeometryContract(),
@@ -1363,6 +1461,13 @@ function buildV1BodyReferenceBodyGeometryContract(args: {
         args.input.bodyOutlineSourceMode === "body-only" ||
         bodyOutline.sourceContourMode === "body-only" ||
         (args.input.renderMode ?? "body-cutout-qa") === "body-cutout-qa",
+      contourFrame: bodyOutline.contourFrame
+        ? {
+            ...bodyOutline.contourFrame,
+            glbInputBounds: bodyOutline.contourFrame.glbInputBounds ?? svgQuality.bounds,
+            canonicalInputBounds: bodyOutline.contourFrame.canonicalInputBounds ?? svgQuality.bounds,
+          }
+        : undefined,
     },
     glb: {
       path: args.generatedGlb.glbPath,
@@ -1388,6 +1493,7 @@ function buildV1BodyReferenceBodyGeometryContract(args: {
           }
         : undefined,
       bodyBoundsUnits: args.bodyMeshBounds ? "mm" : undefined,
+      bodyHeightAuthority,
       wrapDiameterMm: round2(calibration.wrapDiameterMm),
       wrapWidthMm: round2(calibration.wrapWidthMm),
       frontVisibleWidthMm: round2(calibration.frontVisibleWidthMm),
@@ -1431,6 +1537,12 @@ function buildV2BodyReferenceBodyGeometryContract(args: {
     "artwork-placements",
     "engraving-overlay-preview",
   ].sort((left, right) => left.localeCompare(right));
+  const bodyHeightAuthority = resolveV2BodyHeightAuthority({
+    input: args.input,
+    v2Source: args.v2Source,
+    v2MirroredProfile: args.v2MirroredProfile,
+    generatedBodyBoundsHeightMm: args.bodyMeshBounds?.sizeMm.y,
+  });
 
   return updateContractValidation({
     ...createEmptyBodyGeometryContract(),
@@ -1477,6 +1589,7 @@ function buildV2BodyReferenceBodyGeometryContract(args: {
           }
         : undefined,
       bodyBoundsUnits: args.bodyMeshBounds ? "mm" : undefined,
+      bodyHeightAuthority,
       wrapDiameterMm: round2(args.v2Source.wrapDiameterMm),
       wrapWidthMm: round2(args.v2Source.wrapWidthMm),
       frontVisibleWidthMm: round2(args.v2Source.wrapDiameterMm),

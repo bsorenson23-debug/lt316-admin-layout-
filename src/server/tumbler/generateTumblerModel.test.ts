@@ -421,6 +421,7 @@ test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth
     glb: { hash?: string; sourceHash?: string; freshRelativeToSource?: boolean };
     source: { hash?: string };
     meshes: { names: string[]; bodyMeshNames: string[]; accessoryMeshNames: string[]; fallbackDetected: boolean };
+    dimensionsMm: { bodyHeightAuthority?: { kind?: string; status?: string; sourceField?: string; inputHeights?: { canonicalBodyHeightMm?: number } } };
     validation: { status: string };
     svgQuality?: { status: string; suspiciousJumpCount: number; expectedBridgeSegmentCount: number };
   };
@@ -431,6 +432,9 @@ test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth
   assert.deepEqual(auditArtifact.meshes.bodyMeshNames, ["body_mesh"]);
   assert.deepEqual(auditArtifact.meshes.accessoryMeshNames, []);
   assert.equal(auditArtifact.meshes.fallbackDetected, false);
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.kind, "canonical-body-height-warning");
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.status, "warn");
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.inputHeights?.canonicalBodyHeightMm, 214.71);
   assert.equal(auditArtifact.validation.status, "pass");
   assert.equal(auditArtifact.svgQuality?.status, "pass");
   assert.equal(auditArtifact.svgQuality?.suspiciousJumpCount, 0);
@@ -447,6 +451,67 @@ test("generateBodyReferenceGlb changes source lineage when the approved outline 
   assert.notEqual(before.bodyGeometryContract.source.hash, after.bodyGeometryContract.source.hash);
   assert.equal(after.bodyGeometryContract.source.hash, after.bodyGeometryContract.glb.sourceHash);
   assert.equal(after.bodyGeometryContract.validation.status, "pass");
+});
+
+test("generateBodyReferenceGlb reports when 150mm body bounds came from non-uniform canonical height", async () => {
+  const shortProfile: CanonicalBodyProfile = {
+    ...BODY_PROFILE,
+    axis: {
+      xTop: 0,
+      yTop: 25,
+      xBottom: 0,
+      yBottom: 175,
+    },
+    samples: [
+      { sNorm: 0, yMm: 25, yPx: 170, xLeft: -44.45, radiusPx: 84.5, radiusMm: 44.45 },
+      { sNorm: 0.5, yMm: 100, yPx: 380, xLeft: -44.45, radiusPx: 84.5, radiusMm: 44.45 },
+      { sNorm: 1, yMm: 175, yPx: 590, xLeft: -36, radiusPx: 68.4, radiusMm: 36 },
+    ],
+  };
+  const shortCalibration: CanonicalDimensionCalibration = {
+    ...DIMENSION_CALIBRATION,
+    totalHeightMm: 218.4,
+    bodyHeightMm: 150,
+    lidBodyLineMm: 25,
+    bodyBottomMm: 175,
+    printableSurfaceContract: {
+      printableTopMm: 25,
+      printableBottomMm: 175,
+      printableHeightMm: 150,
+      axialExclusions: [],
+      circumferentialExclusions: [],
+    },
+    svgFrontViewBoxMm: {
+      x: -44.45,
+      y: 0,
+      width: 88.9,
+      height: 218.4,
+    },
+  };
+
+  const result = await generateBodyReferenceGlb(createInput({
+    templateName: "usable-height-diagnostic",
+    canonicalBodyProfile: shortProfile,
+    canonicalDimensionCalibration: shortCalibration,
+    bodyHeightAuthorityInput: {
+      lookupFullProductHeightMm: 218.4,
+      lookupBodyHeightMm: 150,
+      lookupBodyHeightSource: "usable-height",
+      templateDimensionsPrintHeightMm: 150,
+      approvedSvgBoundsHeightMm: 150,
+      referenceBandHeightPx: 14,
+    },
+  }));
+
+  assert.equal(result.bodyGeometryContract.validation.status, "pass");
+  assert.equal(result.bodyGeometryContract.source.hash, result.bodyGeometryContract.glb.sourceHash);
+  assert.equal(result.bodyGeometryContract.dimensionsMm.bodyBounds?.height, 150);
+  assert.equal(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.status, "warn");
+  assert.equal(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.kind, "canonical-body-height-warning");
+  assert.equal(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.sourceField, "canonicalDimensionCalibration.bodyHeightMm");
+  assert.equal(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.isPhysicalBodyHeight, false);
+  assert.ok(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.rejectedHeightSources.includes("lookup.usableHeightMm"));
+  assert.ok(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.rejectedHeightSources.includes("approvedSvgBounds.height"));
 });
 
 test("generateBodyReferenceGlb requires an approved body outline", async () => {
@@ -494,8 +559,9 @@ test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirro
   const sceneMeshNames = scene.children.map((child) => child.name).filter(Boolean);
   assert.deepEqual(sceneMeshNames, ["body_mesh"]);
   const bounds = getObjectBounds(scene, "body_mesh").getSize(new THREE.Vector3());
+  const expectedUniformHeightMm = Math.round(185 * (88.9 / 40) * 100) / 100;
   assert.ok(bounds.x > 80);
-  assert.ok(bounds.y > 180);
+  assert.ok(Math.abs(bounds.y - expectedUniformHeightMm) <= 0.5);
   assert.ok(bounds.z > 80);
 
   const auditArtifact = JSON.parse(await readFile(result.auditJsonPath ?? "", "utf8")) as {
@@ -511,7 +577,17 @@ test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirro
     };
     glb: { sourceHash?: string };
     meshes: { names: string[]; bodyMeshNames: string[]; accessoryMeshNames: string[] };
-    dimensionsMm: { scaleSource?: string };
+    dimensionsMm: {
+      scaleSource?: string;
+      expectedBodyHeightMm?: number;
+      bodyHeightAuthority?: {
+        kind?: string;
+        status?: string;
+        sourceField?: string;
+        uniformScaleApplied?: boolean;
+        derivedBodyHeightMm?: number;
+      };
+    };
   };
   assert.equal(auditArtifact.source.type, "body-reference-v2");
   assert.equal(auditArtifact.source.centerlineCaptured, true);
@@ -529,6 +605,11 @@ test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirro
   assert.deepEqual(auditArtifact.meshes.bodyMeshNames, ["body_mesh"]);
   assert.deepEqual(auditArtifact.meshes.accessoryMeshNames, []);
   assert.equal(auditArtifact.dimensionsMm.scaleSource, "lookup-diameter");
+  assert.equal(auditArtifact.dimensionsMm.expectedBodyHeightMm, expectedUniformHeightMm);
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.kind, "derived-from-diameter-scale");
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.sourceField, "sourceContour.heightUnits * mmPerSourceUnit");
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.uniformScaleApplied, true);
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.derivedBodyHeightMm, expectedUniformHeightMm);
 });
 
 test("generateBodyReferenceGlb keeps BODY CUTOUT QA pass clean for operator-seeded v2 drafts with context-only warnings", async () => {

@@ -2,12 +2,14 @@
 
 import React from "react";
 import type { TumblerItemLookupFitDebug } from "@/types/tumblerItemLookup";
+import type { BodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
 import { buildTumblerLookupDebugGuideModel } from "@/lib/tumblerLookupDebugGuides";
 import styles from "./TumblerLookupDebugPanel.module.css";
 
 interface Props {
   debug: TumblerItemLookupFitDebug;
   imageUrl: string;
+  guideFrame?: BodyReferenceGuideFrame | null;
 }
 
 function round1(value: number): number {
@@ -34,22 +36,26 @@ function buildEdgePolyline(
     .join(" ");
 }
 
-export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
+export function TumblerLookupDebugPanel({ debug, imageUrl, guideFrame }: Props) {
   const viewBox = `0 0 ${debug.imageWidthPx} ${debug.imageHeightPx}`;
   const silhouetteWidth = debug.silhouetteBoundsPx.maxX - debug.silhouetteBoundsPx.minX;
   const silhouetteHeight = debug.silhouetteBoundsPx.maxY - debug.silhouetteBoundsPx.minY;
   const bodyTraceTopPx = debug.bodyTraceTopPx ?? debug.bodyTopPx;
   const bodyTraceBottomPx = debug.bodyTraceBottomPx ?? debug.bodyBottomPx;
   const bodyHeight = bodyTraceBottomPx - bodyTraceTopPx;
-  const guideModel = buildTumblerLookupDebugGuideModel(debug);
+  const guideModel = buildTumblerLookupDebugGuideModel(debug, guideFrame);
   const rightProfile = buildEdgePolyline(debug, "right", guideModel.revolvedProfileTopGuideYPx);
   const leftProfile = buildEdgePolyline(debug, "left", guideModel.revolvedProfileTopGuideYPx);
   const measurementBand = guideModel.measurementBand;
+  const resolvedGuideFrameBounds = guideModel.resolvedGuideFrameBounds;
   const measurementBandTopPx = measurementBand?.topPx ?? debug.referenceBandTopPx;
   const measurementBandBottomPx = measurementBand?.bottomPx ?? debug.referenceBandBottomPx;
   const measurementBandLeftPx = measurementBand?.leftPx ?? Math.max(0, debug.centerXPx - debug.referenceHalfWidthPx);
   const measurementBandRightPx = measurementBand?.rightPx ?? Math.min(debug.imageWidthPx, debug.centerXPx + debug.referenceHalfWidthPx);
   const measurementBandWidthPx = measurementBand?.widthPx ?? Math.max(1, measurementBandRightPx - measurementBandLeftPx + 1);
+  const resolvedGuideTopPx = resolvedGuideFrameBounds?.topPx ?? measurementBandTopPx;
+  const resolvedGuideBottomPx = resolvedGuideFrameBounds?.bottomPx ?? measurementBandBottomPx;
+  const resolvedGuideWidthPx = resolvedGuideFrameBounds?.widthPx ?? measurementBandWidthPx;
 
   return (
     <div className={styles.panel}>
@@ -99,6 +105,11 @@ export function TumblerLookupDebugPanel({ debug, imageUrl }: Props) {
             viewBox={viewBox}
             className={styles.preview}
             aria-label="Rim split and diameter band"
+            data-guide-source={guideModel.guideSource}
+            data-guide-top={resolvedGuideTopPx}
+            data-guide-bottom={resolvedGuideBottomPx}
+            data-guide-width={resolvedGuideWidthPx}
+            data-guide-source-hash={guideFrame?.sourceHash ?? ""}
             data-bottom-body-guide={guideModel.showBottomBodyGuide ? "present" : "absent"}
           >
             <image href={imageUrl} x="0" y="0" width={debug.imageWidthPx} height={debug.imageHeightPx} />
