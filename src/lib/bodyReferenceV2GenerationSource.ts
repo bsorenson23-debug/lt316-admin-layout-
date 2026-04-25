@@ -403,7 +403,8 @@ export function buildBodyReferenceV2MirroredProfile(
     .sort((left, right) => left.yPx - right.yPx || left.xPx - right.xPx);
   const minYPx = Math.min(...leftPoints.map((point) => point.yPx));
   const maxYPx = Math.max(...leftPoints.map((point) => point.yPx));
-  const bodyHeightMm = round4((maxYPx - minYPx) * source.mmPerPx);
+  const profileHeightPx = Math.max(0, maxYPx - minYPx);
+  const bodyHeightMm = round4(profileHeightPx * source.mmPerPx);
 
   return {
     bodyHeightMm,

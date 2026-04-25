@@ -73,6 +73,12 @@ export interface TumblerItemLookupFitDebug {
   fullBottomPx: number;
   bodyTopPx: number;
   bodyBottomPx: number;
+  paintedBodyTopPx?: number;
+  colorBodyBottomPx?: number;
+  bodyTraceTopPx?: number;
+  bodyTraceBottomPx?: number;
+  engravingStartGuidePx?: number;
+  seamSilverBottomPx?: number | null;
   rimTopPx: number;
   rimBottomPx: number;
   referenceBandTopPx: number;
@@ -88,6 +94,8 @@ export interface TumblerItemLookupFitDebug {
   measurementBandRightPx?: number;
   measurementBandRowCount?: number;
   measurementBandWidthStdDevPx?: number;
+  baseBandTopPx?: number;
+  baseBandBottomPx?: number;
   maxCenterWidthPx: number;
   referenceHalfWidthPx: number;
   handleSide?: "left" | "right" | null;

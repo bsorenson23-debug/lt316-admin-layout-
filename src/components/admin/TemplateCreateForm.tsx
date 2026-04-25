@@ -59,12 +59,12 @@ import {
 import {
   cloneEditableBodyOutline,
   createEditableBodyOutline,
-  deriveDimensionsFromEditableBodyOutline,
 } from "@/lib/editableBodyOutline";
 import {
   buildOutlineGeometrySignature,
   cloneOutline,
   hasFineTuneDraftChanges,
+  rebuildAcceptedBodyReferenceSnapshot,
   resolveFineTuneGlbReviewState,
   resolveOutlineBounds,
   resolveOutlinePointCount,
@@ -77,7 +77,8 @@ import {
   getDrinkwareGlbStatusLabel,
   isBodyCutoutQaPreviewAvailable,
 } from "@/lib/bodyReferencePreviewIntent";
-import { buildBodyReferenceGlbSourceSignature } from "@/lib/bodyReferenceGlbSource";
+import { buildBodyReferenceGlbSourcePayload } from "@/lib/bodyReferenceGlbSource";
+import { resolveBodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
 import { parseBodyReferenceGlbResponse } from "@/lib/adminApi.schema";
 import type { BodyGeometryContract } from "@/lib/bodyGeometryContract";
 import { inferGeneratedModelStatusFromSource } from "@/lib/generatedModelUrl";
@@ -121,6 +122,7 @@ import {
   ENGRAVING_OVERLAY_PREVIEW_MATERIAL_LABEL,
   ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN,
 } from "@/lib/engravingOverlayPreview";
+import { hashJsonSha256, stableStringifyForHash } from "@/lib/hashSha256";
 import {
   acceptBodyReferenceV2Draft,
   buildBodyReferenceV2GenerationReadinessFromDraft,
@@ -140,6 +142,7 @@ import {
   summarizeBodyReferenceV2ScaleMirrorPreview,
 } from "@/lib/bodyReferenceV2ScaleMirror";
 import { summarizeProductDimensionAuthority } from "@/lib/productDimensionAuthority";
+import type { BodyHeightAuthorityInput, LookupBodyHeightSource } from "@/lib/bodyHeightAuthority";
 import {
   buildBodyReferenceV2GuidanceMessages,
   formatBodyReferenceV2ScaleSourceLabel,
@@ -192,6 +195,27 @@ function buildEffectiveBodyReferenceV2Draft(args: {
     blockedRegions: cloneSerializable(geometryDraft.blockedRegions ?? []),
     scaleCalibration: cloneSerializable(args.scaleCalibration),
   });
+}
+
+function resolveLookupBodyHeightSource(
+  dimensions: TumblerItemLookupDimensions | null | undefined,
+): LookupBodyHeightSource | undefined {
+  if (!dimensions) return undefined;
+  const bodyHeightMm = dimensions.bodyHeightMm;
+  const usableHeightMm = dimensions.usableHeightMm;
+  if (typeof bodyHeightMm !== "number" || !Number.isFinite(bodyHeightMm) || bodyHeightMm <= 0) {
+    return typeof usableHeightMm === "number" && Number.isFinite(usableHeightMm) && usableHeightMm > 0
+      ? "usable-height"
+      : undefined;
+  }
+  if (
+    typeof usableHeightMm === "number" &&
+    Number.isFinite(usableHeightMm) &&
+    Math.abs(usableHeightMm - bodyHeightMm) <= 0.05
+  ) {
+    return "usable-height";
+  }
+  return "unknown";
 }
 
 const ENGRAVING_OVERLAY_TEXTURE_PX_PER_MM = 4;
@@ -289,7 +313,7 @@ async function rasterizeOverlayTexture(item: PlacedItem, tintColor: string): Pro
 
 function formatBoundsLabel(bounds: ReturnType<typeof resolveOutlineBounds>): string {
   if (!bounds) return "n/a";
-  return `${bounds.width} x ${bounds.height} mm`;
+  return `${bounds.width} x ${bounds.height} contour units`;
 }
 
 function formatShortHash(value: string | null | undefined): string {
@@ -492,6 +516,34 @@ function formatLookupAuthority(value: DimensionAuthority | null | undefined): st
     default:
       return "Unknown";
   }
+}
+
+function formatLookupVariantStatus(
+  value: ReturnType<typeof summarizeProductDimensionAuthority>["variantStatus"],
+): string {
+  switch (value) {
+    case "exact":
+      return "Exact variant";
+    case "generic":
+      return "Generic variant";
+    case "ambiguous":
+      return "Ambiguous variant";
+    case "mismatch":
+      return "Variant mismatch";
+    default:
+      return "Variant unknown";
+  }
+}
+
+function buildLookupTemplateName(result: TumblerItemLookupResponse, fallback: string): string {
+  const parts: string[] = [];
+  if (result.brand) parts.push(result.brand);
+  if (result.model) parts.push(result.model);
+  const normalizedModel = result.model?.toLowerCase() ?? "";
+  if (result.capacityOz && !normalizedModel.includes(`${result.capacityOz}oz`) && !normalizedModel.includes(`${result.capacityOz} oz`)) {
+    parts.push(`${result.capacityOz}oz`);
+  }
+  return parts.length > 0 ? parts.join(" ") : result.title ?? fallback;
 }
 
 function resolveDefaultPreviewModelMode(args: {
@@ -795,6 +847,7 @@ export function TemplateCreateForm({
   const [reviewedBodyCutoutQaGeneratedSourceSignature, setReviewedBodyCutoutQaGeneratedSourceSignature] = React.useState<string | null>(null);
   const [generatedReviewedBodyGeometryContract, setGeneratedReviewedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
   const [loadedBodyGeometryContract, setLoadedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
+  const [currentReviewedBodyReferenceSourceHash, setCurrentReviewedBodyReferenceSourceHash] = React.useState<string | null>(null);
   const [reviewedGeneratedModelState, setReviewedGeneratedModelState] = React.useState<{
     glbPath: string;
     status: "generated-reviewed-model";
@@ -1662,11 +1715,7 @@ export function TemplateCreateForm({
       setLookupResult(result);
       setLookupDimensionsSnapshot(result.dimensions);
 
-      const parts: string[] = [];
-      if (result.brand) parts.push(result.brand);
-      if (result.model) parts.push(result.model);
-      if (result.capacityOz) parts.push(`${result.capacityOz}oz`);
-      setName(parts.length > 0 ? parts.join(" ") : result.title ?? raw);
+      setName(buildLookupTemplateName(result, raw));
       if (result.brand) setBrand(result.brand);
       if (result.capacityOz) setCapacity(`${result.capacityOz}oz`);
       setProductType("tumbler");
@@ -2099,7 +2148,55 @@ export function TemplateCreateForm({
     }),
     [activeBodyReferenceFineTuneOutline],
   );
-  const currentReviewedBodyReferenceSourceSignature = React.useMemo(() => {
+  const bodyHeightAuthorityInput = React.useMemo<BodyHeightAuthorityInput>(() => {
+    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
+    const bodyBottomFromOverallMm = round2(Math.max(bodyTopFromOverallMm, overallHeightMm - Math.max(0, bottomMarginMm)));
+    const referenceBandHeightPx =
+      typeof lookupResult?.fitDebug?.referenceBandTopPx === "number" &&
+      typeof lookupResult.fitDebug.referenceBandBottomPx === "number"
+        ? round2(Math.max(0, lookupResult.fitDebug.referenceBandBottomPx - lookupResult.fitDebug.referenceBandTopPx))
+        : undefined;
+
+    return {
+      lookupBodyHeightMm: lookupDimensionAuthoritySummary.bodyHeightMm,
+      lookupBodyHeightSource: resolveLookupBodyHeightSource(activeLookupDimensions),
+      lookupFullProductHeightMm: lookupDimensionAuthoritySummary.fullProductHeightMm,
+      templateDimensionsHeightMm: overallHeightMm > 0 ? round2(overallHeightMm) : undefined,
+      templateDimensionsPrintHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
+      printableHeightMm: approvedCanonicalDimensionCalibration?.printableSurfaceContract?.printableHeightMm,
+      engravableHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
+      approvedSvgBoundsHeightMm: activeBodyReferenceSvgQuality.bounds?.height,
+      approvedSvgMarkedPhysicalMm: false,
+      v2ExpectedBodyHeightMm: bodyReferenceV2ScaleCalibration.expectedBodyHeightMm,
+      referenceBandHeightPx,
+      canonicalBodyHeightMm: approvedCanonicalDimensionCalibration?.bodyHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      diameterAuthority:
+        lookupDimensionAuthoritySummary.readyForLookupScale
+          ? "lookup-diameter"
+          : "manual-diameter",
+      radialScaleSource: "diameterMm",
+      yScaleSource: "template body top/bottom",
+      sourceFunction: "TemplateCreateForm.bodyHeightAuthorityInput",
+    };
+  }, [
+    activeBodyReferenceSvgQuality.bounds?.height,
+    activeLookupDimensions,
+    approvedCanonicalDimensionCalibration?.bodyHeightMm,
+    approvedCanonicalDimensionCalibration?.printableSurfaceContract?.printableHeightMm,
+    bodyReferenceV2ScaleCalibration.expectedBodyHeightMm,
+    bottomMarginMm,
+    lookupDimensionAuthoritySummary.bodyHeightMm,
+    lookupDimensionAuthoritySummary.fullProductHeightMm,
+    lookupDimensionAuthoritySummary.readyForLookupScale,
+    lookupResult?.fitDebug?.referenceBandBottomPx,
+    lookupResult?.fitDebug?.referenceBandTopPx,
+    overallHeightMm,
+    printHeightMm,
+    topMarginMm,
+  ]);
+  const currentReviewedBodyReferenceSourcePayload = React.useMemo(() => {
     if (
       !canGenerateReviewedBodyReferenceGlb ||
       !approvedBodyOutline ||
@@ -2108,25 +2205,49 @@ export function TemplateCreateForm({
     ) {
       return null;
     }
-    return buildBodyReferenceGlbSourceSignature({
-      renderMode: "body-cutout-qa",
-      matchedProfileId: resolvedMatchedProfileId ?? null,
+    return buildBodyReferenceGlbSourcePayload({
       bodyOutline: approvedBodyOutline,
       canonicalBodyProfile: approvedCanonicalBodyProfile,
       canonicalDimensionCalibration: approvedCanonicalDimensionCalibration,
-      bodyColorHex: bodyColorHex || null,
-      rimColorHex: rimColorHex || null,
     });
   }, [
     approvedBodyOutline,
     approvedCanonicalBodyProfile,
     approvedCanonicalDimensionCalibration,
-    bodyColorHex,
     canGenerateReviewedBodyReferenceGlb,
-    resolvedMatchedProfileId,
-    rimColorHex,
   ]);
-  const activeBodyReferenceDraftSourceSignature = React.useMemo(() => {
+  const currentReviewedBodyReferenceSourceSignature = React.useMemo(
+    () => (
+      currentReviewedBodyReferenceSourcePayload
+        ? stableStringifyForHash(currentReviewedBodyReferenceSourcePayload)
+        : null
+    ),
+    [currentReviewedBodyReferenceSourcePayload],
+  );
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!currentReviewedBodyReferenceSourcePayload) {
+      setCurrentReviewedBodyReferenceSourceHash(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void hashJsonSha256(currentReviewedBodyReferenceSourcePayload)
+      .then((hash) => {
+        if (!cancelled) {
+          setCurrentReviewedBodyReferenceSourceHash(hash);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCurrentReviewedBodyReferenceSourceHash(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentReviewedBodyReferenceSourcePayload]);
+  const activeBodyReferenceDraftSourcePayload = React.useMemo(() => {
     if (
       !canGenerateReviewedBodyReferenceGlb ||
       !activeBodyReferenceFineTuneOutline ||
@@ -2135,28 +2256,43 @@ export function TemplateCreateForm({
     ) {
       return null;
     }
-    return buildBodyReferenceGlbSourceSignature({
-      renderMode: "body-cutout-qa",
-      matchedProfileId: resolvedMatchedProfileId ?? null,
+    return buildBodyReferenceGlbSourcePayload({
       bodyOutline: activeBodyReferenceFineTuneOutline,
       canonicalBodyProfile: approvedCanonicalBodyProfile,
       canonicalDimensionCalibration: approvedCanonicalDimensionCalibration,
-      bodyColorHex: bodyColorHex || null,
-      rimColorHex: rimColorHex || null,
     });
   }, [
     activeBodyReferenceFineTuneOutline,
     approvedCanonicalBodyProfile,
     approvedCanonicalDimensionCalibration,
-    bodyColorHex,
     canGenerateReviewedBodyReferenceGlb,
-    resolvedMatchedProfileId,
-    rimColorHex,
   ]);
+  const activeBodyReferenceDraftSourceSignature = React.useMemo(
+    () => (
+      activeBodyReferenceDraftSourcePayload
+        ? stableStringifyForHash(activeBodyReferenceDraftSourcePayload)
+        : null
+    ),
+    [activeBodyReferenceDraftSourcePayload],
+  );
   const reviewedBodyReferenceGlbSourceHash =
     loadedBodyGeometryContract?.glb.sourceHash
     ?? generatedReviewedBodyGeometryContract?.glb.sourceHash
-    ?? reviewedBodyCutoutQaGeneratedSourceSignature;
+    ?? null;
+  const bodyReferenceGuideFrame = React.useMemo(
+    () => resolveBodyReferenceGuideFrame({
+      acceptedBodyReferenceOutline: approvedBodyOutline,
+      acceptedSourceHash: currentReviewedBodyReferenceSourceHash,
+      generatedSourceHash: reviewedBodyReferenceGlbSourceHash,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    }),
+    [
+      approvedBodyOutline,
+      currentReviewedBodyReferenceSourceHash,
+      lookupResult?.fitDebug,
+      reviewedBodyReferenceGlbSourceHash,
+    ],
+  );
   const reviewedBodyReferenceGlbFreshness = React.useMemo(
     () => resolveFineTuneGlbReviewState({
       canGenerate: canGenerateReviewedBodyReferenceGlb,
@@ -2181,7 +2317,7 @@ export function TemplateCreateForm({
         reviewedBodyReferenceGlbFreshness.status === "stale" &&
         reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
       hasReviewedGlb: reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
-      acceptedSourceHash: currentReviewedBodyReferenceSourceSignature,
+      acceptedSourceHash: currentReviewedBodyReferenceSourceHash,
       reviewedGlbSourceHash: reviewedBodyReferenceGlbSourceHash,
       reviewedGlbFreshRelativeToSource:
         reviewedBodyReferenceGlbFreshness.status === "current"
@@ -2193,7 +2329,7 @@ export function TemplateCreateForm({
     [
       approvedBodyOutline,
       bodyReferenceFineTuneDraftPendingAcceptance,
-      currentReviewedBodyReferenceSourceSignature,
+      currentReviewedBodyReferenceSourceHash,
       hasAcceptedBodyReferenceReview,
       reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
       reviewedBodyReferenceGlbFreshness.status,
@@ -2259,26 +2395,12 @@ export function TemplateCreateForm({
     reviewedBodyReferenceGlbFreshness.status,
   ]);
 
-  const applyAcceptedBodyReferenceDerivedDimensions = React.useCallback((outline: EditableBodyOutline | null | undefined) => {
-    if (!outline) return;
-    const derived = deriveDimensionsFromEditableBodyOutline(outline);
-    const nextTop = typeof derived.bodyTopFromOverallMm === "number"
-      ? round2(Math.max(0, derived.bodyTopFromOverallMm))
-      : topMarginMm;
-    const nextBodyBottom = typeof derived.bodyBottomFromOverallMm === "number"
-      ? round2(Math.max(nextTop + 1, derived.bodyBottomFromOverallMm))
-      : round2(Math.max(nextTop + 1, overallHeightMm - Math.max(0, bottomMarginMm)));
-    if (typeof derived.bodyTopFromOverallMm === "number") {
-      setTopMarginMm(nextTop);
-    }
-    if (typeof derived.bodyBottomFromOverallMm === "number" && overallHeightMm > 0) {
-      setBottomMarginMm(round2(Math.max(0, overallHeightMm - nextBodyBottom)));
-      setPrintHeightMm(round2(Math.max(1, nextBodyBottom - nextTop)));
-    }
-    if (typeof derived.diameterMm === "number" && derived.diameterMm > 0) {
-      setDiameterMm(round2(derived.diameterMm));
-    }
-  }, [bottomMarginMm, overallHeightMm, topMarginMm]);
+  const clearReviewedBodyReferenceGeneratedState = React.useCallback(() => {
+    setGeneratedReviewedBodyGeometryContract(null);
+    setLoadedBodyGeometryContract(null);
+    setReviewedBodyCutoutQaGeneratedSourceSignature(null);
+    setReviewedGeneratedModelState(null);
+  }, []);
 
   const handleStartBodyReferenceFineTune = React.useCallback(() => {
     if (productType === "flat" || !approvedBodyOutline) return;
@@ -2336,15 +2458,58 @@ export function TemplateCreateForm({
 
   const handleAcceptBodyReferenceFineTuneDraft = React.useCallback(() => {
     if (!activeBodyReferenceFineTuneOutline || !bodyReferenceFineTuneDraftHasChanges) return;
-    const acceptedOutline = cloneEditableBodyOutline(activeBodyReferenceFineTuneOutline) ?? activeBodyReferenceFineTuneOutline;
-    setApprovedBodyOutline(acceptedOutline);
-    applyAcceptedBodyReferenceDerivedDimensions(acceptedOutline);
+    const rebuiltSnapshot = rebuildAcceptedBodyReferenceSnapshot({
+      acceptedOutline: activeBodyReferenceFineTuneOutline,
+      overallHeightMm,
+      topMarginMm,
+      bottomMarginMm,
+      diameterMm,
+      baseDiameterMm:
+        resolvedMatchedProfile?.bottomDiameterMm ??
+        resolvedMatchedProfile?.outsideDiameterMm ??
+        diameterMm,
+      handleArcDeg,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    });
+    if (!rebuiltSnapshot) return;
+    setApprovedBodyOutline(cloneSerializable(rebuiltSnapshot.approvedBodyOutline));
+    setApprovedCanonicalBodyProfile(
+      rebuiltSnapshot.approvedCanonicalBodyProfile
+        ? cloneSerializable(rebuiltSnapshot.approvedCanonicalBodyProfile)
+        : null,
+    );
+    setApprovedCanonicalDimensionCalibration(
+      rebuiltSnapshot.approvedCanonicalDimensionCalibration
+        ? cloneSerializable(rebuiltSnapshot.approvedCanonicalDimensionCalibration)
+        : null,
+    );
+    setApprovedBodyReferenceQa(
+      rebuiltSnapshot.approvedBodyReferenceQa
+        ? cloneSerializable(rebuiltSnapshot.approvedBodyReferenceQa)
+        : null,
+    );
+    setApprovedBodyReferenceWarnings([...rebuiltSnapshot.approvedBodyReferenceWarnings]);
+    setTopMarginMm(rebuiltSnapshot.nextTopMarginMm);
+    setBottomMarginMm(rebuiltSnapshot.nextBottomMarginMm);
+    setPrintHeightMm(rebuiltSnapshot.nextPrintHeightMm);
+    setDiameterMm(rebuiltSnapshot.nextDiameterMm);
+    clearReviewedBodyReferenceGeneratedState();
+    setPreviewModelMode("alignment-model");
+    setHasAcceptedBodyReferenceReview(true);
     resetBodyReferenceFineTuneState();
   }, [
     activeBodyReferenceFineTuneOutline,
-    applyAcceptedBodyReferenceDerivedDimensions,
     bodyReferenceFineTuneDraftHasChanges,
+    bottomMarginMm,
+    clearReviewedBodyReferenceGeneratedState,
+    diameterMm,
+    handleArcDeg,
+    lookupResult?.fitDebug,
+    overallHeightMm,
     resetBodyReferenceFineTuneState,
+    resolvedMatchedProfile?.bottomDiameterMm,
+    resolvedMatchedProfile?.outsideDiameterMm,
+    topMarginMm,
   ]);
 
   const handleSeedBodyReferenceV2Centerline = React.useCallback(() => {
@@ -2423,6 +2588,7 @@ export function TemplateCreateForm({
           renderMode: "body-cutout-qa",
           matchedProfileId: resolvedMatchedProfileId ?? null,
           generationSourceMode,
+          bodyHeightAuthorityInput,
           ...(requestingV2
             ? {
                 bodyReferenceV2Draft: acceptedBodyReferenceV2Draft,
@@ -2481,6 +2647,7 @@ export function TemplateCreateForm({
     approvedCanonicalBodyProfile,
     approvedCanonicalDimensionCalibration,
     bodyColorHex,
+    bodyHeightAuthorityInput,
     bodyReferenceV2CaptureReadiness.generationReady,
     name,
     productType,
@@ -2719,6 +2886,7 @@ export function TemplateCreateForm({
           <label className={styles.fieldLabel}>Product type</label>
           <select
             className={styles.selectInput}
+            data-testid="template-product-type-select"
             value={productType}
             onChange={(e) => setProductType(e.target.value as "tumbler" | "mug" | "bottle" | "flat")}
           >
@@ -2831,22 +2999,41 @@ export function TemplateCreateForm({
                 </div>
                 <div className={styles.lookupMetrics}>
                   {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm) && (
-                    <span>Dia {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm)}</span>
+                    <span>Diameter authority {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm)}</span>
                   )}
-                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm) && (
-                    <span>Body {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm)}</span>
-                  )}
+                  <span>Authority {formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
                   <span>{formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
-                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm) && (
-                    <span>Full {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm)}</span>
+                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.wrapWidthMm) && (
+                    <span>Wrap width {formatLookupMeasurement(lookupDimensionAuthoritySummary.wrapWidthMm)} = Math.PI * diameter</span>
                   )}
                   {(lookupResult?.glbPath || glbPath) && <span>3D ready</span>}
                 </div>
                 <div className={styles.lookupMetrics}>
                   <span>Variant {activeLookupDimensions.selectedVariantLabel || "n/a"}</span>
                   <span>Selected size {formatLookupSize(lookupDimensionAuthoritySummary.selectedSizeOz)}</span>
-                  <span>Authority {formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
+                  <span>{formatLookupVariantStatus(lookupDimensionAuthoritySummary.variantStatus)}</span>
+                  {lookupDimensionAuthoritySummary.heightIgnoredForScale && (
+                    <span>Full product height is stored for context and ignored for lookup-based body contour scale.</span>
+                  )}
                 </div>
+                <details className={styles.compactDetails}>
+                  <summary className={styles.compactDetailsSummary}>
+                    Reference dimensions
+                  </summary>
+                  <div className={styles.compactDetailsContent}>
+                    <div className={styles.lookupMetrics}>
+                      {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm) && (
+                        <span>Reference body band {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm)}</span>
+                      )}
+                      {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm) && (
+                        <span>Reference full height {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm)}</span>
+                      )}
+                      {lookupDimensionAuthoritySummary.heightIgnoredForScale && (
+                        <span>Height is reference only and is not used for body scale authority.</span>
+                      )}
+                    </div>
+                  </div>
+                </details>
                 {(lookupDimensionAuthoritySummary.errors.length > 0 || lookupDimensionAuthoritySummary.warnings.length > 0) && (
                   <div className={styles.cutoutFitWarningList}>
                     {lookupDimensionAuthoritySummary.errors.map((error) => (
@@ -2870,6 +3057,7 @@ export function TemplateCreateForm({
               <TumblerLookupDebugPanel
                 debug={lookupResult.fitDebug}
                 imageUrl={lookupDebugImageUrl}
+                guideFrame={bodyReferenceGuideFrame}
               />
             )}
           </div>
@@ -3134,10 +3322,7 @@ export function TemplateCreateForm({
                   );
                   setApprovedBodyReferenceQa(cloneSerializable(liveBodyReferencePipeline.qa));
                   setApprovedBodyReferenceWarnings([...liveBodyReferencePipeline.warnings]);
-                  setGeneratedReviewedBodyGeometryContract(null);
-                  setLoadedBodyGeometryContract(null);
-                  setReviewedBodyCutoutQaGeneratedSourceSignature(null);
-                  setReviewedGeneratedModelState(null);
+                  clearReviewedBodyReferenceGeneratedState();
                   setHasAcceptedBodyReferenceReview(true);
                   setPreviewModelMode("alignment-model");
                 }}
@@ -3896,7 +4081,7 @@ export function TemplateCreateForm({
                         </div>
                         <div className={styles.cutoutFitMetric}>
                           <span className={styles.cutoutFitMetricLabel}>Source hash</span>
-                          <span className={styles.cutoutFitMetricValue}>{formatShortHash(currentReviewedBodyReferenceSourceSignature)}</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatShortHash(currentReviewedBodyReferenceSourceHash)}</span>
                         </div>
                         <div className={styles.cutoutFitMetric}>
                           <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
@@ -3937,6 +4122,7 @@ export function TemplateCreateForm({
                   detectedOutline={bodyReferenceFineTuneDetectedBaselineOutline}
                   overallHeightMm={overallHeightMm}
                   sourceImageUrl={productPhotoFullUrl || null}
+                  fitDebug={lookupResult?.fitDebug ?? null}
                   svgQualityReport={activeBodyReferenceSvgQuality}
                   interactive={bodyReferenceFineTuneModeEnabled}
                   canUndo={bodyReferenceFineTuneUndoStack.length > 0}
@@ -4706,7 +4892,10 @@ export function TemplateCreateForm({
 
       {/* ── Physical dimensions ───────────────────────────────────── */}
       <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
-        <div className={styles.sectionTitle}>Physical dimensions</div>
+        <div className={styles.sectionTitle}>Diameter authority</div>
+        <div className={styles.sectionLead}>
+          Diameter is the only body scale authority. Other measurements are reference context and do not prove BODY CUTOUT QA scale.
+        </div>
 
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>Diameter (mm) *</label>
@@ -4720,56 +4909,68 @@ export function TemplateCreateForm({
         </div>
 
         <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Print height (mm) *</label>
-          <input
-            className={styles.numInput}
-            type="number"
-            value={printHeightMm || ""}
-            step={0.1}
-            onChange={(e) => setPrintHeightMm(Number(e.target.value) || 0)}
-          />
-        </div>
-
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Template width</label>
+          <label className={styles.fieldLabel}>Wrap width</label>
           <span className={styles.readOnly}>
             {templateWidthMm > 0 ? `${templateWidthMm} mm` : "\u2014"}{" "}
-            <span className={styles.fieldHint}>(auto-calculated)</span>
+            <span className={styles.fieldHint}>(Math.PI * diameter)</span>
           </span>
         </div>
 
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Handle arc (&deg;)</label>
-          <input
-            className={styles.numInput}
-            type="number"
-            value={handleArcDeg}
-            step={1}
-            min={0}
-            max={360}
-            onChange={(e) => setHandleArcDeg(Number(e.target.value) || 0)}
-          />
-          <span className={styles.fieldHint}>0 = no handle, 90 = YETI Rambler style</span>
-        </div>
+        <details className={styles.compactDetails} data-testid="template-reference-dimensions-details">
+          <summary className={styles.compactDetailsSummary}>
+            Reference dimensions
+          </summary>
+          <div className={styles.compactDetailsContent}>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Reference printable band</label>
+              <input
+                className={styles.numInput}
+                data-testid="template-print-height-input"
+                type="number"
+                value={printHeightMm || ""}
+                step={0.1}
+                onChange={(e) => setPrintHeightMm(Number(e.target.value) || 0)}
+              />
+              <span className={styles.fieldHint}>Used for workspace/export context, not body scale authority.</span>
+            </div>
 
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Taper correction</label>
-          <select
-            className={styles.selectInput}
-            value={taperCorrection}
-            onChange={(e) => setTaperCorrection(e.target.value as "none" | "top-narrow" | "bottom-narrow")}
-          >
-            <option value="none">None</option>
-            <option value="top-narrow">Top narrow</option>
-            <option value="bottom-narrow">Bottom narrow</option>
-          </select>
-        </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Handle arc (&deg;)</label>
+              <input
+                className={styles.numInput}
+                type="number"
+                value={handleArcDeg}
+                step={1}
+                min={0}
+                max={360}
+                onChange={(e) => setHandleArcDeg(Number(e.target.value) || 0)}
+              />
+              <span className={styles.fieldHint}>Reference only for product context.</span>
+            </div>
+
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Taper correction</label>
+              <select
+                className={styles.selectInput}
+                value={taperCorrection}
+                onChange={(e) => setTaperCorrection(e.target.value as "none" | "top-narrow" | "bottom-narrow")}
+              >
+                <option value="none">None</option>
+                <option value="top-narrow">Top narrow</option>
+                <option value="bottom-narrow">Bottom narrow</option>
+              </select>
+            </div>
+          </div>
+        </details>
       </div>
 
       {/* ── Engravable zone editor ──────────────────────────────── */}
       {productType !== "flat" && frontPhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
         <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
-          <div className={styles.sectionTitle}>Engravable zone</div>
+          <div className={styles.sectionTitle}>Reference engravable zone</div>
+          <div className={styles.sectionLead}>
+            This visual band helps workspace/export context. BODY CUTOUT QA scale still comes from diameter plus accepted BODY REFERENCE.
+          </div>
           <EngravableZoneEditor
             photoDataUrl={frontPhotoDataUrl}
             overallHeightMm={overallHeightMm}
@@ -4781,6 +4982,7 @@ export function TemplateCreateForm({
             photoAnchorY={referencePhotoAnchorY}
             bodyColorHex={bodyColorHex}
             rimColorHex={rimColorHex}
+            guideFrame={bodyReferenceGuideFrame}
             onChange={(top, bottom) => {
               setTopMarginMm(top);
               setBottomMarginMm(bottom);

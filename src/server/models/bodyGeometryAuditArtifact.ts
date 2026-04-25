@@ -48,6 +48,7 @@ export interface BodyGeometryAuditArtifact {
   dimensionsMm: {
     bodyBounds?: BodyGeometryBoundsMm;
     bodyBoundsUnits?: BodyGeometryContract["dimensionsMm"]["bodyBoundsUnits"];
+    bodyHeightAuthority?: BodyGeometryContract["dimensionsMm"]["bodyHeightAuthority"];
     wrapDiameterMm?: number;
     wrapWidthMm?: number;
     frontVisibleWidthMm?: number;
@@ -129,6 +130,7 @@ export function buildBodyGeometryAuditArtifact(
     dimensionsMm: {
       bodyBounds: contract.dimensionsMm.bodyBounds,
       bodyBoundsUnits: contract.dimensionsMm.bodyBoundsUnits,
+      bodyHeightAuthority: contract.dimensionsMm.bodyHeightAuthority,
       wrapDiameterMm: contract.dimensionsMm.wrapDiameterMm,
       wrapWidthMm: contract.dimensionsMm.wrapWidthMm,
       frontVisibleWidthMm: contract.dimensionsMm.frontVisibleWidthMm,

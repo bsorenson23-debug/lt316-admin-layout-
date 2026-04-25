@@ -5,6 +5,7 @@ import type { EditableBodyOutline } from "../types/productTemplate.ts";
 import {
   buildBodyReferenceSvgQualityReport,
   buildBodyReferenceSvgQualityReportFromOutline,
+  buildBodyReferenceSvgQualityVisualization,
 } from "./bodyReferenceSvgQuality.ts";
 import {
   nudgeOutlinePoint,
@@ -217,6 +218,90 @@ test("closed full-body silhouette bridges are excluded from suspicious jump warn
   assert.equal(report.suspiciousJumpCount, 0);
   assert.equal(report.expectedBridgeSegmentCount, 2);
   assert.doesNotMatch(report.warnings.join(" "), /suspicious large jump/i);
+});
+
+test("rounded bottom closure counts as an expected body-only bridge without widening geometry", () => {
+  const points = [
+    { x: 44.5, y: 15 },
+    { x: 44.5, y: 25 },
+    { x: 44.5, y: 32.4 },
+    { x: 43.9, y: 40.2 },
+    { x: 43.9, y: 47.6 },
+    { x: 43.9, y: 55 },
+    { x: 43.9, y: 62.9 },
+    { x: 43.9, y: 70.2 },
+    { x: 43.9, y: 77.6 },
+    { x: 43.9, y: 85 },
+    { x: 43.9, y: 92.9 },
+    { x: 43.9, y: 100.2 },
+    { x: 43.9, y: 107.6 },
+    { x: 43.9, y: 115.5 },
+    { x: 43.9, y: 122.8 },
+    { x: 43.9, y: 130.2 },
+    { x: 43.9, y: 138.1 },
+    { x: 42.2, y: 145.5 },
+    { x: 40.3, y: 152.8 },
+    { x: 38.7, y: 160.7 },
+    { x: 38.1, y: 168.1 },
+    { x: 37.6, y: 175.4 },
+    { x: 37.1, y: 183.3 },
+    { x: 36.6, y: 190.7 },
+    { x: 36, y: 198.1 },
+    { x: 35.5, y: 205.4 },
+    { x: 35.3, y: 213.3 },
+    { x: 35, y: 220.7 },
+    { x: 34.5, y: 228 },
+    { x: 32, y: 235.9 },
+    { x: 15.7, y: 243.3 },
+    { x: -15.7, y: 243.3 },
+    { x: -32, y: 235.9 },
+    { x: -34.5, y: 228 },
+    { x: -35, y: 220.7 },
+    { x: -35.3, y: 213.3 },
+    { x: -35.5, y: 205.4 },
+    { x: -36, y: 198.1 },
+    { x: -36.6, y: 190.7 },
+    { x: -37.1, y: 183.3 },
+    { x: -37.6, y: 175.4 },
+    { x: -38.1, y: 168.1 },
+    { x: -38.7, y: 160.7 },
+    { x: -40.3, y: 152.8 },
+    { x: -42.2, y: 145.5 },
+    { x: -43.9, y: 138.1 },
+    { x: -43.9, y: 130.2 },
+    { x: -43.9, y: 122.8 },
+    { x: -43.9, y: 115.5 },
+    { x: -43.9, y: 107.6 },
+    { x: -43.9, y: 100.2 },
+    { x: -43.9, y: 92.9 },
+    { x: -43.9, y: 85 },
+    { x: -43.9, y: 77.6 },
+    { x: -43.9, y: 70.2 },
+    { x: -43.9, y: 62.9 },
+    { x: -43.9, y: 55 },
+    { x: -43.9, y: 47.6 },
+    { x: -43.9, y: 40.2 },
+    { x: -44.4, y: 32.4 },
+    { x: -44.4, y: 25 },
+    { x: -44.4, y: 15 },
+  ];
+  const report = buildBodyReferenceSvgQualityReport({
+    points,
+    closed: true,
+  });
+  const visualization = buildBodyReferenceSvgQualityVisualization({
+    points,
+    closed: true,
+  });
+
+  assert.equal(report.status, "pass");
+  assert.equal(report.suspiciousJumpCount, 0);
+  assert.equal(report.expectedBridgeSegmentCount, 2);
+  assert.equal(visualization.expectedBridgeSegments.length, 2);
+  assert.ok(visualization.expectedBridgeSegments.some((segment) => segment.from.y === 15 && segment.to.y === 15));
+  assert.ok(visualization.expectedBridgeSegments.some((segment) => segment.from.y === 243.3 && segment.to.y === 243.3));
+  assert.equal(report.bounds?.maxX, 44.5);
+  assert.equal(report.bounds?.minX, -44.4);
 });
 
 test("draft svg quality updates after a point move", () => {

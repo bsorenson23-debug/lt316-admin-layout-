@@ -2,6 +2,7 @@
 
 import React from "react";
 import type { EditableBodyOutline, EditableBodyOutlinePoint } from "@/types/productTemplate";
+import type { TumblerItemLookupFitDebug } from "@/types/tumblerItemLookup";
 import type { BodyReferenceSvgQualityReport } from "@/lib/bodyReferenceSvgQuality";
 import {
   buildBodyReferenceSvgQualityVisualizationFromOutline,
@@ -18,6 +19,8 @@ import {
   insertFineTunePointOnSegment,
   nudgeOutlinePoint,
   resolveOutlineBounds,
+  resolvePrimaryBodyReferenceVisualContour,
+  resolveUiOnlyRimReferenceGuide,
   updateOutlinePointPosition,
 } from "@/lib/bodyReferenceFineTune";
 import {
@@ -43,6 +46,7 @@ type Props = {
   overallHeightMm?: number | null;
   interactive?: boolean;
   sourceImageUrl?: string | null;
+  fitDebug?: TumblerItemLookupFitDebug | null;
   svgQualityReport?: BodyReferenceSvgQualityReport | null;
   canUndo?: boolean;
   onUndo?: () => void;
@@ -111,16 +115,37 @@ function buildOutlinePath(outline: EditableBodyOutline | null | undefined): stri
   return buildContourSvgPath(points.map((point) => ({ x: point.x, y: point.y })));
 }
 
+function buildPrimaryVisualPath(
+  visualContour: ReturnType<typeof resolvePrimaryBodyReferenceVisualContour>,
+): string | null {
+  if (!visualContour || visualContour.points.length < 3) return null;
+  return buildContourSvgPath(visualContour.points);
+}
+
+function buildPrimaryVisualPoints(outline: EditableBodyOutline | null | undefined): DisplayPoint[] {
+  const visualContour = resolvePrimaryBodyReferenceVisualContour(outline);
+  if (!visualContour) return [];
+  return visualContour.points.map((point, index) => ({
+    id: `visual:${index}`,
+    x: point.x,
+    y: point.y,
+  }));
+}
+
 function buildViewBox(args: {
   outline: EditableBodyOutline | null | undefined;
   approvedOutline: EditableBodyOutline | null | undefined;
   detectedOutline: EditableBodyOutline | null | undefined;
   sourceImagePlacement: ImagePlacement | null;
+  uiOnlyRimReferenceGuideY?: number | null;
 }): ViewBox {
   const points = [
     ...buildMirroredPoints(args.outline),
     ...buildMirroredPoints(args.approvedOutline),
     ...buildMirroredPoints(args.detectedOutline),
+    ...buildPrimaryVisualPoints(args.outline),
+    ...buildPrimaryVisualPoints(args.approvedOutline),
+    ...buildPrimaryVisualPoints(args.detectedOutline),
   ];
   const xs = points.map((point) => point.x);
   const ys = points.map((point) => point.y);
@@ -128,6 +153,9 @@ function buildViewBox(args: {
   if (args.sourceImagePlacement) {
     xs.push(args.sourceImagePlacement.x, args.sourceImagePlacement.x + args.sourceImagePlacement.width);
     ys.push(args.sourceImagePlacement.y, args.sourceImagePlacement.y + args.sourceImagePlacement.height);
+  }
+  if (typeof args.uiOnlyRimReferenceGuideY === "number" && Number.isFinite(args.uiOnlyRimReferenceGuideY)) {
+    ys.push(args.uiOnlyRimReferenceGuideY);
   }
 
   if (xs.length === 0 || ys.length === 0) {
@@ -186,7 +214,7 @@ function buildSourceImagePlacement(outline: EditableBodyOutline | null | undefin
 
 function formatBounds(bounds: ReturnType<typeof resolveOutlineBounds>): string {
   if (!bounds) return "n/a";
-  return `${bounds.width} x ${bounds.height} mm`;
+  return `${bounds.width} x ${bounds.height} contour units`;
 }
 
 function formatQualityStatus(status: BodyReferenceSvgQualityReport["status"] | undefined): string {
@@ -259,6 +287,7 @@ export function BodyReferenceFineTuneEditor({
   overallHeightMm = null,
   interactive = false,
   sourceImageUrl = null,
+  fitDebug = null,
   svgQualityReport = null,
   canUndo = false,
   onUndo,
@@ -287,22 +316,38 @@ export function BodyReferenceFineTuneEditor({
     () => buildSourceImagePlacement(outline),
     [outline],
   );
+  const uiOnlyRimReferenceGuide = React.useMemo(
+    () => resolveUiOnlyRimReferenceGuide({
+      outline,
+      fitDebug,
+    }),
+    [fitDebug, outline],
+  );
   const viewBox = React.useMemo(
     () => buildViewBox({
       outline,
       approvedOutline,
       detectedOutline,
       sourceImagePlacement,
+      uiOnlyRimReferenceGuideY: uiOnlyRimReferenceGuide?.y ?? null,
     }),
-    [approvedOutline, detectedOutline, outline, sourceImagePlacement],
+    [approvedOutline, detectedOutline, outline, sourceImagePlacement, uiOnlyRimReferenceGuide?.y],
   );
-  const approvedPath = React.useMemo(
-    () => buildOutlinePath(approvedOutline),
+  const approvedVisualContour = React.useMemo(
+    () => resolvePrimaryBodyReferenceVisualContour(approvedOutline),
     [approvedOutline],
   );
-  const detectedPath = React.useMemo(
-    () => buildOutlinePath(detectedOutline),
+  const detectedVisualContour = React.useMemo(
+    () => resolvePrimaryBodyReferenceVisualContour(detectedOutline),
     [detectedOutline],
+  );
+  const approvedPath = React.useMemo(
+    () => buildPrimaryVisualPath(approvedVisualContour),
+    [approvedVisualContour],
+  );
+  const detectedPath = React.useMemo(
+    () => buildPrimaryVisualPath(detectedVisualContour),
+    [detectedVisualContour],
   );
   const draftPath = React.useMemo(
     () => buildOutlinePath(outline),
@@ -616,6 +661,15 @@ export function BodyReferenceFineTuneEditor({
           <span className={styles.statusValue}>{formatBounds(outlineBounds)}</span>
         </div>
         <div className={styles.statusCard}>
+          <span className={styles.statusLabel}>Primary outline</span>
+          <span
+            className={styles.statusValue}
+            data-testid="body-reference-primary-outline-source"
+          >
+            {approvedVisualContour?.source ?? "unavailable"}
+          </span>
+        </div>
+        <div className={styles.statusCard}>
           <span className={styles.statusLabel}>Point count</span>
           <span className={styles.statusValue}>{sortedPoints.length}</span>
         </div>
@@ -676,7 +730,7 @@ export function BodyReferenceFineTuneEditor({
           className={styles.guidesNote}
           data-testid="body-reference-guides-source-hash-note"
         >
-          Guide rendering is read-only and excluded from source hash, GLB input, WRAP / EXPORT, and v2 authority.
+          Approved SVG cutout is the primary BODY CUTOUT QA outline. Guide rendering is read-only and excluded from source hash, GLB input, WRAP / EXPORT, and v2 authority.
         </div>
         {(guideCandidateReport.warnings.length > 0 || guideCandidateReport.errors.length > 0) && (
           <div className={styles.guidesMessages}>
@@ -743,6 +797,10 @@ export function BodyReferenceFineTuneEditor({
               x2={outlineBounds.maxX}
               y2={outlineBounds.minY}
               className={styles.boundsGuideEdge}
+              data-testid="body-reference-body-contour-top-edge"
+              data-guide-source="approved-body-contour"
+              data-guide-authority="body-cutout"
+              data-excluded-from-body-cutout="false"
             />
             <line
               x1={outlineBounds.minX}
@@ -762,6 +820,26 @@ export function BodyReferenceFineTuneEditor({
           className={styles.centerLine}
         />
 
+        {uiOnlyRimReferenceGuide && outlineBounds && (
+          <line
+            x1={outlineBounds.minX}
+            y1={uiOnlyRimReferenceGuide.y}
+            x2={outlineBounds.maxX}
+            y2={uiOnlyRimReferenceGuide.y}
+            className={styles.rimReferenceGuide}
+            data-testid="body-reference-rim-reference-guide"
+            data-guide-source={uiOnlyRimReferenceGuide.source}
+            data-guide-authority={uiOnlyRimReferenceGuide.authority}
+            data-excluded-from-body-cutout={String(uiOnlyRimReferenceGuide.excludedFromBodyCutout)}
+            data-affects-source-hash={String(uiOnlyRimReferenceGuide.affectsSourceHash)}
+            data-affects-glb-input={String(uiOnlyRimReferenceGuide.affectsGlbInput)}
+            data-affects-wrap-export={String(uiOnlyRimReferenceGuide.affectsWrapExport)}
+            data-affects-v2-authority={String(uiOnlyRimReferenceGuide.affectsV2Authority)}
+            data-source-field={uiOnlyRimReferenceGuide.sourceField}
+            data-coordinate-space={uiOnlyRimReferenceGuide.coordinateSpace}
+          />
+        )}
+
         {guideOverlayVisible && guideCandidateReport.candidates.length > 0 && (
           <g
             className={styles.guideOverlay}
@@ -775,11 +853,12 @@ export function BodyReferenceFineTuneEditor({
         {overlayState.detectedContour && detectedPath && (
           <path d={detectedPath} className={styles.detectedPath} />
         )}
-        {overlayState.approvedContour && approvedPath && interactive && (
-          <path d={approvedPath} className={styles.approvedPath} />
-        )}
         {overlayState.draftContour && draftPath && (
-          <path d={draftPath} className={styles.draftPath} />
+          <path
+            d={draftPath}
+            className={styles.draftPath}
+            data-testid="body-reference-secondary-control-outline"
+          />
         )}
 
         {overlayState.bridgeGuides && qualityVisualization.expectedBridgeSegments.map((segment) => (
@@ -803,6 +882,16 @@ export function BodyReferenceFineTuneEditor({
             className={styles.warningSegment}
           />
         ))}
+
+        {overlayState.approvedContour && approvedPath && (
+          <path
+            d={approvedPath}
+            className={styles.approvedPath}
+            data-testid="body-reference-approved-primary-outline"
+            data-outline-source={approvedVisualContour?.source ?? "unknown"}
+            data-top-guide-y={approvedVisualContour?.topGuideY ?? ""}
+          />
+        )}
 
         {overlayState.points && sortedPoints.slice(0, -1).map((point, index) => {
           const nextPoint = sortedPoints[index + 1];

@@ -15,7 +15,16 @@ import {
   createBodyReferenceV2Layer,
   createCenterlineAxis,
 } from "../../lib/bodyReferenceV2Layers.ts";
-import { generateBodyReferenceGlb, type GenerateBodyReferenceGlbInput } from "./generateTumblerModel.ts";
+import { buildBodyReferenceGlbSourcePayload } from "../../lib/bodyReferenceGlbSource.ts";
+import { hashJsonSha256Node } from "../../lib/hashSha256.node.ts";
+import { stableStringifyForHash } from "../../lib/hashSha256.ts";
+import {
+  deriveBodyTraceExtents,
+  deriveEngravingStartGuidePx,
+  deriveReferenceMeasurementBand,
+  generateBodyReferenceGlb,
+  type GenerateBodyReferenceGlbInput,
+} from "./generateTumblerModel.ts";
 
 const BODY_PROFILE: CanonicalBodyProfile = {
   symmetrySource: "left",
@@ -78,6 +87,38 @@ const DIMENSION_CALIBRATION: CanonicalDimensionCalibration = {
   },
 };
 
+const BRAND_REPEATABILITY_PRODUCTION_FILES = [
+  new URL("./generateTumblerModel.ts", import.meta.url),
+  new URL("./lookupTumblerItem.ts", import.meta.url),
+  new URL("../../components/admin/TumblerLookupDebugPanel.tsx", import.meta.url),
+];
+
+test("lookup refinement production control flow has no branded literals", async () => {
+  const disallowedLiterals = [
+    "Stanley",
+    "stanley",
+    "IceFlow",
+    "iceflow",
+    "YETI",
+    "yeti",
+    "Quencher",
+    "quencher",
+    "Rambler",
+    "rambler",
+  ];
+
+  for (const fileUrl of BRAND_REPEATABILITY_PRODUCTION_FILES) {
+    const source = await readFile(fileUrl, "utf8");
+    for (const literal of disallowedLiterals) {
+      assert.equal(
+        source.includes(literal),
+        false,
+        `${fileUrl.pathname} contains disallowed production literal ${literal}`,
+      );
+    }
+  }
+});
+
 function createOutline(widthMm = 44.45): EditableBodyOutline {
   const scale = widthMm / 49.9;
   return {
@@ -133,6 +174,127 @@ function createInput(overrides: Partial<GenerateBodyReferenceGlbInput> = {}): Ge
     ...overrides,
   };
 }
+
+test("Stanley IceFlow reference measurement band uses seam body rows instead of wider lid rows", () => {
+  const centerXPx = 250;
+  const bodyTopPx = 170;
+  const bodyBottomPx = 620;
+  const runs = Array.from({ length: bodyBottomPx - bodyTopPx + 1 }, (_, index) => {
+    const y = bodyTopPx + index;
+    const seamBand = y >= 172 && y <= 188;
+    const width = seamBand ? 181 : 160;
+    const left = centerXPx - Math.floor(width / 2);
+    const right = left + width - 1;
+    return { y, left, right, width };
+  });
+  const widerLidHalfWidthPx = 140;
+
+  const band = deriveReferenceMeasurementBand({
+    runs,
+    bodyTopPx,
+    bodyBottomPx,
+    centerXPx,
+    fallbackHalfWidthPx: widerLidHalfWidthPx,
+  });
+
+  assert.equal(band.usedFallback, false);
+  assert.equal(band.rowCount > 0, true);
+  assert.equal(band.widthPx <= widerLidHalfWidthPx * 2, true);
+  assert.equal(band.referenceHalfWidthPx, band.widthPx / 2);
+  assert.equal(band.referenceHalfWidthPx < widerLidHalfWidthPx, true);
+  assert.equal(band.widthPx <= 280, true);
+});
+
+test("generic profile metadata controls reference measurement band derivation", () => {
+  const centerXPx = 250;
+  const bodyTopPx = 100;
+  const bodyBottomPx = 500;
+  const runs = Array.from({ length: bodyBottomPx - bodyTopPx + 1 }, (_, index) => {
+    const y = bodyTopPx + index;
+    const genericMetadataBand = y >= 220 && y <= 240;
+    const width = genericMetadataBand ? 200 : 150;
+    const left = centerXPx - Math.floor(width / 2);
+    const right = left + width - 1;
+    return { y, left, right, width };
+  });
+
+  const band = deriveReferenceMeasurementBand({
+    runs,
+    bodyTopPx,
+    bodyBottomPx,
+    centerXPx,
+    fallbackHalfWidthPx: 130,
+    bandTopRatio: 0.3,
+    bandHeightRatio: 0.05,
+  });
+
+  assert.equal(band.usedFallback, false);
+  assert.equal(band.topPx >= 220, true);
+  assert.equal(band.bottomPx <= 240, true);
+  assert.equal(band.widthPx, 200);
+  assert.equal(band.referenceHalfWidthPx, 100);
+});
+
+test("Stanley IceFlow reference measurement band falls back deterministically when seam rows are unavailable", () => {
+  const band = deriveReferenceMeasurementBand({
+    runs: [],
+    bodyTopPx: 170,
+    bodyBottomPx: 620,
+    centerXPx: 250,
+    fallbackHalfWidthPx: 140,
+  });
+
+  assert.equal(band.usedFallback, true);
+  assert.equal(band.referenceHalfWidthPx, 140);
+  assert.equal(band.widthPx, 280);
+  assert.equal(band.centerXPx, 250);
+});
+
+test("Stanley IceFlow engraving start guide is the midpoint between rim bottom and painted body top", () => {
+  assert.equal(deriveEngravingStartGuidePx({
+    rimBottomPx: 168,
+    paintedBodyTopPx: 182,
+  }), 175);
+});
+
+test("Stanley IceFlow engraving start guide prefers the seam-adjacent silver edge", () => {
+  assert.equal(deriveEngravingStartGuidePx({
+    rimBottomPx: 168,
+    seamSilverBottomPx: 180,
+    paintedBodyTopPx: 184,
+  }), 182);
+});
+
+test("Stanley IceFlow body trace reaches lower rounded body beyond color-matched sidewall", () => {
+  const centerXPx = 250;
+  const paintedBodyTopPx = 182;
+  const colorBodyBottomPx = 540;
+  const roundedBottomPx = 628;
+  const maxCenterWidthPx = 190;
+  const runs = Array.from({ length: roundedBottomPx - paintedBodyTopPx + 1 }, (_, index) => {
+    const y = paintedBodyTopPx + index;
+    const taperT = Math.max(0, (y - colorBodyBottomPx) / Math.max(1, roundedBottomPx - colorBodyBottomPx));
+    const width = y <= colorBodyBottomPx
+      ? 180
+      : Math.max(28, Math.round(180 - taperT * 145));
+    const left = centerXPx - Math.floor(width / 2);
+    const right = left + width - 1;
+    return { y, left, right, width };
+  });
+
+  const trace = deriveBodyTraceExtents({
+    runs,
+    paintedBodyTopPx,
+    colorBodyBottomPx,
+    centerXPx,
+    maxCenterWidthPx,
+  });
+
+  assert.equal(trace.usedFallback, false);
+  assert.equal(trace.topPx, paintedBodyTopPx);
+  assert.equal(trace.bottomPx, roundedBottomPx);
+  assert.equal(trace.bottomPx > colorBodyBottomPx, true);
+});
 
 function createV2Draft(overrides: Partial<BodyReferenceV2Draft> = {}): BodyReferenceV2Draft {
   return {
@@ -230,6 +392,11 @@ function getObjectBounds(scene: THREE.Object3D, name: string): THREE.Box3 {
 
 test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth audit metadata", async () => {
   const result = await generateBodyReferenceGlb(createInput());
+  const sourcePayload = buildBodyReferenceGlbSourcePayload({
+    bodyOutline: createInput().bodyOutline!,
+    canonicalBodyProfile: BODY_PROFILE,
+    canonicalDimensionCalibration: DIMENSION_CALIBRATION,
+  });
 
   assert.equal(result.modelStatus, "generated-reviewed-model");
   assert.equal(result.renderMode, "body-cutout-qa");
@@ -238,6 +405,8 @@ test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth
   assert.deepEqual(result.fallbackMeshNames, []);
   assert.equal(result.bodyGeometryContract.glb.path, result.glbPath);
   assert.equal(result.bodyGeometryContract.glb.freshRelativeToSource, true);
+  assert.equal(result.generatedSourceSignature, stableStringifyForHash(sourcePayload));
+  assert.equal(result.bodyGeometryContract.source.hash, hashJsonSha256Node(sourcePayload));
   assert.equal(result.bodyGeometryContract.source.hash, result.bodyGeometryContract.glb.sourceHash);
   assert.deepEqual(result.bodyGeometryContract.meshes.bodyMeshNames, ["body_mesh"]);
   assert.deepEqual(result.bodyGeometryContract.meshes.accessoryMeshNames, []);
@@ -262,6 +431,7 @@ test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth
     glb: { hash?: string; sourceHash?: string; freshRelativeToSource?: boolean };
     source: { hash?: string };
     meshes: { names: string[]; bodyMeshNames: string[]; accessoryMeshNames: string[]; fallbackDetected: boolean };
+    dimensionsMm: { bodyHeightAuthority?: { kind?: string; status?: string; sourceField?: string; inputHeights?: { canonicalBodyHeightMm?: number } } };
     validation: { status: string };
     svgQuality?: { status: string; suspiciousJumpCount: number; expectedBridgeSegmentCount: number };
   };
@@ -272,6 +442,9 @@ test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth
   assert.deepEqual(auditArtifact.meshes.bodyMeshNames, ["body_mesh"]);
   assert.deepEqual(auditArtifact.meshes.accessoryMeshNames, []);
   assert.equal(auditArtifact.meshes.fallbackDetected, false);
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.kind, "canonical-body-height-warning");
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.status, "warn");
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.inputHeights?.canonicalBodyHeightMm, 214.71);
   assert.equal(auditArtifact.validation.status, "pass");
   assert.equal(auditArtifact.svgQuality?.status, "pass");
   assert.equal(auditArtifact.svgQuality?.suspiciousJumpCount, 0);
@@ -288,6 +461,82 @@ test("generateBodyReferenceGlb changes source lineage when the approved outline 
   assert.notEqual(before.bodyGeometryContract.source.hash, after.bodyGeometryContract.source.hash);
   assert.equal(after.bodyGeometryContract.source.hash, after.bodyGeometryContract.glb.sourceHash);
   assert.equal(after.bodyGeometryContract.validation.status, "pass");
+});
+
+test("generateBodyReferenceGlb keeps reviewed source lineage stable across display-only color changes", async () => {
+  const before = await generateBodyReferenceGlb(createInput({
+    bodyColorHex: "#184f90",
+    rimColorHex: "#b6b6b6",
+  }));
+  const after = await generateBodyReferenceGlb(createInput({
+    bodyColorHex: "#ff22aa",
+    rimColorHex: "#00ffaa",
+  }));
+
+  assert.equal(before.generatedSourceSignature, after.generatedSourceSignature);
+  assert.equal(before.bodyGeometryContract.source.hash, after.bodyGeometryContract.source.hash);
+  assert.equal(after.bodyGeometryContract.source.hash, after.bodyGeometryContract.glb.sourceHash);
+});
+
+test("generateBodyReferenceGlb reports when 150mm body bounds came from non-uniform canonical height", async () => {
+  const shortProfile: CanonicalBodyProfile = {
+    ...BODY_PROFILE,
+    axis: {
+      xTop: 0,
+      yTop: 25,
+      xBottom: 0,
+      yBottom: 175,
+    },
+    samples: [
+      { sNorm: 0, yMm: 25, yPx: 170, xLeft: -44.45, radiusPx: 84.5, radiusMm: 44.45 },
+      { sNorm: 0.5, yMm: 100, yPx: 380, xLeft: -44.45, radiusPx: 84.5, radiusMm: 44.45 },
+      { sNorm: 1, yMm: 175, yPx: 590, xLeft: -36, radiusPx: 68.4, radiusMm: 36 },
+    ],
+  };
+  const shortCalibration: CanonicalDimensionCalibration = {
+    ...DIMENSION_CALIBRATION,
+    totalHeightMm: 218.4,
+    bodyHeightMm: 150,
+    lidBodyLineMm: 25,
+    bodyBottomMm: 175,
+    printableSurfaceContract: {
+      printableTopMm: 25,
+      printableBottomMm: 175,
+      printableHeightMm: 150,
+      axialExclusions: [],
+      circumferentialExclusions: [],
+    },
+    svgFrontViewBoxMm: {
+      x: -44.45,
+      y: 0,
+      width: 88.9,
+      height: 218.4,
+    },
+  };
+
+  const result = await generateBodyReferenceGlb(createInput({
+    templateName: "usable-height-diagnostic",
+    canonicalBodyProfile: shortProfile,
+    canonicalDimensionCalibration: shortCalibration,
+    bodyHeightAuthorityInput: {
+      lookupFullProductHeightMm: 218.4,
+      lookupBodyHeightMm: 150,
+      lookupBodyHeightSource: "usable-height",
+      templateDimensionsPrintHeightMm: 150,
+      approvedSvgBoundsHeightMm: 150,
+      referenceBandHeightPx: 14,
+    },
+  }));
+
+  assert.equal(result.bodyGeometryContract.validation.status, "pass");
+  assert.equal(result.bodyGeometryContract.source.hash, result.bodyGeometryContract.glb.sourceHash);
+  assert.equal(result.bodyGeometryContract.dimensionsMm.bodyBounds?.height, 150);
+  assert.equal(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.status, "warn");
+  assert.equal(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.kind, "canonical-body-height-warning");
+  assert.equal(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.sourceField, "canonicalDimensionCalibration.bodyHeightMm");
+  assert.equal(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.isPhysicalBodyHeight, false);
+  assert.ok(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.rejectedHeightSources.includes("lookup.usableHeightMm"));
+  assert.ok(result.bodyGeometryContract.dimensionsMm.bodyHeightAuthority?.rejectedHeightSources.includes("approvedSvgBounds.height"));
 });
 
 test("generateBodyReferenceGlb requires an approved body outline", async () => {
@@ -335,8 +584,9 @@ test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirro
   const sceneMeshNames = scene.children.map((child) => child.name).filter(Boolean);
   assert.deepEqual(sceneMeshNames, ["body_mesh"]);
   const bounds = getObjectBounds(scene, "body_mesh").getSize(new THREE.Vector3());
+  const expectedUniformHeightMm = Math.round(185 * (88.9 / 40) * 100) / 100;
   assert.ok(bounds.x > 80);
-  assert.ok(bounds.y > 180);
+  assert.ok(Math.abs(bounds.y - expectedUniformHeightMm) <= 0.5);
   assert.ok(bounds.z > 80);
 
   const auditArtifact = JSON.parse(await readFile(result.auditJsonPath ?? "", "utf8")) as {
@@ -352,7 +602,17 @@ test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirro
     };
     glb: { sourceHash?: string };
     meshes: { names: string[]; bodyMeshNames: string[]; accessoryMeshNames: string[] };
-    dimensionsMm: { scaleSource?: string };
+    dimensionsMm: {
+      scaleSource?: string;
+      expectedBodyHeightMm?: number;
+      bodyHeightAuthority?: {
+        kind?: string;
+        status?: string;
+        sourceField?: string;
+        uniformScaleApplied?: boolean;
+        derivedBodyHeightMm?: number;
+      };
+    };
   };
   assert.equal(auditArtifact.source.type, "body-reference-v2");
   assert.equal(auditArtifact.source.centerlineCaptured, true);
@@ -370,6 +630,11 @@ test("generateBodyReferenceGlb can generate BODY CUTOUT QA from a ready v2 mirro
   assert.deepEqual(auditArtifact.meshes.bodyMeshNames, ["body_mesh"]);
   assert.deepEqual(auditArtifact.meshes.accessoryMeshNames, []);
   assert.equal(auditArtifact.dimensionsMm.scaleSource, "lookup-diameter");
+  assert.equal(auditArtifact.dimensionsMm.expectedBodyHeightMm, expectedUniformHeightMm);
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.kind, "derived-from-diameter-scale");
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.sourceField, "sourceContour.heightUnits * mmPerSourceUnit");
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.uniformScaleApplied, true);
+  assert.equal(auditArtifact.dimensionsMm.bodyHeightAuthority?.derivedBodyHeightMm, expectedUniformHeightMm);
 });
 
 test("generateBodyReferenceGlb keeps BODY CUTOUT QA pass clean for operator-seeded v2 drafts with context-only warnings", async () => {

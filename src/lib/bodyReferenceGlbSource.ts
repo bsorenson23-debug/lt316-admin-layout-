@@ -22,22 +22,25 @@ function normalizePoint(point: { x: number; y: number }) {
   };
 }
 
-function normalizeOutline(outline: EditableBodyOutline | null | undefined) {
+function normalizeOutlinePoints(outline: EditableBodyOutline) {
+  return outline.points.map((point) => ({
+    x: round2(point.x),
+    y: round2(point.y),
+    role: point.role ?? null,
+    pointType: point.pointType ?? null,
+    inHandle: point.inHandle ? normalizePoint(point.inHandle) : null,
+    outHandle: point.outHandle ? normalizePoint(point.outHandle) : null,
+  }));
+}
+
+function normalizeReviewedBodyReferenceOutline(outline: EditableBodyOutline | null | undefined) {
   if (!outline) return null;
-  const directContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
   return {
     closed: outline.closed,
     version: outline.version ?? 1,
-    points: outline.points.map((point) => ({
-      x: round2(point.x),
-      y: round2(point.y),
-      role: point.role ?? null,
-      pointType: point.pointType ?? null,
-      inHandle: point.inHandle ? normalizePoint(point.inHandle) : null,
-      outHandle: point.outHandle ? normalizePoint(point.outHandle) : null,
-    })),
-    directContour: directContour?.map(normalizePoint) ?? null,
     sourceContourMode: outline.sourceContourMode ?? null,
+    points: normalizeOutlinePoints(outline),
+    authoritativeContour: resolveAuthoritativeEditableBodyOutlineContour(outline)?.map(normalizePoint) ?? null,
   };
 }
 
@@ -197,32 +200,35 @@ export function resolveReviewedBodyReferenceGlbInput(args: {
 }
 
 export function buildBodyReferenceGlbSourcePayload(input: BodyReferenceGlbSourceSignatureInput) {
-  const bodyOutline = input.bodyOutline ?? input.referencePaths?.bodyOutline ?? null;
-  const lidProfile = input.lidProfile ?? null;
-  const silverProfile = input.silverProfile ?? null;
+  return buildReviewedBodyReferenceSourcePayload(input);
+}
 
+export function buildReviewedBodyReferenceSourcePayload(
+  input: BodyReferenceGlbSourceSignatureInput,
+) {
+  const bodyOutline = input.bodyOutline ?? input.referencePaths?.bodyOutline ?? null;
   return {
-    version: 4,
-    renderMode: input.renderMode ?? "hybrid-preview",
-    matchedProfileId: input.matchedProfileId ?? null,
-    bodyOutline: normalizeOutline(bodyOutline),
-    lidProfile: normalizeOutline(lidProfile),
-    silverProfile: normalizeOutline(silverProfile),
+    version: 5,
+    generationSource: "reviewed-body-reference-v1",
+    // Keep lineage tied to the accepted geometry inputs that actually define
+    // the reviewed body mesh and its canonical calibration. Display-only
+    // colors and render modes stay outside this payload on purpose.
+    bodyOutline: normalizeReviewedBodyReferenceOutline(bodyOutline),
     canonicalBodyProfile: normalizeBodyProfile(input.canonicalBodyProfile),
     canonicalDimensionCalibration: normalizeDimensionCalibration(input.canonicalDimensionCalibration),
-    bodyColorHex: input.bodyColorHex ?? null,
-    lidColorHex: input.lidColorHex ?? null,
-    rimColorHex: input.rimColorHex ?? null,
-    lidSeamFromOverallMm: finiteOrNull(input.lidSeamFromOverallMm),
-    silverBandBottomFromOverallMm: finiteOrNull(input.silverBandBottomFromOverallMm),
-    topOuterDiameterMm: finiteOrNull(input.topOuterDiameterMm),
   };
 }
 
 export function buildBodyReferenceGlbSourceSignature(
   input: BodyReferenceGlbSourceSignatureInput,
 ): string {
-  return stableStringifyForHash(buildBodyReferenceGlbSourcePayload(input));
+  return buildReviewedBodyReferenceSourceSignature(input);
+}
+
+export function buildReviewedBodyReferenceSourceSignature(
+  input: BodyReferenceGlbSourceSignatureInput,
+): string {
+  return stableStringifyForHash(buildReviewedBodyReferenceSourcePayload(input));
 }
 
 export type BodyReferenceGlbReviewState = {

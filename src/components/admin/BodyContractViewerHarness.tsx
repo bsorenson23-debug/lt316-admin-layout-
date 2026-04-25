@@ -63,7 +63,7 @@ const MOCK_APPROVED_BODY_OUTLINE: EditableBodyOutline = {
 };
 
 const MOCK_APPROVED_BODY_OUTLINE_HASH =
-  "0635a5995c3628708a5e2d1b861846a84638318a6461eeef688ae11db7297ebf";
+  "886546cc2f9db18d8f0a23b644e4c8fe2535ce5024f0d6c9db0deaec62d49a2a";
 
 const HARNESS_TUMBLER_DIMS: TumblerDimensions = {
   overallHeightMm: 180,

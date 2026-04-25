@@ -4,10 +4,12 @@ import {
 } from "./bodyReferenceGlbSource.ts";
 import type { PreviewModelMode } from "./tumblerPreviewModelState.ts";
 import type { BodyReferenceSvgQualityReport } from "./bodyReferenceSvgQuality.ts";
+import type { BodyHeightAuthorityReport } from "./bodyHeightAuthority.ts";
 import type {
   CanonicalBodyProfile,
   CanonicalDimensionCalibration,
   EditableBodyOutline,
+  EditableBodyOutlineContourFrame,
 } from "../types/productTemplate.ts";
 import { resolveAuthoritativeEditableBodyOutlineContour } from "./editableBodyOutline.ts";
 
@@ -79,6 +81,7 @@ export interface BodyGeometryContract {
     nonBodyGenerationExclusions?: string[];
     fallbackGenerationModeAvailable?: boolean;
     generationSourceMode?: "v1-approved-contour" | "v2-mirrored-profile";
+    contourFrame?: EditableBodyOutlineContourFrame;
   };
   glb: {
     path?: string;
@@ -102,6 +105,7 @@ export interface BodyGeometryContract {
   dimensionsMm: {
     bodyBounds?: BodyGeometryBoundsMm;
     bodyBoundsUnits?: "mm" | "scene-units";
+    bodyHeightAuthority?: BodyHeightAuthorityReport;
     wrapDiameterMm?: number;
     wrapWidthMm?: number;
     frontVisibleWidthMm?: number;
@@ -245,6 +249,39 @@ function parseViewBoxWidth(value: string | undefined): number | undefined {
   return Number.isFinite(width) ? width : undefined;
 }
 
+function normalizeBounds(bounds: {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  width: number;
+  height: number;
+} | null | undefined) {
+  return bounds
+    ? {
+        minX: round2(bounds.minX),
+        minY: round2(bounds.minY),
+        maxX: round2(bounds.maxX),
+        maxY: round2(bounds.maxY),
+        width: round2(bounds.width),
+        height: round2(bounds.height),
+      }
+    : null;
+}
+
+function normalizeContourFrame(frame: EditableBodyOutlineContourFrame | null | undefined) {
+  return frame
+    ? {
+        ...frame,
+        boundsBeforeBandCrop: normalizeBounds(frame.boundsBeforeBandCrop),
+        boundsAfterBandCrop: normalizeBounds(frame.boundsAfterBandCrop),
+        acceptedPreviewBounds: normalizeBounds(frame.acceptedPreviewBounds),
+        glbInputBounds: normalizeBounds(frame.glbInputBounds),
+        canonicalInputBounds: normalizeBounds(frame.canonicalInputBounds),
+      }
+    : null;
+}
+
 function normalizeMeshName(name: string): string {
   return name.trim().toLowerCase();
 }
@@ -339,16 +376,13 @@ export function buildBodyGeometrySourceHashPayload(
       x: round2(point.x),
       y: round2(point.y),
     })) ?? null,
-    sourceContourBounds: outline.sourceContourBounds
-      ? {
-          minX: round2(outline.sourceContourBounds.minX),
-          minY: round2(outline.sourceContourBounds.minY),
-          maxX: round2(outline.sourceContourBounds.maxX),
-          maxY: round2(outline.sourceContourBounds.maxY),
-          width: round2(outline.sourceContourBounds.width),
-          height: round2(outline.sourceContourBounds.height),
-        }
-      : null,
+    sourceContourBounds: normalizeBounds(outline.sourceContourBounds),
+    printableBandContour: outline.printableBandContour?.map((point) => ({
+      x: round2(point.x),
+      y: round2(point.y),
+    })) ?? null,
+    printableBandContourBounds: normalizeBounds(outline.printableBandContourBounds),
+    contourFrame: normalizeContourFrame(outline.contourFrame),
     sourceContourViewport: outline.sourceContourViewport
       ? {
           minX: round2(outline.sourceContourViewport.minX),
@@ -362,17 +396,11 @@ export function buildBodyGeometrySourceHashPayload(
   if (!authorityInput?.canonicalBodyProfile || !authorityInput.canonicalDimensionCalibration) {
     return outlinePayload;
   }
-  const normalizedAuthorityPayload = buildBodyReferenceGlbSourcePayload({
+  return buildBodyReferenceGlbSourcePayload({
     bodyOutline: outline,
     canonicalBodyProfile: authorityInput.canonicalBodyProfile,
     canonicalDimensionCalibration: authorityInput.canonicalDimensionCalibration,
   });
-  return {
-    version: 2,
-    outline: outlinePayload,
-    canonicalBodyProfile: normalizedAuthorityPayload.canonicalBodyProfile,
-    canonicalDimensionCalibration: normalizedAuthorityPayload.canonicalDimensionCalibration,
-  };
 }
 
 export function createEmptyBodyGeometryContract(): BodyGeometryContract {
@@ -993,6 +1021,8 @@ export function mergeAuditContractWithLoadedInspection(args: {
       ...seededContract.dimensionsMm,
       bodyBounds: mergedBodyBounds,
       bodyBoundsUnits: mergedBodyBoundsUnits,
+      bodyHeightAuthority:
+        auditContract?.dimensionsMm.bodyHeightAuthority ?? seededContract.dimensionsMm.bodyHeightAuthority,
       wrapDiameterMm:
         auditContract?.dimensionsMm.wrapDiameterMm ?? seededContract.dimensionsMm.wrapDiameterMm,
       wrapWidthMm:

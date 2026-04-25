@@ -9,6 +9,7 @@ import {
   normalizeMeasurementContour,
   resolveAuthoritativeEditableBodyOutlineContour,
 } from "./editableBodyOutline.ts";
+import { buildBodyReferenceSvgQualityReportFromOutline } from "./bodyReferenceSvgQuality.ts";
 
 const noisyStanleyFitDebug: TumblerItemLookupFitDebug = {
   kind: "lathe-body-fit",
@@ -53,7 +54,7 @@ const noisyStanleyFitDebug: TumblerItemLookupFitDebug = {
   ],
 };
 
-test("fit-debug fallback outline keeps Stanley shell seeded by dimensional truth", () => {
+test("fit-debug fallback outline preserves full body-only source frame and diameter seed", () => {
   const outline = createEditableBodyOutline({
     overallHeightMm: 273.8,
     bodyTopFromOverallMm: 28,
@@ -70,9 +71,72 @@ test("fit-debug fallback outline keeps Stanley shell seeded by dimensional truth
   const byRole = new Map(outline.points.map((point) => [point.role, point]));
 
   assert.ok(Math.abs((byRole.get("topOuter")?.x ?? 0) - 49.91) < 1.0);
-  assert.ok(Math.abs((byRole.get("body")?.x ?? 0) - 49.91) < 1.0);
-  assert.ok(Math.abs((byRole.get("base")?.x ?? 0) - 39.35) < 1.25);
+  assert.ok((outline.contourFrame?.acceptedPreviewBounds?.width ?? 0) >= 99);
   assert.ok((outline.sourceContour?.length ?? 0) >= noisyStanleyFitDebug.profilePoints.length * 2);
+  assert.equal(outline.contourFrame?.kind, "full-body-only-source");
+  assert.equal(outline.contourFrame?.bandCropApplied, false);
+  assert.equal(outline.contourFrame?.bodyOnlyReCropSkipped, true);
+  assert.ok((outline.contourFrame?.acceptedPreviewBounds?.height ?? 0) > 216);
+});
+
+test("fit-debug body contour top bridge aligns to seam body-top guide without restoring the rim band", () => {
+  const fitDebug: TumblerItemLookupFitDebug = {
+    kind: "lathe-body-fit",
+    sourceImageUrl: "https://example.com/iceflow-body.png",
+    imageWidthPx: 600,
+    imageHeightPx: 700,
+    silhouetteBoundsPx: { minX: 120, minY: 40, maxX: 480, maxY: 660 },
+    centerXPx: 300,
+    fullTopPx: 40,
+    fullBottomPx: 660,
+    bodyTopPx: 220,
+    bodyBottomPx: 635,
+    rimTopPx: 180,
+    rimBottomPx: 201,
+    referenceBandTopPx: 224,
+    referenceBandBottomPx: 238,
+    referenceBandCenterYPx: 231,
+    referenceBandWidthPx: 169,
+    maxCenterWidthPx: 191,
+    referenceHalfWidthPx: 84.5,
+    fitScore: 8.9,
+    profilePoints: Array.from({ length: 43 }, (_, index) => {
+      const yPx = Math.min(635, 220 + (index * 10));
+      return {
+        yPx,
+        yMm: 25 + ((yPx - 220) * (88.9 / 169)),
+        radiusPx: 84.5,
+        radiusMm: 44.45,
+      };
+    }),
+  };
+
+  const outline = createEditableBodyOutline({
+    overallHeightMm: 218.4,
+    bodyTopFromOverallMm: 25,
+    bodyBottomFromOverallMm: 175,
+    diameterMm: 88.9,
+    topOuterDiameterMm: 88.9,
+    fitDebug,
+  });
+  const contour = resolveAuthoritativeEditableBodyOutlineContour(outline);
+  const bounds = boundsOf(contour);
+  const quality = buildBodyReferenceSvgQualityReportFromOutline({ outline });
+  const mmPerSourceUnit = 88.9 / 169;
+  const expectedBodyTopGuideY = Math.round((25 + ((fitDebug.rimBottomPx - 220) * mmPerSourceUnit)) * 10) / 10;
+  const mappedRimTopY = Math.round((expectedBodyTopGuideY + ((fitDebug.rimTopPx - fitDebug.rimBottomPx) * mmPerSourceUnit)) * 10) / 10;
+
+  assert.ok(contour);
+  assert.ok(bounds);
+  assert.equal(bounds?.minY, expectedBodyTopGuideY);
+  assert.equal(outline.sourceContourBounds?.minY, fitDebug.rimBottomPx);
+  assert.equal(outline.contourFrame?.acceptedPreviewBounds?.minY, expectedBodyTopGuideY);
+  assert.ok((bounds?.maxY ?? 0) > 243 && (bounds?.maxY ?? 0) < 244);
+  assert.ok((bounds?.height ?? 0) > 225);
+  assert.ok((bounds?.minY ?? 0) > mappedRimTopY, "rim/top-band pixels above the green guide remain excluded");
+  assert.equal(quality.status, "pass");
+  assert.equal(quality.expectedBridgeSegmentCount, 2);
+  assert.equal(quality.suspiciousJumpCount, 0);
 });
 
 function widthAtY(points: Array<{ x: number; y: number }>, y: number): number {
@@ -95,6 +159,24 @@ function widthAtY(points: Array<{ x: number; y: number }>, y: number): number {
   xs.sort((a, b) => a - b);
   if (xs.length < 2) return 0;
   return xs[xs.length - 1]! - xs[0]!;
+}
+
+function boundsOf(points: Array<{ x: number; y: number }> | null | undefined) {
+  if (!points || points.length === 0) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return {
+    minX,
+    maxX,
+    minY,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
 }
 
 const noisyTraceDebug: FlatItemLookupTraceDebug = {
@@ -136,7 +218,7 @@ const noisyTraceDebug: FlatItemLookupTraceDebug = {
   ],
 };
 
-test("trace-debug outline stores a deterministic body-only contour instead of the raw noisy silhouette", () => {
+test("trace-debug outline preserves the accepted body-only contour and stores printable band separately", () => {
   const outline = createEditableBodyOutlineFromTraceDebug({
     traceDebug: noisyTraceDebug,
     overallHeightMm: 300,
@@ -147,17 +229,20 @@ test("trace-debug outline stores a deterministic body-only contour instead of th
   });
 
   const byRole = new Map(outline.points.map((point) => [point.role, point]));
-  assert.ok((outline.sourceContour?.length ?? 0) >= 40);
-  // Keep the high-fidelity traced band for provenance, but use the simpler
-  // mirrored contour for deterministic editing and downstream generation.
-  assert.ok((outline.directContour?.length ?? 0) < (outline.sourceContour?.length ?? 0));
+  const directBounds = boundsOf(outline.directContour);
+  assert.ok((outline.sourceContour?.length ?? 0) >= 10);
+  assert.equal(outline.contourFrame?.kind, "full-body-only-source");
+  assert.equal(outline.contourFrame?.authoritativeForBodyCutoutQa, true);
+  assert.equal(outline.contourFrame?.authoritativeForPrintableBand, false);
+  assert.equal(outline.contourFrame?.bandCropApplied, false);
+  assert.equal(outline.contourFrame?.bodyOnlyReCropSkipped, true);
   assert.ok((outline.sourceContourBounds?.minY ?? 0) > 80);
-  assert.ok((outline.sourceContourBounds?.maxY ?? 999) < 660);
-  assert.ok(widthAtY(outline.sourceContour ?? [], 380) > 70);
-  assert.ok(widthAtY(outline.directContour ?? [], 80) > 90);
-  assert.ok(widthAtY(outline.directContour ?? [], 80) < 110);
-  assert.ok(Math.abs((outline.directContour?.[0]?.y ?? 0) - 40) < 0.5);
-  assert.ok(Math.abs((outline.directContour?.at(-1)?.y ?? 999) - 40) < 0.5);
+  assert.ok((outline.sourceContourBounds?.maxY ?? 0) >= 700);
+  assert.ok((outline.printableBandContourBounds?.height ?? 0) > 0);
+  assert.ok((outline.printableBandContourBounds?.height ?? 9999) < (outline.contourFrame?.boundsBeforeBandCrop?.height ?? 0));
+  assert.ok(widthAtY(outline.sourceContour ?? [], 300) > 70);
+  assert.ok((directBounds?.height ?? 0) > 400);
+  assert.ok((directBounds?.width ?? 0) >= 99);
   assert.ok(
     Math.abs((byRole.get("topOuter")?.x ?? 0) - 50) < 1.0,
     `expected trace-derived top shell to stay seeded by diameter, got ${JSON.stringify(byRole.get("topOuter"))}`,
@@ -208,7 +293,7 @@ test("manual body-only overrides rebuild authoritative contours from saved point
   assert.equal(authoritativeContour?.at(-1)?.x, -54);
 });
 
-test("body-only imported outline stays aligned with the auto body-band fit", () => {
+test("body-only imported outline preserves full source frame instead of masquerading as body-band fit", () => {
   const source = {
     svgText: "",
     pathData: "",
@@ -261,14 +346,16 @@ test("body-only imported outline stays aligned with the auto body-band fit", () 
 
   const autoByRole = new Map(autoOutline.points.map((point) => [point.role, point]));
   const bodyOnlyByRole = new Map(bodyOnlyOutline.points.map((point) => [point.role, point]));
+  const bodyOnlyBounds = boundsOf(resolveAuthoritativeEditableBodyOutlineContour(bodyOnlyOutline));
+  const autoBounds = boundsOf(resolveAuthoritativeEditableBodyOutlineContour(autoOutline));
 
   assert.equal(bodyOnlyByRole.get("topOuter")?.x, autoByRole.get("topOuter")?.x);
-  for (const role of ["upperTaper", "lowerTaper", "bevel", "base"] as const) {
-    assert.ok(
-      Math.abs((bodyOnlyByRole.get(role)?.x ?? 0) - (autoByRole.get(role)?.x ?? 0)) <= 0.3,
-      `expected ${role} to stay within body-band fit tolerance, got auto=${autoByRole.get(role)?.x} bodyOnly=${bodyOnlyByRole.get(role)?.x}`,
-    );
-  }
+  assert.equal(bodyOnlyOutline.contourFrame?.kind, "full-body-only-source");
+  assert.equal(bodyOnlyOutline.contourFrame?.bandCropApplied, false);
+  assert.equal(bodyOnlyOutline.contourFrame?.bodyOnlyReCropSkipped, true);
+  assert.ok((bodyOnlyOutline.printableBandContourBounds?.height ?? 0) > 0);
+  assert.ok((bodyOnlyBounds?.height ?? 0) > (autoBounds?.height ?? 0));
+  assert.ok((bodyOnlyByRole.get("base")?.y ?? 0) > (autoByRole.get("base")?.y ?? 0));
 });
 
 test("body-only imported outline trims narrow top protrusions before scaling the shell", () => {
@@ -325,7 +412,7 @@ test("body-only imported outline trims narrow top protrusions before scaling the
   assert.ok(Math.abs((byRole.get("body")?.x ?? 0) - 53) < 1);
 });
 
-test("body-only measurement contour crops to the body band without re-mirroring it", () => {
+test("body-only measurement contour preserves accepted body shell without body-band re-crop", () => {
   const tracedContour = [
     { x: 220, y: 100 },
     { x: 220, y: 360 },
@@ -352,8 +439,61 @@ test("body-only measurement contour crops to the body band without re-mirroring 
   assert.ok(normalized);
   assert.equal(normalized?.mirrored, false);
   assert.equal(normalized?.bodyOnly, true);
-  assert.ok((normalized?.contour.length ?? 0) > tracedContour.length);
+  assert.equal(normalized?.bodyOnlyReCropSkipped, true);
+  assert.equal(normalized?.bandCropApplied, false);
+  assert.equal(normalized?.contour.length, tracedContour.length);
+  assert.equal(normalized?.bounds.minY, 100);
+  assert.equal(normalized?.bounds.maxY, 700);
   assert.ok((normalized?.bounds.minX ?? 0) >= 220);
   assert.ok((normalized?.bounds.maxX ?? 0) <= 462);
   assert.ok((normalized?.contour.some((point) => point.x > 400) ?? false));
+});
+
+test("body-only approved contour preview does not collapse to printable 89 by 150 band", () => {
+  const fullBodyContour = [
+    { x: 215, y: 172 },
+    { x: 215, y: 260 },
+    { x: 220, y: 430 },
+    { x: 230, y: 587 },
+    { x: 369, y: 587 },
+    { x: 379, y: 430 },
+    { x: 384, y: 260 },
+    { x: 384, y: 172 },
+    { x: 215, y: 172 },
+  ];
+  const outline = createEditableBodyOutlineFromImportedSvg({
+    source: {
+      svgText: "",
+      pathData: "",
+      viewport: { minX: 0, minY: 0, width: 640, height: 760 },
+      bounds: { minX: 215, minY: 172, maxX: 384, maxY: 587, width: 169, height: 415 },
+      contour: fullBodyContour,
+    },
+    overallHeightMm: 218.4,
+    bodyTopFromOverallMm: 25,
+    bodyBottomFromOverallMm: 175,
+    diameterMm: 88.9,
+    topOuterDiameterMm: 88.9,
+    sourceMode: "body-only",
+  });
+  const previewBounds = boundsOf(resolveAuthoritativeEditableBodyOutlineContour(outline));
+  const normalized = normalizeMeasurementContour({
+    outline,
+    overallHeightMm: 218.4,
+    bodyTopFromOverallMm: 25,
+    bodyBottomFromOverallMm: 175,
+  });
+
+  assert.equal(outline.sourceContourMode, "body-only");
+  assert.equal(outline.contourFrame?.kind, "full-body-only-source");
+  assert.equal(outline.contourFrame?.authoritativeForBodyCutoutQa, true);
+  assert.equal(outline.contourFrame?.authoritativeForPrintableBand, false);
+  assert.equal(outline.contourFrame?.bandCropApplied, false);
+  assert.equal(outline.contourFrame?.bodyOnlyReCropSkipped, true);
+  assert.ok((previewBounds?.height ?? 0) > 150);
+  assert.notEqual(Math.round(previewBounds?.height ?? 0), 150);
+  assert.ok((outline.printableBandContourBounds?.height ?? 0) > 0);
+  assert.ok((outline.printableBandContourBounds?.height ?? 9999) < (outline.contourFrame?.boundsBeforeBandCrop?.height ?? 0));
+  assert.equal(normalized?.bodyOnlyReCropSkipped, true);
+  assert.equal(normalized?.bandCropApplied, false);
 });

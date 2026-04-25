@@ -173,9 +173,18 @@ type LoadedAuditArtifactState =
   | { status: "required-missing"; expectation: "required"; auditUrl: string }
   | { status: "failed"; expectation: "required"; auditUrl: string; error: string };
 
+type WebGlAvailabilityState =
+  | { status: "checking" }
+  | { status: "available" }
+  | { status: "unavailable"; reason: string };
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
+
+const WEBGL_UNAVAILABLE_REASON = "WebGL context could not be created.";
+const WEBGL_UNAVAILABLE_RUNTIME_MESSAGE =
+  "Runtime inspection unavailable: WebGL context could not be created. Open in a WebGL-capable browser/session to validate loaded-scene truth.";
 
 function toBodyBounds(
   bounds: LoadedGltfSceneInspection["bounds"]["body"] | null | undefined,
@@ -199,6 +208,120 @@ function resolveViewerSourceType(args: {
   if (args.approvedBodyOutline) return "approved-svg";
   if (args.sourceModelStatus === "generated-reviewed-model") return "generated";
   return "unknown";
+}
+
+function canCreateWebglContext(): { available: true } | { available: false; reason: string } {
+  if (typeof document === "undefined") {
+    return { available: false, reason: "Document is not available." };
+  }
+
+  const canvas = document.createElement("canvas");
+  const contextNames = ["webgl2", "webgl", "experimental-webgl"] as const;
+
+  for (const contextName of contextNames) {
+    try {
+      const context = canvas.getContext(contextName, {
+        antialias: false,
+        failIfMajorPerformanceCaveat: false,
+        stencil: false,
+      }) as WebGLRenderingContext | WebGL2RenderingContext | null;
+      if (context) {
+        context.getExtension("WEBGL_lose_context")?.loseContext();
+        return { available: true };
+      }
+    } catch {
+      // Keep probing the remaining context names; some browsers throw instead of returning null.
+    }
+  }
+
+  return { available: false, reason: WEBGL_UNAVAILABLE_REASON };
+}
+
+function useWebGlAvailability(): WebGlAvailabilityState {
+  const [availability, setAvailability] = useState<WebGlAvailabilityState>({ status: "checking" });
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const result = canCreateWebglContext();
+      if (cancelled) return;
+      setAvailability(
+        result.available
+          ? { status: "available" }
+          : { status: "unavailable", reason: result.reason },
+      );
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  return availability;
+}
+
+function WebGlPreflightPanel() {
+  return (
+    <div
+      data-testid="model-viewer-webgl-preflight"
+      role="status"
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#161620",
+        color: "var(--text-secondary)",
+        fontSize: 12,
+        padding: 16,
+        textAlign: "center",
+      }}
+    >
+      Checking 3D preview runtime...
+    </div>
+  );
+}
+
+function WebGlUnavailablePanel({
+  isBodyCutoutQa,
+}: {
+  isBodyCutoutQa: boolean;
+}) {
+  return (
+    <div
+      data-testid="model-viewer-webgl-unavailable"
+      role="status"
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        background: "#161620",
+        color: "var(--text-secondary)",
+        fontSize: 12,
+        lineHeight: 1.45,
+        padding: 18,
+        textAlign: "center",
+      }}
+    >
+      <strong style={{ color: "var(--text-primary)", fontSize: 13 }}>
+        3D preview unavailable: this browser/session does not provide WebGL.
+      </strong>
+      <span>
+        {isBodyCutoutQa
+          ? "BODY CUTOUT QA runtime inspection requires a WebGL-capable browser to validate loaded-scene truth."
+          : "Open in a WebGL-capable browser/session to inspect the loaded 3D scene."}
+      </span>
+      <span style={{ color: "var(--warning)", maxWidth: 460 }}>
+        {WEBGL_UNAVAILABLE_RUNTIME_MESSAGE}
+      </span>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -758,6 +881,7 @@ export default function ModelViewer({
     status: "idle",
     expectation: "none",
   });
+  const webglAvailability = useWebGlAvailability();
   const [isAutoRotating, setIsAutoRotating] = useState(!!tumblerDims);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditRequestTrackerRef = useRef<{
@@ -934,6 +1058,16 @@ export default function ModelViewer({
       setUrl(null);
     };
   }, [file, sourceModelUrl, tumblerDims]);
+
+  useEffect(() => {
+    if (webglAvailability.status !== "unavailable") return;
+    if (!file && !sourceModelUrl && !url) return;
+    setLoadedSceneInspectionState({
+      status: "failed",
+      glbUrl: url ?? sourceModelUrl ?? file?.name ?? undefined,
+      error: WEBGL_UNAVAILABLE_RUNTIME_MESSAGE,
+    });
+  }, [file, sourceModelUrl, url, webglAvailability]);
 
   const handleModelReady = useCallback((obj: THREE.Object3D) => {
     const box = new THREE.Box3().setFromObject(obj);
@@ -1389,6 +1523,7 @@ export default function ModelViewer({
     sourceModelStatus ||
     approvedBodyOutline,
   );
+  const shouldShowRuntimeStatusPanels = webglAvailability.status !== "unavailable";
   const showBodyContractInspector = Boolean(showModelDebug || BODY_CONTRACT_INSPECTOR_ENABLED);
 
   const H = tumblerDims?.overallHeightMm ?? 200;
@@ -1480,7 +1615,7 @@ export default function ModelViewer({
           )}
         </div>
       )}
-      {(bodyCutoutQaGuardState || showBodyGeometryStatusBadge || showBodyContractInspector) && (
+      {shouldShowRuntimeStatusPanels && (bodyCutoutQaGuardState || showBodyGeometryStatusBadge || showBodyContractInspector) && (
         <div
           style={{
             position: "absolute",
@@ -1518,91 +1653,97 @@ export default function ModelViewer({
           )}
         </div>
       )}
-      <CanvasErrorBoundary>
-        <Canvas
-          shadows={false}
-          frameloop={hasItems ? "always" : "demand"}
-          dpr={[1, 1.25]}
-          camera={{ fov: 35, near: nearClip, far: farClip }}
-          gl={{
-            antialias: true,
-            powerPreference: "low-power",
-            stencil: false,
-            toneMapping: THREE.NeutralToneMapping,
-            toneMappingExposure: 1.0,
-            alpha: false,
-          }}
-          style={{ width: "100%", height: "100%" }}
-        >
-          <color attach="background" args={["#1a1a22"]} />
+      {webglAvailability.status === "checking" && <WebGlPreflightPanel />}
+      {webglAvailability.status === "unavailable" && (
+        <WebGlUnavailablePanel isBodyCutoutQa={effectivePreviewMode === "body-cutout-qa"} />
+      )}
+      {webglAvailability.status === "available" && (
+        <CanvasErrorBoundary>
+          <Canvas
+            shadows={false}
+            frameloop={hasItems ? "always" : "demand"}
+            dpr={[1, 1.25]}
+            camera={{ fov: 35, near: nearClip, far: farClip }}
+            gl={{
+              antialias: true,
+              powerPreference: "low-power",
+              stencil: false,
+              toneMapping: THREE.NeutralToneMapping,
+              toneMappingExposure: 1.0,
+              alpha: false,
+            }}
+            style={{ width: "100%", height: "100%" }}
+          >
+            <color attach="background" args={["#1a1a22"]} />
 
-          <StudioLights />
+            <StudioLights />
 
-          <Bounds observe={false} margin={4.4}>
-            <Suspense fallback={<LoadingIndicator />}>
-              <ModelByExtension
-                url={url}
-                ext={ext}
-                dims={tumblerDims}
-                scaleTargetHeightMm={scaleTargetHeightMm}
-                handleArcDeg={handleArcDeg}
-                placedItems={placedItems}
-                itemTextures={itemTextures}
-                bedWidthMm={bedWidthMm}
-                bedHeightMm={bedHeightMm}
-                glbPath={glbPath}
-                sourceName={sourceName}
-                tumblerMapping={tumblerMapping}
-                bodyTintColor={bodyTintColor}
-                rimTintColor={rimTintColor}
-                showTemplateSurfaceZones={showTemplateSurfaceZones}
-                onReady={handleModelReady}
-              />
-            </Suspense>
-            <AutoFit url={url} />
-          </Bounds>
+            <Bounds observe={false} margin={4.4}>
+              <Suspense fallback={<LoadingIndicator />}>
+                <ModelByExtension
+                  url={url}
+                  ext={ext}
+                  dims={tumblerDims}
+                  scaleTargetHeightMm={scaleTargetHeightMm}
+                  handleArcDeg={handleArcDeg}
+                  placedItems={placedItems}
+                  itemTextures={itemTextures}
+                  bedWidthMm={bedWidthMm}
+                  bedHeightMm={bedHeightMm}
+                  glbPath={glbPath}
+                  sourceName={sourceName}
+                  tumblerMapping={tumblerMapping}
+                  bodyTintColor={bodyTintColor}
+                  rimTintColor={rimTintColor}
+                  showTemplateSurfaceZones={showTemplateSurfaceZones}
+                  onReady={handleModelReady}
+                />
+              </Suspense>
+              <AutoFit url={url} />
+            </Bounds>
 
-          {tumblerDims && modelBounds && !hasItems && (
-            <EngravableZoneRing dims={tumblerDims} modelBounds={modelBounds} />
-          )}
+            {tumblerDims && modelBounds && !hasItems && (
+              <EngravableZoneRing dims={tumblerDims} modelBounds={modelBounds} />
+            )}
 
-          <ContactShadows
-            position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}
-            opacity={0.4}
-            scale={shadowScale}
-            blur={3}
-            far={shadowFar}
-            color="#000018"
-          />
+            <ContactShadows
+              position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}
+              opacity={0.4}
+              scale={shadowScale}
+              blur={3}
+              far={shadowFar}
+              color="#000018"
+            />
 
-          <Grid
-            position={[0, modelBounds ? modelBounds.min.y - 1 : -0.011, 0]}
-            infiniteGrid
-            cellSize={gridCell}
-            cellThickness={0.4}
-            cellColor="#333344"
-            sectionSize={gridSection}
-            sectionThickness={0.7}
-            sectionColor="#444466"
-            fadeDistance={gridFade}
-            fadeStrength={2.5}
-          />
+            <Grid
+              position={[0, modelBounds ? modelBounds.min.y - 1 : -0.011, 0]}
+              infiniteGrid
+              cellSize={gridCell}
+              cellThickness={0.4}
+              cellColor="#333344"
+              sectionSize={gridSection}
+              sectionThickness={0.7}
+              sectionColor="#444466"
+              fadeDistance={gridFade}
+              fadeStrength={2.5}
+            />
 
-          <OrbitControls
-            makeDefault
-            enableDamping
-            dampingFactor={0.05}
-            autoRotate={isAutoRotating}
-            autoRotateSpeed={0.7}
-            minDistance={minDist}
-            maxDistance={maxDist}
-            maxPolarAngle={Math.PI / 1.85}
-            enablePan={false}
-            onStart={handleOrbitStart}
-            onEnd={handleOrbitEnd}
-          />
-        </Canvas>
-      </CanvasErrorBoundary>
+            <OrbitControls
+              makeDefault
+              enableDamping
+              dampingFactor={0.05}
+              autoRotate={isAutoRotating}
+              autoRotateSpeed={0.7}
+              minDistance={minDist}
+              maxDistance={maxDist}
+              maxPolarAngle={Math.PI / 1.85}
+              enablePan={false}
+              onStart={handleOrbitStart}
+              onEnd={handleOrbitEnd}
+            />
+          </Canvas>
+        </CanvasErrorBoundary>
+      )}
       {showModelDebug && (
         <div
           style={{
@@ -1672,6 +1813,7 @@ function LegacyScaffoldModelViewer({
     status: "idle",
     expectation: "none",
   });
+  const webglAvailability = useWebGlAvailability();
 
   // Auto-rotate: on by default for tumblers; pause on user interaction, resume after 4s
   const [isAutoRotating, setIsAutoRotating] = useState(!!tumblerDims);
@@ -1816,91 +1958,97 @@ function LegacyScaffoldModelViewer({
           )}
         </div>
       )}
-      <CanvasErrorBoundary>
-        <Canvas
-          shadows={false}
-          frameloop={hasItems ? "always" : "demand"}
-          dpr={[1, 1.25]}
-          camera={{ fov: 35, near: nearClip, far: farClip }}
-          gl={{
-            antialias: true,
-            powerPreference: "low-power",
-            stencil: false,
-            toneMapping: THREE.NeutralToneMapping,
-            toneMappingExposure: 1.0,
-            alpha: false,
-          }}
-          style={{ width: "100%", height: "100%" }}
-        >
-          <color attach="background" args={["#1a1a22"]} />
+      {webglAvailability.status === "checking" && <WebGlPreflightPanel />}
+      {webglAvailability.status === "unavailable" && (
+        <WebGlUnavailablePanel isBodyCutoutQa={previewModelMode === "body-cutout-qa"} />
+      )}
+      {webglAvailability.status === "available" && (
+        <CanvasErrorBoundary>
+          <Canvas
+            shadows={false}
+            frameloop={hasItems ? "always" : "demand"}
+            dpr={[1, 1.25]}
+            camera={{ fov: 35, near: nearClip, far: farClip }}
+            gl={{
+              antialias: true,
+              powerPreference: "low-power",
+              stencil: false,
+              toneMapping: THREE.NeutralToneMapping,
+              toneMappingExposure: 1.0,
+              alpha: false,
+            }}
+            style={{ width: "100%", height: "100%" }}
+          >
+            <color attach="background" args={["#1a1a22"]} />
 
-          <StudioLights />
+            <StudioLights />
 
-          <Bounds observe={false} margin={4.4}>
-            <Suspense fallback={<LoadingIndicator />}>
-              <ModelByExtension
-                url={url} ext={ext}
-                dims={tumblerDims}
-                scaleTargetHeightMm={scaleTargetHeightMm}
-                handleArcDeg={handleArcDeg}
-                placedItems={placedItems}
-                itemTextures={itemTextures}
-                bedWidthMm={bedWidthMm}
-                bedHeightMm={bedHeightMm}
-                glbPath={glbPath}
-                sourceName={sourceName}
-                tumblerMapping={tumblerMapping}
-                bodyTintColor={bodyTintColor}
-                rimTintColor={rimTintColor}
-                showTemplateSurfaceZones={showTemplateSurfaceZones}
-                onReady={handleModelReady}
-              />
-            </Suspense>
-            <AutoFit url={url} />
-          </Bounds>
+            <Bounds observe={false} margin={4.4}>
+              <Suspense fallback={<LoadingIndicator />}>
+                <ModelByExtension
+                  url={url} ext={ext}
+                  dims={tumblerDims}
+                  scaleTargetHeightMm={scaleTargetHeightMm}
+                  handleArcDeg={handleArcDeg}
+                  placedItems={placedItems}
+                  itemTextures={itemTextures}
+                  bedWidthMm={bedWidthMm}
+                  bedHeightMm={bedHeightMm}
+                  glbPath={glbPath}
+                  sourceName={sourceName}
+                  tumblerMapping={tumblerMapping}
+                  bodyTintColor={bodyTintColor}
+                  rimTintColor={rimTintColor}
+                  showTemplateSurfaceZones={showTemplateSurfaceZones}
+                  onReady={handleModelReady}
+                />
+              </Suspense>
+              <AutoFit url={url} />
+            </Bounds>
 
-          {/* Engravable zone highlight — shown when tumbler loaded, no items placed */}
-          {tumblerDims && modelBounds && !hasItems && (
-            <EngravableZoneRing dims={tumblerDims} modelBounds={modelBounds} />
-          )}
+            {/* Engravable zone highlight - shown when tumbler loaded, no items placed */}
+            {tumblerDims && modelBounds && !hasItems && (
+              <EngravableZoneRing dims={tumblerDims} modelBounds={modelBounds} />
+            )}
 
-          <ContactShadows
-            position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}
-            opacity={0.4}
-            scale={shadowScale}
-            blur={3}
-            far={shadowFar}
-            color="#000018"
-          />
+            <ContactShadows
+              position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}
+              opacity={0.4}
+              scale={shadowScale}
+              blur={3}
+              far={shadowFar}
+              color="#000018"
+            />
 
-          <Grid
-            position={[0, modelBounds ? modelBounds.min.y - 1 : -0.011, 0]}
-            infiniteGrid
-            cellSize={gridCell}
-            cellThickness={0.4}
-            cellColor="#333344"
-            sectionSize={gridSection}
-            sectionThickness={0.7}
-            sectionColor="#444466"
-            fadeDistance={gridFade}
-            fadeStrength={2.5}
-          />
+            <Grid
+              position={[0, modelBounds ? modelBounds.min.y - 1 : -0.011, 0]}
+              infiniteGrid
+              cellSize={gridCell}
+              cellThickness={0.4}
+              cellColor="#333344"
+              sectionSize={gridSection}
+              sectionThickness={0.7}
+              sectionColor="#444466"
+              fadeDistance={gridFade}
+              fadeStrength={2.5}
+            />
 
-          <OrbitControls
-            makeDefault
-            enableDamping
-            dampingFactor={0.05}
-            autoRotate={isAutoRotating}
-            autoRotateSpeed={0.7}
-            minDistance={minDist}
-            maxDistance={maxDist}
-            maxPolarAngle={Math.PI / 1.85}
-            enablePan={false}
-            onStart={handleOrbitStart}
-            onEnd={handleOrbitEnd}
-          />
-        </Canvas>
-      </CanvasErrorBoundary>
+            <OrbitControls
+              makeDefault
+              enableDamping
+              dampingFactor={0.05}
+              autoRotate={isAutoRotating}
+              autoRotateSpeed={0.7}
+              minDistance={minDist}
+              maxDistance={maxDist}
+              maxPolarAngle={Math.PI / 1.85}
+              enablePan={false}
+              onStart={handleOrbitStart}
+              onEnd={handleOrbitEnd}
+            />
+          </Canvas>
+        </CanvasErrorBoundary>
+      )}
     </div>
   );
 }

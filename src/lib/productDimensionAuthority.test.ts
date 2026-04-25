@@ -47,13 +47,13 @@ test("diameter-first authority resolves lookup scale from diameter and not heigh
     requireExactVariantMatch: true,
   });
 
-  assert.equal(summary.status, "warn");
+  assert.equal(summary.status, "pass");
   assert.equal(summary.readyForLookupScale, true);
   assert.equal(summary.dimensionAuthority, "diameter-primary");
   assert.equal(summary.scaleDiameterMm, 101.6);
   assert.equal(summary.wrapWidthMm, 319.19);
   assert.equal(summary.heightIgnoredForScale, true);
-  assert.match(summary.warnings.join(" "), /ignored for lookup-based body contour scale/i);
+  assert.equal(summary.warnings.length, 0);
 });
 
 test("body-diameter authority can drive scale when outside diameter is absent", () => {
@@ -84,7 +84,7 @@ test("manual override can provide scale authority when requested", () => {
     manualOverrideDiameterMm: 90.4,
   });
 
-  assert.equal(summary.status, "warn");
+  assert.equal(summary.status, "pass");
   assert.equal(summary.dimensionAuthority, "manual-override");
   assert.equal(summary.scaleDiameterMm, 90.4);
   assert.equal(summary.readyForLookupScale, true);
@@ -171,4 +171,43 @@ test("generic single-size dimensions can warn without blocking lookup scale", ()
 
 test("wrap width is derived from diameter using pi times diameter", () => {
   assert.equal(computeWrapWidthFromDiameterMm(88.9), 279.29);
+});
+
+test("reference height fields do not become scale authority or warnings", () => {
+  const summary = summarizeProductDimensionAuthority(createDimensions({
+    diameterMm: 88.9,
+    outsideDiameterMm: 88.9,
+    bodyDiameterMm: 72,
+    wrapDiameterMm: 88.9,
+    fullProductHeightMm: 999,
+    overallHeightMm: 999,
+    bodyHeightMm: 1,
+    usableHeightMm: 1,
+  }), {
+    requireScaleDiameter: true,
+  });
+
+  assert.equal(summary.status, "pass");
+  assert.equal(summary.dimensionAuthority, "diameter-primary");
+  assert.equal(summary.scaleDiameterMm, 88.9);
+  assert.equal(summary.bodyHeightMm, 1);
+  assert.equal(summary.fullProductHeightMm, 999);
+  assert.equal(summary.heightIgnoredForScale, true);
+  assert.equal(summary.wrapWidthMm, 279.29);
+});
+
+test("diameter authority passes even when reference heights are absent", () => {
+  const summary = summarizeProductDimensionAuthority(createDimensions({
+    fullProductHeightMm: null,
+    overallHeightMm: null,
+    bodyHeightMm: null,
+    usableHeightMm: null,
+  }), {
+    requireScaleDiameter: true,
+  });
+
+  assert.equal(summary.status, "pass");
+  assert.equal(summary.readyForLookupScale, true);
+  assert.equal(summary.scaleDiameterMm, 101.6);
+  assert.equal(summary.heightIgnoredForScale, false);
 });

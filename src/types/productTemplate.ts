@@ -30,20 +30,54 @@ export interface EditableBodyOutlineContourPoint {
   y: number;
 }
 
+export interface EditableBodyOutlineContourBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  width: number;
+  height: number;
+}
+
+export type EditableBodyOutlineContourFrameKind =
+  | "full-body-only-source"
+  | "printable-band"
+  | "body-band-from-overall-product"
+  | "explicit-body-trace-frame"
+  | "ui-only-guide"
+  | "unknown";
+
+export interface EditableBodyOutlineContourFrame {
+  kind: EditableBodyOutlineContourFrameKind;
+  authoritativeForBodyCutoutQa: boolean;
+  authoritativeForPrintableBand: boolean;
+  sourceCoordinateSpace: "raw-image-px" | "svg-px" | "model-mm" | "unknown";
+  boundsBeforeBandCrop?: EditableBodyOutlineContourBounds | null;
+  boundsAfterBandCrop?: EditableBodyOutlineContourBounds | null;
+  bandCropApplied: boolean;
+  bandCropReason?: string;
+  bodyOnlyReCropSkipped: boolean;
+  acceptedPreviewBounds?: EditableBodyOutlineContourBounds | null;
+  glbInputBounds?: EditableBodyOutlineContourBounds | null;
+  canonicalInputBounds?: EditableBodyOutlineContourBounds | null;
+  croppedAwayTopUnits?: number;
+  croppedAwayBottomUnits?: number;
+  croppedAwayTopMm?: number;
+  croppedAwayBottomMm?: number;
+  sourceDiameterUnits?: number;
+  mmPerSourceUnit?: number;
+}
+
 export interface EditableBodyOutline {
   closed: boolean;
   version: 1;
   points: EditableBodyOutlinePoint[];
   directContour?: EditableBodyOutlineContourPoint[];
   sourceContour?: EditableBodyOutlineContourPoint[];
-  sourceContourBounds?: {
-    minX: number;
-    minY: number;
-    maxX: number;
-    maxY: number;
-    width: number;
-    height: number;
-  };
+  sourceContourBounds?: EditableBodyOutlineContourBounds;
+  printableBandContour?: EditableBodyOutlineContourPoint[];
+  printableBandContourBounds?: EditableBodyOutlineContourBounds;
+  contourFrame?: EditableBodyOutlineContourFrame;
   sourceContourMode?: "full-image" | "body-only";
   sourceContourViewport?: {
     minX: number;
@@ -55,16 +89,13 @@ export interface EditableBodyOutline {
 
 export interface NormalizedMeasurementContour {
   contour: EditableBodyOutlineContourPoint[];
-  bounds: {
-    minX: number;
-    minY: number;
-    maxX: number;
-    maxY: number;
-    width: number;
-    height: number;
-  };
+  bounds: EditableBodyOutlineContourBounds;
   mirrored: boolean;
   bodyOnly: boolean;
+  bodyOnlyReCropSkipped?: boolean;
+  bandCropApplied?: boolean;
+  boundsBeforeBandCrop?: EditableBodyOutlineContourBounds;
+  boundsAfterBandCrop?: EditableBodyOutlineContourBounds;
 }
 
 export interface CanonicalHandleAnchor {

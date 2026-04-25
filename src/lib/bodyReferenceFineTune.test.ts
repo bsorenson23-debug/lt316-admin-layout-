@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { EditableBodyOutline } from "../types/productTemplate.ts";
+import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
 import { buildBodyReferenceSvgQualityReportFromOutline } from "./bodyReferenceSvgQuality.ts";
 import {
   buildOutlineGeometrySignature,
@@ -10,9 +11,12 @@ import {
   hasFineTuneDraftChanges,
   insertFineTunePointOnSegment,
   nudgeOutlinePoint,
+  rebuildAcceptedBodyReferenceSnapshot,
   resolveFineTuneGlbReviewState,
   resolveOutlineBounds,
   resolveOutlinePointCount,
+  resolvePrimaryBodyReferenceVisualContour,
+  resolveUiOnlyRimReferenceGuide,
 } from "./bodyReferenceFineTune.ts";
 
 function makeOutline(): EditableBodyOutline {
@@ -67,6 +71,32 @@ function makeManualOutlineWithStaleContour(): EditableBodyOutline {
   };
 }
 
+function makeFitDebug(overrides: Partial<TumblerItemLookupFitDebug> = {}): TumblerItemLookupFitDebug {
+  return {
+    kind: "lathe-body-fit",
+    sourceImageUrl: "https://example.test/source.png",
+    imageWidthPx: 600,
+    imageHeightPx: 700,
+    silhouetteBoundsPx: { minX: 120, minY: 40, maxX: 480, maxY: 660 },
+    centerXPx: 300,
+    fullTopPx: 40,
+    fullBottomPx: 660,
+    bodyTopPx: 220,
+    bodyBottomPx: 635,
+    rimTopPx: 165,
+    rimBottomPx: 210,
+    referenceBandTopPx: 224,
+    referenceBandBottomPx: 238,
+    referenceBandCenterYPx: 231,
+    referenceBandWidthPx: 169,
+    maxCenterWidthPx: 191,
+    referenceHalfWidthPx: 84.5,
+    fitScore: 8.9,
+    profilePoints: [],
+    ...overrides,
+  };
+}
+
 test("moving a point changes signature and bounds", () => {
   const approved = makeOutline();
   const draft = cloneOutline(approved)!;
@@ -82,6 +112,139 @@ test("moving a point changes signature and bounds", () => {
   assert.ok(draftBounds);
   assert.equal(approvedBounds!.width, 30);
   assert.equal(draftBounds!.width, 35);
+});
+
+test("primary review outline prefers approved direct contour over sparse edit controls", () => {
+  const outline = makeOutline();
+  outline.points = [
+    { id: "top", x: 44.5, y: 40, role: "topOuter", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "body", x: 44.5, y: 80, role: "body", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "base", x: 42, y: 175, role: "base", pointType: "corner", inHandle: null, outHandle: null },
+  ];
+  outline.directContour = [
+    { x: -44.45, y: 25 },
+    { x: 44.45, y: 25 },
+    { x: 44.45, y: 120 },
+    { x: 41, y: 224.8 },
+    { x: -41, y: 224.8 },
+    { x: -44.45, y: 120 },
+  ];
+
+  const visual = resolvePrimaryBodyReferenceVisualContour(outline);
+
+  assert.ok(visual);
+  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.topGuideY, 25);
+  assert.equal(visual!.bounds.height, 199.8);
+  assert.equal(visual!.points.length, outline.directContour.length);
+});
+
+test("printable band metadata cannot replace approved SVG visual authority", () => {
+  const outline = makeOutline();
+  outline.printableBandContourBounds = {
+    minX: -44.45,
+    minY: 50,
+    maxX: 44.45,
+    maxY: 175,
+    width: 88.9,
+    height: 125,
+  };
+  outline.printableBandContour = [
+    { x: -44.45, y: 50 },
+    { x: 44.45, y: 50 },
+    { x: 44.45, y: 175 },
+    { x: -44.45, y: 175 },
+  ];
+  outline.directContour = [
+    { x: -44.45, y: 25 },
+    { x: 44.45, y: 25 },
+    { x: 44.45, y: 224.8 },
+    { x: -44.45, y: 224.8 },
+  ];
+
+  const visual = resolvePrimaryBodyReferenceVisualContour(outline);
+
+  assert.ok(visual);
+  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.topGuideY, 25);
+  assert.equal(visual!.bounds.minY, 25);
+  assert.equal(visual!.bounds.maxY, 224.8);
+});
+
+test("rim reference guide is visual-only and does not expand body-only contour authority", () => {
+  const outline = makeOutline();
+  outline.sourceContourMode = "body-only";
+  outline.sourceContourBounds = {
+    minX: 215,
+    minY: 220,
+    maxX: 384,
+    maxY: 635,
+    width: 169,
+    height: 415,
+  };
+  outline.sourceContourViewport = {
+    minX: 0,
+    minY: 0,
+    width: 600,
+    height: 700,
+  };
+  outline.directContour = [
+    { x: -44.45, y: 25 },
+    { x: 44.45, y: 25 },
+    { x: 44.45, y: 243.29 },
+    { x: -44.45, y: 243.29 },
+  ];
+  const beforeSignature = buildOutlineGeometrySignature(outline);
+  const beforeQuality = buildBodyReferenceSvgQualityReportFromOutline({ outline });
+
+  const guide = resolveUiOnlyRimReferenceGuide({
+    outline,
+    fitDebug: makeFitDebug({ rimBottomPx: 210 }),
+  });
+  const visual = resolvePrimaryBodyReferenceVisualContour(outline);
+
+  assert.ok(guide);
+  assert.ok(visual);
+  assert.equal(guide!.source, "rim-reference-ui-only");
+  assert.equal(guide!.authority, "visual-only");
+  assert.equal(guide!.excludedFromBodyCutout, true);
+  assert.equal(guide!.affectsSourceHash, false);
+  assert.equal(guide!.affectsGlbInput, false);
+  assert.equal(guide!.affectsWrapExport, false);
+  assert.equal(guide!.affectsV2Authority, false);
+  assert.equal(guide!.sourceField, "fitDebug.rimBottomPx");
+  assert.ok(guide!.y < visual!.bounds.minY);
+  assert.equal(visual!.bounds.minY, 25);
+  assert.equal(visual!.bounds.height, 218.29);
+  assert.equal(buildOutlineGeometrySignature(outline), beforeSignature);
+  assert.deepEqual(buildBodyReferenceSvgQualityReportFromOutline({ outline }), beforeQuality);
+});
+
+test("printable top cannot create the rim reference guide or top-band body geometry", () => {
+  const outline = makeOutline();
+  outline.printableBandContourBounds = {
+    minX: -44.45,
+    minY: 25,
+    maxX: 44.45,
+    maxY: 175,
+    width: 88.9,
+    height: 150,
+  };
+  outline.directContour = [
+    { x: -44.45, y: 25 },
+    { x: 44.45, y: 25 },
+    { x: 44.45, y: 243.29 },
+    { x: -44.45, y: 243.29 },
+  ];
+
+  const guide = resolveUiOnlyRimReferenceGuide({ outline, fitDebug: null });
+  const visual = resolvePrimaryBodyReferenceVisualContour(outline);
+
+  assert.equal(guide, null);
+  assert.ok(visual);
+  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.bounds.minY, 25);
+  assert.equal(visual!.bounds.maxY, 243.29);
 });
 
 test("point count falls back to the effective point-derived contour when cached geometry is sparse", () => {
@@ -257,4 +420,79 @@ test("regenerated reviewed glb becomes fresh again after acceptance", () => {
 
   assert.equal(reviewState.status, "current");
   assert.equal(reviewState.canRequestGeneration, true);
+});
+
+test("accepted fine-tune rebuild updates approved canonical profile and calibration from the corrected outline", () => {
+  const baseline = rebuildAcceptedBodyReferenceSnapshot({
+    acceptedOutline: makeOutline(),
+    overallHeightMm: 80,
+    topMarginMm: 10,
+    bottomMarginMm: 20,
+    diameterMm: 60,
+    baseDiameterMm: 60,
+    fitDebug: makeFitDebug(),
+  });
+  const acceptedOutline = makeOutline();
+  acceptedOutline.points[1] = { ...acceptedOutline.points[1]!, x: 44 };
+  acceptedOutline.directContour = [
+    { x: 10, y: 10 },
+    { x: 44, y: 10 },
+    { x: 44, y: 60 },
+    { x: 10, y: 60 },
+    { x: 10, y: 10 },
+  ];
+
+  const rebuilt = rebuildAcceptedBodyReferenceSnapshot({
+    acceptedOutline,
+    overallHeightMm: 80,
+    topMarginMm: 10,
+    bottomMarginMm: 20,
+    diameterMm: 60,
+    baseDiameterMm: 60,
+    fitDebug: makeFitDebug(),
+  });
+
+  assert.ok(baseline);
+  assert.ok(rebuilt);
+  assert.equal(baseline!.readyForReviewedGeneration, true);
+  assert.equal(rebuilt!.readyForReviewedGeneration, true);
+  assert.equal(rebuilt!.approvedCanonicalBodyProfile?.samples.length, 96);
+  assert.notEqual(
+    rebuilt!.approvedCanonicalBodyProfile?.svgPath,
+    baseline!.approvedCanonicalBodyProfile?.svgPath,
+  );
+  assert.notDeepEqual(
+    rebuilt!.approvedCanonicalDimensionCalibration,
+    baseline!.approvedCanonicalDimensionCalibration,
+  );
+  assert.notEqual(rebuilt!.nextDiameterMm, baseline!.nextDiameterMm);
+  assert.ok(Array.isArray(rebuilt!.approvedBodyReferenceWarnings));
+  assert.ok(rebuilt!.approvedBodyReferenceQa);
+  assert.equal(rebuilt!.nextDiameterMm, 88);
+  assert.equal(rebuilt!.nextPrintHeightMm, 50);
+});
+
+test("accepted fine-tune rebuild marks reviewed generation unavailable when canonical rebuild fails", () => {
+  const rebuilt = rebuildAcceptedBodyReferenceSnapshot({
+    acceptedOutline: {
+      ...makeOutline(),
+      points: [{ ...makeOutline().points[0]! }],
+      directContour: [{ x: 10, y: 10 }],
+    },
+    overallHeightMm: 0,
+    topMarginMm: 0,
+    bottomMarginMm: 0,
+    diameterMm: 0,
+    baseDiameterMm: 0,
+    fitDebug: null,
+  });
+
+  assert.ok(rebuilt);
+  assert.equal(rebuilt!.readyForReviewedGeneration, false);
+  assert.equal(rebuilt!.approvedCanonicalBodyProfile, null);
+  assert.equal(rebuilt!.approvedCanonicalDimensionCalibration, null);
+  assert.equal(rebuilt!.approvedBodyReferenceQa, null);
+  assert.deepEqual(rebuilt!.approvedBodyReferenceWarnings, [
+    "Accepted BODY REFERENCE could not rebuild canonical profile and calibration from the corrected outline.",
+  ]);
 });

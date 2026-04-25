@@ -296,6 +296,59 @@ function isExpectedHorizontalBridgeSegment(args: {
   return true;
 }
 
+function isExpectedRoundedBottomClosureSegment(args: {
+  points: readonly QualityPoint[];
+  segmentIndex: number;
+  segmentLength: number;
+  segmentLengths: readonly number[];
+  bounds: NonNullable<ReturnType<typeof getBounds>>;
+}): boolean {
+  const { points, segmentIndex, segmentLength, segmentLengths, bounds } = args;
+  if (points.length < 4 || segmentLengths.length !== points.length) return false;
+  if (!(bounds.width > 0) || !(bounds.height > 0)) return false;
+
+  const { from, to } = getSegmentEndpoints(points, segmentIndex);
+  const previousPoint = points[(segmentIndex - 1 + points.length) % points.length]!;
+  const nextPoint = points[(segmentIndex + 2) % points.length]!;
+  const previousLength = segmentLengths[(segmentIndex - 1 + segmentLengths.length) % segmentLengths.length] ?? 0;
+  const nextLength = segmentLengths[(segmentIndex + 1) % segmentLengths.length] ?? 0;
+
+  const edgeTolerance = Math.max(
+    BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.expectedBridgeNearEdgeAbs,
+    bounds.height * BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.expectedBridgeNearEdgeRatio,
+  );
+  const horizontalTolerance = Math.max(
+    BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.expectedBridgeHorizontalToleranceAbs,
+    bounds.height * BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.expectedBridgeHorizontalToleranceRatio,
+  );
+
+  if (!isNearlyHorizontal(from, to, horizontalTolerance)) return false;
+
+  const averageY = (from.y + to.y) / 2;
+  if (Math.abs(averageY - bounds.maxY) > edgeTolerance) return false;
+
+  const horizontalSpan = Math.abs(to.x - from.x);
+  if (horizontalSpan < Math.max(8, bounds.width * 0.25)) return false;
+
+  const centerX = bounds.minX + (bounds.width / 2);
+  if (!(Math.min(from.x, to.x) <= centerX && Math.max(from.x, to.x) >= centerX)) {
+    return false;
+  }
+
+  const neighborLengthMax = Math.max(segmentLength * 0.75, bounds.height * 0.08);
+  if (!(previousLength > 0) || !(nextLength > 0)) return false;
+  if (previousLength > neighborLengthMax || nextLength > neighborLengthMax) return false;
+
+  // Rounded tumbler bases close through short sloped sidewall segments, not vertical sidewalls.
+  if (!(previousPoint.y < from.y && nextPoint.y < to.y)) return false;
+  const fromIsRightSide = from.x > to.x;
+  const outwardTolerance = Math.max(1, bounds.width * 0.02);
+  if (fromIsRightSide) {
+    return previousPoint.x >= from.x - outwardTolerance && nextPoint.x <= to.x + outwardTolerance;
+  }
+  return previousPoint.x <= from.x + outwardTolerance && nextPoint.x >= to.x - outwardTolerance;
+}
+
 function calculateAngleDegrees(
   previous: QualityPoint,
   current: QualityPoint,
@@ -487,6 +540,7 @@ export function buildBodyReferenceSvgQualityReport(
   );
   let suspiciousJumpCount = 0;
   let expectedBridgeSegmentCount = 0;
+  const expectedBridgeSegmentIndices = new Set<number>();
   for (let index = 0; index < segmentLengths.length; index += 1) {
     const length = segmentLengths[index]!;
     if (length < suspiciousJumpBaseThreshold) continue;
@@ -500,22 +554,51 @@ export function buildBodyReferenceSvgQualityReport(
       length >= medianSegmentLength * BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.suspiciousJumpMultiple;
     const classification: SegmentClassification =
       (localRatioSuspicious || globalRatioSuspicious)
-        ? (closed && bounds && isExpectedHorizontalBridgeSegment({
+        ? (closed && bounds && (
+            isExpectedHorizontalBridgeSegment({
+              points: usablePoints,
+              segmentIndex: index,
+              segmentLength: length,
+              segmentLengths,
+              bounds,
+            }) ||
+            isExpectedRoundedBottomClosureSegment({
             points: usablePoints,
             segmentIndex: index,
             segmentLength: length,
             segmentLengths,
             bounds,
-          })
+            })
+          )
             ? "expected-horizontal-bridge"
             : "suspicious-jump")
         : "normal";
     if (classification === "expected-horizontal-bridge") {
       expectedBridgeSegmentCount += 1;
+      expectedBridgeSegmentIndices.add(index);
       continue;
     }
     if (classification === "suspicious-jump") {
       suspiciousJumpCount += 1;
+    }
+  }
+
+  if (closed && bounds && expectedBridgeSegmentCount < 2) {
+    for (let index = 0; index < segmentLengths.length; index += 1) {
+      if (expectedBridgeSegmentIndices.has(index)) continue;
+      const length = segmentLengths[index]!;
+      if (
+        isExpectedRoundedBottomClosureSegment({
+          points: usablePoints,
+          segmentIndex: index,
+          segmentLength: length,
+          segmentLengths,
+          bounds,
+        })
+      ) {
+        expectedBridgeSegmentCount += 1;
+        expectedBridgeSegmentIndices.add(index);
+      }
     }
   }
 
@@ -628,6 +711,7 @@ export function buildBodyReferenceSvgQualityVisualization(
 
   const expectedBridgeSegments: BodyReferenceSvgQualitySegmentAnnotation[] = [];
   const suspiciousJumpSegments: BodyReferenceSvgQualitySegmentAnnotation[] = [];
+  const expectedBridgeSegmentIndices = new Set<number>();
 
   for (let index = 0; index < segmentLengths.length; index += 1) {
     const length = segmentLengths[index]!;
@@ -643,17 +727,25 @@ export function buildBodyReferenceSvgQualityVisualization(
     if (!localRatioSuspicious && !globalRatioSuspicious) continue;
 
     const { from, to } = getSegmentEndpoints(usablePoints, index);
-    const annotation: BodyReferenceSvgQualitySegmentAnnotation = {
-      kind:
-        closed && isExpectedHorizontalBridgeSegment({
+    const isExpectedBridge =
+      closed && (
+        isExpectedHorizontalBridgeSegment({
+          points: usablePoints,
+          segmentIndex: index,
+          segmentLength: length,
+          segmentLengths,
+          bounds,
+        }) ||
+        isExpectedRoundedBottomClosureSegment({
           points: usablePoints,
           segmentIndex: index,
           segmentLength: length,
           segmentLengths,
           bounds,
         })
-          ? "expected-horizontal-bridge"
-          : "suspicious-jump",
+      );
+    const annotation: BodyReferenceSvgQualitySegmentAnnotation = {
+      kind: isExpectedBridge ? "expected-horizontal-bridge" : "suspicious-jump",
       segmentIndex: index,
       length: round2(length),
       from: { x: round2(from.x), y: round2(from.y) },
@@ -662,8 +754,34 @@ export function buildBodyReferenceSvgQualityVisualization(
 
     if (annotation.kind === "expected-horizontal-bridge") {
       expectedBridgeSegments.push(annotation);
+      expectedBridgeSegmentIndices.add(index);
     } else {
       suspiciousJumpSegments.push(annotation);
+    }
+  }
+
+  if (closed && expectedBridgeSegments.length < 2) {
+    for (let index = 0; index < segmentLengths.length; index += 1) {
+      if (expectedBridgeSegmentIndices.has(index)) continue;
+      const length = segmentLengths[index]!;
+      if (!isExpectedRoundedBottomClosureSegment({
+        points: usablePoints,
+        segmentIndex: index,
+        segmentLength: length,
+        segmentLengths,
+        bounds,
+      })) {
+        continue;
+      }
+      const { from, to } = getSegmentEndpoints(usablePoints, index);
+      expectedBridgeSegments.push({
+        kind: "expected-horizontal-bridge",
+        segmentIndex: index,
+        length: round2(length),
+        from: { x: round2(from.x), y: round2(from.y) },
+        to: { x: round2(to.x), y: round2(to.y) },
+      });
+      expectedBridgeSegmentIndices.add(index);
     }
   }
 

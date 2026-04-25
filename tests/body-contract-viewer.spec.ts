@@ -37,6 +37,43 @@ async function attachHarnessScreenshot(
   });
 }
 
+test("ModelViewer shows a WebGL-unavailable fallback without mounting Canvas", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.addInitScript(() => {
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = (function getContext(this: HTMLCanvasElement, contextId: string, ...args: unknown[]) {
+      if (contextId === "webgl2" || contextId === "webgl" || contextId === "experimental-webgl") {
+        return null;
+      }
+      return (originalGetContext as unknown as (
+        this: HTMLCanvasElement,
+        contextId: string,
+        ...innerArgs: unknown[]
+      ) => unknown).call(this, contextId, ...args);
+    }) as typeof HTMLCanvasElement.prototype.getContext;
+  });
+  await ensureBodyContractFixtureFiles();
+  await page.goto("/admin/debug/body-contract-viewer?scenario=body-cutout-qa-valid");
+
+  await expect(page.getByTestId("body-contract-viewer-harness")).toBeVisible();
+  await expect(page.getByTestId("model-viewer-webgl-unavailable")).toBeVisible();
+  await expect(page.getByTestId("model-viewer-webgl-unavailable")).toContainText(
+    "3D preview unavailable: this browser/session does not provide WebGL.",
+  );
+  await expect(page.getByTestId("model-viewer-webgl-unavailable")).toContainText(
+    "BODY CUTOUT QA runtime inspection requires a WebGL-capable browser",
+  );
+  await expect(page.getByTestId("body-contract-viewer-viewport").locator("canvas")).toHaveCount(0);
+  await expect(page.getByText("No body mesh found")).toHaveCount(0);
+  await expect(page.getByTestId("body-contract-inspector-runtime-status")).toHaveCount(0);
+  expect(consoleErrors.some((message) => message.includes("THREE.WebGLRenderer"))).toBe(false);
+});
+
 test("BODY CUTOUT QA valid body-only fixture shows PASS with no extras", async ({ page }, testInfo) => {
   await openHarnessScenario(page, testInfo, "body-cutout-qa-valid");
 
@@ -71,7 +108,7 @@ test("BODY CUTOUT QA fails when accessory meshes are present", async ({ page }, 
   await expect(page.getByTestId("body-contract-inspector-status")).toHaveText(/FAIL/);
   await expect(page.getByTestId("body-contract-inspector-accessory-meshes")).toContainText("lid_mesh");
   await expect(page.getByTestId("body-contract-inspector-accessory-meshes")).toContainText("handle_mesh");
-  await expect(page.getByTestId("body-contract-inspector-validation-error")).toContainText(
+  await expect(page.getByTestId("body-contract-inspector-validation-messages")).toContainText(
     "BODY CUTOUT QA expected exactly body geometry, but accessory meshes were found:",
   );
 });

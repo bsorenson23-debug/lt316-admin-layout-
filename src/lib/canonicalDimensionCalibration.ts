@@ -223,6 +223,17 @@ function measurementToleranceMm(radiusMm: number): number {
   return Math.max(2, Math.abs(radiusMm) * 0.08);
 }
 
+function finitePositive(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function firstFinitePositive(...values: Array<number | null | undefined>): number | null {
+  for (const value of values) {
+    if (finitePositive(value)) return value;
+  }
+  return null;
+}
+
 function resolveCanonicalSampleRadiusMm(args: {
   outlineRadiusMm: number;
   measuredRadiusMm: number | null;
@@ -389,14 +400,63 @@ function deriveCanonicalSamples(args: {
     .filter((ratio) => Number.isFinite(ratio) && ratio > 0);
   const acceptedRowTarget = Math.max(12, Math.round(sampleCount * 0.12));
   const hasValidatedRatio = acceptedRatios.length >= acceptedRowTarget;
-  const sourceMmPerPx = hasValidatedRatio
-    ? median(acceptedRatios)
-    : (ratioCandidates.length > 0 ? median(ratioCandidates) : 0);
+  const diameterAuthorityMm = firstFinitePositive(args.wrapDiameterMm, args.bodyDiameterMm);
+  const fitDebugDiameterUnits = firstFinitePositive(
+    args.fitDebug?.measurementBandWidthPx,
+    args.fitDebug?.referenceBandWidthPx,
+    args.fitDebug?.referenceHalfWidthPx ? args.fitDebug.referenceHalfWidthPx * 2 : null,
+  );
+  const contourDiameterCandidates = (candidateRows.length > 0 ? candidateRows : rows)
+    .map((row) => row.radiusPx * 2)
+    .filter((value) => Number.isFinite(value) && value > 0.2);
+  const contourDiameterUnits = contourDiameterCandidates.length > 0
+    ? Math.max(...contourDiameterCandidates)
+    : 0;
+  const contourFrameDiameterUnits = firstFinitePositive(
+    outline.contourFrame?.authoritativeForBodyCutoutQa === true
+      ? outline.contourFrame.sourceDiameterUnits
+      : null,
+  );
+  const contourFrameMmPerSourceUnit = firstFinitePositive(
+    outline.contourFrame?.authoritativeForBodyCutoutQa === true
+      ? outline.contourFrame.mmPerSourceUnit
+      : null,
+  );
+  const sourceDiameterUnits = firstFinitePositive(
+    contourFrameDiameterUnits,
+    fitDebugDiameterUnits,
+    contourDiameterUnits,
+  );
+  const diameterMmPerSourceUnitFromDiameter =
+    hasSourceContour &&
+    finitePositive(diameterAuthorityMm) &&
+    finitePositive(sourceDiameterUnits)
+      ? diameterAuthorityMm / sourceDiameterUnits
+      : 0;
+  const diameterMmPerSourceUnit =
+    hasSourceContour &&
+    finitePositive(diameterAuthorityMm) &&
+    finitePositive(contourFrameMmPerSourceUnit)
+      ? contourFrameMmPerSourceUnit
+      : diameterMmPerSourceUnitFromDiameter;
+  const sourceMmPerPx = diameterMmPerSourceUnit > 0
+    ? diameterMmPerSourceUnit
+    : (
+        hasValidatedRatio
+          ? median(acceptedRatios)
+          : (ratioCandidates.length > 0 ? median(ratioCandidates) : 0)
+      );
+  const uniformScaleApplied = hasSourceContour && sourceMmPerPx > 0 && finitePositive(diameterAuthorityMm);
+  const resolvedBodyTopMm = bodyTopMm;
+  const resolvedBodyHeightMm = uniformScaleApplied
+    ? round2(axisHeightPx * sourceMmPerPx)
+    : bodyHeightMm;
+  const resolvedBodyBottomMm = round2(resolvedBodyTopMm + resolvedBodyHeightMm);
   const acceptedRowIndexes = new Set(acceptedRatioRows.map((row) => row.index));
   const measurementIssues: string[] = [];
   if (!hasSourceContour) {
     measurementIssues.push("Measurement contour missing; falling back to outline-only shell calibration.");
-  } else if (!hasValidatedRatio) {
+  } else if (!hasValidatedRatio && !uniformScaleApplied) {
     measurementIssues.push("Measurement contour did not produce enough stable mid-band rows; falling back to outline-only shell calibration.");
   }
 
@@ -405,18 +465,28 @@ function deriveCanonicalSamples(args: {
       ? round2(row.radiusPx * sourceMmPerPx)
       : null;
     const canBlendMeasured =
-      hasValidatedRatio &&
-      acceptedRowIndexes.has(row.index) &&
-      !(row.radiusPx < 15 && (measuredRadiusMm ?? 0) > 12 && Math.abs((measuredRadiusMm ?? 0) - row.outlineRadiusMm) > 1);
+      uniformScaleApplied ||
+      (
+        hasValidatedRatio &&
+        acceptedRowIndexes.has(row.index) &&
+        !(row.radiusPx < 15 && (measuredRadiusMm ?? 0) > 12 && Math.abs((measuredRadiusMm ?? 0) - row.outlineRadiusMm) > 1)
+      );
     const radiusMm = canBlendMeasured
-      ? resolveCanonicalSampleRadiusMm({
-          outlineRadiusMm: row.outlineRadiusMm,
-          measuredRadiusMm,
-        })
+      ? (
+          uniformScaleApplied
+            ? (measuredRadiusMm ?? row.outlineRadiusMm)
+            : resolveCanonicalSampleRadiusMm({
+                outlineRadiusMm: row.outlineRadiusMm,
+                measuredRadiusMm,
+              })
+        )
       : row.outlineRadiusMm;
+    const yMm = uniformScaleApplied
+      ? round2(resolvedBodyTopMm + ((row.yPx - axisYTop) * sourceMmPerPx))
+      : round2(row.yMm);
     return {
       sNorm: round4(row.sNorm),
-      yMm: round2(row.yMm),
+      yMm,
       yPx: round2(row.yPx),
       xLeft: round2(row.xLeft),
       radiusPx: round2(row.radiusPx),
@@ -430,7 +500,7 @@ function deriveCanonicalSamples(args: {
   let fallbackMode: CanonicalBodyContractQA["fallbackMode"] =
     !hasSourceContour
       ? "missing-measurement-contour"
-      : (hasValidatedRatio ? "none" : "outline-only");
+      : (hasValidatedRatio || uniformScaleApplied ? "none" : "outline-only");
   const invariantIssues: string[] = [];
   const monotonicYmm = samples.every((sample, index) => index === 0 || sample.yMm > (samples[index - 1]?.yMm ?? Number.NEGATIVE_INFINITY));
   const monotonicYpx = samples.every((sample, index) => index === 0 || sample.yPx > (samples[index - 1]?.yPx ?? Number.NEGATIVE_INFINITY));
@@ -449,7 +519,7 @@ function deriveCanonicalSamples(args: {
     invariantIssues.push(`Front visible width differs from body diameter by ${round2(Math.abs(frontVisibleWidthMm - args.bodyDiameterMm))} mm.`);
   }
 
-  if (invariantIssues.length > 0 && hasSourceContour) {
+  if (invariantIssues.length > 0 && hasSourceContour && !uniformScaleApplied) {
     samples = buildOutlineOnlySamples(rows);
     frontVisibleWidthMm = round2(
       samples.reduce((max, sample) => Math.max(max, sample.radiusMm * 2), 0),
@@ -462,7 +532,7 @@ function deriveCanonicalSamples(args: {
   const resolvedDirectContour = outline.sourceContourMode === "body-only"
     ? resolveEditableBodyOutlineDirectContour(outline)
     : null;
-  const tracedSvgPath = resolvedDirectContour && resolvedDirectContour.length >= 3
+  const tracedSvgPath = !uniformScaleApplied && resolvedDirectContour && resolvedDirectContour.length >= 3
     ? buildContourSvgPath(resolvedDirectContour.map((point) => ({ x: point.x, y: point.y })))
     : null;
   const svgPath = tracedSvgPath ?? buildContourSvgPath([...leftPoints, ...rightPoints]) ?? "";
@@ -484,16 +554,18 @@ function deriveCanonicalSamples(args: {
     ? round2(wrapMm(handleMeridianMm + (handleKeepOutWidthMm / 2), Math.max(wrapWidthMm, 1)))
     : undefined;
   const sx = sourceMmPerPx > 0 ? round4(sourceMmPerPx) : 1;
-  const sy = hasSourceContour && axisHeightPx !== 0 ? round4(bodyHeightMm / axisHeightPx) : 1;
+  const sy = hasSourceContour && axisHeightPx !== 0
+    ? round4(uniformScaleApplied ? sourceMmPerPx : bodyHeightMm / axisHeightPx)
+    : 1;
   const tx = hasSourceContour ? round4(-axisX * sx) : 0;
-  const ty = hasSourceContour ? round4(args.bodyTopFromOverallMm - (axisYTop * sy)) : 0;
+  const ty = hasSourceContour ? round4(resolvedBodyTopMm - (axisYTop * sy)) : 0;
   const qaIssues = dedupeIssues([...measurementIssues, ...invariantIssues]);
   const shellAuthority: CanonicalBodyContractQA["shellAuthority"] =
     outline.sourceContour?.length || outline.directContour?.length
       ? "outline-profile"
       : "dimensional-seed";
   const scaleAuthority: CanonicalBodyContractQA["scaleAuthority"] =
-    hasValidatedRatio
+    hasValidatedRatio || uniformScaleApplied
       ? "validated-midband-ratio"
       : (sourceMmPerPx > 0 ? "outline-ratio-fallback" : "none");
   const qaPass = invariantIssues.length === 0 || fallbackMode === "outline-only" || fallbackMode === "missing-measurement-contour";
@@ -517,16 +589,16 @@ function deriveCanonicalSamples(args: {
   const canonicalDimensionCalibration: CanonicalDimensionCalibration = {
     units: "mm",
     totalHeightMm: round2(args.overallHeightMm),
-    bodyHeightMm,
+    bodyHeightMm: resolvedBodyHeightMm,
     lidBodyLineMm: round2(args.bodyTopFromOverallMm),
-    bodyBottomMm: round2(args.bodyBottomFromOverallMm),
+    bodyBottomMm: resolvedBodyBottomMm,
     wrapDiameterMm: round2(Math.max(args.wrapDiameterMm ?? args.bodyDiameterMm ?? frontVisibleWidthMm, 0)),
     baseDiameterMm: round2(Math.max(0, args.baseDiameterMm ?? 0)),
     wrapWidthMm,
     frontVisibleWidthMm,
     frontAxisPx: canonicalBodyProfile.axis,
     photoToFrontTransform: {
-      type: "affine",
+      type: uniformScaleApplied ? "similarity" : "affine",
       matrix: [sx, 0, tx, 0, sy, ty],
     },
     svgFrontViewBoxMm: {

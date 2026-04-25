@@ -13,6 +13,10 @@ export interface TumblerProfile {
   brand: string;
   model: string;
   capacityOz: number;
+  /** Additional catalog tokens used for generic lookup matching. */
+  lookupAliases?: string[];
+  /** Official source domains for this profile family, used for source classification. */
+  officialDomains?: string[];
   /** "straight" = constant diameter, "tapered" = conical body */
   shapeType: "straight" | "tapered";
   /** Overall outside diameter for straight cups (mm) */
@@ -35,6 +39,21 @@ export interface TumblerProfile {
   guideBand?: TumblerGuideBand;
   /** Optional calibration notes shown to the user */
   notes?: string;
+  /** Existing reviewed/product GLB asset for this profile, when available. */
+  templateGlbPath?: string;
+  /** Generic generated-model capability for profiles that support image-derived body-band diagnostics. */
+  generatedModelPolicy?: {
+    strategy: "body-band-lathe";
+    fileStem?: string;
+    fitDebugProfile?: {
+      measurementBandRatio?: {
+        top: number;
+        height: number;
+      };
+      engravingGuideRatio?: number;
+      minTraceWidthRatio?: number;
+    };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +123,7 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
       upperGrooveYmm: 28,
       lowerGrooveYmm: 213,
     },
+    templateGlbPath: "/models/templates/yeti-40oz-body.glb",
     notes: "Same body diameter as 30oz but taller. Roller OK; chuck gives cleaner registration.",
   },
 
@@ -230,6 +250,8 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     brand: "Stanley",
     model: "IceFlow Flip Straw 30oz",
     capacityOz: 30,
+    lookupAliases: ["flip straw", "ice flow", "iceflow"],
+    officialDomains: ["stanley1913.com"],
     shapeType: "tapered",
     topDiameterMm: 88.9,            // Stanley official depth: 3.5"
     bottomDiameterMm: 76.2,         // estimated base diameter: 3.0"
@@ -243,6 +265,17 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
       label: "Safe Print Zone",
       upperGrooveYmm: 25,
       lowerGrooveYmm: 175,
+    },
+    generatedModelPolicy: {
+      strategy: "body-band-lathe",
+      fitDebugProfile: {
+        measurementBandRatio: {
+          top: 0.004,
+          height: 0.035,
+        },
+        engravingGuideRatio: 0.5,
+        minTraceWidthRatio: 0.12,
+      },
     },
     notes: "Body-only Stanley IceFlow profile. The top carry handle and lid are ignored for GLB generation and mapping; the silver rim band is used as the body split.",
   },

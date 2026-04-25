@@ -206,10 +206,6 @@ export function summarizeProductDimensionAuthority(
   }
 
   const heightIgnoredForScale = Boolean(fullProductHeightMm);
-  if (heightIgnoredForScale) {
-    warnings.push("Full product height is stored for context and ignored for lookup-based body contour scale.");
-  }
-
   if (hasMultipleSizeOptions && selectedSizeOz && !availableSizeOz.includes(selectedSizeOz)) {
     warnings.push(
       `Selected ${selectedSizeOz} oz variant is not present in the parsed page size options (${availableSizeOz.join(", ")} oz).`,

@@ -1,5 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import * as THREE from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import type { TumblerProfile } from "../../data/tumblerProfiles.ts";
@@ -15,11 +13,9 @@ import type {
 } from "../../types/tumblerItemLookup.ts";
 import {
   buildBodyReferenceGlbSourcePayload,
-  buildBodyReferenceGlbSourceSignature,
   type BodyReferenceGlbRenderMode,
 } from "../../lib/bodyReferenceGlbSource.ts";
 import {
-  buildBodyGeometrySourceHashPayload,
   createEmptyBodyGeometryContract,
   updateContractValidation,
   type BodyGeometryContract,
@@ -31,13 +27,15 @@ import {
   type BodyReferenceV2GenerationSource,
   type BodyReferenceV2MirroredProfile,
 } from "../../lib/bodyReferenceV2GenerationSource.ts";
+import {
+  resolveBodyHeightAuthority,
+  type BodyHeightAuthorityInput,
+} from "../../lib/bodyHeightAuthority.ts";
 import { hashArrayBufferSha256Node, hashJsonSha256Node } from "../../lib/hashSha256.node.ts";
 import { stableStringifyForHash } from "../../lib/hashSha256.ts";
 import { getGeneratedModelWriteAbsolutePath, writeGeneratedModelGlb } from "../models/generatedModelStorage.ts";
 import { writeBodyGeometryAuditArtifact } from "../models/bodyGeometryAuditArtifact.ts";
 
-const GENERATED_PUBLIC_PREFIX = "/models/generated";
-const GENERATED_DIR = path.join(process.cwd(), "public", "models", "generated");
 const BODY_SAMPLE_COUNT = 30;
 
 type FileReaderLike = {
@@ -72,7 +70,35 @@ type CenterRun = {
   whole: RowBounds;
 };
 
-type StanleySilhouetteFit = {
+export type ProfileReferenceMeasurementRun = {
+  y: number;
+  left: number;
+  right: number;
+  width: number;
+};
+
+export interface ProfileReferenceMeasurementBand {
+  topPx: number;
+  bottomPx: number;
+  centerYPx: number;
+  centerXPx: number;
+  leftPx: number;
+  rightPx: number;
+  widthPx: number;
+  referenceHalfWidthPx: number;
+  rowCount: number;
+  widthStdDevPx: number;
+  usedFallback: boolean;
+}
+
+export interface ProfileBodyTraceExtents {
+  topPx: number;
+  bottomPx: number;
+  rowCount: number;
+  usedFallback: boolean;
+}
+
+type ProfileSilhouetteFit = {
   bodyProfile: Array<{ yMm: number; radiusMm: number }>;
   bodyTopYmm: number;
   bodyBottomYmm: number;
@@ -85,7 +111,7 @@ type StanleySilhouetteFit = {
   fitDebug?: TumblerItemLookupFitDebug | null;
 };
 
-type StanleyCandidateFit = StanleySilhouetteFit & {
+type ProfileCandidateFit = ProfileSilhouetteFit & {
   fitScore: number;
 };
 
@@ -160,6 +186,12 @@ function normalizeScore(value: number): number {
 function avg(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function stdDev(values: number[]): number {
+  if (values.length === 0) return 0;
+  const mean = avg(values);
+  return Math.sqrt(avg(values.map((value) => (value - mean) ** 2)));
 }
 
 function median(values: number[]): number {
@@ -408,6 +440,170 @@ function smoothSeries(values: number[], radius: number): number[] {
   });
 }
 
+export function deriveReferenceMeasurementBand(args: {
+  runs: ProfileReferenceMeasurementRun[];
+  bodyTopPx: number;
+  bodyBottomPx: number;
+  centerXPx: number;
+  fallbackHalfWidthPx: number;
+  bandTopRatio?: number;
+  bandHeightRatio?: number;
+}): ProfileReferenceMeasurementBand {
+  const bodyHeightPx = Math.max(1, args.bodyBottomPx - args.bodyTopPx + 1);
+  const bandTopRatio = Number.isFinite(args.bandTopRatio) ? Math.max(0, Number(args.bandTopRatio)) : 0.004;
+  const bandHeightRatio = Number.isFinite(args.bandHeightRatio) ? Math.max(0.001, Number(args.bandHeightRatio)) : 0.035;
+  const bandTopPx = Math.round(args.bodyTopPx + Math.max(1, bodyHeightPx * bandTopRatio));
+  const bandHeightPx = Math.max(6, Math.min(24, Math.round(bodyHeightPx * bandHeightRatio)));
+  const bandBottomPx = Math.round(Math.min(
+    args.bodyBottomPx,
+    bandTopPx + bandHeightPx - 1,
+  ));
+  const fallbackHalfWidthPx = Math.max(1, args.fallbackHalfWidthPx);
+
+  const bandRows = args.runs
+    .filter((run) =>
+      run.y >= bandTopPx &&
+      run.y <= bandBottomPx &&
+      run.left < args.centerXPx &&
+      run.right > args.centerXPx &&
+      run.width > 0,
+    )
+    .map((run) => ({
+      ...run,
+      centerXPx: (run.left + run.right) / 2,
+      widthPx: run.right - run.left + 1,
+    }));
+
+  if (bandRows.length === 0) {
+    return {
+      topPx: bandTopPx,
+      bottomPx: bandBottomPx,
+      centerYPx: round2((bandTopPx + bandBottomPx) / 2),
+      centerXPx: round2(args.centerXPx),
+      leftPx: round2(args.centerXPx - fallbackHalfWidthPx),
+      rightPx: round2(args.centerXPx + fallbackHalfWidthPx),
+      widthPx: round2(fallbackHalfWidthPx * 2),
+      referenceHalfWidthPx: round2(fallbackHalfWidthPx),
+      rowCount: 0,
+      widthStdDevPx: 0,
+      usedFallback: true,
+    };
+  }
+
+  const medianWidthPx = median(bandRows.map((run) => run.widthPx));
+  const maxWidthDeltaPx = Math.max(5, medianWidthPx * 0.08);
+  const stableRows = bandRows.filter((run) => Math.abs(run.widthPx - medianWidthPx) <= maxWidthDeltaPx);
+  const selectedRows = stableRows.length >= 3 ? stableRows : bandRows;
+  const leftPx = avg(selectedRows.map((run) => run.left));
+  const rightPx = avg(selectedRows.map((run) => run.right));
+  const widthPx = Math.max(1, rightPx - leftPx + 1);
+
+  return {
+    topPx: Math.min(...selectedRows.map((run) => run.y)),
+    bottomPx: Math.max(...selectedRows.map((run) => run.y)),
+    centerYPx: round2(avg(selectedRows.map((run) => run.y))),
+    centerXPx: round2(avg(selectedRows.map((run) => run.centerXPx))),
+    leftPx: round2(leftPx),
+    rightPx: round2(rightPx),
+    widthPx: round2(widthPx),
+    referenceHalfWidthPx: round2(widthPx / 2),
+    rowCount: selectedRows.length,
+    widthStdDevPx: round2(stdDev(selectedRows.map((run) => run.widthPx))),
+    usedFallback: false,
+  };
+}
+
+export function deriveEngravingStartGuidePx(args: {
+  rimBottomPx: number;
+  paintedBodyTopPx: number;
+  seamSilverBottomPx?: number | null;
+  guideRatio?: number;
+}): number {
+  const seamSilverBottomPx = Number.isFinite(args.seamSilverBottomPx)
+    ? Number(args.seamSilverBottomPx)
+    : null;
+  const silverEdgePx = seamSilverBottomPx != null && seamSilverBottomPx < args.paintedBodyTopPx
+    ? Math.max(args.rimBottomPx, seamSilverBottomPx)
+    : args.rimBottomPx;
+  const guideRatio = Number.isFinite(args.guideRatio) ? clamp(Number(args.guideRatio), 0, 1) : 0.5;
+  return round2(silverEdgePx + (args.paintedBodyTopPx - silverEdgePx) * guideRatio);
+}
+
+function deriveSeamReferenceBottomPx(args: {
+  runs: CenterRun[];
+  paintedBodyTopPx: number;
+  bodyColor: Rgb;
+  bodyLuma: number;
+  maxCenterWidthPx: number;
+  fullTopPx: number;
+  fullHeightPx: number;
+}): number | null {
+  const searchTopPx = Math.max(
+    args.fullTopPx,
+    Math.round(args.paintedBodyTopPx - Math.max(8, args.fullHeightPx * 0.045)),
+  );
+  const seamRows = args.runs
+    .filter((run) => {
+      if (run.y < searchTopPx || run.y >= args.paintedBodyTopPx) return false;
+      if (run.width < args.maxCenterWidthPx * 0.28) return false;
+      const luma = run.sampleColor[0] * 0.2126 + run.sampleColor[1] * 0.7152 + run.sampleColor[2] * 0.0722;
+      const distanceFromBody = colorDistance(run.sampleColor, args.bodyColor);
+      return distanceFromBody > 18 || luma > args.bodyLuma + 6;
+    })
+    .map((run) => run.y)
+    .sort((a, b) => a - b);
+
+  if (seamRows.length === 0) return null;
+
+  let segmentStartPx = seamRows[seamRows.length - 1];
+  const segmentEndPx = seamRows[seamRows.length - 1];
+  for (let index = seamRows.length - 2; index >= 0; index -= 1) {
+    if (segmentStartPx - seamRows[index] > 2) break;
+    segmentStartPx = seamRows[index];
+  }
+
+  return segmentEndPx;
+}
+
+export function deriveBodyTraceExtents(args: {
+  runs: ProfileReferenceMeasurementRun[];
+  paintedBodyTopPx: number;
+  colorBodyBottomPx: number;
+  centerXPx: number;
+  maxCenterWidthPx: number;
+  minTraceWidthRatio?: number;
+}): ProfileBodyTraceExtents {
+  const minTraceWidthRatio = Number.isFinite(args.minTraceWidthRatio)
+    ? Math.max(0.01, Number(args.minTraceWidthRatio))
+    : 0.12;
+  const minTraceWidthPx = Math.max(10, args.maxCenterWidthPx * minTraceWidthRatio);
+  const traceRows = args.runs
+    .filter((run) =>
+      run.y >= args.paintedBodyTopPx &&
+      run.left < args.centerXPx &&
+      run.right > args.centerXPx &&
+      run.width >= minTraceWidthPx,
+    )
+    .map((run) => run.y);
+  const segment = findLongestRowSegment(traceRows);
+
+  if (!segment || segment.start > args.paintedBodyTopPx + 8) {
+    return {
+      topPx: args.paintedBodyTopPx,
+      bottomPx: args.colorBodyBottomPx,
+      rowCount: Math.max(0, args.colorBodyBottomPx - args.paintedBodyTopPx + 1),
+      usedFallback: true,
+    };
+  }
+
+  return {
+    topPx: args.paintedBodyTopPx,
+    bottomPx: Math.max(args.colorBodyBottomPx, segment.end),
+    rowCount: segment.end - segment.start + 1,
+    usedFallback: false,
+  };
+}
+
 function findLongestRowSegment(rows: number[]): { start: number; end: number } | null {
   if (rows.length === 0) return null;
   const sorted = [...rows].sort((a, b) => a - b);
@@ -460,7 +656,7 @@ function buildLatheProfileFromRows(args: {
   const mmPerPxY = profile.overallHeightMm / Math.max(1, fullHeightPx);
   const bodyRuns = runs.filter((run) => run.y >= bodyTop && run.y <= bodyBottom);
   const widths = smoothSeries(
-    bodyRuns.map((run) => Math.max(1, run.whole.right - centerX)),
+    bodyRuns.map((run) => Math.max(1, centerX - run.left, run.right - centerX)),
     2,
   );
   const topRadiusMm = (profile.topDiameterMm ?? profile.outsideDiameterMm ?? 88.9) / 2;
@@ -500,10 +696,10 @@ function buildLatheProfileFromRows(args: {
   };
 }
 
-async function fitStanleyIceFlow30FromImage(
+async function fitProfileBodyBandFromImage(
   profile: TumblerProfile,
   imageUrl: string,
-): Promise<StanleyCandidateFit | null> {
+): Promise<ProfileCandidateFit | null> {
   const sharp = (await import("sharp")).default;
   const sourceBuffer = await fetchBuffer(imageUrl);
   const { data, info } = await sharp(sourceBuffer)
@@ -569,26 +765,64 @@ async function fitStanleyIceFlow30FromImage(
     .map((run) => run.y);
   const silverSegment = findLongestRowSegment(silverRowYs);
 
-  const bodyTop = silverSegment ? silverSegment.end + 1 : bodySegment.start;
-  const bodyBottom = bodySegment.end;
+  const rimTop = silverSegment ? silverSegment.start : fullTop;
+  const rimBottom = silverSegment ? silverSegment.end : Math.max(fullTop, bodySegment.start - 1);
+  const paintedBodyTop = bodySegment.start;
+  const colorBodyBottom = bodySegment.end;
+  if (colorBodyBottom - paintedBodyTop < fullHeightPx * 0.5) return null;
+
+  const fitDebugProfile = profile.generatedModelPolicy?.fitDebugProfile ?? {};
+  const seamSilverBottomPx = deriveSeamReferenceBottomPx({
+    runs,
+    paintedBodyTopPx: paintedBodyTop,
+    bodyColor,
+    bodyLuma,
+    maxCenterWidthPx: maxCenterWidth,
+    fullTopPx: fullTop,
+    fullHeightPx,
+  });
+  const engravingStartGuidePx = deriveEngravingStartGuidePx({
+    rimBottomPx: rimBottom,
+    paintedBodyTopPx: paintedBodyTop,
+    seamSilverBottomPx,
+    guideRatio: fitDebugProfile.engravingGuideRatio,
+  });
+  const bodyTrace = deriveBodyTraceExtents({
+    runs,
+    paintedBodyTopPx: paintedBodyTop,
+    colorBodyBottomPx: colorBodyBottom,
+    centerXPx: centerX,
+    maxCenterWidthPx: maxCenterWidth,
+    minTraceWidthRatio: fitDebugProfile.minTraceWidthRatio,
+  });
+  const bodyTop = bodyTrace.topPx;
+  const bodyBottom = bodyTrace.bottomPx;
   if (bodyBottom - bodyTop < fullHeightPx * 0.5) return null;
 
   const bodyRuns = runs.filter((run) => run.y >= bodyTop && run.y <= bodyBottom);
-
-  const rimTop = silverSegment ? silverSegment.start : fullTop;
-  const rimBottom = silverSegment ? silverSegment.end : Math.max(fullTop, bodyTop - 1);
+  const profileFullBottom = Math.max(fullBottom, bodyBottom);
+  const profileFullHeightPx = profileFullBottom - fullTop + 1;
   const rimRows = runs.filter((run) => run.y >= rimTop && run.y <= rimBottom);
   const rimHalfWidthPx = avg(rimRows.map((run) => Math.max(1, run.whole.right - centerX)));
+  const measurementBand = deriveReferenceMeasurementBand({
+    runs,
+    bodyTopPx: paintedBodyTop,
+    bodyBottomPx: bodyBottom,
+    centerXPx: centerX,
+    fallbackHalfWidthPx: Number.isFinite(rimHalfWidthPx) && rimHalfWidthPx > 0 ? rimHalfWidthPx : maxCenterWidth / 2,
+    bandTopRatio: fitDebugProfile.measurementBandRatio?.top,
+    bandHeightRatio: fitDebugProfile.measurementBandRatio?.height,
+  });
 
   const profileFit = buildLatheProfileFromRows({
     profile,
     runs,
     fullTop,
-    fullHeightPx,
+    fullHeightPx: profileFullHeightPx,
     bodyTop,
     bodyBottom,
     centerX,
-    referenceHalfWidthPx: rimHalfWidthPx > 0 ? rimHalfWidthPx : maxCenterWidth / 2,
+    referenceHalfWidthPx: measurementBand.referenceHalfWidthPx,
   });
 
   const rimHeightMm = round2(Math.max(4, (rimBottom - rimTop + 1) * profileFit.mmPerPxY));
@@ -597,23 +831,21 @@ async function fitStanleyIceFlow30FromImage(
   const overallTopYmm = profile.overallHeightMm / 2;
   const rimTopYmm = round2(overallTopYmm - (rimTop - fullTop) * profileFit.mmPerPxY);
   const rimBottomYmm = round2(overallTopYmm - (rimBottom - fullTop) * profileFit.mmPerPxY);
-  const referenceBandCenterYPx = Math.round(bodyTop + ((bodyBottom - bodyTop) * 0.22));
-  const referenceBandHeightPx = Math.max(12, Math.round((bodyBottom - bodyTop + 1) * 0.12));
-  const referenceBandTopPx = Math.max(bodyTop, referenceBandCenterYPx - Math.floor(referenceBandHeightPx / 2));
-  const referenceBandBottomPx = Math.min(bodyBottom, referenceBandTopPx + referenceBandHeightPx - 1);
   const centerOffsetScore = normalizeScore(1 - Math.abs(centerX - width / 2) / Math.max(1, width * 0.18));
   const portraitRatio = width / Math.max(1, height);
   const portraitScore = normalizeScore(1 - Math.abs(portraitRatio - 0.44) / 0.32);
-  const bodyCoverage = (bodyBottom - bodyTop + 1) / Math.max(1, fullHeightPx);
+  const bodyCoverage = (bodyBottom - bodyTop + 1) / Math.max(1, profileFullHeightPx);
   const bodyCoverageScore = normalizeScore(1 - Math.abs(bodyCoverage - 0.74) / 0.2);
   const symmetryScore = normalizeScore(avg(bodyRuns.map((run) => {
-    const leftSpan = centerX - run.whole.left;
-    const rightSpan = run.whole.right - centerX;
+    const leftSpan = centerX - run.left;
+    const rightSpan = run.right - centerX;
     const maxSpan = Math.max(1, Math.max(leftSpan, rightSpan));
     return 1 - Math.abs(leftSpan - rightSpan) / maxSpan;
   })));
-  const topBodyRadius = bodyRuns[0] ? Math.max(1, bodyRuns[0].whole.right - centerX) : rimHalfWidthPx;
-  const bottomBodyRadius = bodyRuns[bodyRuns.length - 1] ? Math.max(1, bodyRuns[bodyRuns.length - 1].whole.right - centerX) : topBodyRadius;
+  const topBodyRadius = bodyRuns[0] ? Math.max(1, centerX - bodyRuns[0].left, bodyRuns[0].right - centerX) : rimHalfWidthPx;
+  const bottomBodyRadius = bodyRuns[bodyRuns.length - 1]
+    ? Math.max(1, centerX - bodyRuns[bodyRuns.length - 1].left, bodyRuns[bodyRuns.length - 1].right - centerX)
+    : topBodyRadius;
   const taperRatio = bottomBodyRadius / Math.max(1, topBodyRadius);
   const taperScore = normalizeScore(1 - Math.abs(taperRatio - 0.82) / 0.18);
   const silverScore = silverSegment ? 1 : 0.2;
@@ -634,17 +866,32 @@ async function fitStanleyIceFlow30FromImage(
     silhouetteBoundsPx: bounds,
     centerXPx: round2(centerX),
     fullTopPx: fullTop,
-    fullBottomPx: fullBottom,
+    fullBottomPx: profileFullBottom,
     bodyTopPx: bodyTop,
     bodyBottomPx: bodyBottom,
+    paintedBodyTopPx: paintedBodyTop,
+    colorBodyBottomPx: colorBodyBottom,
+    bodyTraceTopPx: bodyTrace.topPx,
+    bodyTraceBottomPx: bodyTrace.bottomPx,
+    engravingStartGuidePx,
+    seamSilverBottomPx,
     rimTopPx: rimTop,
     rimBottomPx: rimBottom,
-    referenceBandTopPx,
-    referenceBandBottomPx,
-    referenceBandCenterYPx,
-    referenceBandWidthPx: round2(maxCenterWidth),
+    referenceBandTopPx: measurementBand.topPx,
+    referenceBandBottomPx: measurementBand.bottomPx,
+    referenceBandCenterYPx: measurementBand.centerYPx,
+    referenceBandWidthPx: measurementBand.widthPx,
+    measurementBandTopPx: measurementBand.topPx,
+    measurementBandBottomPx: measurementBand.bottomPx,
+    measurementBandCenterYPx: measurementBand.centerYPx,
+    measurementBandCenterXPx: measurementBand.centerXPx,
+    measurementBandWidthPx: measurementBand.widthPx,
+    measurementBandLeftPx: measurementBand.leftPx,
+    measurementBandRightPx: measurementBand.rightPx,
+    measurementBandRowCount: measurementBand.rowCount,
+    measurementBandWidthStdDevPx: measurementBand.widthStdDevPx,
     maxCenterWidthPx: round2(maxCenterWidth),
-    referenceHalfWidthPx: round2(rimHalfWidthPx > 0 ? rimHalfWidthPx : maxCenterWidth / 2),
+    referenceHalfWidthPx: measurementBand.referenceHalfWidthPx,
     fitScore,
     profilePoints: profileFit.debugProfilePoints,
   };
@@ -664,10 +911,10 @@ async function fitStanleyIceFlow30FromImage(
   };
 }
 
-async function fitBestStanleyIceFlow30FromImages(
+async function fitBestProfileBodyBandFromImages(
   profile: TumblerProfile,
   imageUrls: string[],
-): Promise<StanleySilhouetteFit | null> {
+): Promise<ProfileSilhouetteFit | null> {
   const seen = new Set<string>();
   const candidates = imageUrls.filter((url) => {
     if (!url || seen.has(url)) return false;
@@ -675,10 +922,10 @@ async function fitBestStanleyIceFlow30FromImages(
     return true;
   }).slice(0, 12);
 
-  let bestFit: StanleyCandidateFit | null = null;
+  let bestFit: ProfileCandidateFit | null = null;
   for (const imageUrl of candidates) {
     try {
-      const fit = await fitStanleyIceFlow30FromImage(profile, imageUrl);
+      const fit = await fitProfileBodyBandFromImage(profile, imageUrl);
       if (!fit) continue;
       if (!bestFit || fit.fitScore > bestFit.fitScore) {
         bestFit = fit;
@@ -690,7 +937,7 @@ async function fitBestStanleyIceFlow30FromImages(
 
   if (!bestFit) return null;
   console.info(
-    "[generateTumblerModel] selected Stanley image:",
+    "[generateTumblerModel] selected profile image:",
     bestFit.fitDebug?.sourceImageUrl ?? "unknown",
     "score",
     bestFit.fitScore,
@@ -725,10 +972,10 @@ function buildFallbackBodyProfile(profile: TumblerProfile) {
     bodyColorHex: "#d5d775",
     rimColorHex: "#c2c5c7",
     fitDebug: null,
-  } satisfies StanleySilhouetteFit;
+  } satisfies ProfileSilhouetteFit;
 }
 
-function createBodyMesh(fit: StanleySilhouetteFit): THREE.Mesh {
+function createBodyMesh(fit: ProfileSilhouetteFit): THREE.Mesh {
   const orderedProfile = [...fit.bodyProfile]
     .map((point) => ({
       yMm: round2(point.yMm),
@@ -767,7 +1014,7 @@ function createBodyMesh(fit: StanleySilhouetteFit): THREE.Mesh {
   return mesh;
 }
 
-function createRimMesh(fit: StanleySilhouetteFit): THREE.Mesh {
+function createRimMesh(fit: ProfileSilhouetteFit): THREE.Mesh {
   const orderedProfile = [...fit.bodyProfile]
     .map((point) => ({
       yMm: round2(point.yMm),
@@ -799,9 +1046,9 @@ function createRimMesh(fit: StanleySilhouetteFit): THREE.Mesh {
   return mesh;
 }
 
-function buildStanleyIceFlow30Scene(profile: TumblerProfile, fit: StanleySilhouetteFit): THREE.Scene {
+function buildProfileBodyBandScene(profile: TumblerProfile, fit: ProfileSilhouetteFit): THREE.Scene {
   const scene = new THREE.Scene();
-  scene.name = "stanley_iceflow_30_generated";
+  scene.name = `${profile.id}_generated_profile_body_band`;
 
   const body = createBodyMesh(fit);
   const rim = createRimMesh(fit);
@@ -816,35 +1063,43 @@ async function writeGeneratedGlb(
   fileName: string,
   scene: THREE.Scene,
 ): Promise<string> {
-  const absolutePath = path.join(GENERATED_DIR, fileName);
-  await mkdir(GENERATED_DIR, { recursive: true });
   const arrayBuffer = await exportSceneToGlb(scene);
-  await writeFile(absolutePath, Buffer.from(arrayBuffer));
-  return `${GENERATED_PUBLIC_PREFIX}/${fileName}`;
+  return writeGeneratedModelGlb(fileName, arrayBuffer);
 }
 
 export async function ensureGeneratedTumblerGlb(
   profileId: string,
   options?: { imageUrl?: string | null; imageUrls?: string[] },
 ) : Promise<GeneratedTumblerGlbResult> {
-  if (profileId !== "stanley-iceflow-30") {
-    return { glbPath: "", fitDebug: null };
-  }
-
   const { getTumblerProfileById } = await import("../../data/tumblerProfiles.ts");
   const profile = getTumblerProfileById(profileId);
   if (!profile) return { glbPath: "", fitDebug: null };
+  const generatedModelPolicy = profile.generatedModelPolicy ?? null;
+  if (generatedModelPolicy?.strategy !== "body-band-lathe") {
+    return { glbPath: "", fitDebug: null };
+  }
 
-  let fit: StanleySilhouetteFit = buildFallbackBodyProfile(profile);
+  let fit: ProfileSilhouetteFit = buildFallbackBodyProfile(profile);
 
+  const primaryImageUrl = options?.imageUrl ?? null;
   const candidateImageUrls = [
     ...(options?.imageUrls ?? []),
-    ...(options?.imageUrl ? [options.imageUrl] : []),
-  ].filter((value, index, array): value is string => Boolean(value) && array.indexOf(value) === index);
+  ].filter((value, index, array): value is string => Boolean(value) && value !== primaryImageUrl && array.indexOf(value) === index);
 
-  if (candidateImageUrls.length > 0) {
+  if (primaryImageUrl) {
     try {
-      const silhouetteFit = await fitBestStanleyIceFlow30FromImages(profile, candidateImageUrls);
+      const primaryFit = await fitProfileBodyBandFromImage(profile, primaryImageUrl);
+      if (primaryFit) {
+        fit = primaryFit;
+      }
+    } catch (error) {
+      console.warn("[generateTumblerModel] selected variant fit failed:", primaryImageUrl, error);
+    }
+  }
+
+  if (!fit.fitDebug && candidateImageUrls.length > 0) {
+    try {
+      const silhouetteFit = await fitBestProfileBodyBandFromImages(profile, candidateImageUrls);
       if (silhouetteFit) {
         fit = silhouetteFit;
       }
@@ -853,9 +1108,10 @@ export async function ensureGeneratedTumblerGlb(
     }
   }
 
-  const fileName = `${profileId}-bodyfit-v5.glb`;
+  const fileStem = generatedModelPolicy.fileStem?.trim() || `${profile.id}-bodyfit-v5`;
+  const fileName = `${fileStem}.glb`;
   return {
-    glbPath: await writeGeneratedGlb(fileName, buildStanleyIceFlow30Scene(profile, fit)),
+    glbPath: await writeGeneratedGlb(fileName, buildProfileBodyBandScene(profile, fit)),
     fitDebug: fit.fitDebug ?? null,
   };
 }
@@ -874,6 +1130,7 @@ export interface GenerateBodyReferenceGlbInput {
   canonicalBodyProfile?: CanonicalBodyProfile | null;
   canonicalDimensionCalibration?: CanonicalDimensionCalibration | null;
   bodyReferenceV2Draft?: BodyReferenceV2Draft | null;
+  bodyHeightAuthorityInput?: BodyHeightAuthorityInput | null;
   bodyColorHex?: string | null;
   rimColorHex?: string | null;
 }
@@ -1051,6 +1308,93 @@ function buildV2BodyReferenceScene(args: {
   };
 }
 
+function resolveV1BodyHeightAuthority(args: {
+  input: GenerateBodyReferenceGlbInput;
+  bodyHeightMm: number;
+  sourceBoundsHeightMm?: number;
+  generatedBodyBoundsHeightMm?: number;
+}) {
+  const calibration = args.input.canonicalDimensionCalibration!;
+  const mmPerSourceUnit =
+    calibration.photoToFrontTransform.type === "similarity" &&
+    typeof calibration.photoToFrontTransform.matrix[0] === "number" &&
+    Number.isFinite(calibration.photoToFrontTransform.matrix[0]) &&
+    calibration.photoToFrontTransform.matrix[0] > 0
+      ? calibration.photoToFrontTransform.matrix[0]
+      : undefined;
+  const sourceDiameterUnits = mmPerSourceUnit
+    ? calibration.wrapDiameterMm / mmPerSourceUnit
+    : undefined;
+  const sourceContourHeightUnits = mmPerSourceUnit
+    ? args.bodyHeightMm / mmPerSourceUnit
+    : undefined;
+  return resolveBodyHeightAuthority({
+    ...(args.input.bodyHeightAuthorityInput ?? {}),
+    diameterAuthorityKind: "diameter-primary",
+    diameterAuthorityValueMm: calibration.wrapDiameterMm,
+    diameterAuthoritySourceField: "canonicalDimensionCalibration.wrapDiameterMm",
+    sourceDiameterUnits,
+    sourceContourHeightUnits,
+    mmPerSourceUnit,
+    uniformScaleApplied: calibration.photoToFrontTransform.type === "similarity",
+    derivedBodyHeightMm: args.bodyHeightMm,
+    svgPhysicalMmTrusted: false,
+    svgToPhotoTransformPresent: calibration.photoToFrontTransform.type === "similarity",
+    canonicalBodyHeightMm: args.bodyHeightMm,
+    bodyTopFromOverallMm: calibration.lidBodyLineMm,
+    bodyBottomFromOverallMm: calibration.bodyBottomMm,
+    templateDimensionsHeightMm: calibration.totalHeightMm,
+    printableHeightMm: calibration.printableSurfaceContract?.printableHeightMm,
+    approvedSvgBoundsHeightMm: args.sourceBoundsHeightMm,
+    approvedSvgMarkedPhysicalMm: false,
+    generatedBodyBoundsHeightMm: args.generatedBodyBoundsHeightMm,
+    diameterAuthority: "canonicalDimensionCalibration.wrapDiameterMm",
+    radialScaleSource: "canonicalDimensionCalibration.wrapDiameterMm",
+    yScaleSource: "canonicalDimensionCalibration.photoToFrontTransform.similarityScale",
+    sourceFunction: "buildV1BodyReferenceBodyGeometryContract",
+  });
+}
+
+function resolveV2BodyHeightAuthority(args: {
+  input: GenerateBodyReferenceGlbInput;
+  v2Source: BodyReferenceV2GenerationSource;
+  v2MirroredProfile: BodyReferenceV2MirroredProfile;
+  generatedBodyBoundsHeightMm?: number;
+}) {
+  const scaleCalibration = args.v2Source.scaleCalibration;
+  const sourceDiameterUnits =
+    args.v2Source.mmPerPx > 0
+      ? args.v2Source.wrapDiameterMm / args.v2Source.mmPerPx
+      : undefined;
+  const sourceContourHeightUnits = args.v2MirroredProfile.maxYPx - args.v2MirroredProfile.minYPx;
+  return resolveBodyHeightAuthority({
+    ...(args.input.bodyHeightAuthorityInput ?? {}),
+    diameterAuthorityKind: "diameter-primary",
+    diameterAuthorityValueMm: args.v2Source.wrapDiameterMm,
+    diameterAuthoritySourceField: "bodyReferenceV2.scaleCalibration.lookupDiameterMm",
+    sourceDiameterUnits,
+    sourceContourHeightUnits,
+    mmPerSourceUnit: args.v2Source.mmPerPx,
+    uniformScaleApplied: true,
+    derivedBodyHeightMm: args.v2MirroredProfile.bodyHeightMm,
+    svgPhysicalMmTrusted: false,
+    svgToPhotoTransformPresent: true,
+    lookupBodyHeightMm: scaleCalibration.lookupBodyHeightMm,
+    lookupBodyHeightSource: scaleCalibration.lookupBodyHeightMm
+      ? (scaleCalibration.lookupHeightIgnoredForScale ? "usable-height" : "unknown")
+      : undefined,
+    lookupFullProductHeightMm: scaleCalibration.lookupFullProductHeightMm,
+    templateDimensionsPrintHeightMm: scaleCalibration.expectedBodyHeightMm,
+    v2ExpectedBodyHeightMm: scaleCalibration.expectedBodyHeightMm,
+    v2ProfileBoundsHeightMm: args.v2MirroredProfile.bodyHeightMm,
+    generatedBodyBoundsHeightMm: args.generatedBodyBoundsHeightMm,
+    diameterAuthority: "bodyReferenceV2.scaleCalibration.lookupDiameterMm",
+    radialScaleSource: "lookup-diameter",
+    yScaleSource: "bodyReferenceV2.mmPerPx",
+    sourceFunction: "buildV2BodyReferenceBodyGeometryContract",
+  });
+}
+
 async function writeReviewedBodyReferenceGlb(
   fileName: string,
   scene: THREE.Scene,
@@ -1092,6 +1436,12 @@ function buildV1BodyReferenceBodyGeometryContract(args: {
     sourceHash: args.sourceHash,
     label: args.input.templateName ?? args.input.matchedProfileId ?? undefined,
   });
+  const bodyHeightAuthority = resolveV1BodyHeightAuthority({
+    input: args.input,
+    bodyHeightMm,
+    sourceBoundsHeightMm: svgQuality.bounds?.height,
+    generatedBodyBoundsHeightMm: args.bodyMeshBounds?.sizeMm.y,
+  });
 
   return updateContractValidation({
     ...createEmptyBodyGeometryContract(),
@@ -1109,6 +1459,13 @@ function buildV1BodyReferenceBodyGeometryContract(args: {
         args.input.bodyOutlineSourceMode === "body-only" ||
         bodyOutline.sourceContourMode === "body-only" ||
         (args.input.renderMode ?? "body-cutout-qa") === "body-cutout-qa",
+      contourFrame: bodyOutline.contourFrame
+        ? {
+            ...bodyOutline.contourFrame,
+            glbInputBounds: bodyOutline.contourFrame.glbInputBounds ?? svgQuality.bounds,
+            canonicalInputBounds: bodyOutline.contourFrame.canonicalInputBounds ?? svgQuality.bounds,
+          }
+        : undefined,
     },
     glb: {
       path: args.generatedGlb.glbPath,
@@ -1134,6 +1491,7 @@ function buildV1BodyReferenceBodyGeometryContract(args: {
           }
         : undefined,
       bodyBoundsUnits: args.bodyMeshBounds ? "mm" : undefined,
+      bodyHeightAuthority,
       wrapDiameterMm: round2(calibration.wrapDiameterMm),
       wrapWidthMm: round2(calibration.wrapWidthMm),
       frontVisibleWidthMm: round2(calibration.frontVisibleWidthMm),
@@ -1177,6 +1535,12 @@ function buildV2BodyReferenceBodyGeometryContract(args: {
     "artwork-placements",
     "engraving-overlay-preview",
   ].sort((left, right) => left.localeCompare(right));
+  const bodyHeightAuthority = resolveV2BodyHeightAuthority({
+    input: args.input,
+    v2Source: args.v2Source,
+    v2MirroredProfile: args.v2MirroredProfile,
+    generatedBodyBoundsHeightMm: args.bodyMeshBounds?.sizeMm.y,
+  });
 
   return updateContractValidation({
     ...createEmptyBodyGeometryContract(),
@@ -1223,6 +1587,7 @@ function buildV2BodyReferenceBodyGeometryContract(args: {
           }
         : undefined,
       bodyBoundsUnits: args.bodyMeshBounds ? "mm" : undefined,
+      bodyHeightAuthority,
       wrapDiameterMm: round2(args.v2Source.wrapDiameterMm),
       wrapWidthMm: round2(args.v2Source.wrapWidthMm),
       frontVisibleWidthMm: round2(args.v2Source.wrapDiameterMm),
@@ -1297,30 +1662,14 @@ export async function generateBodyReferenceGlb(
     throw new Error("Approved BODY REFERENCE outline is required before generating a reviewed GLB.");
   }
 
-  const sourceHashPayload = buildBodyGeometrySourceHashPayload({
-    outline: input.bodyOutline,
-    canonicalBodyProfile: input.canonicalBodyProfile,
-    canonicalDimensionCalibration: input.canonicalDimensionCalibration,
-  }) ?? buildBodyReferenceGlbSourcePayload({
-    renderMode: input.renderMode ?? "body-cutout-qa",
-    matchedProfileId: input.matchedProfileId ?? null,
+  const sourceHashPayload = buildBodyReferenceGlbSourcePayload({
     bodyOutline: input.bodyOutline,
     canonicalBodyProfile: input.canonicalBodyProfile,
     canonicalDimensionCalibration: input.canonicalDimensionCalibration,
-    bodyColorHex: input.bodyColorHex ?? null,
-    rimColorHex: input.rimColorHex ?? null,
   });
   const sourceHash = hashJsonSha256Node(sourceHashPayload);
   const fileStem = buildBodyReferenceFileStem(input, sourceHash);
-  const generatedSourceSignature = buildBodyReferenceGlbSourceSignature({
-    renderMode: input.renderMode ?? "body-cutout-qa",
-    matchedProfileId: input.matchedProfileId ?? null,
-    bodyOutline: input.bodyOutline,
-    canonicalBodyProfile: input.canonicalBodyProfile,
-    canonicalDimensionCalibration: input.canonicalDimensionCalibration,
-    bodyColorHex: input.bodyColorHex ?? null,
-    rimColorHex: input.rimColorHex ?? null,
-  });
+  const generatedSourceSignature = stableStringifyForHash(sourceHashPayload);
   const built = buildV1BodyReferenceScene(input);
   const generatedGlb = await writeReviewedBodyReferenceGlb(`${fileStem}.glb`, built.scene);
   const bodyGeometryContract = buildV1BodyReferenceBodyGeometryContract({

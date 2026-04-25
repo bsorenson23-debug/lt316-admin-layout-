@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useRef, useCallback, useEffect, useState } from "react";
+import type { BodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
+import { mapBodyReferenceGuideFrameToDisplayedImage } from "@/lib/bodyReferenceGuideFrame";
 import styles from "./EngravableZoneEditor.module.css";
 
 interface Props {
@@ -24,6 +26,8 @@ interface Props {
   bodyColorHex: string;
   /** Current sampled / saved rim / engrave color */
   rimColorHex: string;
+  /** Shared BODY REFERENCE guide authority used by lookup debug and UI overlays. */
+  guideFrame?: BodyReferenceGuideFrame | null;
   onChange: (topMarginMm: number, bottomMarginMm: number) => void;
   onPhotoScaleChange: (scalePct: number) => void;
   onPhotoOffsetYChange: (offsetPct: number) => void;
@@ -225,6 +229,7 @@ export function EngravableZoneEditor({
   photoAnchorY,
   bodyColorHex,
   rimColorHex,
+  guideFrame,
   onChange,
   onPhotoScaleChange,
   onPhotoOffsetYChange,
@@ -247,6 +252,23 @@ export function EngravableZoneEditor({
     let cancelled = false;
     const img = new Image();
     img.onload = () => {
+      const guideImageSize = guideFrame?.rawImageSize;
+      if (
+        guideFrame?.coordinateSpace === "raw-image-px" &&
+        guideImageSize &&
+        guideImageSize.width > 0 &&
+        guideImageSize.height > 0
+      ) {
+        if (!cancelled) {
+          setDisplayPhoto({
+            src: img.src,
+            w: guideImageSize.width,
+            h: guideImageSize.height,
+            bodyCenterX: guideFrame.rawImageBounds?.centerX ?? guideImageSize.width / 2,
+          });
+        }
+        return;
+      }
       const cropped = cropVisibleBounds(img);
       if (!cancelled) {
         setDisplayPhoto({
@@ -267,7 +289,7 @@ export function EngravableZoneEditor({
     return () => {
       cancelled = true;
     };
-  }, [photoDataUrl]);
+  }, [photoDataUrl, guideFrame]);
 
   // Pixels per mm for this display
   const pxPerMm = CANVAS_HEIGHT / overallHeightMm;
@@ -303,6 +325,23 @@ export function EngravableZoneEditor({
   const photoTopPx = Math.round(basePhotoTopPx + (clampedPhotoOffsetYPct / 100) * CANVAS_HEIGHT);
   const bodyLeftPx = Math.round((containerWidthPx - bodyWidthPx) / 2);
   const bodyCenterLineX = bodyLeftPx + bodyWidthPx / 2;
+  const mappedGuideFrame = mapBodyReferenceGuideFrameToDisplayedImage(
+    guideFrame,
+    activeDisplayPhoto
+      ? {
+          left: photoLeftPx,
+          top: photoTopPx,
+          width: photoWidthPx,
+          height: targetPhotoHeightPx,
+        }
+      : null,
+  );
+  const guideBounds = mappedGuideFrame?.mappedDomOverlayBounds ?? null;
+  const guideFrameLeftPx = guideBounds?.left ?? bodyLeftPx;
+  const guideFrameTopPx = guideBounds?.top ?? 0;
+  const guideFrameWidthPx = guideBounds?.width ?? bodyWidthPx;
+  const guideFrameHeightPx = guideBounds?.height ?? CANVAS_HEIGHT;
+  const guideFrameCenterLineX = guideBounds?.centerX ?? bodyCenterLineX;
 
   const handlePointerDown = useCallback(
     (line: "top" | "bottom") => (e: React.PointerEvent) => {
@@ -418,11 +457,21 @@ export function EngravableZoneEditor({
         >
           <div
             className={styles.bodyFrame}
-            style={{ left: bodyLeftPx, width: bodyWidthPx, height: CANVAS_HEIGHT }}
+            data-guide-source={mappedGuideFrame?.guideSource ?? "legacy-diameter-frame"}
+            data-guide-top={guideBounds?.top ?? ""}
+            data-guide-bottom={guideBounds?.bottom ?? ""}
+            data-guide-width={guideBounds?.width ?? ""}
+            data-guide-source-hash={mappedGuideFrame?.sourceHash ?? ""}
+            style={{
+              left: guideFrameLeftPx,
+              top: guideFrameTopPx,
+              width: guideFrameWidthPx,
+              height: guideFrameHeightPx,
+            }}
           />
           <div
             className={styles.centerReferenceLine}
-            style={{ left: bodyCenterLineX }}
+            style={{ left: guideFrameCenterLineX }}
             aria-hidden
           />
 
@@ -502,8 +551,17 @@ export function EngravableZoneEditor({
             <span className={styles.readoutValue}>{round1(Math.PI * diameterMm)} mm</span>
           </div>
           <div className={styles.readoutHint}>
-            The dashed frame is the physical tumbler body. Drag the green lines to the silver rings.
+            The dashed frame uses the shared BODY REFERENCE guide authority. Drag the green lines to the silver rings.
           </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Guide source</span>
+            <span className={styles.readoutValue}>{mappedGuideFrame?.guideSource ?? "legacy"}</span>
+          </div>
+          {mappedGuideFrame?.warnings.length ? (
+            <div className={styles.readoutHint}>
+              {mappedGuideFrame.warnings[0]}
+            </div>
+          ) : null}
           <div className={styles.colorSwatchGroup}>
             <div className={styles.colorSwatchRow}>
               <span className={styles.readoutLabel}>Body color</span>

@@ -172,6 +172,49 @@ test("v2 source hash changes when the captured centerline or body-left outline c
   );
 });
 
+test("v2 mirrored profile uses diameter-derived uniform scalar for y-scale", () => {
+  const source = buildBodyReferenceV2GenerationSource(createDraft({
+    scaleCalibration: {
+      scaleSource: "lookup-diameter",
+      lookupDiameterMm: 88.9,
+      resolvedDiameterMm: 88.9,
+      wrapDiameterMm: 88.9,
+      wrapWidthMm: 279.29,
+      expectedBodyHeightMm: 220,
+      expectedBodyWidthMm: 88.9,
+    },
+  }));
+
+  assert.ok(source);
+  const profile = buildBodyReferenceV2MirroredProfile(source!);
+  const expectedHeight = Math.round(185 * source!.mmPerPx * 10000) / 10000;
+
+  assert.equal(profile.bodyHeightMm, expectedHeight);
+  assert.equal(profile.samples[0]?.yMm, 0);
+  assert.equal(profile.samples.at(-1)?.yMm, expectedHeight);
+  assert.notEqual(profile.bodyHeightMm, 220);
+});
+
+test("v2 mirrored profile ignores expected height as independent y-scale", () => {
+  const source = buildBodyReferenceV2GenerationSource(createDraft({
+    scaleCalibration: {
+      scaleSource: "lookup-diameter",
+      lookupDiameterMm: 88.9,
+      resolvedDiameterMm: 88.9,
+      wrapDiameterMm: 88.9,
+      wrapWidthMm: 279.29,
+      expectedBodyHeightMm: 185,
+      expectedBodyWidthMm: 88.9,
+    },
+  }));
+
+  assert.ok(source);
+  const profile = buildBodyReferenceV2MirroredProfile(source!);
+
+  assert.notEqual(profile.bodyHeightMm, 185);
+  assert.equal(profile.bodyHeightMm, Math.round(185 * source!.mmPerPx * 10000) / 10000);
+});
+
 test("lid and handle reference layers stay excluded from the v2 body generation source", () => {
   const source = buildBodyReferenceV2GenerationSource(createDraft({
     layers: [
