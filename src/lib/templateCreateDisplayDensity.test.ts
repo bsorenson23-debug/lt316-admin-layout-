@@ -23,20 +23,20 @@ test("dedupeTemplateCreateDisplayMessages keeps first-seen severity and removes 
   ]);
 });
 
-test("shouldAutoOpenTemplateCreateDiagnostics follows debug mode", () => {
+test("shouldAutoOpenTemplateCreateDiagnostics keeps debug details collapsed by default", () => {
   assert.equal(
     shouldAutoOpenTemplateCreateDiagnostics({
       adminDebugEnabled: true,
       routeDebugEnabled: false,
     }),
-    true,
+    false,
   );
   assert.equal(
     shouldAutoOpenTemplateCreateDiagnostics({
       adminDebugEnabled: false,
       routeDebugEnabled: true,
     }),
-    true,
+    false,
   );
   assert.equal(
     shouldAutoOpenTemplateCreateDiagnostics({
