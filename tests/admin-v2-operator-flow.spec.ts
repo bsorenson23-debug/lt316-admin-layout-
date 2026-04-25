@@ -99,6 +99,8 @@ function expectV2BodyContractDebugReport(report: Record<string, unknown>): void 
   const source = asRecord(contract.source);
   const glb = asRecord(contract.glb);
   const meshes = asRecord(contract.meshes);
+  const dimensions = asRecord(contract.dimensionsMm);
+  const runtimeInspection = asRecord(contract.runtimeInspection);
   const validation = asRecord(contract.validation);
   const auditArtifact = asRecord(report.auditArtifact);
   const auditSource = asRecord(auditArtifact.source);
@@ -109,8 +111,11 @@ function expectV2BodyContractDebugReport(report: Record<string, unknown>): void 
   expect(source.centerlineCaptured).toBe(true);
   expect(source.leftBodyOutlineCaptured).toBe(true);
   expect(source.mirroredBodyGenerated).toBe(true);
+  expect(runtimeInspection.status).toBe("complete");
+  expect(dimensions.bodyBounds).toBeTruthy();
   expect(asStringArray(meshes.bodyMeshNames)).toEqual(["body_mesh"]);
   expect(asStringArray(meshes.accessoryMeshNames)).toEqual([]);
+  expect(meshes.fallbackDetected).toBe(false);
   expect(glb.freshRelativeToSource).toBe(true);
   expect(source.hash).toBe(glb.sourceHash);
   expect(validation.status).toBe("pass");
@@ -173,6 +178,12 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
 
     await expect(page.getByText("Source pending", { exact: true })).toBeVisible();
     await expect(page.getByText("Detect blocked", { exact: true })).toBeVisible();
+    const missingSourceImageCopy = "Upload a product image in Source before photo auto-detect.";
+    const missingSourceImageBlockers = page.locator('[class*="workflowBlockedNote"]').filter({
+      hasText: missingSourceImageCopy,
+    });
+    await expect(missingSourceImageBlockers).toHaveCount(2);
+    await expect(missingSourceImageBlockers.first()).toBeVisible();
 
     const lookupInput = page.getByPlaceholder(
       "https://www.academy.com/... or Stanley IceFlow 30 oz Classic Flip Straw Tumbler",
@@ -379,6 +390,33 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     await waitForLocatorDisabledState(v2GenerateButton, true, 30_000);
 
     await page.getByTestId("body-reference-v2-seed-centerline").click();
+    await page.waitForTimeout(500);
+
+    const centerlineOnlySummaryMetrics = await readMetricMap(bodyReferenceV2Summary, [
+      "Centerline axis",
+      "Body-left outline",
+      "Lookup diameter ready",
+      "v2 generation ready",
+    ]);
+    expect(centerlineOnlySummaryMetrics["Centerline axis"]).toBe("captured");
+    expect(centerlineOnlySummaryMetrics["Body-left outline"]).toBe("missing");
+    expect(centerlineOnlySummaryMetrics["Lookup diameter ready"]).toBe("present");
+    expect(centerlineOnlySummaryMetrics["v2 generation ready"]).toBe("no");
+
+    const centerlineOnlyGenerationMetrics = await readMetricMap(bodyReferenceV2GenerationReadiness, [
+      "Centerline axis",
+      "Body-left points",
+      "Accepted draft",
+      "Lookup diameter",
+    ]);
+    expect(centerlineOnlyGenerationMetrics["Centerline axis"]).toBe("captured");
+    expect(centerlineOnlyGenerationMetrics["Body-left points"]).toBe("0");
+    expect(centerlineOnlyGenerationMetrics["Accepted draft"]).toBe("no");
+    expect(centerlineOnlyGenerationMetrics["Lookup diameter"]).toMatch(/\d+(\.\d+)? mm/);
+    await expect(bodyReferenceV2GenerationReadiness).toContainText("Capture the body-left outline.");
+    await expect(bodyReferenceV2GenerationReadiness).toContainText("Mirror validation is waiting for the body-left outline.");
+    await waitForLocatorDisabledState(v2GenerateButton, true, 30_000);
+
     await page.getByTestId("body-reference-v2-seed-body-left").click();
     await page.waitForTimeout(500);
 
