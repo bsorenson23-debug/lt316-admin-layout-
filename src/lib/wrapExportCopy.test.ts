@@ -17,36 +17,36 @@ import {
 
 test("wrap export summary copy calls out authority and preview separation", () => {
   assert.equal(getWrapExportSummaryTitle(), "WRAP / EXPORT status");
-  assert.match(getWrapExportSummarySubtitle(), /source of truth/i);
-  assert.match(getWrapExportSummarySubtitle(), /separate from BODY CUTOUT QA/i);
+  assert.match(getWrapExportSummarySubtitle(), /saved artwork placement/i);
+  assert.match(getWrapExportSummarySubtitle(), /BODY CUTOUT QA remains body-only/i);
 });
 
 test("mapping freshness copy is operator-readable", () => {
   assert.equal(
     getWrapExportMappingFreshnessLabel({ freshness: "fresh", hasSavedPlacements: true }),
-    "Fresh for current reviewed geometry",
+    "Mapped to current body source",
   );
   assert.equal(
     getWrapExportMappingFreshnessLabel({ freshness: "stale", hasSavedPlacements: true }),
-    "Stale after body-geometry change",
+    "Mapping stale",
   );
   assert.equal(
     getWrapExportMappingFreshnessLabel({ freshness: "unknown", hasSavedPlacements: false }),
-    "No saved placement yet",
+    "No saved artwork placement yet",
   );
 });
 
 test("export authority and badge notes explain wrap export intent", () => {
   assert.equal(
     getWrapExportExportAuthorityLabel("laser-bed-mm-placement"),
-    "Saved laser-bed mm placement",
+    "Saved artwork placement",
   );
-  assert.match(getWrapExportBadgeNote("ready"), /Separate from BODY CUTOUT QA/i);
-  assert.match(getWrapExportBadgeNote("no-reviewed-glb"), /Preview only/i);
+  assert.match(getWrapExportBadgeNote("ready"), /WRAP \/ EXPORT ready/i);
+  assert.match(getWrapExportBadgeNote("no-reviewed-glb"), /Overlay preview unavailable/i);
 });
 
 test("empty-state and reference-only copy stay explicit", () => {
-  assert.match(getWrapExportNoSavedPlacementMessage(), /Save artwork in millimeter space/i);
+  assert.match(getWrapExportNoSavedPlacementMessage(), /Place artwork on the workspace/i);
   assert.match(getWrapExportNoAppearanceReferenceMessage(), /stay out of BODY CUTOUT QA and body_mesh/i);
   assert.match(getWrapExportAppearanceReferenceNote(), /reference-only/i);
 });
@@ -54,9 +54,10 @@ test("empty-state and reference-only copy stay explicit", () => {
 test("overlay and regenerate notes explain what does and does not require regeneration", () => {
   assert.match(
     getWrapExportOverlayPreviewNote("Engraving preview silver"),
-    /updates the preview without GLB regeneration/i,
+    /available for export review/i,
   );
-  assert.match(getWrapExportRegenerateNote(), /only after body geometry changes/i);
+  assert.match(getWrapExportRegenerateNote(), /body geometry changes/i);
+  assert.match(getWrapExportRegenerateNote(), /Artwork-only moves do not require GLB regeneration/i);
 });
 
 test("operator warning note prioritizes outside-printable and stale guidance", () => {
@@ -76,7 +77,7 @@ test("operator warning note prioritizes outside-printable and stale guidance", (
       outsidePrintableWarningCount: 0,
       staleMappingWarningCount: 1,
     }) ?? "",
-    /Regenerate the reviewed BODY CUTOUT QA GLB/i,
+    /Saved placement is preserved, but the current body source changed/i,
   );
   assert.equal(
     getWrapExportOperatorWarningNote({

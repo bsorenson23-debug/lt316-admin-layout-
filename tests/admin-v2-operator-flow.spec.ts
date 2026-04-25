@@ -332,15 +332,15 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     await expect(page.getByText("WRAP / EXPORT PREVIEW", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("appearance-reference-summary")).toContainText("reference-only");
     await expect(page.getByTestId("wrap-export-summary")).toContainText(
-      "Saved laser-bed millimeter placement is the WRAP / EXPORT source of truth.",
+      "WRAP / EXPORT checks saved artwork placement and export preview.",
     );
     await expect(
       page.getByText(
-        "No saved laser-bed artwork placements yet. Save artwork in millimeter space to unlock WRAP / EXPORT preview and export agreement checks.",
+        "No saved artwork placement yet. Place artwork on the workspace, then save the template to persist WRAP / EXPORT placement.",
         { exact: true },
       ),
     ).toBeVisible();
-    await expect(page.getByTestId("body-geometry-status-badge-note")).toContainText("Separate from BODY CUTOUT QA");
+    await expect(page.getByTestId("body-geometry-status-badge-note")).toContainText("BODY CUTOUT QA remains body-only");
 
     const emptyOverlaySummary = await readOverlaySummaryState(page);
     expect(emptyOverlaySummary.enabled).toBe("no");

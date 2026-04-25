@@ -6,7 +6,7 @@ export function getWrapExportSummaryTitle(): string {
 }
 
 export function getWrapExportSummarySubtitle(): string {
-  return "Saved laser-bed millimeter placement is the WRAP / EXPORT source of truth. The 3D overlay is preview-only and stays separate from BODY CUTOUT QA.";
+  return "WRAP / EXPORT checks saved artwork placement and export preview. BODY CUTOUT QA remains body-only.";
 }
 
 export function getWrapExportMappingFreshnessLabel(args: {
@@ -14,50 +14,50 @@ export function getWrapExportMappingFreshnessLabel(args: {
   hasSavedPlacements: boolean;
 }): string {
   if (!args.hasSavedPlacements) {
-    return "No saved placement yet";
+    return "No saved artwork placement yet";
   }
   switch (args.freshness) {
     case "fresh":
-      return "Fresh for current reviewed geometry";
+      return "Mapped to current body source";
     case "stale":
-      return "Stale after body-geometry change";
+      return "Mapping stale";
     default:
-      return "Unknown - review geometry agreement";
+      return "Mapping not confirmed";
   }
 }
 
 export function getWrapExportExportAuthorityLabel(authority: string | null | undefined): string {
   if (authority === "laser-bed-mm-placement") {
-    return "Saved laser-bed mm placement";
+    return "Saved artwork placement";
   }
-  return authority?.trim() || "Saved laser-bed mm placement";
+  return authority?.trim() || "Saved artwork placement";
 }
 
 export function getWrapExportBadgeNote(mappingStatus: WrapExportMappingStatus): string {
   switch (mappingStatus) {
     case "ready":
-      return "Separate from BODY CUTOUT QA · Preview and export checks ready";
+      return "WRAP / EXPORT ready. BODY CUTOUT QA remains body-only.";
     case "no-reviewed-glb":
-      return "Separate from BODY CUTOUT QA · Preview only until a reviewed GLB is loaded";
+      return "Overlay preview unavailable. Generate a reviewed body GLB first.";
     case "stale-geometry":
-      return "Separate from BODY CUTOUT QA · Regenerate reviewed geometry for exact placement";
+      return "Mapping stale. Refresh the reviewed body source before trusting placement preview.";
     case "missing-dimensions":
-      return "Separate from BODY CUTOUT QA · Missing wrap dimensions";
+      return "WRAP / EXPORT blocked. Wrap dimensions are missing.";
     default:
-      return "Separate from BODY CUTOUT QA · Wrap/export readiness unknown";
+      return "WRAP / EXPORT status unknown. BODY CUTOUT QA remains body-only.";
   }
 }
 
 export function getWrapExportAuthorityNote(): string {
-  return "Saved laser-bed millimeter placement stays authoritative for WRAP / EXPORT. BODY CUTOUT QA remains the body-only geometry check.";
+  return "WRAP / EXPORT uses saved artwork placement. BODY CUTOUT QA proves body-only geometry.";
 }
 
 export function getWrapExportOverlayPreviewNote(materialLabel: string): string {
-  return `The 3D engraving overlay is derived from saved placement and uses ${materialLabel}. Moving artwork updates the preview without GLB regeneration.`;
+  return `Engraving overlay preview is available for export review with ${materialLabel} when saved placement matches the current body source.`;
 }
 
 export function getWrapExportRegenerateNote(): string {
-  return "Regenerate the reviewed BODY CUTOUT QA GLB only after body geometry changes. Artwork moves and overlay updates do not require regeneration.";
+  return "Regenerate or refresh the reviewed body source when body geometry changes. Artwork-only moves do not require GLB regeneration.";
 }
 
 export function getWrapExportAppearanceReferenceNote(): string {
@@ -65,7 +65,7 @@ export function getWrapExportAppearanceReferenceNote(): string {
 }
 
 export function getWrapExportNoSavedPlacementMessage(): string {
-  return "No saved laser-bed artwork placements yet. Save artwork in millimeter space to unlock WRAP / EXPORT preview and export agreement checks.";
+  return "No saved artwork placement yet. Place artwork on the workspace, then save the template to persist WRAP / EXPORT placement.";
 }
 
 export function getWrapExportNoAppearanceReferenceMessage(): string {
@@ -82,13 +82,13 @@ export function getWrapExportOperatorWarningNote(args: {
     return null;
   }
   if (args.outsidePrintableWarningCount > 0) {
-    return "One or more saved placements sit outside the printable wrap area. Move or resize the artwork in laser-bed millimeter space; no GLB regenerate is required.";
+    return "One or more saved placements sit outside the printable wrap area. Move or resize artwork in the workspace; no GLB regeneration is required.";
   }
   if (args.freshness === "stale" || args.staleMappingWarningCount > 0) {
-    return "Saved placements remain authoritative, but viewer agreement is stale because body geometry changed. Regenerate the reviewed BODY CUTOUT QA GLB to refresh exact wrap/export placement.";
+    return "Mapping stale. Saved placement is preserved, but the current body source changed. Refresh the reviewed body source before trusting placement preview.";
   }
   if (args.freshness === "unknown") {
-    return "Saved placements exist, but viewer agreement cannot be confirmed yet because mapping freshness is unknown.";
+    return "Saved placement exists, but mapping freshness is not confirmed for the current body source.";
   }
   return null;
 }

@@ -159,6 +159,6 @@ test("disabled actions explain exactly why they are blocked during template crea
   await (await waitForLocatorEnabled(page.getByTestId("preview-mode-wrap-export"), 120_000)).click();
   await expect(page.getByText("WRAP / EXPORT PREVIEW", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("wrap-export-summary")).toContainText(
-    "Saved laser-bed millimeter placement is the WRAP / EXPORT source of truth.",
+    "WRAP / EXPORT checks saved artwork placement and export preview.",
   );
 });

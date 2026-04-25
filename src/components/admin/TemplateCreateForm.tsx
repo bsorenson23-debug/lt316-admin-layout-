@@ -3607,7 +3607,7 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>
                         {hasSavedArtworkPlacements
                           ? wrapExportFreshnessLabel
-                          : "No saved placement yet"}
+                          : "No saved artwork placement yet"}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>

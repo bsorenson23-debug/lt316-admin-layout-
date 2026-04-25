@@ -70,7 +70,7 @@ test("wrap-export preview fails when wrap dimensions are missing", () => {
   assert.equal(state.mappingStatus, "missing-dimensions");
   assert.equal(state.readyForPreview, false);
   assert.equal(state.readyForExactPlacement, false);
-  assert.match(state.errors.join(" "), /wrap diameter and wrap width/i);
+  assert.match(state.errors.join(" "), /blocked until wrap diameter and wrap width/i);
 });
 
 test("wrap-export preview warns when body bounds are missing", () => {
@@ -97,7 +97,7 @@ test("wrap-export preview warns when body bounds are missing", () => {
   assert.equal(state.mappingStatus, "unknown");
   assert.equal(state.readyForPreview, true);
   assert.equal(state.readyForExactPlacement, false);
-  assert.match(state.warnings.join(" "), /viewer agreement is waiting on body bounds/i);
+  assert.match(state.warnings.join(" "), /exact body agreement needs body bounds/i);
 });
 
 test("wrap-export preview warns when geometry is stale", () => {
@@ -128,7 +128,7 @@ test("wrap-export preview warns when geometry is stale", () => {
   assert.equal(state.status, "warn");
   assert.equal(state.mappingStatus, "stale-geometry");
   assert.equal(state.readyForExactPlacement, false);
-  assert.match(state.warnings.join(" "), /viewer agreement is stale/i);
+  assert.match(state.warnings.join(" "), /current body source changed/i);
 });
 
 test("wrap-export preview warns when no reviewed GLB is loaded", () => {
@@ -156,13 +156,13 @@ test("wrap-export preview warns when no reviewed GLB is loaded", () => {
   assert.equal(state.readyForPreview, true);
   assert.equal(state.readyForExactPlacement, false);
   assert.equal(state.isBodyCutoutQaProof, false);
-  assert.match(state.warnings.join(" "), /exact placement waits for a reviewed BODY CUTOUT QA GLB/i);
+  assert.match(state.warnings.join(" "), /Overlay preview unavailable/i);
 });
 
 test("wrap-export helper status and mapping labels stay operator-readable", () => {
-  assert.equal(getWrapExportPreviewStatusLabel("pass"), "PASS");
-  assert.equal(getWrapExportPreviewStatusLabel("unknown"), "UNKNOWN");
-  assert.equal(getWrapExportMappingStatusLabel("ready"), "Ready");
-  assert.equal(getWrapExportMappingStatusLabel("stale-geometry"), "Stale reviewed geometry");
-  assert.equal(getWrapExportMappingStatusLabel("no-reviewed-glb"), "Preview only - no reviewed GLB");
+  assert.equal(getWrapExportPreviewStatusLabel("pass"), "WRAP / EXPORT ready");
+  assert.equal(getWrapExportPreviewStatusLabel("unknown"), "WRAP / EXPORT status unknown");
+  assert.equal(getWrapExportMappingStatusLabel("ready"), "Mapping ready");
+  assert.equal(getWrapExportMappingStatusLabel("stale-geometry"), "Mapping stale");
+  assert.equal(getWrapExportMappingStatusLabel("no-reviewed-glb"), "Overlay preview unavailable");
 });
