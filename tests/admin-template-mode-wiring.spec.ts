@@ -54,8 +54,9 @@ test("template create and edit use one dedicated template mode and exit cleanly"
   await page.getByTestId("template-gallery-create-new").click();
   await expect(page.getByTestId("template-mode-shell")).toBeVisible();
   await page.getByPlaceholder("YETI Rambler 40oz").fill(templateName);
-  await page.locator('[data-testid="template-create-form"] select').nth(1).selectOption("flat");
-  await page.locator('[data-testid="template-create-form"] input[type="number"]').nth(1).fill("120");
+  await page.getByTestId("template-product-type-select").selectOption("flat");
+  await page.getByTestId("template-reference-dimensions-details").locator("summary").click();
+  await page.getByTestId("template-print-height-input").fill("120");
   await page.getByTestId("template-create-save").click();
 
   await expect(page.getByTestId("template-mode-shell")).toHaveCount(0);

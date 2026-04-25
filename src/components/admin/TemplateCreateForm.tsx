@@ -2886,6 +2886,7 @@ export function TemplateCreateForm({
           <label className={styles.fieldLabel}>Product type</label>
           <select
             className={styles.selectInput}
+            data-testid="template-product-type-select"
             value={productType}
             onChange={(e) => setProductType(e.target.value as "tumbler" | "mug" | "bottle" | "flat")}
           >
@@ -3000,6 +3001,7 @@ export function TemplateCreateForm({
                   {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm) && (
                     <span>Diameter authority {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm)}</span>
                   )}
+                  <span>Authority {formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
                   <span>{formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
                   {formatLookupMeasurement(lookupDimensionAuthoritySummary.wrapWidthMm) && (
                     <span>Wrap width {formatLookupMeasurement(lookupDimensionAuthoritySummary.wrapWidthMm)} = Math.PI * diameter</span>
@@ -3010,6 +3012,9 @@ export function TemplateCreateForm({
                   <span>Variant {activeLookupDimensions.selectedVariantLabel || "n/a"}</span>
                   <span>Selected size {formatLookupSize(lookupDimensionAuthoritySummary.selectedSizeOz)}</span>
                   <span>{formatLookupVariantStatus(lookupDimensionAuthoritySummary.variantStatus)}</span>
+                  {lookupDimensionAuthoritySummary.heightIgnoredForScale && (
+                    <span>Full product height is stored for context and ignored for lookup-based body contour scale.</span>
+                  )}
                 </div>
                 <details className={styles.compactDetails}>
                   <summary className={styles.compactDetailsSummary}>
@@ -4911,7 +4916,7 @@ export function TemplateCreateForm({
           </span>
         </div>
 
-        <details className={styles.compactDetails}>
+        <details className={styles.compactDetails} data-testid="template-reference-dimensions-details">
           <summary className={styles.compactDetailsSummary}>
             Reference dimensions
           </summary>
@@ -4920,6 +4925,7 @@ export function TemplateCreateForm({
               <label className={styles.fieldLabel}>Reference printable band</label>
               <input
                 className={styles.numInput}
+                data-testid="template-print-height-input"
                 type="number"
                 value={printHeightMm || ""}
                 step={0.1}
