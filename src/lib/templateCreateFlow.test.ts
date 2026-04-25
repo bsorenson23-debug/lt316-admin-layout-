@@ -97,7 +97,7 @@ test("source and detect readiness stay blocked until a detectable product image 
   assert.equal(readiness.sourceReady, false);
   assert.equal(readiness.detectReady, false);
   assert.deepEqual(readiness.missing, ["productImage"]);
-  assert.equal(readiness.blockedReason, "Upload a product image in Source before photo auto-detect.");
+  assert.equal(readiness.blockedReason, "Upload a product photo first.");
 });
 
 test("source and detect readiness agree once a detectable product image exists", () => {
@@ -203,7 +203,7 @@ test("generate gate reason explains why BODY CUTOUT QA generation is disabled", 
       canGenerate: false,
       hasPendingSourceDraft: false,
     }),
-    "Accept BODY REFERENCE review before generating BODY CUTOUT QA.",
+    "Accept BODY REFERENCE first.",
   );
   assert.equal(
     getTemplateCreateGenerateGateReason({
@@ -212,7 +212,7 @@ test("generate gate reason explains why BODY CUTOUT QA generation is disabled", 
       canGenerate: true,
       hasPendingSourceDraft: true,
     }),
-    "Accept corrected cutout changes before generating BODY CUTOUT QA.",
+    "Accept corrected cutout changes first.",
   );
 });
 

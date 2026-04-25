@@ -874,9 +874,15 @@
 }
 
 .workflowBlockedNote {
+  width: fit-content;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
   font-size: 11px;
   line-height: 1.4;
   color: var(--warning);
+  background: var(--warning-bg);
 }
 
 .workflowNextNote {
@@ -1070,9 +1076,15 @@
 }
 
 .actionDisabledReason {
+  width: fit-content;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
   font-size: 11px;
   line-height: 1.4;
   color: var(--warning);
+  background: var(--warning-bg);
 }
 
 .reviewScaffoldInlineMeta {
