@@ -7,6 +7,7 @@ import type {
   EditableBodyOutline,
 } from "../types/productTemplate.ts";
 import {
+  buildBodyReferenceGlbSourcePayload,
   buildBodyReferenceGlbSourceSignature,
   resolveBodyReferenceGlbReviewState,
   resolveReviewedBodyReferenceGlbInput,
@@ -193,11 +194,22 @@ test("BODY REFERENCE GLB source signature resolves stale cached manual contours 
   );
 });
 
-test("BODY REFERENCE GLB source signature changes when render mode changes", () => {
-  assert.notEqual(
+test("BODY REFERENCE GLB source signature ignores display-only render mode changes", () => {
+  assert.equal(
     signature(),
     signature({
       renderMode: "hybrid-preview",
+    }),
+  );
+});
+
+test("BODY REFERENCE GLB source signature ignores display-only tint colors", () => {
+  assert.equal(
+    signature(),
+    signature({
+      bodyColorHex: "#ff00aa",
+      lidColorHex: "#00ffee",
+      rimColorHex: "#111111",
     }),
   );
 });
@@ -212,7 +224,7 @@ test("BODY REFERENCE GLB source signature ignores source image and view bookkeep
   );
 });
 
-test("BODY REFERENCE GLB source signature changes when body-only source contour authority changes", () => {
+test("BODY REFERENCE GLB source signature ignores source contour bookkeeping when approved geometry is unchanged", () => {
   const changedOutline: EditableBodyOutline = {
     ...baseOutline,
     sourceContour: [
@@ -235,7 +247,7 @@ test("BODY REFERENCE GLB source signature changes when body-only source contour 
     },
   };
 
-  assert.notEqual(
+  assert.equal(
     signature(),
     signature({
       referencePaths: {
@@ -247,7 +259,49 @@ test("BODY REFERENCE GLB source signature changes when body-only source contour 
   );
 });
 
-test("BODY REFERENCE GLB source signature ignores fallback lid and silver outlines unless explicitly provided", () => {
+test("BODY REFERENCE GLB source signature changes when canonical calibration changes", () => {
+  assert.notEqual(
+    signature(),
+    signature({
+      canonicalDimensionCalibration: {
+        ...baseCalibration,
+        bodyHeightMm: 142.01,
+        wrapDiameterMm: 86.52,
+        wrapWidthMm: 271.81,
+      },
+    }),
+  );
+});
+
+test("BODY REFERENCE GLB source payload keeps only reviewed geometry authority fields", () => {
+  const payload = buildBodyReferenceGlbSourcePayload({
+    renderMode: "body-cutout-qa",
+    matchedProfileId: "stanley-iceflow-20oz",
+    canonicalBodyProfile: baseProfile,
+    canonicalDimensionCalibration: baseCalibration,
+    referencePaths: {
+      bodyOutline: baseOutline,
+      lidProfile: null,
+      silverProfile: null,
+    },
+    bodyColorHex: "#184f90",
+    lidColorHex: "#d8ef80",
+    rimColorHex: "#679ef3",
+    lidSeamFromOverallMm: 43.5,
+    silverBandBottomFromOverallMm: 50.7,
+    topOuterDiameterMm: 88,
+  }) as Record<string, unknown>;
+
+  assert.equal(payload.version, 5);
+  assert.equal(payload.generationSource, "reviewed-body-reference-v1");
+  assert.equal("renderMode" in payload, false);
+  assert.equal("matchedProfileId" in payload, false);
+  assert.equal("bodyColorHex" in payload, false);
+  assert.equal("rimColorHex" in payload, false);
+  assert.equal("topOuterDiameterMm" in payload, false);
+});
+
+test("BODY REFERENCE GLB source signature ignores non-body accessory outlines", () => {
   const fallbackLidProfile: EditableBodyOutline = {
     ...baseOutline,
     points: baseOutline.points.map((point, index) => ({
@@ -275,12 +329,7 @@ test("BODY REFERENCE GLB source signature ignores fallback lid and silver outlin
     }),
   );
 
-  assert.notEqual(
-    signature(),
-    signature({
-      lidProfile: fallbackLidProfile,
-    }),
-  );
+  assert.equal(signature(), signature({ lidProfile: fallbackLidProfile }));
 });
 
 test("BODY REFERENCE GLB source signature ignores unrelated caller state", () => {

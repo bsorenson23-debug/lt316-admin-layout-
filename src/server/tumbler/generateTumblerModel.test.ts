@@ -15,6 +15,9 @@ import {
   createBodyReferenceV2Layer,
   createCenterlineAxis,
 } from "../../lib/bodyReferenceV2Layers.ts";
+import { buildBodyReferenceGlbSourcePayload } from "../../lib/bodyReferenceGlbSource.ts";
+import { hashJsonSha256Node } from "../../lib/hashSha256.node.ts";
+import { stableStringifyForHash } from "../../lib/hashSha256.ts";
 import {
   deriveBodyTraceExtents,
   deriveEngravingStartGuidePx,
@@ -389,6 +392,11 @@ function getObjectBounds(scene: THREE.Object3D, name: string): THREE.Box3 {
 
 test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth audit metadata", async () => {
   const result = await generateBodyReferenceGlb(createInput());
+  const sourcePayload = buildBodyReferenceGlbSourcePayload({
+    bodyOutline: createInput().bodyOutline!,
+    canonicalBodyProfile: BODY_PROFILE,
+    canonicalDimensionCalibration: DIMENSION_CALIBRATION,
+  });
 
   assert.equal(result.modelStatus, "generated-reviewed-model");
   assert.equal(result.renderMode, "body-cutout-qa");
@@ -397,6 +405,8 @@ test("generateBodyReferenceGlb emits a reviewed body-only GLB with runtime-truth
   assert.deepEqual(result.fallbackMeshNames, []);
   assert.equal(result.bodyGeometryContract.glb.path, result.glbPath);
   assert.equal(result.bodyGeometryContract.glb.freshRelativeToSource, true);
+  assert.equal(result.generatedSourceSignature, stableStringifyForHash(sourcePayload));
+  assert.equal(result.bodyGeometryContract.source.hash, hashJsonSha256Node(sourcePayload));
   assert.equal(result.bodyGeometryContract.source.hash, result.bodyGeometryContract.glb.sourceHash);
   assert.deepEqual(result.bodyGeometryContract.meshes.bodyMeshNames, ["body_mesh"]);
   assert.deepEqual(result.bodyGeometryContract.meshes.accessoryMeshNames, []);
@@ -451,6 +461,21 @@ test("generateBodyReferenceGlb changes source lineage when the approved outline 
   assert.notEqual(before.bodyGeometryContract.source.hash, after.bodyGeometryContract.source.hash);
   assert.equal(after.bodyGeometryContract.source.hash, after.bodyGeometryContract.glb.sourceHash);
   assert.equal(after.bodyGeometryContract.validation.status, "pass");
+});
+
+test("generateBodyReferenceGlb keeps reviewed source lineage stable across display-only color changes", async () => {
+  const before = await generateBodyReferenceGlb(createInput({
+    bodyColorHex: "#184f90",
+    rimColorHex: "#b6b6b6",
+  }));
+  const after = await generateBodyReferenceGlb(createInput({
+    bodyColorHex: "#ff22aa",
+    rimColorHex: "#00ffaa",
+  }));
+
+  assert.equal(before.generatedSourceSignature, after.generatedSourceSignature);
+  assert.equal(before.bodyGeometryContract.source.hash, after.bodyGeometryContract.source.hash);
+  assert.equal(after.bodyGeometryContract.source.hash, after.bodyGeometryContract.glb.sourceHash);
 });
 
 test("generateBodyReferenceGlb reports when 150mm body bounds came from non-uniform canonical height", async () => {

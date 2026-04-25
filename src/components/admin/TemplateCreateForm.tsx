@@ -59,12 +59,12 @@ import {
 import {
   cloneEditableBodyOutline,
   createEditableBodyOutline,
-  deriveDimensionsFromEditableBodyOutline,
 } from "@/lib/editableBodyOutline";
 import {
   buildOutlineGeometrySignature,
   cloneOutline,
   hasFineTuneDraftChanges,
+  rebuildAcceptedBodyReferenceSnapshot,
   resolveFineTuneGlbReviewState,
   resolveOutlineBounds,
   resolveOutlinePointCount,
@@ -77,7 +77,7 @@ import {
   getDrinkwareGlbStatusLabel,
   isBodyCutoutQaPreviewAvailable,
 } from "@/lib/bodyReferencePreviewIntent";
-import { buildBodyReferenceGlbSourceSignature } from "@/lib/bodyReferenceGlbSource";
+import { buildBodyReferenceGlbSourcePayload } from "@/lib/bodyReferenceGlbSource";
 import { resolveBodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
 import { parseBodyReferenceGlbResponse } from "@/lib/adminApi.schema";
 import type { BodyGeometryContract } from "@/lib/bodyGeometryContract";
@@ -122,6 +122,7 @@ import {
   ENGRAVING_OVERLAY_PREVIEW_MATERIAL_LABEL,
   ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN,
 } from "@/lib/engravingOverlayPreview";
+import { hashJsonSha256, stableStringifyForHash } from "@/lib/hashSha256";
 import {
   acceptBodyReferenceV2Draft,
   buildBodyReferenceV2GenerationReadinessFromDraft,
@@ -846,6 +847,7 @@ export function TemplateCreateForm({
   const [reviewedBodyCutoutQaGeneratedSourceSignature, setReviewedBodyCutoutQaGeneratedSourceSignature] = React.useState<string | null>(null);
   const [generatedReviewedBodyGeometryContract, setGeneratedReviewedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
   const [loadedBodyGeometryContract, setLoadedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
+  const [currentReviewedBodyReferenceSourceHash, setCurrentReviewedBodyReferenceSourceHash] = React.useState<string | null>(null);
   const [reviewedGeneratedModelState, setReviewedGeneratedModelState] = React.useState<{
     glbPath: string;
     status: "generated-reviewed-model";
@@ -2194,7 +2196,7 @@ export function TemplateCreateForm({
     printHeightMm,
     topMarginMm,
   ]);
-  const currentReviewedBodyReferenceSourceSignature = React.useMemo(() => {
+  const currentReviewedBodyReferenceSourcePayload = React.useMemo(() => {
     if (
       !canGenerateReviewedBodyReferenceGlb ||
       !approvedBodyOutline ||
@@ -2203,25 +2205,49 @@ export function TemplateCreateForm({
     ) {
       return null;
     }
-    return buildBodyReferenceGlbSourceSignature({
-      renderMode: "body-cutout-qa",
-      matchedProfileId: resolvedMatchedProfileId ?? null,
+    return buildBodyReferenceGlbSourcePayload({
       bodyOutline: approvedBodyOutline,
       canonicalBodyProfile: approvedCanonicalBodyProfile,
       canonicalDimensionCalibration: approvedCanonicalDimensionCalibration,
-      bodyColorHex: bodyColorHex || null,
-      rimColorHex: rimColorHex || null,
     });
   }, [
     approvedBodyOutline,
     approvedCanonicalBodyProfile,
     approvedCanonicalDimensionCalibration,
-    bodyColorHex,
     canGenerateReviewedBodyReferenceGlb,
-    resolvedMatchedProfileId,
-    rimColorHex,
   ]);
-  const activeBodyReferenceDraftSourceSignature = React.useMemo(() => {
+  const currentReviewedBodyReferenceSourceSignature = React.useMemo(
+    () => (
+      currentReviewedBodyReferenceSourcePayload
+        ? stableStringifyForHash(currentReviewedBodyReferenceSourcePayload)
+        : null
+    ),
+    [currentReviewedBodyReferenceSourcePayload],
+  );
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!currentReviewedBodyReferenceSourcePayload) {
+      setCurrentReviewedBodyReferenceSourceHash(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void hashJsonSha256(currentReviewedBodyReferenceSourcePayload)
+      .then((hash) => {
+        if (!cancelled) {
+          setCurrentReviewedBodyReferenceSourceHash(hash);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCurrentReviewedBodyReferenceSourceHash(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentReviewedBodyReferenceSourcePayload]);
+  const activeBodyReferenceDraftSourcePayload = React.useMemo(() => {
     if (
       !canGenerateReviewedBodyReferenceGlb ||
       !activeBodyReferenceFineTuneOutline ||
@@ -2230,38 +2256,39 @@ export function TemplateCreateForm({
     ) {
       return null;
     }
-    return buildBodyReferenceGlbSourceSignature({
-      renderMode: "body-cutout-qa",
-      matchedProfileId: resolvedMatchedProfileId ?? null,
+    return buildBodyReferenceGlbSourcePayload({
       bodyOutline: activeBodyReferenceFineTuneOutline,
       canonicalBodyProfile: approvedCanonicalBodyProfile,
       canonicalDimensionCalibration: approvedCanonicalDimensionCalibration,
-      bodyColorHex: bodyColorHex || null,
-      rimColorHex: rimColorHex || null,
     });
   }, [
     activeBodyReferenceFineTuneOutline,
     approvedCanonicalBodyProfile,
     approvedCanonicalDimensionCalibration,
-    bodyColorHex,
     canGenerateReviewedBodyReferenceGlb,
-    resolvedMatchedProfileId,
-    rimColorHex,
   ]);
+  const activeBodyReferenceDraftSourceSignature = React.useMemo(
+    () => (
+      activeBodyReferenceDraftSourcePayload
+        ? stableStringifyForHash(activeBodyReferenceDraftSourcePayload)
+        : null
+    ),
+    [activeBodyReferenceDraftSourcePayload],
+  );
   const reviewedBodyReferenceGlbSourceHash =
     loadedBodyGeometryContract?.glb.sourceHash
     ?? generatedReviewedBodyGeometryContract?.glb.sourceHash
-    ?? reviewedBodyCutoutQaGeneratedSourceSignature;
+    ?? null;
   const bodyReferenceGuideFrame = React.useMemo(
     () => resolveBodyReferenceGuideFrame({
       acceptedBodyReferenceOutline: approvedBodyOutline,
-      acceptedSourceHash: currentReviewedBodyReferenceSourceSignature,
+      acceptedSourceHash: currentReviewedBodyReferenceSourceHash,
       generatedSourceHash: reviewedBodyReferenceGlbSourceHash,
       fitDebug: lookupResult?.fitDebug ?? null,
     }),
     [
       approvedBodyOutline,
-      currentReviewedBodyReferenceSourceSignature,
+      currentReviewedBodyReferenceSourceHash,
       lookupResult?.fitDebug,
       reviewedBodyReferenceGlbSourceHash,
     ],
@@ -2290,7 +2317,7 @@ export function TemplateCreateForm({
         reviewedBodyReferenceGlbFreshness.status === "stale" &&
         reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
       hasReviewedGlb: reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
-      acceptedSourceHash: currentReviewedBodyReferenceSourceSignature,
+      acceptedSourceHash: currentReviewedBodyReferenceSourceHash,
       reviewedGlbSourceHash: reviewedBodyReferenceGlbSourceHash,
       reviewedGlbFreshRelativeToSource:
         reviewedBodyReferenceGlbFreshness.status === "current"
@@ -2302,7 +2329,7 @@ export function TemplateCreateForm({
     [
       approvedBodyOutline,
       bodyReferenceFineTuneDraftPendingAcceptance,
-      currentReviewedBodyReferenceSourceSignature,
+      currentReviewedBodyReferenceSourceHash,
       hasAcceptedBodyReferenceReview,
       reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
       reviewedBodyReferenceGlbFreshness.status,
@@ -2368,26 +2395,12 @@ export function TemplateCreateForm({
     reviewedBodyReferenceGlbFreshness.status,
   ]);
 
-  const applyAcceptedBodyReferenceDerivedDimensions = React.useCallback((outline: EditableBodyOutline | null | undefined) => {
-    if (!outline) return;
-    const derived = deriveDimensionsFromEditableBodyOutline(outline);
-    const nextTop = typeof derived.bodyTopFromOverallMm === "number"
-      ? round2(Math.max(0, derived.bodyTopFromOverallMm))
-      : topMarginMm;
-    const nextBodyBottom = typeof derived.bodyBottomFromOverallMm === "number"
-      ? round2(Math.max(nextTop + 1, derived.bodyBottomFromOverallMm))
-      : round2(Math.max(nextTop + 1, overallHeightMm - Math.max(0, bottomMarginMm)));
-    if (typeof derived.bodyTopFromOverallMm === "number") {
-      setTopMarginMm(nextTop);
-    }
-    if (typeof derived.bodyBottomFromOverallMm === "number" && overallHeightMm > 0) {
-      setBottomMarginMm(round2(Math.max(0, overallHeightMm - nextBodyBottom)));
-      setPrintHeightMm(round2(Math.max(1, nextBodyBottom - nextTop)));
-    }
-    if (typeof derived.diameterMm === "number" && derived.diameterMm > 0) {
-      setDiameterMm(round2(derived.diameterMm));
-    }
-  }, [bottomMarginMm, overallHeightMm, topMarginMm]);
+  const clearReviewedBodyReferenceGeneratedState = React.useCallback(() => {
+    setGeneratedReviewedBodyGeometryContract(null);
+    setLoadedBodyGeometryContract(null);
+    setReviewedBodyCutoutQaGeneratedSourceSignature(null);
+    setReviewedGeneratedModelState(null);
+  }, []);
 
   const handleStartBodyReferenceFineTune = React.useCallback(() => {
     if (productType === "flat" || !approvedBodyOutline) return;
@@ -2445,15 +2458,58 @@ export function TemplateCreateForm({
 
   const handleAcceptBodyReferenceFineTuneDraft = React.useCallback(() => {
     if (!activeBodyReferenceFineTuneOutline || !bodyReferenceFineTuneDraftHasChanges) return;
-    const acceptedOutline = cloneEditableBodyOutline(activeBodyReferenceFineTuneOutline) ?? activeBodyReferenceFineTuneOutline;
-    setApprovedBodyOutline(acceptedOutline);
-    applyAcceptedBodyReferenceDerivedDimensions(acceptedOutline);
+    const rebuiltSnapshot = rebuildAcceptedBodyReferenceSnapshot({
+      acceptedOutline: activeBodyReferenceFineTuneOutline,
+      overallHeightMm,
+      topMarginMm,
+      bottomMarginMm,
+      diameterMm,
+      baseDiameterMm:
+        resolvedMatchedProfile?.bottomDiameterMm ??
+        resolvedMatchedProfile?.outsideDiameterMm ??
+        diameterMm,
+      handleArcDeg,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    });
+    if (!rebuiltSnapshot) return;
+    setApprovedBodyOutline(cloneSerializable(rebuiltSnapshot.approvedBodyOutline));
+    setApprovedCanonicalBodyProfile(
+      rebuiltSnapshot.approvedCanonicalBodyProfile
+        ? cloneSerializable(rebuiltSnapshot.approvedCanonicalBodyProfile)
+        : null,
+    );
+    setApprovedCanonicalDimensionCalibration(
+      rebuiltSnapshot.approvedCanonicalDimensionCalibration
+        ? cloneSerializable(rebuiltSnapshot.approvedCanonicalDimensionCalibration)
+        : null,
+    );
+    setApprovedBodyReferenceQa(
+      rebuiltSnapshot.approvedBodyReferenceQa
+        ? cloneSerializable(rebuiltSnapshot.approvedBodyReferenceQa)
+        : null,
+    );
+    setApprovedBodyReferenceWarnings([...rebuiltSnapshot.approvedBodyReferenceWarnings]);
+    setTopMarginMm(rebuiltSnapshot.nextTopMarginMm);
+    setBottomMarginMm(rebuiltSnapshot.nextBottomMarginMm);
+    setPrintHeightMm(rebuiltSnapshot.nextPrintHeightMm);
+    setDiameterMm(rebuiltSnapshot.nextDiameterMm);
+    clearReviewedBodyReferenceGeneratedState();
+    setPreviewModelMode("alignment-model");
+    setHasAcceptedBodyReferenceReview(true);
     resetBodyReferenceFineTuneState();
   }, [
     activeBodyReferenceFineTuneOutline,
-    applyAcceptedBodyReferenceDerivedDimensions,
     bodyReferenceFineTuneDraftHasChanges,
+    bottomMarginMm,
+    clearReviewedBodyReferenceGeneratedState,
+    diameterMm,
+    handleArcDeg,
+    lookupResult?.fitDebug,
+    overallHeightMm,
     resetBodyReferenceFineTuneState,
+    resolvedMatchedProfile?.bottomDiameterMm,
+    resolvedMatchedProfile?.outsideDiameterMm,
+    topMarginMm,
   ]);
 
   const handleSeedBodyReferenceV2Centerline = React.useCallback(() => {
@@ -3261,10 +3317,7 @@ export function TemplateCreateForm({
                   );
                   setApprovedBodyReferenceQa(cloneSerializable(liveBodyReferencePipeline.qa));
                   setApprovedBodyReferenceWarnings([...liveBodyReferencePipeline.warnings]);
-                  setGeneratedReviewedBodyGeometryContract(null);
-                  setLoadedBodyGeometryContract(null);
-                  setReviewedBodyCutoutQaGeneratedSourceSignature(null);
-                  setReviewedGeneratedModelState(null);
+                  clearReviewedBodyReferenceGeneratedState();
                   setHasAcceptedBodyReferenceReview(true);
                   setPreviewModelMode("alignment-model");
                 }}
@@ -4023,7 +4076,7 @@ export function TemplateCreateForm({
                         </div>
                         <div className={styles.cutoutFitMetric}>
                           <span className={styles.cutoutFitMetricLabel}>Source hash</span>
-                          <span className={styles.cutoutFitMetricValue}>{formatShortHash(currentReviewedBodyReferenceSourceSignature)}</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatShortHash(currentReviewedBodyReferenceSourceHash)}</span>
                         </div>
                         <div className={styles.cutoutFitMetric}>
                           <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>

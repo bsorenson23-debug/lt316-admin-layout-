@@ -17,6 +17,7 @@ import {
 import {
   buildMirroredBodyPreview,
 } from "./bodyReferenceV2ScaleMirror.ts";
+import { buildBodyReferenceGlbSourcePayload } from "./bodyReferenceGlbSource.ts";
 import {
   buildLaserBedSurfaceMappingSignature,
 } from "./laserBedSurfaceMapping.ts";
@@ -263,16 +264,18 @@ test("buildBodyGeometrySourceHashPayload includes canonical body authority when 
     outline: authority.outline,
     canonicalBodyProfile: authority.canonicalBodyProfile,
     canonicalDimensionCalibration: authority.canonicalDimensionCalibration,
-  }) as {
-    version: number;
-    outline: ReturnType<typeof buildBodyGeometrySourceHashPayload>;
+  }) as Record<string, unknown> & {
     canonicalBodyProfile: { samples: Array<{ yMm: number }> };
     canonicalDimensionCalibration: { wrapDiameterMm: number };
   };
 
   assert.ok(payload);
-  assert.equal(payload.version, 2);
-  assert.deepEqual(payload.outline, buildBodyGeometrySourceHashPayload(authority.outline));
+  assert.deepEqual(payload, buildBodyReferenceGlbSourcePayload({
+    bodyOutline: authority.outline,
+    canonicalBodyProfile: authority.canonicalBodyProfile,
+    canonicalDimensionCalibration: authority.canonicalDimensionCalibration,
+  }));
+  assert.equal(payload.generationSource, "reviewed-body-reference-v1");
   assert.equal(payload.canonicalDimensionCalibration.wrapDiameterMm, 86.4);
   assert.equal(payload.canonicalBodyProfile.samples[1]?.yMm, 88.4);
 });

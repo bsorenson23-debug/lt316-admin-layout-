@@ -396,17 +396,11 @@ export function buildBodyGeometrySourceHashPayload(
   if (!authorityInput?.canonicalBodyProfile || !authorityInput.canonicalDimensionCalibration) {
     return outlinePayload;
   }
-  const normalizedAuthorityPayload = buildBodyReferenceGlbSourcePayload({
+  return buildBodyReferenceGlbSourcePayload({
     bodyOutline: outline,
     canonicalBodyProfile: authorityInput.canonicalBodyProfile,
     canonicalDimensionCalibration: authorityInput.canonicalDimensionCalibration,
   });
-  return {
-    version: 2,
-    outline: outlinePayload,
-    canonicalBodyProfile: normalizedAuthorityPayload.canonicalBodyProfile,
-    canonicalDimensionCalibration: normalizedAuthorityPayload.canonicalDimensionCalibration,
-  };
 }
 
 export function createEmptyBodyGeometryContract(): BodyGeometryContract {

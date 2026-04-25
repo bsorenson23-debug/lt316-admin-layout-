@@ -13,11 +13,9 @@ import type {
 } from "../../types/tumblerItemLookup.ts";
 import {
   buildBodyReferenceGlbSourcePayload,
-  buildBodyReferenceGlbSourceSignature,
   type BodyReferenceGlbRenderMode,
 } from "../../lib/bodyReferenceGlbSource.ts";
 import {
-  buildBodyGeometrySourceHashPayload,
   createEmptyBodyGeometryContract,
   updateContractValidation,
   type BodyGeometryContract,
@@ -1664,30 +1662,14 @@ export async function generateBodyReferenceGlb(
     throw new Error("Approved BODY REFERENCE outline is required before generating a reviewed GLB.");
   }
 
-  const sourceHashPayload = buildBodyGeometrySourceHashPayload({
-    outline: input.bodyOutline,
-    canonicalBodyProfile: input.canonicalBodyProfile,
-    canonicalDimensionCalibration: input.canonicalDimensionCalibration,
-  }) ?? buildBodyReferenceGlbSourcePayload({
-    renderMode: input.renderMode ?? "body-cutout-qa",
-    matchedProfileId: input.matchedProfileId ?? null,
+  const sourceHashPayload = buildBodyReferenceGlbSourcePayload({
     bodyOutline: input.bodyOutline,
     canonicalBodyProfile: input.canonicalBodyProfile,
     canonicalDimensionCalibration: input.canonicalDimensionCalibration,
-    bodyColorHex: input.bodyColorHex ?? null,
-    rimColorHex: input.rimColorHex ?? null,
   });
   const sourceHash = hashJsonSha256Node(sourceHashPayload);
   const fileStem = buildBodyReferenceFileStem(input, sourceHash);
-  const generatedSourceSignature = buildBodyReferenceGlbSourceSignature({
-    renderMode: input.renderMode ?? "body-cutout-qa",
-    matchedProfileId: input.matchedProfileId ?? null,
-    bodyOutline: input.bodyOutline,
-    canonicalBodyProfile: input.canonicalBodyProfile,
-    canonicalDimensionCalibration: input.canonicalDimensionCalibration,
-    bodyColorHex: input.bodyColorHex ?? null,
-    rimColorHex: input.rimColorHex ?? null,
-  });
+  const generatedSourceSignature = stableStringifyForHash(sourceHashPayload);
   const built = buildV1BodyReferenceScene(input);
   const generatedGlb = await writeReviewedBodyReferenceGlb(`${fileStem}.glb`, built.scene);
   const bodyGeometryContract = buildV1BodyReferenceBodyGeometryContract({

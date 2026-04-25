@@ -11,6 +11,7 @@ import {
   hasFineTuneDraftChanges,
   insertFineTunePointOnSegment,
   nudgeOutlinePoint,
+  rebuildAcceptedBodyReferenceSnapshot,
   resolveFineTuneGlbReviewState,
   resolveOutlineBounds,
   resolveOutlinePointCount,
@@ -419,4 +420,79 @@ test("regenerated reviewed glb becomes fresh again after acceptance", () => {
 
   assert.equal(reviewState.status, "current");
   assert.equal(reviewState.canRequestGeneration, true);
+});
+
+test("accepted fine-tune rebuild updates approved canonical profile and calibration from the corrected outline", () => {
+  const baseline = rebuildAcceptedBodyReferenceSnapshot({
+    acceptedOutline: makeOutline(),
+    overallHeightMm: 80,
+    topMarginMm: 10,
+    bottomMarginMm: 20,
+    diameterMm: 60,
+    baseDiameterMm: 60,
+    fitDebug: makeFitDebug(),
+  });
+  const acceptedOutline = makeOutline();
+  acceptedOutline.points[1] = { ...acceptedOutline.points[1]!, x: 44 };
+  acceptedOutline.directContour = [
+    { x: 10, y: 10 },
+    { x: 44, y: 10 },
+    { x: 44, y: 60 },
+    { x: 10, y: 60 },
+    { x: 10, y: 10 },
+  ];
+
+  const rebuilt = rebuildAcceptedBodyReferenceSnapshot({
+    acceptedOutline,
+    overallHeightMm: 80,
+    topMarginMm: 10,
+    bottomMarginMm: 20,
+    diameterMm: 60,
+    baseDiameterMm: 60,
+    fitDebug: makeFitDebug(),
+  });
+
+  assert.ok(baseline);
+  assert.ok(rebuilt);
+  assert.equal(baseline!.readyForReviewedGeneration, true);
+  assert.equal(rebuilt!.readyForReviewedGeneration, true);
+  assert.equal(rebuilt!.approvedCanonicalBodyProfile?.samples.length, 96);
+  assert.notEqual(
+    rebuilt!.approvedCanonicalBodyProfile?.svgPath,
+    baseline!.approvedCanonicalBodyProfile?.svgPath,
+  );
+  assert.notDeepEqual(
+    rebuilt!.approvedCanonicalDimensionCalibration,
+    baseline!.approvedCanonicalDimensionCalibration,
+  );
+  assert.notEqual(rebuilt!.nextDiameterMm, baseline!.nextDiameterMm);
+  assert.ok(Array.isArray(rebuilt!.approvedBodyReferenceWarnings));
+  assert.ok(rebuilt!.approvedBodyReferenceQa);
+  assert.equal(rebuilt!.nextDiameterMm, 88);
+  assert.equal(rebuilt!.nextPrintHeightMm, 50);
+});
+
+test("accepted fine-tune rebuild marks reviewed generation unavailable when canonical rebuild fails", () => {
+  const rebuilt = rebuildAcceptedBodyReferenceSnapshot({
+    acceptedOutline: {
+      ...makeOutline(),
+      points: [{ ...makeOutline().points[0]! }],
+      directContour: [{ x: 10, y: 10 }],
+    },
+    overallHeightMm: 0,
+    topMarginMm: 0,
+    bottomMarginMm: 0,
+    diameterMm: 0,
+    baseDiameterMm: 0,
+    fitDebug: null,
+  });
+
+  assert.ok(rebuilt);
+  assert.equal(rebuilt!.readyForReviewedGeneration, false);
+  assert.equal(rebuilt!.approvedCanonicalBodyProfile, null);
+  assert.equal(rebuilt!.approvedCanonicalDimensionCalibration, null);
+  assert.equal(rebuilt!.approvedBodyReferenceQa, null);
+  assert.deepEqual(rebuilt!.approvedBodyReferenceWarnings, [
+    "Accepted BODY REFERENCE could not rebuild canonical profile and calibration from the corrected outline.",
+  ]);
 });

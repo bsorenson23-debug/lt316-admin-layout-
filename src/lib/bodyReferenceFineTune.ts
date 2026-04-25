@@ -1,8 +1,15 @@
-import type { EditableBodyOutline } from "../types/productTemplate.ts";
+import type {
+  BodyReferenceQAContract,
+  CanonicalBodyProfile,
+  CanonicalDimensionCalibration,
+  EditableBodyOutline,
+} from "../types/productTemplate.ts";
 import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
 import { stableStringifyForHash } from "./hashSha256.ts";
 import { resolveBodyReferenceGlbReviewState } from "./bodyReferenceGlbSource.ts";
+import { deriveBodyReferencePipeline } from "./bodyReferencePipeline.ts";
 import {
+  deriveDimensionsFromEditableBodyOutline,
   insertEditableOutlinePoint,
   rebuildEditableBodyOutline,
   removeEditableOutlinePoint,
@@ -113,6 +120,109 @@ function resolveBoundsFromPoints(points: Array<{ x: number; y: number }> | undef
     maxY: round2(maxY),
     width: round2(Math.max(0, maxX - minX)),
     height: round2(Math.max(0, maxY - minY)),
+  };
+}
+
+export interface RebuildAcceptedBodyReferenceSnapshotArgs {
+  acceptedOutline: EditableBodyOutline | null | undefined;
+  overallHeightMm: number;
+  topMarginMm: number;
+  bottomMarginMm: number;
+  diameterMm: number;
+  baseDiameterMm?: number | null;
+  handleArcDeg?: number;
+  fitDebug?: TumblerItemLookupFitDebug | null;
+}
+
+export interface RebuildAcceptedBodyReferenceSnapshotResult {
+  approvedBodyOutline: EditableBodyOutline;
+  approvedCanonicalBodyProfile: CanonicalBodyProfile | null;
+  approvedCanonicalDimensionCalibration: CanonicalDimensionCalibration | null;
+  approvedBodyReferenceQa: BodyReferenceQAContract | null;
+  approvedBodyReferenceWarnings: string[];
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+  nextTopMarginMm: number;
+  nextBottomMarginMm: number;
+  nextPrintHeightMm: number;
+  nextDiameterMm: number;
+  readyForReviewedGeneration: boolean;
+}
+
+const ACCEPTED_BODY_REFERENCE_REBUILD_WARNING =
+  "Accepted BODY REFERENCE could not rebuild canonical profile and calibration from the corrected outline.";
+
+export function rebuildAcceptedBodyReferenceSnapshot(
+  args: RebuildAcceptedBodyReferenceSnapshotArgs,
+): RebuildAcceptedBodyReferenceSnapshotResult | null {
+  const approvedBodyOutline = cloneOutline(args.acceptedOutline);
+  if (!approvedBodyOutline) {
+    return null;
+  }
+
+  const derived = deriveDimensionsFromEditableBodyOutline(approvedBodyOutline);
+  const nextTopMarginMm =
+    typeof derived.bodyTopFromOverallMm === "number"
+      ? round2(Math.max(0, derived.bodyTopFromOverallMm))
+      : round2(Math.max(0, args.topMarginMm));
+  const nextBodyBottomDefault = round2(
+    Math.max(nextTopMarginMm + 1, args.overallHeightMm - Math.max(0, args.bottomMarginMm)),
+  );
+  const bodyBottomFromOverallMm =
+    typeof derived.bodyBottomFromOverallMm === "number"
+      ? round2(Math.max(nextTopMarginMm + 1, derived.bodyBottomFromOverallMm))
+      : nextBodyBottomDefault;
+  const nextBottomMarginMm =
+    args.overallHeightMm > 0
+      ? round2(Math.max(0, args.overallHeightMm - bodyBottomFromOverallMm))
+      : round2(Math.max(0, args.bottomMarginMm));
+  const nextPrintHeightMm = round2(Math.max(1, bodyBottomFromOverallMm - nextTopMarginMm));
+  const nextDiameterMm =
+    typeof derived.diameterMm === "number" && derived.diameterMm > 0
+      ? round2(derived.diameterMm)
+      : round2(Math.max(0, args.diameterMm));
+
+  const rebuiltPipeline = deriveBodyReferencePipeline({
+    outline: approvedBodyOutline,
+    overallHeightMm: args.overallHeightMm,
+    bodyTopFromOverallMm: nextTopMarginMm,
+    bodyBottomFromOverallMm,
+    wrapDiameterMm: nextDiameterMm,
+    baseDiameterMm: args.baseDiameterMm ?? nextDiameterMm,
+    handleArcDeg: args.handleArcDeg,
+    fitDebug: args.fitDebug ?? null,
+  });
+
+  if (!rebuiltPipeline) {
+    return {
+      approvedBodyOutline,
+      approvedCanonicalBodyProfile: null,
+      approvedCanonicalDimensionCalibration: null,
+      approvedBodyReferenceQa: null,
+      approvedBodyReferenceWarnings: [ACCEPTED_BODY_REFERENCE_REBUILD_WARNING],
+      bodyTopFromOverallMm: nextTopMarginMm,
+      bodyBottomFromOverallMm,
+      nextTopMarginMm,
+      nextBottomMarginMm,
+      nextPrintHeightMm,
+      nextDiameterMm,
+      readyForReviewedGeneration: false,
+    };
+  }
+
+  return {
+    approvedBodyOutline,
+    approvedCanonicalBodyProfile: rebuiltPipeline.canonicalBodyProfile,
+    approvedCanonicalDimensionCalibration: rebuiltPipeline.canonicalDimensionCalibration,
+    approvedBodyReferenceQa: rebuiltPipeline.qa,
+    approvedBodyReferenceWarnings: [...rebuiltPipeline.warnings],
+    bodyTopFromOverallMm: nextTopMarginMm,
+    bodyBottomFromOverallMm,
+    nextTopMarginMm,
+    nextBottomMarginMm,
+    nextPrintHeightMm,
+    nextDiameterMm,
+    readyForReviewedGeneration: true,
   };
 }
 
