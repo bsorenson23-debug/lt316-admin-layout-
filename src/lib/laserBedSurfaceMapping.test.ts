@@ -152,7 +152,8 @@ test("stale mapping signature warns and freshness comparison reports stale", () 
   assert.equal(freshness.reason, "signature-mismatch");
   assert.equal(validation.status, "warn");
   assert.equal(validation.freshness, "stale");
-  assert.match(validation.warnings.join(" "), /mapping is stale relative to the current body geometry/i);
+  assert.match(validation.warnings.join(" "), /Mapping stale/i);
+  assert.match(validation.warnings.join(" "), /current body source changed/i);
 });
 
 test("mapping freshness falls back to source lineage when no saved signature exists", () => {

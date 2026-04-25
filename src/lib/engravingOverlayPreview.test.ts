@@ -135,7 +135,8 @@ test("stale mapping warns and disables overlay preview", () => {
   assert.equal(state.freshness, "stale");
   assert.equal(state.enabled, false);
   assert.equal(state.status, "warn");
-  assert.match(state.warnings.join(" "), /mapping is stale/i);
+  assert.match(state.warnings.join(" "), /Mapping stale/i);
+  assert.match(state.disabledReason ?? "", /current body source changed/i);
 });
 
 test("missing dimensions disables overlay preview", () => {
@@ -176,7 +177,7 @@ test("overlay preview is only visible in wrap-export intent", () => {
   assert.equal(item.visible, false);
   assert.equal(state.enabled, false);
   assert.equal(state.isBodyCutoutQaProof, false);
-  assert.match(state.warnings.join(" "), /WRAP \/ EXPORT/i);
+  assert.match(state.warnings.join(" "), /Switch to WRAP \/ EXPORT/i);
 });
 
 test("moving artwork changes overlay descriptors without changing body-source lineage", () => {
@@ -215,5 +216,5 @@ test("missing placements return an empty disabled summary", () => {
   assert.equal(state.visibleCount, 0);
   assert.equal(state.enabled, false);
   assert.equal(state.isBodyCutoutQaProof, false);
-  assert.match(state.disabledReason ?? "", /No saved laser-bed artwork placements yet/i);
+  assert.match(state.disabledReason ?? "", /No saved artwork placement yet/i);
 });

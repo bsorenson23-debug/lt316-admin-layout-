@@ -303,9 +303,9 @@ export function validateLaserBedSurfaceMapping(
     glbSourceHash: mapping.glbSourceHash,
   });
   if (freshnessResult.freshness === "stale") {
-    warnings.push("Saved WRAP / EXPORT mapping is stale relative to the current body geometry.");
+    warnings.push("Mapping stale. Saved placement is preserved, but the current body source changed.");
   } else if (freshnessResult.freshness === "unknown") {
-    warnings.push("Saved WRAP / EXPORT mapping freshness cannot be confirmed yet.");
+    warnings.push("Saved placement exists, but mapping freshness is not confirmed for the current body source.");
   }
 
   for (const placement of args.placements ?? []) {

@@ -68,13 +68,13 @@ export function getWrapExportPreviewStatusLabel(
 ): string {
   switch (status) {
     case "pass":
-      return "PASS";
+      return "WRAP / EXPORT ready";
     case "warn":
-      return "WARN";
+      return "WRAP / EXPORT needs review";
     case "fail":
-      return "FAIL";
+      return "WRAP / EXPORT blocked";
     default:
-      return "UNKNOWN";
+      return "WRAP / EXPORT status unknown";
   }
 }
 
@@ -83,15 +83,15 @@ export function getWrapExportMappingStatusLabel(
 ): string {
   switch (status) {
     case "ready":
-      return "Ready";
+      return "Mapping ready";
     case "missing-dimensions":
-      return "Missing dimensions";
+      return "Mapping blocked";
     case "stale-geometry":
-      return "Stale reviewed geometry";
+      return "Mapping stale";
     case "no-reviewed-glb":
-      return "Preview only - no reviewed GLB";
+      return "Overlay preview unavailable";
     default:
-      return "Unknown";
+      return "Mapping unknown";
   }
 }
 
@@ -148,21 +148,21 @@ export function buildWrapExportPreviewState(
   const errors: string[] = [];
 
   if (!wrapDiameterMm || !wrapWidthMm) {
-    errors.push("WRAP / EXPORT is blocked until wrap diameter and wrap width are available.");
+    errors.push("WRAP / EXPORT blocked until wrap diameter and wrap width are available.");
   }
 
   if (!hasBodyBounds) {
-    warnings.push("WRAP / EXPORT can preview saved artwork, but exact viewer agreement is waiting on body bounds.");
+    warnings.push("Saved placement can preview, but exact body agreement needs body bounds.");
   }
 
   if (freshness === "unknown") {
-    warnings.push("WRAP / EXPORT preview is available, but saved placement freshness cannot be confirmed against the current reviewed geometry yet.");
+    warnings.push("Saved placement exists, but mapping freshness is not confirmed for the current body source.");
   } else if (freshness === "stale") {
-    warnings.push("Saved laser-bed millimeter placement stays authoritative, but exact viewer agreement is stale. Regenerate the reviewed BODY CUTOUT QA GLB after body-geometry changes.");
+    warnings.push("Mapping stale. Saved placement is preserved, but the current body source changed. Refresh the reviewed body source before trusting placement preview.");
   }
 
   if (!reviewedGeneratedGlb) {
-    warnings.push("WRAP / EXPORT can still preview saved artwork, but exact placement waits for a reviewed BODY CUTOUT QA GLB.");
+    warnings.push("Overlay preview unavailable. Generate a reviewed body GLB and save artwork placement before WRAP / EXPORT preview.");
   }
 
   if (
@@ -170,7 +170,7 @@ export function buildWrapExportPreviewState(
     typeof printableBottomMm !== "number" ||
     typeof printableHeightMm !== "number"
   ) {
-    warnings.push("Printable top/bottom bounds are unavailable, so WRAP / EXPORT is using the current body span only.");
+    warnings.push("Printable bounds are unavailable. WRAP / EXPORT is using the current body span only.");
   }
 
   const readyForPreview = errors.length === 0;

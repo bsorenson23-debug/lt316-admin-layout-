@@ -102,25 +102,25 @@ function resolveOverlayDisabledReason(args: {
   errors: string[];
 }): string | undefined {
   if (args.totalCount === 0) {
-    return "No saved laser-bed artwork placements yet. WRAP / EXPORT will show the 3D overlay after artwork is saved in millimeter space.";
+    return "No saved artwork placement yet. Place artwork on the workspace, then save the template to persist WRAP / EXPORT placement.";
   }
   if (args.previewMode !== "wrap-export") {
-    return "3D engraving overlay preview only renders in WRAP / EXPORT.";
+    return "Overlay preview unavailable. Switch to WRAP / EXPORT to review saved artwork placement.";
   }
   if (!args.mappingStateReadyForPreview) {
-    return "3D engraving overlay preview waits for WRAP / EXPORT mapping dimensions.";
+    return "Overlay preview unavailable. Generate a reviewed body GLB and save artwork placement before WRAP / EXPORT preview.";
   }
   if (args.freshness === "stale") {
-    return "3D engraving overlay preview is using saved placement, but viewer agreement is stale. Regenerate the reviewed BODY CUTOUT QA GLB after body-geometry changes.";
+    return "Mapping stale. Saved placement is preserved, but the current body source changed.";
   }
   if (args.freshness === "unknown") {
-    return "3D engraving overlay preview waits until mapping freshness can be confirmed.";
+    return "Overlay preview unavailable. Mapping freshness is not confirmed for the current body source.";
   }
   if (args.visibleCount === 0 && args.outsidePrintableAreaCount > 0) {
-    return "3D engraving overlay preview is hidden because every saved placement sits outside the printable wrap area.";
+    return "Overlay preview unavailable. Every saved placement sits outside the printable wrap area.";
   }
   if (args.visibleCount === 0 && args.errors.length > 0) {
-    return "3D engraving overlay preview is hidden until saved artwork placement issues are resolved.";
+    return "Overlay preview unavailable. Resolve saved artwork placement issues first.";
   }
   return undefined;
 }
@@ -165,13 +165,13 @@ export function buildEngravingOverlayPreviewItems(
     const warnings = [...normalizedIssues.warnings];
 
     if (args.previewMode !== "wrap-export") {
-      warnings.push("3D engraving overlay preview only renders in WRAP / EXPORT.");
+      warnings.push("Overlay preview unavailable. Switch to WRAP / EXPORT to review saved artwork placement.");
     }
     if (mappingState.freshness !== "fresh") {
       warnings.push(
         mappingState.freshness === "stale"
-          ? "3D engraving overlay preview is hidden because the saved mapping is stale relative to current body geometry."
-          : "3D engraving overlay preview is hidden because mapping freshness is unknown.",
+          ? "Mapping stale. Saved placement is preserved, but the current body source changed."
+          : "Overlay preview unavailable. Mapping freshness is not confirmed for the current body source.",
       );
     }
 
@@ -224,7 +224,7 @@ export function buildEngravingOverlayPreviewState(
   )).length;
   const warnings = normalizeMessages([
     ...(args.previewMode !== "wrap-export"
-      ? ["3D engraving overlay preview only renders in WRAP / EXPORT."]
+      ? ["Overlay preview unavailable. Switch to WRAP / EXPORT to review saved artwork placement."]
       : []),
     ...mappingState.warnings,
     ...items.flatMap((item) => item.warnings),
