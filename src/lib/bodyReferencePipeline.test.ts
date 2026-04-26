@@ -145,7 +145,7 @@ function sampleByNearestY(points: EditableBodyOutlinePoint[], yMm: number): Edit
   return [...points].sort((a, b) => Math.abs(a.y - yMm) - Math.abs(b.y - yMm))[0];
 }
 
-test("Stanley golden fixture keeps body bounds authoritative while preserving ring diagnostics", () => {
+test("Stanley golden fixture keeps body bounds authoritative while seeding engravable top from lower ring", () => {
   const outline = buildStanleyOutline();
   const pipeline = deriveBodyReferencePipeline({
     outline,
@@ -164,9 +164,9 @@ test("Stanley golden fixture keeps body bounds authoritative while preserving ri
   assert.equal(pipeline?.qa.pass, true);
   assert.deepEqual(pipeline?.warnings, []);
   assert.ok(Math.abs((pipeline?.canonicalDimensionCalibration.frontVisibleWidthMm ?? 0) - 99.82) <= 0.75);
-  assert.equal(pipeline?.printableSurfaceResolution.printableSurfaceContract.printableTopMm, 28);
+  assert.equal(pipeline?.printableSurfaceResolution.printableSurfaceContract.printableTopMm, 73.7);
   assert.equal(pipeline?.printableSurfaceResolution.printableSurfaceContract.printableBottomMm, 244);
-  assert.equal(pipeline?.printableSurfaceResolution.printableSurfaceContract.printableHeightMm, 216);
+  assert.equal(pipeline?.printableSurfaceResolution.printableSurfaceContract.printableHeightMm, 170.3);
   assert.deepEqual(
     pipeline?.printableSurfaceResolution.printableSurfaceContract.axialExclusions,
     [
@@ -174,7 +174,7 @@ test("Stanley golden fixture keeps body bounds authoritative while preserving ri
       { kind: "rim-ring", startMm: 62.8, endMm: 73.7 },
     ],
   );
-  assert.equal(pipeline?.printableSurfaceResolution.topBoundarySource, "body-top-fallback");
+  assert.equal(pipeline?.printableSurfaceResolution.topBoundarySource, "rim-ring");
   assert.equal(pipeline?.printableSurfaceResolution.automaticDetectionWeak, false);
 
   const firstRows = pipeline?.canonicalBodyProfile.samples.slice(0, 8) ?? [];

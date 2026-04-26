@@ -2,6 +2,8 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
+import type { PlacedItem } from "@/types/admin";
 import type {
   BodyReferenceQAContract,
   CanonicalBodyProfile,
@@ -11,7 +13,12 @@ import type {
   TumblerMapping,
 } from "@/types/productTemplate";
 import type { AutoDetectResult } from "@/lib/autoDetect";
-import type { TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
+import type { PrintableSurfaceContract } from "@/types/printableSurface";
+import type {
+  DimensionAuthority,
+  TumblerItemLookupDimensions,
+  TumblerItemLookupResponse,
+} from "@/types/tumblerItemLookup";
 import {
   deriveTumblerPreviewModelState,
   type PreviewModelMode,
@@ -21,16 +28,33 @@ import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
 import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "@/data/rotaryPlacementPresets";
 import { saveTemplate, updateTemplate } from "@/lib/templateStorage";
-import { generateThumbnail } from "@/lib/generateThumbnail";
+import {
+  DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL,
+  generateThumbnail,
+} from "@/lib/generateThumbnail";
 import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHandleArcDeg } from "@/data/tumblerProfiles";
 import { getDefaultLaserSettings } from "@/lib/scopedDefaults";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import {
   buildTemplateCreateWorkflowSteps,
   deriveTemplateCreateWorkflowStep,
+  getTemplateBodyCutoutQaGlbLifecycle,
+  getTemplateBodyReferenceV2OperatorState,
+  getTemplateCreateGenerateGateReason,
+  getTemplateCreateNextActionHint,
   getTemplateCreateSaveGateReason,
   getTemplateCreateSourceReadiness,
+  isTemplateCreateReviewFlowProductType,
 } from "@/lib/templateCreateFlow";
+import {
+  formatTemplateCreateDisabledActionLabels,
+  getTemplateCreateLookupActionReason,
+  getTemplateCreatePreviewActionReason,
+  getTemplateCreateReviewAcceptActionReason,
+  getTemplateCreateV2SeedActionReason,
+  groupTemplateCreateDisabledActionReasons,
+  resolveTemplateCreateBlockedActionReason,
+} from "@/lib/templateCreateActionReasons";
 import {
   BODY_REFERENCE_CONTRACT_VERSION,
   deriveBodyReferencePipeline,
@@ -38,16 +62,17 @@ import {
 import {
   cloneEditableBodyOutline,
   createEditableBodyOutline,
-  deriveDimensionsFromEditableBodyOutline,
 } from "@/lib/editableBodyOutline";
 import {
   buildOutlineGeometrySignature,
   cloneOutline,
   hasFineTuneDraftChanges,
+  rebuildAcceptedBodyReferenceSnapshot,
   resolveFineTuneGlbReviewState,
   resolveOutlineBounds,
   resolveOutlinePointCount,
 } from "@/lib/bodyReferenceFineTune";
+import { summarizeBodyReferenceFineTuneLifecycle } from "@/lib/bodyReferenceFineTuneLifecycle";
 import { buildBodyReferenceSvgQualityReportFromOutline } from "@/lib/bodyReferenceSvgQuality";
 import {
   getBodyReferencePreviewModeHint,
@@ -55,15 +80,87 @@ import {
   getDrinkwareGlbStatusLabel,
   isBodyCutoutQaPreviewAvailable,
 } from "@/lib/bodyReferencePreviewIntent";
-import { buildBodyReferenceGlbSourceSignature } from "@/lib/bodyReferenceGlbSource";
+import { buildBodyReferenceGlbSourcePayload } from "@/lib/bodyReferenceGlbSource";
+import { resolveBodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
+import {
+  resolveDetectedLowerSilverSeamMm,
+  resolveEngravableZoneGuideAuthority,
+} from "@/lib/engravableGuideAuthority";
 import { parseBodyReferenceGlbResponse } from "@/lib/adminApi.schema";
 import type { BodyGeometryContract } from "@/lib/bodyGeometryContract";
 import { inferGeneratedModelStatusFromSource } from "@/lib/generatedModelUrl";
+import {
+  buildLaserBedSurfaceMappingSignature,
+  type LaserBedArtworkPlacement,
+  type LaserBedSurfaceMapping,
+  validateLaserBedSurfaceMapping,
+} from "@/lib/laserBedSurfaceMapping";
+import {
+  summarizeAppearanceReferenceLayers,
+  type ProductAppearanceReferenceLayer,
+} from "@/lib/productAppearanceReferenceLayers";
 import {
   buildWrapExportPreviewState,
   getWrapExportMappingStatusLabel,
   getWrapExportPreviewStatusLabel,
 } from "@/lib/wrapExportPreviewState";
+import {
+  summarizeWrapExportProductionReadiness,
+} from "@/lib/wrapExportProductionValidation";
+import {
+  getWrapExportAppearanceReferenceNote,
+  getWrapExportAuthorityNote,
+  getWrapExportExportAuthorityLabel,
+  getWrapExportMappingFreshnessLabel,
+  getWrapExportNoAppearanceReferenceMessage,
+  getWrapExportNoSavedPlacementMessage,
+  getWrapExportOperatorWarningNote,
+  getWrapExportOverlayPreviewNote,
+  getWrapExportRegenerateNote,
+  getWrapExportSummarySubtitle,
+  getWrapExportSummaryTitle,
+} from "@/lib/wrapExportCopy";
+import {
+  dedupeTemplateCreateDisplayMessages,
+  shouldAutoOpenTemplateCreateDiagnostics,
+  shouldShowTemplateCreateDiagnostics,
+} from "@/lib/templateCreateDisplayDensity";
+import {
+  buildEngravingOverlayPreviewState,
+  ENGRAVING_OVERLAY_PREVIEW_MATERIAL_LABEL,
+  ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN,
+} from "@/lib/engravingOverlayPreview";
+import { hashJsonSha256, stableStringifyForHash } from "@/lib/hashSha256";
+import {
+  acceptBodyReferenceV2Draft,
+  buildBodyReferenceV2GenerationReadinessFromDraft,
+  createEmptyBodyReferenceV2Draft,
+  resetBodyReferenceV2Draft,
+  seedBodyLeftOutlineFromApprovedBodyOutline,
+  seedCenterlineFromApprovedBodyOutline,
+  setBodyLeftOutline,
+  setCenterlineAxis,
+  summarizeBodyReferenceV2CaptureReadiness,
+} from "@/lib/bodyReferenceV2Capture";
+import {
+  summarizeBodyReferenceV2Draft,
+  type BodyReferenceV2Draft,
+} from "@/lib/bodyReferenceV2Layers";
+import {
+  summarizeBodyReferenceV2ScaleMirrorPreview,
+} from "@/lib/bodyReferenceV2ScaleMirror";
+import { summarizeProductDimensionAuthority } from "@/lib/productDimensionAuthority";
+import type { BodyHeightAuthorityInput, LookupBodyHeightSource } from "@/lib/bodyHeightAuthority";
+import {
+  buildBodyReferenceV2GuidanceMessages,
+  formatBodyReferenceV2ScaleSourceLabel,
+  getBodyReferenceV2AcceptDraftReason,
+  getBodyReferenceV2CurrentQaSourceLabel,
+  getBodyReferenceV2GenerateGateReason,
+  getBodyReferenceV2ReferenceOnlyNote,
+  getBodyReferenceV2SourceAuthorityNote,
+  getBodyReferenceV2WrapExportDistinctionNote,
+} from "@/lib/bodyReferenceV2Guidance";
 import { BodyReferenceFineTuneEditor } from "./BodyReferenceFineTuneEditor";
 import { FileDropZone } from "./shared/FileDropZone";
 import { TumblerMappingWizard } from "./TumblerMappingWizard";
@@ -81,6 +178,8 @@ interface Props {
   onSave: (template: ProductTemplate) => void;
   onCancel: () => void;
   editingTemplate?: ProductTemplate;
+  workspaceArtworkPlacements?: LaserBedArtworkPlacement[] | null;
+  surfaceMode?: "modal" | "page";
 }
 
 function round2(n: number): number {
@@ -91,9 +190,148 @@ function cloneSerializable<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function resolveAxialBandBoundaryMm(
+  contract: PrintableSurfaceContract | null | undefined,
+  kind: "lid" | "rim-ring",
+  boundary: "start" | "end",
+): number | null {
+  const band = contract?.axialExclusions.find((candidate) => candidate.kind === kind);
+  const value = band?.[boundary === "start" ? "startMm" : "endMm"];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function buildEffectiveBodyReferenceV2Draft(args: {
+  draft?: BodyReferenceV2Draft | null;
+  sourceImageUrl?: string;
+  scaleCalibration: BodyReferenceV2Draft["scaleCalibration"];
+}): BodyReferenceV2Draft {
+  const geometryDraft = args.draft ?? createEmptyBodyReferenceV2Draft();
+  return acceptBodyReferenceV2Draft({
+    sourceImageUrl: args.sourceImageUrl,
+    centerline: geometryDraft.centerline ? cloneSerializable(geometryDraft.centerline) : null,
+    layers: cloneSerializable(geometryDraft.layers ?? []),
+    blockedRegions: cloneSerializable(geometryDraft.blockedRegions ?? []),
+    scaleCalibration: cloneSerializable(args.scaleCalibration),
+  });
+}
+
+function resolveLookupBodyHeightSource(
+  dimensions: TumblerItemLookupDimensions | null | undefined,
+): LookupBodyHeightSource | undefined {
+  if (!dimensions) return undefined;
+  const bodyHeightMm = dimensions.bodyHeightMm;
+  const usableHeightMm = dimensions.usableHeightMm;
+  if (typeof bodyHeightMm !== "number" || !Number.isFinite(bodyHeightMm) || bodyHeightMm <= 0) {
+    return typeof usableHeightMm === "number" && Number.isFinite(usableHeightMm) && usableHeightMm > 0
+      ? "usable-height"
+      : undefined;
+  }
+  if (
+    typeof usableHeightMm === "number" &&
+    Number.isFinite(usableHeightMm) &&
+    Math.abs(usableHeightMm - bodyHeightMm) <= 0.05
+  ) {
+    return "usable-height";
+  }
+  return "unknown";
+}
+
+const ENGRAVING_OVERLAY_TEXTURE_PX_PER_MM = 4;
+const ENGRAVING_OVERLAY_TINT = "#d7dde6";
+const TEMPLATE_CREATE_DEBUG_DETAILS_ENABLED =
+  process.env.NEXT_PUBLIC_ADMIN_DEBUG === "1" ||
+  process.env.NEXT_PUBLIC_SHOW_BODY_CONTRACT_INSPECTOR === "1";
+
+function buildFallbackOverlayBounds(widthMm: number, heightMm: number) {
+  return {
+    x: 0,
+    y: 0,
+    width: Math.max(1, round2(widthMm)),
+    height: Math.max(1, round2(heightMm)),
+  };
+}
+
+function buildOverlayPreviewPlacedItem(args: {
+  assetId: string;
+  name: string;
+  xMm: number;
+  yMm: number;
+  widthMm: number;
+  heightMm: number;
+  rotationDeg: number;
+  visible: boolean;
+  placement: LaserBedArtworkPlacement;
+}): PlacedItem | null {
+  const snapshot = args.placement.assetSnapshot;
+  const svgText = snapshot?.svgText?.trim();
+  const sourceSvgText = snapshot?.sourceSvgText?.trim() ?? svgText;
+  if (!svgText || !sourceSvgText) return null;
+
+  const documentBounds = snapshot?.documentBounds ?? buildFallbackOverlayBounds(args.widthMm, args.heightMm);
+  const artworkBounds = snapshot?.artworkBounds ?? documentBounds;
+
+  return {
+    id: args.placement.id,
+    assetId: args.assetId,
+    name: args.name,
+    svgText,
+    sourceSvgText,
+    documentBounds,
+    artworkBounds,
+    x: args.xMm,
+    y: args.yMm,
+    width: args.widthMm,
+    height: args.heightMm,
+    rotation: args.rotationDeg,
+    defaults: {
+      x: args.xMm,
+      y: args.yMm,
+      width: args.widthMm,
+      height: args.heightMm,
+      rotation: args.rotationDeg,
+    },
+    visible: args.visible,
+  };
+}
+
+async function rasterizeOverlayTexture(item: PlacedItem, tintColor: string): Promise<HTMLCanvasElement | null> {
+  const svgText = item.svgText.trim();
+  if (!svgText) return null;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(item.width * ENGRAVING_OVERLAY_TEXTURE_PX_PER_MM));
+  canvas.height = Math.max(1, Math.ceil(item.height * ENGRAVING_OVERLAY_TEXTURE_PX_PER_MM));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  const blob = new Blob([svgText], { type: "image/svg+xml" });
+  const blobUrl = URL.createObjectURL(blob);
+
+  await new Promise<void>((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = "source-in";
+      ctx.fillStyle = tintColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = "source-over";
+      URL.revokeObjectURL(blobUrl);
+      resolve();
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(blobUrl);
+      resolve();
+    };
+    img.src = blobUrl;
+  });
+
+  return canvas;
+}
+
 function formatBoundsLabel(bounds: ReturnType<typeof resolveOutlineBounds>): string {
   if (!bounds) return "n/a";
-  return `${bounds.width} x ${bounds.height} mm`;
+  return `${bounds.width} x ${bounds.height} contour units`;
 }
 
 function formatShortHash(value: string | null | undefined): string {
@@ -119,6 +357,70 @@ function formatBodyBoundsMetric(
 ): string {
   if (!bounds) return "n/a";
   return `${round2(bounds.width)} × ${round2(bounds.height)} × ${round2(bounds.depth)} mm`;
+}
+
+function buildWrapExportSurfaceMapping(
+  contract: BodyGeometryContract | null | undefined,
+  frontCenterAngleDeg?: number,
+): LaserBedSurfaceMapping | null {
+  if (!contract) return null;
+
+  const wrapDiameterMm =
+    typeof contract.dimensionsMm.wrapDiameterMm === "number" && Number.isFinite(contract.dimensionsMm.wrapDiameterMm)
+      ? round2(contract.dimensionsMm.wrapDiameterMm)
+      : undefined;
+  const wrapWidthMm =
+    typeof contract.dimensionsMm.wrapWidthMm === "number" && Number.isFinite(contract.dimensionsMm.wrapWidthMm)
+      ? round2(contract.dimensionsMm.wrapWidthMm)
+      : undefined;
+  const printableTopMm =
+    typeof contract.dimensionsMm.printableTopMm === "number" && Number.isFinite(contract.dimensionsMm.printableTopMm)
+      ? round2(contract.dimensionsMm.printableTopMm)
+      : undefined;
+  const printableBottomMm =
+    typeof contract.dimensionsMm.printableBottomMm === "number" && Number.isFinite(contract.dimensionsMm.printableBottomMm)
+      ? round2(contract.dimensionsMm.printableBottomMm)
+      : undefined;
+  const printableHeightMm =
+    typeof printableTopMm === "number" &&
+    typeof printableBottomMm === "number" &&
+    printableBottomMm > printableTopMm
+      ? round2(printableBottomMm - printableTopMm)
+      : undefined;
+  const expectedBodyWidthMm =
+    typeof contract.dimensionsMm.expectedBodyWidthMm === "number" && Number.isFinite(contract.dimensionsMm.expectedBodyWidthMm)
+      ? round2(contract.dimensionsMm.expectedBodyWidthMm)
+      : undefined;
+  const expectedBodyHeightMm =
+    typeof contract.dimensionsMm.expectedBodyHeightMm === "number" && Number.isFinite(contract.dimensionsMm.expectedBodyHeightMm)
+      ? round2(contract.dimensionsMm.expectedBodyHeightMm)
+      : undefined;
+  const bodyBounds = contract.dimensionsMm.bodyBounds;
+
+  return {
+    mode: "cylindrical-v1",
+    wrapDiameterMm,
+    wrapWidthMm,
+    printableTopMm,
+    printableBottomMm,
+    printableHeightMm,
+    expectedBodyWidthMm,
+    expectedBodyHeightMm,
+    bodyBounds: bodyBounds
+      ? {
+          width: round2(bodyBounds.width),
+          height: round2(bodyBounds.height),
+          depth: round2(bodyBounds.depth),
+        }
+      : undefined,
+    scaleSource: contract.dimensionsMm.scaleSource,
+    frontCenterAngleDeg:
+      typeof frontCenterAngleDeg === "number" && Number.isFinite(frontCenterAngleDeg)
+        ? round2(frontCenterAngleDeg)
+        : undefined,
+    sourceHash: contract.source.hash,
+    glbSourceHash: contract.glb.sourceHash,
+  };
 }
 
 /** Convert an image file to a data URL (max 480px on longest side for face photos) */
@@ -188,6 +490,10 @@ function getLookupModeLabel(mode: TumblerItemLookupResponse["mode"]): string {
 
 function getLookupSourceLabel(result: TumblerItemLookupResponse): string | null {
   const sourceUrl = result.resolvedUrl ?? result.sources[0]?.url ?? null;
+  return getLookupSourceLabelFromUrl(sourceUrl);
+}
+
+function getLookupSourceLabelFromUrl(sourceUrl: string | null | undefined): string | null {
   if (!sourceUrl) return null;
   try {
     const host = new URL(sourceUrl).hostname.replace(/^www\./i, "");
@@ -209,6 +515,55 @@ function formatLookupMeasurement(value: number | null | undefined): string | nul
     : null;
 }
 
+function formatLookupSize(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? `${round2(value)} oz`
+    : "n/a";
+}
+
+function formatLookupAuthority(value: DimensionAuthority | null | undefined): string {
+  switch (value) {
+    case "diameter-primary":
+      return "Diameter primary";
+    case "body-diameter-primary":
+      return "Body diameter primary";
+    case "wrap-diameter-primary":
+      return "Wrap diameter primary";
+    case "manual-override":
+      return "Manual override";
+    default:
+      return "Unknown";
+  }
+}
+
+function formatLookupVariantStatus(
+  value: ReturnType<typeof summarizeProductDimensionAuthority>["variantStatus"],
+): string {
+  switch (value) {
+    case "exact":
+      return "Exact variant";
+    case "generic":
+      return "Generic variant";
+    case "ambiguous":
+      return "Ambiguous variant";
+    case "mismatch":
+      return "Variant mismatch";
+    default:
+      return "Variant unknown";
+  }
+}
+
+function buildLookupTemplateName(result: TumblerItemLookupResponse, fallback: string): string {
+  const parts: string[] = [];
+  if (result.brand) parts.push(result.brand);
+  if (result.model) parts.push(result.model);
+  const normalizedModel = result.model?.toLowerCase() ?? "";
+  if (result.capacityOz && !normalizedModel.includes(`${result.capacityOz}oz`) && !normalizedModel.includes(`${result.capacityOz} oz`)) {
+    parts.push(`${result.capacityOz}oz`);
+  }
+  return parts.length > 0 ? parts.join(" ") : result.title ?? fallback;
+}
+
 function resolveDefaultPreviewModelMode(args: {
   glbPath: string;
   glbStatus?: ProductTemplate["glbStatus"] | null;
@@ -225,6 +580,17 @@ function resolveDefaultPreviewModelMode(args: {
     return "full-model";
   }
   return "alignment-model";
+}
+
+function getTemplateCreateWorkflowStatusLabel(status: "ready" | "action" | "review"): string {
+  switch (status) {
+    case "ready":
+      return "Ready";
+    case "action":
+      return "Do next";
+    default:
+      return "Waiting";
+  }
 }
 
 function buildPreviewTumblerDimensions(args: {
@@ -246,8 +612,27 @@ function buildPreviewTumblerDimensions(args: {
   };
 }
 
-export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props) {
+export function TemplateCreateForm({
+  onSave,
+  onCancel,
+  editingTemplate,
+  workspaceArtworkPlacements = null,
+  surfaceMode = "modal",
+}: Props) {
+  const inDedicatedTemplateMode = surfaceMode === "page";
   const isEdit = Boolean(editingTemplate);
+  const searchParams = useSearchParams();
+  const routeDebugEnabled = searchParams.get("debug") === "1";
+  const templateCreateDiagnosticsVisible =
+    shouldShowTemplateCreateDiagnostics({
+      adminDebugEnabled: TEMPLATE_CREATE_DEBUG_DETAILS_ENABLED,
+      routeDebugEnabled,
+    });
+  const templateCreateDiagnosticsExpanded =
+    shouldAutoOpenTemplateCreateDiagnostics({
+      adminDebugEnabled: TEMPLATE_CREATE_DEBUG_DETAILS_ENABLED,
+      routeDebugEnabled,
+    });
   const derivedEditingDims = React.useMemo(
     () => (editingTemplate ? getEngravableDimensions(editingTemplate) : null),
     [editingTemplate],
@@ -268,11 +653,14 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   );
 
   // ── Files ────────────────────────────────────────────────────────
-  const [thumbDataUrl, setThumbDataUrl] = React.useState(editingTemplate?.thumbnailDataUrl ?? "");
+  const [thumbDataUrl, setThumbDataUrl] = React.useState(
+    editingTemplate?.thumbnailDataUrl ?? DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL,
+  );
   const [glbPath, setGlbPath] = React.useState(editingTemplate?.glbPath ?? "");
   const [glbFileName, setGlbFileName] = React.useState<string | null>(null);
   const [glbUploading, setGlbUploading] = React.useState(false);
   const [glbUploadError, setGlbUploadError] = React.useState<string | null>(null);
+  const [overlayPreviewTextures, setOverlayPreviewTextures] = React.useState<Map<string, HTMLCanvasElement>>(new Map());
   const [checkingGlbPath, setCheckingGlbPath] = React.useState(false);
   const [productImageFile, setProductImageFile] = React.useState<File | null>(null);
   const [productImageLabel, setProductImageLabel] = React.useState<string | null>(
@@ -287,6 +675,9 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [lookupInput, setLookupInput] = React.useState("");
   const [lookingUpItem, setLookingUpItem] = React.useState(false);
   const [lookupResult, setLookupResult] = React.useState<TumblerItemLookupResponse | null>(null);
+  const [lookupDimensionsSnapshot, setLookupDimensionsSnapshot] = React.useState<TumblerItemLookupDimensions | null>(
+    editingTemplate?.lookupDimensions ?? null,
+  );
   const [lookupError, setLookupError] = React.useState<string | null>(null);
   const [lookupDebugImageUrl, setLookupDebugImageUrl] = React.useState("");
 
@@ -315,6 +706,18 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   );
   const [bottomMarginMm, setBottomMarginMm] = React.useState(
     editingTemplate?.dimensions.bottomMarginMm ?? derivedEditingDims?.bottomMarginMm ?? 0,
+  );
+  const [printableTopOverrideMm, setPrintableTopOverrideMm] = React.useState<number | null>(
+    typeof editingTemplate?.dimensions.printableTopOverrideMm === "number" &&
+      Number.isFinite(editingTemplate.dimensions.printableTopOverrideMm)
+      ? editingTemplate.dimensions.printableTopOverrideMm
+      : null,
+  );
+  const [printableBottomOverrideMm, setPrintableBottomOverrideMm] = React.useState<number | null>(
+    typeof editingTemplate?.dimensions.printableBottomOverrideMm === "number" &&
+      Number.isFinite(editingTemplate.dimensions.printableBottomOverrideMm)
+      ? editingTemplate.dimensions.printableBottomOverrideMm
+      : null,
   );
   const [referencePhotoScalePct, setReferencePhotoScalePct] = React.useState(
     editingTemplate?.dimensions.referencePhotoScalePct ?? 100,
@@ -462,6 +865,16 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [approvedBodyReferenceWarnings, setApprovedBodyReferenceWarnings] = React.useState<string[]>(
     () => [...(editingTemplate?.dimensions.bodyReferenceWarnings ?? [])],
   );
+  const [bodyReferenceV2DraftCapture, setBodyReferenceV2DraftCapture] = React.useState<BodyReferenceV2Draft>(
+    () => editingTemplate?.acceptedBodyReferenceV2Draft
+      ? cloneSerializable(editingTemplate.acceptedBodyReferenceV2Draft)
+      : createEmptyBodyReferenceV2Draft(),
+  );
+  const [acceptedBodyReferenceV2DraftSnapshot, setAcceptedBodyReferenceV2DraftSnapshot] = React.useState<BodyReferenceV2Draft | null>(
+    () => editingTemplate?.acceptedBodyReferenceV2Draft
+      ? cloneSerializable(editingTemplate.acceptedBodyReferenceV2Draft)
+      : null,
+  );
   const [bodyReferenceFineTuneModeEnabled, setBodyReferenceFineTuneModeEnabled] = React.useState(false);
   const [bodyReferenceFineTuneDraftOutline, setBodyReferenceFineTuneDraftOutline] = React.useState<EditableBodyOutline | null>(null);
   const [bodyReferenceFineTuneDetectedBaselineOutline, setBodyReferenceFineTuneDetectedBaselineOutline] = React.useState<EditableBodyOutline | null>(null);
@@ -469,6 +882,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const [reviewedBodyCutoutQaGeneratedSourceSignature, setReviewedBodyCutoutQaGeneratedSourceSignature] = React.useState<string | null>(null);
   const [generatedReviewedBodyGeometryContract, setGeneratedReviewedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
   const [loadedBodyGeometryContract, setLoadedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
+  const [currentReviewedBodyReferenceSourceHash, setCurrentReviewedBodyReferenceSourceHash] = React.useState<string | null>(null);
   const [reviewedGeneratedModelState, setReviewedGeneratedModelState] = React.useState<{
     glbPath: string;
     status: "generated-reviewed-model";
@@ -584,12 +998,88 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     [resolvedMatchedProfileId],
   );
 
+  const bodyReferenceFrameBounds = React.useMemo(() => {
+    if (!Number.isFinite(overallHeightMm) || overallHeightMm <= 0) {
+      return null;
+    }
+    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
+    const bodyBottomFromOverallMm = round2(
+      Math.max(bodyTopFromOverallMm + 1, overallHeightMm - Math.max(0, bottomMarginMm)),
+    );
+    if (bodyBottomFromOverallMm <= bodyTopFromOverallMm) return null;
+    return { bodyTopFromOverallMm, bodyBottomFromOverallMm };
+  }, [bottomMarginMm, overallHeightMm, topMarginMm]);
+
+  const persistedPrintableSurfaceContract = React.useMemo(
+    () =>
+      approvedCanonicalDimensionCalibration?.printableSurfaceContract ??
+      editingTemplate?.dimensions.printableSurfaceContract ??
+      editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract ??
+      null,
+    [
+      approvedCanonicalDimensionCalibration?.printableSurfaceContract,
+      editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract,
+      editingTemplate?.dimensions.printableSurfaceContract,
+    ],
+  );
+
+  const savedSilverBandBottomFromOverallMm = React.useMemo(() => {
+    const explicit = editingTemplate?.dimensions.silverBandBottomFromOverallMm;
+    if (typeof explicit === "number" && Number.isFinite(explicit)) return explicit;
+    return resolveAxialBandBoundaryMm(persistedPrintableSurfaceContract, "rim-ring", "end");
+  }, [editingTemplate?.dimensions.silverBandBottomFromOverallMm, persistedPrintableSurfaceContract]);
+
+  const savedLidSeamFromOverallMm = React.useMemo(() => {
+    const explicit = editingTemplate?.dimensions.lidSeamFromOverallMm;
+    if (typeof explicit === "number" && Number.isFinite(explicit)) return explicit;
+    return (
+      resolveAxialBandBoundaryMm(persistedPrintableSurfaceContract, "lid", "end") ??
+      resolveAxialBandBoundaryMm(persistedPrintableSurfaceContract, "rim-ring", "start")
+    );
+  }, [editingTemplate?.dimensions.lidSeamFromOverallMm, persistedPrintableSurfaceContract]);
+
+  const detectedLowerSilverSeamMm = React.useMemo(() => {
+    if (!bodyReferenceFrameBounds) return null;
+    return resolveDetectedLowerSilverSeamMm({
+      overallHeightMm,
+      bodyTopFromOverallMm: bodyReferenceFrameBounds.bodyTopFromOverallMm,
+      bodyBottomFromOverallMm: bodyReferenceFrameBounds.bodyBottomFromOverallMm,
+      savedSilverBandBottomFromOverallMm,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    });
+  }, [bodyReferenceFrameBounds, lookupResult?.fitDebug, overallHeightMm, savedSilverBandBottomFromOverallMm]);
+
+  const engravableGuideAuthority = React.useMemo(() => {
+    if (!bodyReferenceFrameBounds) return null;
+    return resolveEngravableZoneGuideAuthority({
+      overallHeightMm,
+      bodyTopFromOverallMm: bodyReferenceFrameBounds.bodyTopFromOverallMm,
+      bodyBottomFromOverallMm: bodyReferenceFrameBounds.bodyBottomFromOverallMm,
+      acceptedBodyReferenceAvailable: Boolean(approvedBodyOutline || approvedCanonicalDimensionCalibration),
+      printableTopOverrideMm,
+      printableBottomOverrideMm,
+      savedSilverBandBottomFromOverallMm,
+      fitDebug: lookupResult?.fitDebug ?? null,
+      printableSurfaceContract: persistedPrintableSurfaceContract,
+    });
+  }, [
+    approvedBodyOutline,
+    approvedCanonicalDimensionCalibration,
+    bodyReferenceFrameBounds,
+    lookupResult?.fitDebug,
+    overallHeightMm,
+    persistedPrintableSurfaceContract,
+    printableBottomOverrideMm,
+    printableTopOverrideMm,
+    savedSilverBandBottomFromOverallMm,
+  ]);
+
   const liveBodyReferenceOutline = React.useMemo(() => {
     if (productType === "flat") return null;
     if (!Number.isFinite(overallHeightMm) || overallHeightMm <= 0) return null;
     if (!Number.isFinite(diameterMm) || diameterMm <= 0) return null;
-    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
-    const bodyBottomFromOverallMm = round2(Math.max(bodyTopFromOverallMm + 1, overallHeightMm - Math.max(0, bottomMarginMm)));
+    if (!bodyReferenceFrameBounds) return null;
+    const { bodyTopFromOverallMm, bodyBottomFromOverallMm } = bodyReferenceFrameBounds;
     if (bodyBottomFromOverallMm <= bodyTopFromOverallMm) return null;
     return createEditableBodyOutline({
       overallHeightMm,
@@ -608,7 +1098,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       fitDebug: lookupResult?.fitDebug ?? null,
     });
   }, [
-    bottomMarginMm,
+    bodyReferenceFrameBounds,
     diameterMm,
     lookupResult?.fitDebug,
     overallHeightMm,
@@ -617,13 +1107,12 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     resolvedMatchedProfile?.outsideDiameterMm,
     resolvedMatchedProfile?.topDiameterMm,
     resolvedMatchedProfileId,
-    topMarginMm,
   ]);
 
   const liveBodyReferencePipeline = React.useMemo(() => {
     if (!liveBodyReferenceOutline || productType === "flat") return null;
-    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
-    const bodyBottomFromOverallMm = round2(Math.max(bodyTopFromOverallMm + 1, overallHeightMm - Math.max(0, bottomMarginMm)));
+    if (!bodyReferenceFrameBounds) return null;
+    const { bodyTopFromOverallMm, bodyBottomFromOverallMm } = bodyReferenceFrameBounds;
     if (bodyBottomFromOverallMm <= bodyTopFromOverallMm) return null;
     return deriveBodyReferencePipeline({
       outline: liveBodyReferenceOutline,
@@ -636,19 +1125,34 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         resolvedMatchedProfile?.outsideDiameterMm ??
         diameterMm,
       handleArcDeg,
+      lidSeamFromOverallMm: savedLidSeamFromOverallMm,
+      silverBandBottomFromOverallMm: detectedLowerSilverSeamMm,
+      printableTopOverrideMm,
+      printableBottomOverrideMm,
+      persistedPrintableSurfaceContract,
+      persistedCanonicalPrintableSurfaceContract:
+        approvedCanonicalDimensionCalibration?.printableSurfaceContract ??
+        editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract ??
+        null,
       fitDebug: lookupResult?.fitDebug ?? null,
     });
   }, [
-    bottomMarginMm,
+    approvedCanonicalDimensionCalibration?.printableSurfaceContract,
+    bodyReferenceFrameBounds,
+    detectedLowerSilverSeamMm,
     diameterMm,
+    editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract,
     handleArcDeg,
     liveBodyReferenceOutline,
     lookupResult?.fitDebug,
     overallHeightMm,
+    persistedPrintableSurfaceContract,
+    printableBottomOverrideMm,
+    printableTopOverrideMm,
     productType,
     resolvedMatchedProfile?.bottomDiameterMm,
     resolvedMatchedProfile?.outsideDiameterMm,
-    topMarginMm,
+    savedLidSeamFromOverallMm,
   ]);
 
   const previewTumblerDims = React.useMemo(
@@ -702,9 +1206,331 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     productType,
   ]);
   const effectivePreviewModelMode = previewModelState?.effectiveMode ?? previewModelMode;
+  const wrapExportContract =
+    loadedBodyGeometryContract ?? generatedReviewedBodyGeometryContract;
   const wrapExportPreviewState = React.useMemo(
-    () => buildWrapExportPreviewState(loadedBodyGeometryContract),
-    [loadedBodyGeometryContract],
+    () => buildWrapExportPreviewState(wrapExportContract),
+    [wrapExportContract],
+  );
+  const templateArtworkPlacements = React.useMemo(
+    () => cloneSerializable(
+      workspaceArtworkPlacements
+      ?? editingTemplate?.artworkPlacements
+      ?? editingTemplate?.engravingPreviewState?.placements
+      ?? [],
+    ),
+    [
+      editingTemplate?.artworkPlacements,
+      editingTemplate?.engravingPreviewState?.placements,
+      workspaceArtworkPlacements,
+    ],
+  );
+  const templateAppearanceReferenceLayers = React.useMemo<ProductAppearanceReferenceLayer[]>(
+    () => cloneSerializable(editingTemplate?.appearanceReferenceLayers ?? []),
+    [editingTemplate?.appearanceReferenceLayers],
+  );
+  const appearanceReferenceSummary = React.useMemo(
+    () => summarizeAppearanceReferenceLayers(templateAppearanceReferenceLayers),
+    [templateAppearanceReferenceLayers],
+  );
+  const activeLookupDimensions = React.useMemo(
+    () => lookupResult?.dimensions ?? lookupDimensionsSnapshot ?? null,
+    [lookupDimensionsSnapshot, lookupResult?.dimensions],
+  );
+  const lookupDimensionAuthoritySummary = React.useMemo(
+    () => summarizeProductDimensionAuthority(activeLookupDimensions, {
+      requireScaleDiameter: true,
+      requireExactVariantMatch: true,
+    }),
+    [activeLookupDimensions],
+  );
+  const activeLookupSourceLabel = React.useMemo(
+    () => lookupResult
+      ? getLookupSourceLabel(lookupResult)
+      : getLookupSourceLabelFromUrl(
+          activeLookupDimensions?.productUrl
+          ?? activeLookupDimensions?.dimensionSourceUrl
+          ?? null,
+        ),
+    [
+      activeLookupDimensions?.dimensionSourceUrl,
+      activeLookupDimensions?.productUrl,
+      lookupResult,
+    ],
+  );
+  const bodyReferenceV2ScaleCalibration = React.useMemo<BodyReferenceV2Draft["scaleCalibration"]>(() => {
+    const lookupDiameterMm = lookupDimensionAuthoritySummary.readyForLookupScale
+      ? lookupDimensionAuthoritySummary.scaleDiameterMm ?? null
+      : null;
+    const resolvedDiameterMm = diameterMm > 0 ? round2(diameterMm) : undefined;
+
+    return {
+      scaleSource:
+        typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
+          ? "lookup-diameter"
+          : resolvedDiameterMm != null
+            ? "manual-diameter"
+            : "unknown",
+      lookupDiameterMm:
+        typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
+          ? round2(lookupDiameterMm)
+          : undefined,
+      resolvedDiameterMm,
+      wrapDiameterMm:
+        typeof lookupDiameterMm === "number" && lookupDiameterMm > 0
+          ? round2(lookupDiameterMm)
+          : resolvedDiameterMm,
+      wrapWidthMm: templateWidthMm > 0 ? round2(templateWidthMm) : undefined,
+      expectedBodyHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
+      expectedBodyWidthMm: resolvedDiameterMm,
+      lookupVariantLabel: lookupDimensionAuthoritySummary.selectedVariantLabel,
+      lookupSizeOz: lookupDimensionAuthoritySummary.selectedSizeOz,
+      lookupDimensionAuthority: lookupDimensionAuthoritySummary.dimensionAuthority,
+      lookupScaleStatus: lookupDimensionAuthoritySummary.status,
+      lookupFullProductHeightMm: lookupDimensionAuthoritySummary.fullProductHeightMm,
+      lookupBodyHeightMm: lookupDimensionAuthoritySummary.bodyHeightMm,
+      lookupHeightIgnoredForScale: lookupDimensionAuthoritySummary.heightIgnoredForScale,
+      lookupWarnings: lookupDimensionAuthoritySummary.warnings,
+      lookupErrors: lookupDimensionAuthoritySummary.errors,
+    };
+  }, [
+    diameterMm,
+    lookupDimensionAuthoritySummary.bodyHeightMm,
+    lookupDimensionAuthoritySummary.dimensionAuthority,
+    lookupDimensionAuthoritySummary.errors,
+    lookupDimensionAuthoritySummary.fullProductHeightMm,
+    lookupDimensionAuthoritySummary.heightIgnoredForScale,
+    lookupDimensionAuthoritySummary.readyForLookupScale,
+    lookupDimensionAuthoritySummary.scaleDiameterMm,
+    lookupDimensionAuthoritySummary.selectedSizeOz,
+    lookupDimensionAuthoritySummary.selectedVariantLabel,
+    lookupDimensionAuthoritySummary.status,
+    lookupDimensionAuthoritySummary.warnings,
+    printHeightMm,
+    templateWidthMm,
+  ]);
+  const bodyReferenceV2Draft = React.useMemo<BodyReferenceV2Draft>(() => buildEffectiveBodyReferenceV2Draft({
+    draft: bodyReferenceV2DraftCapture,
+    sourceImageUrl: productPhotoFullUrl || undefined,
+    scaleCalibration: bodyReferenceV2ScaleCalibration,
+  }), [
+    bodyReferenceV2DraftCapture,
+    bodyReferenceV2ScaleCalibration,
+    productPhotoFullUrl,
+  ]);
+  const acceptedBodyReferenceV2Draft = React.useMemo<BodyReferenceV2Draft | null>(() => (
+    acceptedBodyReferenceV2DraftSnapshot
+      ? buildEffectiveBodyReferenceV2Draft({
+          draft: acceptedBodyReferenceV2DraftSnapshot,
+          sourceImageUrl: productPhotoFullUrl || undefined,
+          scaleCalibration: bodyReferenceV2ScaleCalibration,
+        })
+      : null
+  ), [
+    acceptedBodyReferenceV2DraftSnapshot,
+    bodyReferenceV2ScaleCalibration,
+    productPhotoFullUrl,
+  ]);
+  const bodyReferenceV2Summary = React.useMemo(
+    () => summarizeBodyReferenceV2Draft(bodyReferenceV2Draft),
+    [bodyReferenceV2Draft],
+  );
+  const bodyReferenceV2ScaleMirrorPreview = React.useMemo(
+    () => summarizeBodyReferenceV2ScaleMirrorPreview(bodyReferenceV2Draft),
+    [bodyReferenceV2Draft],
+  );
+  const bodyReferenceV2GenerationReadiness = React.useMemo(
+    () => buildBodyReferenceV2GenerationReadinessFromDraft(bodyReferenceV2Draft),
+    [bodyReferenceV2Draft],
+  );
+  const acceptedBodyReferenceV2GenerationReadiness = React.useMemo(
+    () => acceptedBodyReferenceV2Draft
+      ? buildBodyReferenceV2GenerationReadinessFromDraft(acceptedBodyReferenceV2Draft)
+      : null,
+    [acceptedBodyReferenceV2Draft],
+  );
+  const bodyReferenceV2CaptureReadiness = React.useMemo(
+    () => summarizeBodyReferenceV2CaptureReadiness({
+      draft: bodyReferenceV2Draft,
+      acceptedDraft: acceptedBodyReferenceV2Draft,
+    }),
+    [acceptedBodyReferenceV2Draft, bodyReferenceV2Draft],
+  );
+  const activeReviewedBodyReferenceAuthority = React.useMemo(() => {
+    const sourceType = wrapExportContract?.source.type ?? null;
+    if (sourceType === "body-reference-v2") {
+      return "BODY REFERENCE v2 mirrored profile";
+    }
+    if (sourceType === "approved-svg") {
+      return "Accepted BODY REFERENCE cutout";
+    }
+    return null;
+  }, [wrapExportContract]);
+  const isBodyReferenceV2CurrentQaSource = activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile";
+  const templateArtworkPlacementMapping = React.useMemo(
+    () => buildWrapExportSurfaceMapping(wrapExportContract, appearanceReferenceSummary.frontCenterAngleDeg),
+    [appearanceReferenceSummary.frontCenterAngleDeg, wrapExportContract],
+  );
+  const templateArtworkPlacementMappingSignature = React.useMemo(
+    () => templateArtworkPlacementMapping
+      ? buildLaserBedSurfaceMappingSignature(templateArtworkPlacementMapping)
+      : undefined,
+    [templateArtworkPlacementMapping],
+  );
+  const savedArtworkPlacementSignature =
+    workspaceArtworkPlacements != null
+      ? templateArtworkPlacementMappingSignature
+      : editingTemplate?.engravingPreviewState?.mappingSignature
+        ?? editingTemplate?.artworkPlacements?.[0]?.mappingSignature;
+  const persistedArtworkPlacements = React.useMemo(
+    () => templateArtworkPlacements.map((placement) => ({
+      ...placement,
+      mappingSignature:
+        templateArtworkPlacementMappingSignature
+        ?? placement.mappingSignature,
+    })),
+    [templateArtworkPlacements, templateArtworkPlacementMappingSignature],
+  );
+  const persistedTemplateEngravingPreviewState = React.useMemo(
+    () => validateLaserBedSurfaceMapping({
+      mapping: templateArtworkPlacementMapping,
+      placements: persistedArtworkPlacements,
+      savedSignature: savedArtworkPlacementSignature ?? null,
+    }),
+    [
+      persistedArtworkPlacements,
+      savedArtworkPlacementSignature,
+      templateArtworkPlacementMapping,
+    ],
+  );
+  const engravingOverlayPreviewState = React.useMemo(
+    () => buildEngravingOverlayPreviewState({
+      placements: persistedArtworkPlacements,
+      mapping: templateArtworkPlacementMapping,
+      savedSignature: savedArtworkPlacementSignature ?? null,
+      previewMode: effectivePreviewModelMode,
+    }),
+    [
+      effectivePreviewModelMode,
+      persistedArtworkPlacements,
+      savedArtworkPlacementSignature,
+      templateArtworkPlacementMapping,
+    ],
+  );
+  const wrapExportProductionReadiness = React.useMemo(
+    () => summarizeWrapExportProductionReadiness({
+      contract: wrapExportContract,
+      placements: persistedArtworkPlacements,
+      mapping: templateArtworkPlacementMapping,
+      savedSignature: savedArtworkPlacementSignature ?? null,
+      previewMode: effectivePreviewModelMode,
+      overlayState: engravingOverlayPreviewState,
+      appearanceReferenceLayers: templateAppearanceReferenceLayers,
+    }),
+    [
+      effectivePreviewModelMode,
+      editingTemplate?.engravingPreviewState?.mappingSignature,
+      engravingOverlayPreviewState,
+      persistedArtworkPlacements,
+      savedArtworkPlacementSignature,
+      templateAppearanceReferenceLayers,
+      templateArtworkPlacementMapping,
+      wrapExportContract,
+      workspaceArtworkPlacements,
+    ],
+  );
+  const overlayPreviewPlacedItems = React.useMemo<PlacedItem[]>(
+    () => {
+      const placementsById = new Map(persistedArtworkPlacements.map((placement) => [placement.id, placement]));
+      return engravingOverlayPreviewState.items.flatMap((item) => {
+        if (!item.visible) return [];
+        const placement = placementsById.get(item.id);
+        if (!placement) return [];
+        const restored = buildOverlayPreviewPlacedItem({
+          assetId: item.assetId,
+          name: item.name,
+          xMm: item.xMm,
+          yMm: item.yMm,
+          widthMm: item.widthMm,
+          heightMm: item.heightMm,
+          rotationDeg: item.rotationDeg,
+          visible: item.visible,
+          placement,
+        });
+        return restored ? [restored] : [];
+      });
+    },
+    [engravingOverlayPreviewState.items, persistedArtworkPlacements],
+  );
+  const overlayPreviewTextureKey = React.useMemo(
+    () => overlayPreviewPlacedItems
+      .map((item) => `${item.id}:${item.x}:${item.y}:${item.width}:${item.height}:${item.rotation}:${item.svgText.length}`)
+      .join("|"),
+    [overlayPreviewPlacedItems],
+  );
+
+  React.useEffect(() => {
+    if (!engravingOverlayPreviewState.enabled || overlayPreviewPlacedItems.length === 0) {
+      setOverlayPreviewTextures(new Map());
+      return;
+    }
+
+    let cancelled = false;
+    Promise.all(
+      overlayPreviewPlacedItems.map(async (item) => {
+        const texture = await rasterizeOverlayTexture(item, ENGRAVING_OVERLAY_TINT);
+        return texture ? [item.id, texture] as const : null;
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      setOverlayPreviewTextures(new Map(entries.filter((entry): entry is readonly [string, HTMLCanvasElement] => Boolean(entry))));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [engravingOverlayPreviewState.enabled, overlayPreviewPlacedItems, overlayPreviewTextureKey]);
+  const hasSavedArtworkPlacements = persistedArtworkPlacements.length > 0;
+  const wrapExportFreshnessLabel = React.useMemo(
+    () => getWrapExportMappingFreshnessLabel({
+      freshness: wrapExportProductionReadiness.mappingFreshness,
+      hasSavedPlacements: hasSavedArtworkPlacements,
+    }),
+    [hasSavedArtworkPlacements, wrapExportProductionReadiness.mappingFreshness],
+  );
+  const wrapExportOperatorWarningNote = React.useMemo(
+    () => getWrapExportOperatorWarningNote({
+      freshness: wrapExportProductionReadiness.mappingFreshness,
+      placementCount: wrapExportProductionReadiness.placementCount,
+      outsidePrintableWarningCount: engravingOverlayPreviewState.outsidePrintableAreaCount,
+      staleMappingWarningCount: wrapExportProductionReadiness.staleMappingWarningCount,
+    }),
+    [
+      engravingOverlayPreviewState.outsidePrintableAreaCount,
+      wrapExportProductionReadiness.mappingFreshness,
+      wrapExportProductionReadiness.placementCount,
+      wrapExportProductionReadiness.staleMappingWarningCount,
+    ],
+  );
+  const wrapExportDiagnosticMessages = React.useMemo(
+    () => dedupeTemplateCreateDisplayMessages([
+      ...wrapExportPreviewState.errors.map((message) => ({ level: "error" as const, message })),
+      ...wrapExportPreviewState.warnings.map((message) => ({ level: "warning" as const, message })),
+      ...appearanceReferenceSummary.warnings.map((message) => ({ level: "warning" as const, message })),
+      ...persistedTemplateEngravingPreviewState.errors.map((message) => ({ level: "error" as const, message })),
+      ...persistedTemplateEngravingPreviewState.warnings.map((message) => ({ level: "warning" as const, message })),
+      ...engravingOverlayPreviewState.errors.map((message) => ({ level: "error" as const, message })),
+      ...engravingOverlayPreviewState.warnings.map((message) => ({ level: "warning" as const, message })),
+    ]),
+    [
+      appearanceReferenceSummary.warnings,
+      engravingOverlayPreviewState.errors,
+      engravingOverlayPreviewState.warnings,
+      persistedTemplateEngravingPreviewState.errors,
+      persistedTemplateEngravingPreviewState.warnings,
+      wrapExportPreviewState.errors,
+      wrapExportPreviewState.warnings,
+    ],
   );
   const wrapExportSummaryVisible =
     previewModelMode === "wrap-export" ||
@@ -735,6 +1561,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const previewModeDowngradeActive =
     previewModelState != null &&
     previewModelState.requestedMode !== previewModelState.effectiveMode;
+  const hasReviewedBodyCutoutQaGlb = activeDrinkwareGlbStatus === "generated-reviewed-model";
+  const hasSourceModelForPreview = Boolean(glbPath.trim());
 
   const workflowInput = React.useMemo(
     () => ({
@@ -742,6 +1570,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       hasProductImage: Boolean(productImageFile || productPhotoFullUrl),
       hasStagedDetectResult: Boolean(detectResult || lookupResult),
       hasAcceptedReview: hasAcceptedBodyReferenceReview,
+      hasReviewedBodyCutoutQa: hasReviewedBodyCutoutQaGlb,
       hasCanonicalBodyProfile: Boolean(approvedCanonicalBodyProfile),
       hasCanonicalDimensionCalibration: Boolean(approvedCanonicalDimensionCalibration),
     }),
@@ -750,6 +1579,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       approvedCanonicalDimensionCalibration,
       detectResult,
       hasAcceptedBodyReferenceReview,
+      hasReviewedBodyCutoutQaGlb,
       lookupResult,
       productImageFile,
       productPhotoFullUrl,
@@ -769,10 +1599,78 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     () => deriveTemplateCreateWorkflowStep(workflowInput),
     [workflowInput],
   );
+  const workflowSourceStep = React.useMemo(
+    () => workflowSteps.find((step) => step.step === "source") ?? null,
+    [workflowSteps],
+  );
+  const workflowDetectStep = React.useMemo(
+    () => workflowSteps.find((step) => step.step === "detect") ?? null,
+    [workflowSteps],
+  );
+  const workflowReviewStep = React.useMemo(
+    () => workflowSteps.find((step) => step.step === "review") ?? null,
+    [workflowSteps],
+  );
+  const workflowGenerateStep = React.useMemo(
+    () => workflowSteps.find((step) => step.step === "generate") ?? null,
+    [workflowSteps],
+  );
+  const workflowPreviewStep = React.useMemo(
+    () => workflowSteps.find((step) => step.step === "preview") ?? null,
+    [workflowSteps],
+  );
+  const workflowCurrentStepLabel = React.useMemo(
+    () => workflowSteps.find((step) => step.step === workflowCurrentStep)?.label ?? workflowCurrentStep,
+    [workflowCurrentStep, workflowSteps],
+  );
+  const workflowNextActionHint = React.useMemo(
+    () => getTemplateCreateNextActionHint(workflowInput),
+    [workflowInput],
+  );
   const saveGateReason = React.useMemo(
     () => getTemplateCreateSaveGateReason(workflowInput),
     [workflowInput],
   );
+  const lookupActionReason = React.useMemo(
+    () => getTemplateCreateLookupActionReason({
+      lookupInput,
+      lookingUp: lookingUpItem,
+    }),
+    [lookupInput, lookingUpItem],
+  );
+  const templateModeWorkflowHeading = React.useMemo(() => {
+    if (!isTemplateCreateReviewFlowProductType(productType)) {
+      return "Source and template details";
+    }
+    return "Template operator flow";
+  }, [productType]);
+  const workflowCurrentStepDisplayLabel = React.useMemo(
+    () => workflowCurrentStepLabel.replace(/^\d+\.\s*/, ""),
+    [workflowCurrentStepLabel],
+  );
+  const reviewStageLabel = React.useMemo(() => {
+    if (hasAcceptedBodyReferenceReview) {
+      return "BODY REFERENCE accepted";
+    }
+    if (workflowInput.hasStagedDetectResult) {
+      return "Review pending";
+    }
+    return "Review blocked";
+  }, [hasAcceptedBodyReferenceReview, workflowInput.hasStagedDetectResult]);
+  const wrapExportStageLabel = React.useMemo(() => {
+    if (!hasSourceModelForPreview) {
+      return "Source model needed";
+    }
+    return getWrapExportPreviewStatusLabel(wrapExportProductionReadiness.status);
+  }, [hasSourceModelForPreview, wrapExportProductionReadiness.status]);
+  const appearanceReferenceStageLabel = React.useMemo(() => {
+    if (appearanceReferenceSummary.totalLayers <= 0) {
+      return "No references saved";
+    }
+    return `${appearanceReferenceSummary.totalLayers} reference layer${
+      appearanceReferenceSummary.totalLayers === 1 ? "" : "s"
+    }`;
+  }, [appearanceReferenceSummary.totalLayers]);
 
   React.useEffect(() => {
     if (previewModelMode !== "body-cutout-qa") return;
@@ -795,6 +1693,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     setApprovedCanonicalDimensionCalibration(null);
     setApprovedBodyReferenceQa(null);
     setApprovedBodyReferenceWarnings([]);
+    setBodyReferenceV2DraftCapture(createEmptyBodyReferenceV2Draft());
+    setAcceptedBodyReferenceV2DraftSnapshot(null);
     setGeneratedReviewedBodyGeometryContract(null);
     setLoadedBodyGeometryContract(null);
     setReviewedBodyCutoutQaGeneratedSourceSignature(null);
@@ -834,11 +1734,11 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     brand: string | null | undefined;
     model: string | null | undefined;
     capacityOz?: number | null;
-    outsideDiameterMm?: number | null;
+    scaleDiameterMm?: number | null;
     topDiameterMm?: number | null;
     bottomDiameterMm?: number | null;
-    overallHeightMm?: number | null;
-    usableHeightMm?: number | null;
+    fullProductHeightMm?: number | null;
+    bodyHeightMm?: number | null;
   }) => {
     const profileId = findTumblerProfileIdForBrandModel({
       brand: args.brand,
@@ -847,16 +1747,16 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     });
     const matchedProfile = profileId ? getTumblerProfileById(profileId) : null;
 
-    if (args.outsideDiameterMm) {
-      setDiameterMm(round2(args.outsideDiameterMm));
+    if (args.scaleDiameterMm) {
+      setDiameterMm(round2(args.scaleDiameterMm));
     } else if (matchedProfile?.outsideDiameterMm) {
       setDiameterMm(round2(matchedProfile.outsideDiameterMm));
     } else if (args.topDiameterMm && args.bottomDiameterMm) {
       setDiameterMm(round2((args.topDiameterMm + args.bottomDiameterMm) / 2));
     }
 
-    if (args.usableHeightMm) {
-      setPrintHeightMm(round2(args.usableHeightMm));
+    if (args.bodyHeightMm) {
+      setPrintHeightMm(round2(args.bodyHeightMm));
     } else if (matchedProfile?.usableHeightMm) {
       setPrintHeightMm(round2(matchedProfile.usableHeightMm));
     }
@@ -881,12 +1781,12 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       return;
     }
 
-    if (args.overallHeightMm) {
-      setOverallHeightMm(round2(args.overallHeightMm));
+    if (args.fullProductHeightMm) {
+      setOverallHeightMm(round2(args.fullProductHeightMm));
     }
-    if (args.overallHeightMm && args.usableHeightMm) {
-      const topM = round2((args.overallHeightMm - args.usableHeightMm) / 2);
-      const bottomM = round2(Math.max(0, args.overallHeightMm - args.usableHeightMm - topM));
+    if (args.fullProductHeightMm && args.bodyHeightMm) {
+      const topM = round2((args.fullProductHeightMm - args.bodyHeightMm) / 2);
+      const bottomM = round2(Math.max(0, args.fullProductHeightMm - args.bodyHeightMm - topM));
       setTopMarginMm(topM);
       setBottomMarginMm(bottomM);
     }
@@ -908,13 +1808,14 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
     try {
       const result = await lookupTumblerItem(raw);
+      const authoritySummary = summarizeProductDimensionAuthority(result.dimensions, {
+        requireScaleDiameter: true,
+        requireExactVariantMatch: true,
+      });
       setLookupResult(result);
+      setLookupDimensionsSnapshot(result.dimensions);
 
-      const parts: string[] = [];
-      if (result.brand) parts.push(result.brand);
-      if (result.model) parts.push(result.model);
-      if (result.capacityOz) parts.push(`${result.capacityOz}oz`);
-      setName(parts.length > 0 ? parts.join(" ") : result.title ?? raw);
+      setName(buildLookupTemplateName(result, raw));
       if (result.brand) setBrand(result.brand);
       if (result.capacityOz) setCapacity(`${result.capacityOz}oz`);
       setProductType("tumbler");
@@ -924,11 +1825,19 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         brand: result.brand,
         model: result.model,
         capacityOz: result.capacityOz,
-        outsideDiameterMm: result.dimensions.outsideDiameterMm,
+        scaleDiameterMm: authoritySummary.readyForLookupScale
+          ? authoritySummary.scaleDiameterMm ?? null
+          : null,
         topDiameterMm: result.dimensions.topDiameterMm,
         bottomDiameterMm: result.dimensions.bottomDiameterMm,
-        overallHeightMm: result.dimensions.overallHeightMm,
-        usableHeightMm: result.dimensions.usableHeightMm,
+        fullProductHeightMm:
+          authoritySummary.fullProductHeightMm
+          ?? result.dimensions.fullProductHeightMm
+          ?? result.dimensions.overallHeightMm,
+        bodyHeightMm:
+          authoritySummary.bodyHeightMm
+          ?? result.dimensions.bodyHeightMm
+          ?? result.dimensions.usableHeightMm,
       });
 
       if (result.imageUrl) {
@@ -1125,6 +2034,232 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   const bodyReferenceFineTuneDraftPendingAcceptance =
     bodyReferenceFineTuneModeEnabled &&
     bodyReferenceFineTuneDraftHasChanges;
+  const generateBodyCutoutGateReason = React.useMemo(
+    () => getTemplateCreateGenerateGateReason({
+      productType,
+      hasAcceptedReview: hasAcceptedBodyReferenceReview,
+      canGenerate: canGenerateReviewedBodyReferenceGlb,
+      hasPendingSourceDraft: bodyReferenceFineTuneDraftPendingAcceptance,
+    }),
+    [
+      bodyReferenceFineTuneDraftPendingAcceptance,
+      canGenerateReviewedBodyReferenceGlb,
+      hasAcceptedBodyReferenceReview,
+      productType,
+    ],
+  );
+  const acceptBodyReferenceActionReason = React.useMemo(
+    () => getTemplateCreateReviewAcceptActionReason({
+      hasAcceptedReview: hasAcceptedBodyReferenceReview,
+      hasLivePipeline: Boolean(liveBodyReferencePipeline),
+    }),
+    [hasAcceptedBodyReferenceReview, liveBodyReferencePipeline],
+  );
+  const generateBodyCutoutActionReason = React.useMemo(
+    () => resolveTemplateCreateBlockedActionReason({
+      busy: generatingReviewedBodyReferenceGlb,
+      blockedReason: generateBodyCutoutGateReason,
+    }),
+    [generateBodyCutoutGateReason, generatingReviewedBodyReferenceGlb],
+  );
+  const previewModeTransitionNote = React.useMemo(
+    () => previewModeDowngradeActive
+      ? `Selected preview: ${requestedPreviewModeLabel}. Viewer is showing ${effectivePreviewModeLabel} until the required model state is available.`
+      : null,
+    [effectivePreviewModeLabel, previewModeDowngradeActive, requestedPreviewModeLabel],
+  );
+  const bodyReferenceV2GenerateGateReason = React.useMemo(() => {
+    return getBodyReferenceV2GenerateGateReason({
+      hasPendingV1FineTune: bodyReferenceFineTuneDraftPendingAcceptance,
+      hasCenterline: bodyReferenceV2GenerationReadiness.centerlineCaptured,
+      hasBodyLeft: bodyReferenceV2GenerationReadiness.leftBodyPointCount > 0,
+      lookupDiameterReady: bodyReferenceV2GenerationReadiness.lookupDiameterMm != null,
+      accepted: bodyReferenceV2CaptureReadiness.accepted,
+      hasDraftChanges: bodyReferenceV2CaptureReadiness.hasDraftChanges,
+      generationReady: bodyReferenceV2CaptureReadiness.generationReady,
+    });
+  }, [
+    bodyReferenceFineTuneDraftPendingAcceptance,
+    bodyReferenceV2CaptureReadiness.accepted,
+    bodyReferenceV2CaptureReadiness.generationReady,
+    bodyReferenceV2CaptureReadiness.hasDraftChanges,
+    bodyReferenceV2GenerationReadiness.centerlineCaptured,
+    bodyReferenceV2GenerationReadiness.leftBodyPointCount,
+    bodyReferenceV2GenerationReadiness.lookupDiameterMm,
+  ]);
+  const bodyReferenceV2AcceptDraftGateReason = React.useMemo(
+    () => getBodyReferenceV2AcceptDraftReason({
+      hasCenterline: Boolean(bodyReferenceV2Draft.centerline),
+      hasBodyLeft: bodyReferenceV2Summary.bodyLeftCaptured,
+    }),
+    [bodyReferenceV2Draft.centerline, bodyReferenceV2Summary.bodyLeftCaptured],
+  );
+  const bodyReferenceV2AcceptDraftActionReason = React.useMemo(
+    () => resolveTemplateCreateBlockedActionReason({
+      busy: false,
+      blockedReason: bodyReferenceV2AcceptDraftGateReason,
+    }),
+    [bodyReferenceV2AcceptDraftGateReason],
+  );
+  const bodyReferenceV2GenerateActionReason = React.useMemo(
+    () => resolveTemplateCreateBlockedActionReason({
+      busy: generatingReviewedBodyReferenceGlb,
+      blockedReason: bodyReferenceV2GenerateGateReason,
+    }),
+    [bodyReferenceV2GenerateGateReason, generatingReviewedBodyReferenceGlb],
+  );
+  const bodyReferenceV2SeedActionReason = React.useMemo(
+    () => getTemplateCreateV2SeedActionReason({
+      hasApprovedBodyOutline: Boolean(approvedBodyOutline),
+    }),
+    [approvedBodyOutline],
+  );
+  const bodyReferenceV2CurrentQaSourceLabel = React.useMemo(
+    () => getBodyReferenceV2CurrentQaSourceLabel(isBodyReferenceV2CurrentQaSource),
+    [isBodyReferenceV2CurrentQaSource],
+  );
+  const bodyReferenceV2SourceAuthorityNote = React.useMemo(
+    () => getBodyReferenceV2SourceAuthorityNote({
+      isCurrentGenerationSource: isBodyReferenceV2CurrentQaSource,
+      hasDraftChanges: bodyReferenceV2CaptureReadiness.hasDraftChanges,
+    }),
+    [bodyReferenceV2CaptureReadiness.hasDraftChanges, isBodyReferenceV2CurrentQaSource],
+  );
+  const bodyReferenceV2SummaryGuidanceMessages = React.useMemo(
+    () => buildBodyReferenceV2GuidanceMessages({
+      errors: [
+        ...bodyReferenceV2Summary.validation.errors,
+        ...bodyReferenceV2CaptureReadiness.errors,
+      ],
+      warnings: [
+        ...bodyReferenceV2Summary.validation.warnings,
+        ...bodyReferenceV2CaptureReadiness.warnings,
+      ],
+    }),
+    [
+      bodyReferenceV2CaptureReadiness.errors,
+      bodyReferenceV2CaptureReadiness.warnings,
+      bodyReferenceV2Summary.validation.errors,
+      bodyReferenceV2Summary.validation.warnings,
+    ],
+  );
+  const bodyReferenceV2MirrorGuidanceMessages = React.useMemo(
+    () => buildBodyReferenceV2GuidanceMessages({
+      errors: bodyReferenceV2ScaleMirrorPreview.errors,
+      warnings: bodyReferenceV2ScaleMirrorPreview.warnings,
+    }),
+    [bodyReferenceV2ScaleMirrorPreview.errors, bodyReferenceV2ScaleMirrorPreview.warnings],
+  );
+  const bodyReferenceV2GenerationGuidanceMessages = React.useMemo(
+    () => buildBodyReferenceV2GuidanceMessages({
+      errors: bodyReferenceV2GenerationReadiness.errors,
+      warnings: bodyReferenceV2GenerationReadiness.warnings,
+    }),
+    [bodyReferenceV2GenerationReadiness.errors, bodyReferenceV2GenerationReadiness.warnings],
+  );
+  const bodyReferenceV2OperatorState = React.useMemo(
+    () => getTemplateBodyReferenceV2OperatorState({
+      isActiveGenerationSource: isBodyReferenceV2CurrentQaSource,
+      accepted: bodyReferenceV2CaptureReadiness.accepted,
+      generationReady: bodyReferenceV2CaptureReadiness.generationReady,
+      hasDraftChanges: bodyReferenceV2CaptureReadiness.hasDraftChanges,
+      errorCount:
+        bodyReferenceV2Summary.validation.errors.length +
+        bodyReferenceV2CaptureReadiness.errors.length +
+        bodyReferenceV2GenerationReadiness.errors.length,
+      warningCount:
+        bodyReferenceV2Summary.validation.warnings.length +
+        bodyReferenceV2CaptureReadiness.warnings.length +
+        bodyReferenceV2GenerationReadiness.warnings.length,
+    }),
+    [
+      bodyReferenceV2CaptureReadiness.accepted,
+      bodyReferenceV2CaptureReadiness.errors.length,
+      bodyReferenceV2CaptureReadiness.generationReady,
+      bodyReferenceV2CaptureReadiness.hasDraftChanges,
+      bodyReferenceV2CaptureReadiness.warnings.length,
+      bodyReferenceV2GenerationReadiness.errors.length,
+      bodyReferenceV2GenerationReadiness.warnings.length,
+      bodyReferenceV2Summary.validation.errors.length,
+      bodyReferenceV2Summary.validation.warnings.length,
+      isBodyReferenceV2CurrentQaSource,
+    ],
+  );
+  const reviewDisabledActionReasonGroups = React.useMemo(
+    () => groupTemplateCreateDisabledActionReasons([
+      {
+        label: "Accept BODY REFERENCE (v1)",
+        reason: acceptBodyReferenceActionReason,
+      },
+      {
+        label: "Generate BODY CUTOUT QA GLB (v1)",
+        reason: generateBodyCutoutActionReason,
+      },
+    ]),
+    [acceptBodyReferenceActionReason, generateBodyCutoutActionReason],
+  );
+  const previewDisabledActionReasonGroups = React.useMemo(
+    () => groupTemplateCreateDisabledActionReasons([
+      {
+        label: "BODY CUTOUT QA",
+        reason: getTemplateCreatePreviewActionReason({
+          action: "body-cutout-qa",
+          hasSourceModel: hasSourceModelForPreview,
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+        }),
+      },
+      {
+        label: "WRAP / EXPORT",
+        reason: getTemplateCreatePreviewActionReason({
+          action: "wrap-export",
+          hasSourceModel: hasSourceModelForPreview,
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+        }),
+      },
+      {
+        label: "Full model",
+        reason: getTemplateCreatePreviewActionReason({
+          action: "full-model",
+          hasSourceModel: hasSourceModelForPreview,
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+        }),
+      },
+      {
+        label: "Source compare",
+        reason: getTemplateCreatePreviewActionReason({
+          action: "source-compare",
+          hasSourceModel: hasSourceModelForPreview,
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+        }),
+      },
+    ]),
+    [activeDrinkwareGlbStatus, hasSourceModelForPreview],
+  );
+  const bodyReferenceV2DisabledActionReasonGroups = React.useMemo(
+    () => groupTemplateCreateDisabledActionReasons([
+      {
+        label: "Capture / seed centerline",
+        reason: bodyReferenceV2SeedActionReason,
+      },
+      {
+        label: "Set body-left from accepted BODY REFERENCE",
+        reason: bodyReferenceV2SeedActionReason,
+      },
+      {
+        label: "Accept v2 draft",
+        reason: bodyReferenceV2AcceptDraftActionReason,
+      },
+      {
+        label: "Generate BODY CUTOUT QA from v2 mirrored profile",
+        reason: bodyReferenceV2GenerateActionReason,
+      },
+    ]),
+    [
+      bodyReferenceV2AcceptDraftActionReason,
+      bodyReferenceV2GenerateActionReason,
+      bodyReferenceV2SeedActionReason,
+    ],
+  );
   const approvedBodyReferenceOutlineBounds = React.useMemo(
     () => resolveOutlineBounds(approvedBodyOutline),
     [approvedBodyOutline],
@@ -1147,7 +2282,55 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     }),
     [activeBodyReferenceFineTuneOutline],
   );
-  const currentReviewedBodyReferenceSourceSignature = React.useMemo(() => {
+  const bodyHeightAuthorityInput = React.useMemo<BodyHeightAuthorityInput>(() => {
+    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
+    const bodyBottomFromOverallMm = round2(Math.max(bodyTopFromOverallMm, overallHeightMm - Math.max(0, bottomMarginMm)));
+    const referenceBandHeightPx =
+      typeof lookupResult?.fitDebug?.referenceBandTopPx === "number" &&
+      typeof lookupResult.fitDebug.referenceBandBottomPx === "number"
+        ? round2(Math.max(0, lookupResult.fitDebug.referenceBandBottomPx - lookupResult.fitDebug.referenceBandTopPx))
+        : undefined;
+
+    return {
+      lookupBodyHeightMm: lookupDimensionAuthoritySummary.bodyHeightMm,
+      lookupBodyHeightSource: resolveLookupBodyHeightSource(activeLookupDimensions),
+      lookupFullProductHeightMm: lookupDimensionAuthoritySummary.fullProductHeightMm,
+      templateDimensionsHeightMm: overallHeightMm > 0 ? round2(overallHeightMm) : undefined,
+      templateDimensionsPrintHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
+      printableHeightMm: approvedCanonicalDimensionCalibration?.printableSurfaceContract?.printableHeightMm,
+      engravableHeightMm: printHeightMm > 0 ? round2(printHeightMm) : undefined,
+      approvedSvgBoundsHeightMm: activeBodyReferenceSvgQuality.bounds?.height,
+      approvedSvgMarkedPhysicalMm: false,
+      v2ExpectedBodyHeightMm: bodyReferenceV2ScaleCalibration.expectedBodyHeightMm,
+      referenceBandHeightPx,
+      canonicalBodyHeightMm: approvedCanonicalDimensionCalibration?.bodyHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      diameterAuthority:
+        lookupDimensionAuthoritySummary.readyForLookupScale
+          ? "lookup-diameter"
+          : "manual-diameter",
+      radialScaleSource: "diameterMm",
+      yScaleSource: "template body top/bottom",
+      sourceFunction: "TemplateCreateForm.bodyHeightAuthorityInput",
+    };
+  }, [
+    activeBodyReferenceSvgQuality.bounds?.height,
+    activeLookupDimensions,
+    approvedCanonicalDimensionCalibration?.bodyHeightMm,
+    approvedCanonicalDimensionCalibration?.printableSurfaceContract?.printableHeightMm,
+    bodyReferenceV2ScaleCalibration.expectedBodyHeightMm,
+    bottomMarginMm,
+    lookupDimensionAuthoritySummary.bodyHeightMm,
+    lookupDimensionAuthoritySummary.fullProductHeightMm,
+    lookupDimensionAuthoritySummary.readyForLookupScale,
+    lookupResult?.fitDebug?.referenceBandBottomPx,
+    lookupResult?.fitDebug?.referenceBandTopPx,
+    overallHeightMm,
+    printHeightMm,
+    topMarginMm,
+  ]);
+  const currentReviewedBodyReferenceSourcePayload = React.useMemo(() => {
     if (
       !canGenerateReviewedBodyReferenceGlb ||
       !approvedBodyOutline ||
@@ -1156,25 +2339,49 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     ) {
       return null;
     }
-    return buildBodyReferenceGlbSourceSignature({
-      renderMode: "body-cutout-qa",
-      matchedProfileId: resolvedMatchedProfileId ?? null,
+    return buildBodyReferenceGlbSourcePayload({
       bodyOutline: approvedBodyOutline,
       canonicalBodyProfile: approvedCanonicalBodyProfile,
       canonicalDimensionCalibration: approvedCanonicalDimensionCalibration,
-      bodyColorHex: bodyColorHex || null,
-      rimColorHex: rimColorHex || null,
     });
   }, [
     approvedBodyOutline,
     approvedCanonicalBodyProfile,
     approvedCanonicalDimensionCalibration,
-    bodyColorHex,
     canGenerateReviewedBodyReferenceGlb,
-    resolvedMatchedProfileId,
-    rimColorHex,
   ]);
-  const activeBodyReferenceDraftSourceSignature = React.useMemo(() => {
+  const currentReviewedBodyReferenceSourceSignature = React.useMemo(
+    () => (
+      currentReviewedBodyReferenceSourcePayload
+        ? stableStringifyForHash(currentReviewedBodyReferenceSourcePayload)
+        : null
+    ),
+    [currentReviewedBodyReferenceSourcePayload],
+  );
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!currentReviewedBodyReferenceSourcePayload) {
+      setCurrentReviewedBodyReferenceSourceHash(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void hashJsonSha256(currentReviewedBodyReferenceSourcePayload)
+      .then((hash) => {
+        if (!cancelled) {
+          setCurrentReviewedBodyReferenceSourceHash(hash);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCurrentReviewedBodyReferenceSourceHash(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentReviewedBodyReferenceSourcePayload]);
+  const activeBodyReferenceDraftSourcePayload = React.useMemo(() => {
     if (
       !canGenerateReviewedBodyReferenceGlb ||
       !activeBodyReferenceFineTuneOutline ||
@@ -1183,28 +2390,43 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     ) {
       return null;
     }
-    return buildBodyReferenceGlbSourceSignature({
-      renderMode: "body-cutout-qa",
-      matchedProfileId: resolvedMatchedProfileId ?? null,
+    return buildBodyReferenceGlbSourcePayload({
       bodyOutline: activeBodyReferenceFineTuneOutline,
       canonicalBodyProfile: approvedCanonicalBodyProfile,
       canonicalDimensionCalibration: approvedCanonicalDimensionCalibration,
-      bodyColorHex: bodyColorHex || null,
-      rimColorHex: rimColorHex || null,
     });
   }, [
     activeBodyReferenceFineTuneOutline,
     approvedCanonicalBodyProfile,
     approvedCanonicalDimensionCalibration,
-    bodyColorHex,
     canGenerateReviewedBodyReferenceGlb,
-    resolvedMatchedProfileId,
-    rimColorHex,
   ]);
+  const activeBodyReferenceDraftSourceSignature = React.useMemo(
+    () => (
+      activeBodyReferenceDraftSourcePayload
+        ? stableStringifyForHash(activeBodyReferenceDraftSourcePayload)
+        : null
+    ),
+    [activeBodyReferenceDraftSourcePayload],
+  );
   const reviewedBodyReferenceGlbSourceHash =
     loadedBodyGeometryContract?.glb.sourceHash
     ?? generatedReviewedBodyGeometryContract?.glb.sourceHash
-    ?? reviewedBodyCutoutQaGeneratedSourceSignature;
+    ?? null;
+  const bodyReferenceGuideFrame = React.useMemo(
+    () => resolveBodyReferenceGuideFrame({
+      acceptedBodyReferenceOutline: approvedBodyOutline,
+      acceptedSourceHash: currentReviewedBodyReferenceSourceHash,
+      generatedSourceHash: reviewedBodyReferenceGlbSourceHash,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    }),
+    [
+      approvedBodyOutline,
+      currentReviewedBodyReferenceSourceHash,
+      lookupResult?.fitDebug,
+      reviewedBodyReferenceGlbSourceHash,
+    ],
+  );
   const reviewedBodyReferenceGlbFreshness = React.useMemo(
     () => resolveFineTuneGlbReviewState({
       canGenerate: canGenerateReviewedBodyReferenceGlb,
@@ -1221,30 +2443,59 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       reviewedBodyCutoutQaGeneratedSourceSignature,
     ],
   );
-  const reviewedBodyReferenceGlbFreshnessLabel = React.useMemo(() => {
-    if (reviewedBodyReferenceGlbFreshness.status === "current") {
-      return "Reviewed GLB is fresh against the accepted BODY REFERENCE cutout.";
-    }
-    if (reviewedBodyReferenceGlbFreshness.status === "stale") {
-      return "Reviewed GLB is stale and should be regenerated from the accepted cutout.";
-    }
-    if (reviewedBodyReferenceGlbFreshness.status === "draft-pending") {
-      return "Draft contour edits are pending acceptance.";
-    }
-    return "Reviewed GLB freshness is unavailable until an accepted BODY REFERENCE exists.";
-  }, [reviewedBodyReferenceGlbFreshness.status]);
-  const bodyReferenceFineTuneStatusLabel = React.useMemo(() => {
-    if (bodyReferenceFineTuneDraftPendingAcceptance) {
-      return "Draft pending";
-    }
-    if (reviewedBodyReferenceGlbFreshness.status === "current") {
-      return "Reviewed GLB fresh";
-    }
-    if (reviewedBodyReferenceGlbFreshness.status === "stale") {
-      return "Reviewed GLB stale / needs regeneration";
-    }
-    return "Accepted cutout is current";
-  }, [bodyReferenceFineTuneDraftPendingAcceptance, reviewedBodyReferenceGlbFreshness.status]);
+  const bodyCutoutQaGlbLifecycle = React.useMemo(
+    () => getTemplateBodyCutoutQaGlbLifecycle({
+      hasAcceptedBodyReference: hasAcceptedBodyReferenceReview,
+      hasReviewedGlb: hasReviewedBodyCutoutQaGlb,
+      hasPendingSourceDraft: bodyReferenceFineTuneDraftPendingAcceptance,
+      freshnessStatus: reviewedBodyReferenceGlbFreshness.status,
+      glbFreshRelativeToSource: loadedBodyGeometryContract?.glb.freshRelativeToSource ?? null,
+      runtimeInspectionStatus: loadedBodyGeometryContract?.runtimeInspection?.status ?? null,
+      validationStatus: loadedBodyGeometryContract?.validation.status ?? null,
+    }),
+    [
+      bodyReferenceFineTuneDraftPendingAcceptance,
+      hasAcceptedBodyReferenceReview,
+      hasReviewedBodyCutoutQaGlb,
+      loadedBodyGeometryContract?.glb.freshRelativeToSource,
+      loadedBodyGeometryContract?.runtimeInspection?.status,
+      loadedBodyGeometryContract?.validation.status,
+      reviewedBodyReferenceGlbFreshness.status,
+    ],
+  );
+  const qaStageLabel = bodyCutoutQaGlbLifecycle.label.replace(/^BODY CUTOUT QA GLB:\s*/, "");
+  const operatorNextActionHint =
+    hasAcceptedBodyReferenceReview && bodyCutoutQaGlbLifecycle.nextActionLabel
+      ? bodyCutoutQaGlbLifecycle.nextActionLabel
+      : workflowNextActionHint;
+  const bodyReferenceFineTuneLifecycle = React.useMemo(
+    () => summarizeBodyReferenceFineTuneLifecycle({
+      hasAcceptedCutout: hasAcceptedBodyReferenceReview && Boolean(approvedBodyOutline),
+      isDraftDirty: bodyReferenceFineTuneDraftPendingAcceptance,
+      hasAcceptedCorrectedCutout:
+        reviewedBodyReferenceGlbFreshness.status === "stale" &&
+        reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
+      hasReviewedGlb: reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
+      acceptedSourceHash: currentReviewedBodyReferenceSourceHash,
+      reviewedGlbSourceHash: reviewedBodyReferenceGlbSourceHash,
+      reviewedGlbFreshRelativeToSource:
+        reviewedBodyReferenceGlbFreshness.status === "current"
+          ? true
+          : reviewedBodyReferenceGlbFreshness.status === "stale"
+            ? false
+            : null,
+    }),
+    [
+      approvedBodyOutline,
+      bodyReferenceFineTuneDraftPendingAcceptance,
+      currentReviewedBodyReferenceSourceHash,
+      hasAcceptedBodyReferenceReview,
+      reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
+      reviewedBodyReferenceGlbFreshness.status,
+      reviewedBodyReferenceGlbSourceHash,
+    ],
+  );
+  const bodyReferenceFineTuneStatusLabel = bodyReferenceFineTuneLifecycle.label;
   const bodyReferenceFineTuneVisualWarnings = React.useMemo(() => {
     const warnings: Array<{ level: "warn" | "error"; message: string }> = [];
     if (activeBodyReferenceSvgQuality.status === "fail") {
@@ -1286,7 +2537,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         message: "Draft contour changes the BODY REFERENCE source hash but remains non-authoritative until accepted.",
       });
     }
-    if (reviewedBodyReferenceGlbFreshness.status === "stale") {
+    if (
+      reviewedBodyReferenceGlbFreshness.status === "stale" &&
+      reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact
+    ) {
       warnings.push({
         level: "warn",
         message: "Accepted cutout is newer than the reviewed GLB. Regenerate BODY CUTOUT QA before saving or exporting.",
@@ -1300,29 +2554,16 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     currentReviewedBodyReferenceSourceSignature,
     draftBodyReferenceOutlineBounds,
     draftBodyReferencePointCount,
+    reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
     reviewedBodyReferenceGlbFreshness.status,
   ]);
 
-  const applyAcceptedBodyReferenceDerivedDimensions = React.useCallback((outline: EditableBodyOutline | null | undefined) => {
-    if (!outline) return;
-    const derived = deriveDimensionsFromEditableBodyOutline(outline);
-    const nextTop = typeof derived.bodyTopFromOverallMm === "number"
-      ? round2(Math.max(0, derived.bodyTopFromOverallMm))
-      : topMarginMm;
-    const nextBodyBottom = typeof derived.bodyBottomFromOverallMm === "number"
-      ? round2(Math.max(nextTop + 1, derived.bodyBottomFromOverallMm))
-      : round2(Math.max(nextTop + 1, overallHeightMm - Math.max(0, bottomMarginMm)));
-    if (typeof derived.bodyTopFromOverallMm === "number") {
-      setTopMarginMm(nextTop);
-    }
-    if (typeof derived.bodyBottomFromOverallMm === "number" && overallHeightMm > 0) {
-      setBottomMarginMm(round2(Math.max(0, overallHeightMm - nextBodyBottom)));
-      setPrintHeightMm(round2(Math.max(1, nextBodyBottom - nextTop)));
-    }
-    if (typeof derived.diameterMm === "number" && derived.diameterMm > 0) {
-      setDiameterMm(round2(derived.diameterMm));
-    }
-  }, [bottomMarginMm, overallHeightMm, topMarginMm]);
+  const clearReviewedBodyReferenceGeneratedState = React.useCallback(() => {
+    setGeneratedReviewedBodyGeometryContract(null);
+    setLoadedBodyGeometryContract(null);
+    setReviewedBodyCutoutQaGeneratedSourceSignature(null);
+    setReviewedGeneratedModelState(null);
+  }, []);
 
   const handleStartBodyReferenceFineTune = React.useCallback(() => {
     if (productType === "flat" || !approvedBodyOutline) return;
@@ -1380,27 +2621,122 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
   const handleAcceptBodyReferenceFineTuneDraft = React.useCallback(() => {
     if (!activeBodyReferenceFineTuneOutline || !bodyReferenceFineTuneDraftHasChanges) return;
-    const acceptedOutline = cloneEditableBodyOutline(activeBodyReferenceFineTuneOutline) ?? activeBodyReferenceFineTuneOutline;
-    setApprovedBodyOutline(acceptedOutline);
-    applyAcceptedBodyReferenceDerivedDimensions(acceptedOutline);
+    const rebuiltSnapshot = rebuildAcceptedBodyReferenceSnapshot({
+      acceptedOutline: activeBodyReferenceFineTuneOutline,
+      overallHeightMm,
+      topMarginMm,
+      bottomMarginMm,
+      diameterMm,
+      baseDiameterMm:
+        resolvedMatchedProfile?.bottomDiameterMm ??
+        resolvedMatchedProfile?.outsideDiameterMm ??
+        diameterMm,
+      handleArcDeg,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    });
+    if (!rebuiltSnapshot) return;
+    setApprovedBodyOutline(cloneSerializable(rebuiltSnapshot.approvedBodyOutline));
+    setApprovedCanonicalBodyProfile(
+      rebuiltSnapshot.approvedCanonicalBodyProfile
+        ? cloneSerializable(rebuiltSnapshot.approvedCanonicalBodyProfile)
+        : null,
+    );
+    setApprovedCanonicalDimensionCalibration(
+      rebuiltSnapshot.approvedCanonicalDimensionCalibration
+        ? cloneSerializable(rebuiltSnapshot.approvedCanonicalDimensionCalibration)
+        : null,
+    );
+    setApprovedBodyReferenceQa(
+      rebuiltSnapshot.approvedBodyReferenceQa
+        ? cloneSerializable(rebuiltSnapshot.approvedBodyReferenceQa)
+        : null,
+    );
+    setApprovedBodyReferenceWarnings([...rebuiltSnapshot.approvedBodyReferenceWarnings]);
+    setTopMarginMm(rebuiltSnapshot.nextTopMarginMm);
+    setBottomMarginMm(rebuiltSnapshot.nextBottomMarginMm);
+    setPrintHeightMm(rebuiltSnapshot.nextPrintHeightMm);
+    setDiameterMm(rebuiltSnapshot.nextDiameterMm);
+    clearReviewedBodyReferenceGeneratedState();
+    setPreviewModelMode("alignment-model");
+    setHasAcceptedBodyReferenceReview(true);
     resetBodyReferenceFineTuneState();
   }, [
     activeBodyReferenceFineTuneOutline,
-    applyAcceptedBodyReferenceDerivedDimensions,
     bodyReferenceFineTuneDraftHasChanges,
+    bottomMarginMm,
+    clearReviewedBodyReferenceGeneratedState,
+    diameterMm,
+    handleArcDeg,
+    lookupResult?.fitDebug,
+    overallHeightMm,
     resetBodyReferenceFineTuneState,
+    resolvedMatchedProfile?.bottomDiameterMm,
+    resolvedMatchedProfile?.outsideDiameterMm,
+    topMarginMm,
   ]);
 
-  const handleGenerateReviewedBodyReferenceGlb = React.useCallback(async () => {
+  const handleSeedBodyReferenceV2Centerline = React.useCallback(() => {
+    const seededCenterline = seedCenterlineFromApprovedBodyOutline(approvedBodyOutline);
+    if (!seededCenterline) return;
+    setBodyReferenceV2DraftCapture((currentDraft) => setCenterlineAxis(currentDraft, seededCenterline));
+  }, [approvedBodyOutline]);
+
+  const handleSeedBodyReferenceV2BodyLeft = React.useCallback(() => {
+    const seededBodyLeft = seedBodyLeftOutlineFromApprovedBodyOutline(approvedBodyOutline);
+    if (seededBodyLeft.length < 2) return;
+    setBodyReferenceV2DraftCapture((currentDraft) => setBodyLeftOutline(currentDraft, seededBodyLeft));
+  }, [approvedBodyOutline]);
+
+  const handleChangeBodyReferenceV2CenterlineX = React.useCallback((nextX: number) => {
+    if (!Number.isFinite(nextX)) return;
+    setBodyReferenceV2DraftCapture((currentDraft) => {
+      if (!currentDraft.centerline) {
+        return currentDraft;
+      }
+      return setCenterlineAxis(currentDraft, {
+        ...currentDraft.centerline,
+        xPx: nextX,
+        source: "operator",
+      });
+    });
+  }, []);
+
+  const handleAcceptBodyReferenceV2Draft = React.useCallback(() => {
+    const acceptedDraft = acceptBodyReferenceV2Draft(bodyReferenceV2Draft);
+    setBodyReferenceV2DraftCapture(acceptedDraft);
+    setAcceptedBodyReferenceV2DraftSnapshot(acceptedDraft);
+  }, [bodyReferenceV2Draft]);
+
+  const handleResetBodyReferenceV2Draft = React.useCallback(() => {
+    setBodyReferenceV2DraftCapture(resetBodyReferenceV2Draft({
+      sourceImageUrl: productPhotoFullUrl || undefined,
+      scaleCalibration: bodyReferenceV2ScaleCalibration,
+      acceptedDraft: acceptedBodyReferenceV2DraftSnapshot,
+    }));
+  }, [
+    acceptedBodyReferenceV2DraftSnapshot,
+    bodyReferenceV2ScaleCalibration,
+    productPhotoFullUrl,
+  ]);
+
+  const handleGenerateReviewedBodyReferenceGlb = React.useCallback(async (
+    generationSourceMode: "v1-approved-contour" | "v2-mirrored-profile" = "v1-approved-contour",
+  ) => {
+    const requestingV2 = generationSourceMode === "v2-mirrored-profile";
+    if (productType === "flat") {
+      return;
+    }
     if (
-      productType === "flat" ||
-      !approvedBodyOutline ||
-      !approvedCanonicalBodyProfile ||
-      !approvedCanonicalDimensionCalibration
+      requestingV2
+        ? !bodyReferenceV2CaptureReadiness.generationReady || !acceptedBodyReferenceV2Draft
+        : (
+          !approvedBodyOutline ||
+          !approvedCanonicalBodyProfile ||
+          !approvedCanonicalDimensionCalibration
+        )
     ) {
       return;
     }
-
     setGeneratingReviewedBodyReferenceGlb(true);
     setGlbUploadError(null);
 
@@ -1414,10 +2750,18 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           templateName: name.trim() || null,
           renderMode: "body-cutout-qa",
           matchedProfileId: resolvedMatchedProfileId ?? null,
-          bodyOutline: approvedBodyOutline,
-          bodyOutlineSourceMode: approvedBodyOutline.sourceContourMode ?? null,
-          canonicalBodyProfile: approvedCanonicalBodyProfile,
-          canonicalDimensionCalibration: approvedCanonicalDimensionCalibration,
+          generationSourceMode,
+          bodyHeightAuthorityInput,
+          ...(requestingV2
+            ? {
+                bodyReferenceV2Draft: acceptedBodyReferenceV2Draft,
+              }
+            : {
+                bodyOutline: approvedBodyOutline,
+                bodyOutlineSourceMode: approvedBodyOutline?.sourceContourMode ?? null,
+                canonicalBodyProfile: approvedCanonicalBodyProfile,
+                canonicalDimensionCalibration: approvedCanonicalDimensionCalibration,
+              }),
           bodyColorHex: bodyColorHex || null,
           rimColorHex: rimColorHex || null,
         }),
@@ -1445,7 +2789,11 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       setReviewedGeneratedModelState({
         glbPath: generated.glbPath,
         status: "generated-reviewed-model",
-        sourceLabel: generated.modelSourceLabel ?? "Generated from accepted BODY REFERENCE cutout",
+        sourceLabel:
+          generated.modelSourceLabel
+          ?? (requestingV2
+            ? "Generated from BODY REFERENCE v2 mirrored profile"
+            : "Generated from accepted BODY REFERENCE cutout"),
       });
     } catch (error) {
       setGlbUploadError(
@@ -1458,9 +2806,12 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     }
   }, [
     approvedBodyOutline,
+    acceptedBodyReferenceV2Draft,
     approvedCanonicalBodyProfile,
     approvedCanonicalDimensionCalibration,
     bodyColorHex,
+    bodyHeightAuthorityInput,
+    bodyReferenceV2CaptureReadiness.generationReady,
     name,
     productType,
     resolvedMatchedProfileId,
@@ -1483,6 +2834,28 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
     setErrors([]);
 
     const now = new Date().toISOString();
+    const printableSurfaceResolutionForSave = liveBodyReferencePipeline?.printableSurfaceResolution ?? null;
+    const printableSurfaceContractForSave =
+      printableSurfaceResolutionForSave?.printableSurfaceContract ??
+      approvedCanonicalDimensionCalibration?.printableSurfaceContract ??
+      editingTemplate?.dimensions.printableSurfaceContract ??
+      undefined;
+    const axialSurfaceBandsForSave =
+      printableSurfaceResolutionForSave?.axialSurfaceBands ??
+      approvedCanonicalDimensionCalibration?.axialSurfaceBands ??
+      editingTemplate?.dimensions.axialSurfaceBands ??
+      undefined;
+    const canonicalDimensionCalibrationForSave =
+      approvedCanonicalDimensionCalibration
+        ? {
+            ...approvedCanonicalDimensionCalibration,
+            axialSurfaceBands: axialSurfaceBandsForSave,
+            printableSurfaceContract: printableSurfaceContractForSave,
+          }
+        : undefined;
+    const effectivePrintHeightMm = engravableGuideAuthority
+      ? round2(Math.max(0, engravableGuideAuthority.bottomGuideMm - engravableGuideAuthority.topGuideMm))
+      : printHeightMm;
     const template: ProductTemplate = {
       id: editingTemplate?.id ?? crypto.randomUUID(),
       name: name.trim(),
@@ -1490,18 +2863,36 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       capacity: capacity.trim(),
       laserType,
       productType,
-      thumbnailDataUrl: thumbDataUrl,
+      thumbnailDataUrl: thumbDataUrl || DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL,
       productPhotoFullUrl: productPhotoFullUrl || undefined,
       glbPath,
       glbStatus: activeDrinkwareGlbStatus ?? undefined,
       glbSourceLabel: activeDrinkwareGlbSourceLabel ?? undefined,
       dimensions: {
         diameterMm,
-        printHeightMm,
+        printHeightMm: effectivePrintHeightMm,
         templateWidthMm,
         handleArcDeg,
         taperCorrection,
         overallHeightMm: overallHeightMm > 0 ? overallHeightMm : undefined,
+        bodyTopFromOverallMm: bodyReferenceFrameBounds?.bodyTopFromOverallMm,
+        bodyBottomFromOverallMm: bodyReferenceFrameBounds?.bodyBottomFromOverallMm,
+        lidSeamFromOverallMm:
+          typeof savedLidSeamFromOverallMm === "number" && Number.isFinite(savedLidSeamFromOverallMm)
+            ? savedLidSeamFromOverallMm
+            : undefined,
+        silverBandBottomFromOverallMm:
+          typeof detectedLowerSilverSeamMm === "number" && Number.isFinite(detectedLowerSilverSeamMm)
+            ? detectedLowerSilverSeamMm
+            : undefined,
+        printableTopOverrideMm:
+          typeof printableTopOverrideMm === "number" && Number.isFinite(printableTopOverrideMm)
+            ? printableTopOverrideMm
+            : undefined,
+        printableBottomOverrideMm:
+          typeof printableBottomOverrideMm === "number" && Number.isFinite(printableBottomOverrideMm)
+            ? printableBottomOverrideMm
+            : undefined,
         topMarginMm: Number.isFinite(topMarginMm) ? topMarginMm : undefined,
         bottomMarginMm: Number.isFinite(bottomMarginMm) ? bottomMarginMm : undefined,
         referencePhotoScalePct: Number.isFinite(referencePhotoScalePct) ? referencePhotoScalePct : undefined,
@@ -1510,7 +2901,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         bodyColorHex: bodyColorHex || undefined,
         rimColorHex: rimColorHex || undefined,
         canonicalBodyProfile: approvedCanonicalBodyProfile ?? undefined,
-        canonicalDimensionCalibration: approvedCanonicalDimensionCalibration ?? undefined,
+        canonicalDimensionCalibration: canonicalDimensionCalibrationForSave,
         bodyReferenceQA: approvedBodyReferenceQa ?? undefined,
         bodyReferenceWarnings: approvedBodyReferenceWarnings.length > 0 ? approvedBodyReferenceWarnings : undefined,
         bodyReferenceContractVersion:
@@ -1518,6 +2909,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
             ? BODY_REFERENCE_CONTRACT_VERSION
             : undefined,
         bodyOutlineProfile: approvedBodyOutline ?? undefined,
+        axialSurfaceBands: axialSurfaceBandsForSave,
+        printableSurfaceContract: printableSurfaceContractForSave,
       },
       laserSettings: {
         power,
@@ -1527,6 +2920,19 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         materialProfileId,
         rotaryPresetId,
       },
+      appearanceReferenceLayers:
+        templateAppearanceReferenceLayers.length > 0
+          ? templateAppearanceReferenceLayers
+          : undefined,
+      artworkPlacements: persistedArtworkPlacements,
+      engravingPreviewState: {
+        ...persistedTemplateEngravingPreviewState,
+        mappingSignature:
+          templateArtworkPlacementMappingSignature
+          ?? persistedTemplateEngravingPreviewState.mappingSignature,
+      },
+      lookupDimensions: lookupDimensionsSnapshot ?? undefined,
+      acceptedBodyReferenceV2Draft: acceptedBodyReferenceV2Draft ?? undefined,
       createdAt: editingTemplate?.createdAt ?? now,
       updatedAt: now,
       builtIn: editingTemplate?.builtIn ?? false,
@@ -1544,10 +2950,96 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
   };
 
   return (
-    <div className={styles.form}>
+    <div
+      className={`${styles.form} ${surfaceMode === "page" ? styles.formPage : ""}`}
+      data-testid="template-create-form"
+      data-template-create-surface-mode={surfaceMode}
+    >
+      {inDedicatedTemplateMode && (
+        <section className={styles.modeWorkflowOverview}>
+          <div className={styles.modeWorkflowHeader}>
+            <div>
+              <div className={styles.modeWorkflowEyebrow}>Template workflow</div>
+              <div className={styles.modeWorkflowTitle}>{templateModeWorkflowHeading}</div>
+              <div className={styles.modeWorkflowHint}>
+                Keep product setup first, then move through review and proof in order without mixing BODY CUTOUT QA and WRAP / EXPORT.
+              </div>
+            </div>
+            <div className={styles.modeWorkflowHeaderMeta}>
+              <span className={styles.modeWorkflowCurrent}>Current step: {workflowCurrentStepDisplayLabel}</span>
+              <span
+                className={
+                  templateCreateSourceReadiness.sourceReady
+                    ? styles.workflowReadinessReady
+                    : styles.workflowReadinessPending
+                }
+              >
+                {templateCreateSourceReadiness.sourceReady ? "Source ready" : "Source pending"}
+              </span>
+              <span
+                className={
+                  templateCreateSourceReadiness.detectReady
+                    ? styles.workflowReadinessReady
+                    : styles.workflowReadinessPending
+                }
+              >
+                {templateCreateSourceReadiness.detectReady ? "Detect actionable" : "Detect blocked"}
+              </span>
+            </div>
+          </div>
+          <div className={styles.modeWorkflowStepGrid}>
+            {workflowSteps.map((step) => (
+              <div
+                key={`mode-workflow-${step.step}`}
+                className={[
+                  styles.modeWorkflowStepCard,
+                  step.status === "ready"
+                    ? styles.workflowStepReady
+                    : step.status === "action"
+                      ? styles.workflowStepAction
+                      : styles.workflowStepReview,
+                  workflowCurrentStep === step.step ? styles.workflowStepCurrent : "",
+                ].join(" ")}
+              >
+                <div className={styles.modeWorkflowStepHeader}>
+                  <span className={styles.modeWorkflowStepNumber}>
+                    {step.label.split(".")[0]}
+                  </span>
+                  <span className={styles.modeWorkflowStepLabel}>{step.label.replace(/^\d+\.\s*/, "")}</span>
+                </div>
+                <div className={styles.modeWorkflowStepMeta}>
+                  {getTemplateCreateWorkflowStatusLabel(step.status)}
+                </div>
+                <div className={styles.modeWorkflowStepDetail}>
+                  {workflowCurrentStep === step.step ? step.detail : `${getTemplateCreateWorkflowStatusLabel(step.status)} stage`}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className={styles.modeWorkflowFooter}>
+            <div className={styles.modeWorkflowNextAction}>Next action: {workflowNextActionHint}</div>
+            {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
+              <div className={styles.workflowBlockedNote}>
+                {templateCreateSourceReadiness.blockedReason}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      <div className={inDedicatedTemplateMode ? styles.pageWorkspace : undefined}>
+      <div className={inDedicatedTemplateMode ? styles.pageMainColumn : undefined}>
+
       {/* ── Product identity ──────────────────────────────────────── */}
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>Product identity</div>
+      <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
+        <div className={styles.sectionTitle}>
+          {inDedicatedTemplateMode ? "Step 1 · Source details" : "Product identity"}
+        </div>
+        {inDedicatedTemplateMode && (
+          <div className={styles.sectionLead}>
+            Set the template name, product type, and base identity first. The downstream detect and review steps depend on this source context.
+          </div>
+        )}
 
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>Product name *</label>
@@ -1599,6 +3091,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
           <label className={styles.fieldLabel}>Product type</label>
           <select
             className={styles.selectInput}
+            data-testid="template-product-type-select"
             value={productType}
             onChange={(e) => setProductType(e.target.value as "tumbler" | "mug" | "bottle" | "flat")}
           >
@@ -1611,8 +3104,19 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       </div>
 
       {/* ── Product image + auto-detect ──────────────────────────── */}
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>Product image</div>
+      <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
+        <div className={styles.sectionTitle}>
+          {inDedicatedTemplateMode
+            ? isTemplateCreateReviewFlowProductType(productType)
+              ? "Step 2 · Source imagery and detect inputs"
+              : "Source imagery"
+            : "Product image"}
+        </div>
+        {inDedicatedTemplateMode && (
+          <div className={styles.sectionLead}>
+            Keep lookup, product imagery, and photo auto-detect together so Source and Detect stay visually upstream from BODY REFERENCE review.
+          </div>
+        )}
 
         {productType !== "flat" && (
           <div className={styles.lookupBlock}>
@@ -1624,12 +3128,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                   assign the best profile, and pull a usable product photo.
                 </div>
               </div>
-              {lookupResult && (
+              {activeLookupDimensions && (
                 <button
                   type="button"
                   className={styles.lookupResetBtn}
                   onClick={() => {
                     setLookupResult(null);
+                    setLookupDimensionsSnapshot(null);
                     setLookupError(null);
                     setLookupInput("");
                     setLookupDebugImageUrl("");
@@ -1652,55 +3157,123 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                 className={styles.detectBtn}
                 onClick={() => void handleItemLookup()}
                 disabled={lookingUpItem || !lookupInput.trim()}
+                title={lookupActionReason ?? undefined}
+                data-testid="template-create-run-lookup"
               >
                 {lookingUpItem ? "Looking up..." : "Run lookup"}
               </button>
             </div>
+            {lookupActionReason && (
+              <div
+                className={styles.actionDisabledReason}
+                data-testid="template-create-lookup-action-reason"
+              >
+                Run lookup: {lookupActionReason}
+              </div>
+            )}
 
-            {lookupResult && (
+            {activeLookupDimensions && (
               <div className={styles.lookupSummary}>
                 <div className={styles.lookupSummaryHeader}>
                   <div className={styles.lookupSummaryTitle}>
-                    {lookupResult.title || name || "Resolved item"}
+                    {lookupResult?.title || activeLookupDimensions.selectedVariantLabel || name || "Resolved item"}
                   </div>
                   <div className={styles.lookupBadgeRow}>
                     <span className={styles.lookupBadgePrimary}>
-                      {getLookupModeLabel(lookupResult.mode)}
+                      {lookupResult ? getLookupModeLabel(lookupResult.mode) : "Saved lookup"}
                     </span>
-                    {getLookupSourceLabel(lookupResult) && (
+                    {activeLookupSourceLabel && (
                       <span className={styles.lookupBadgeMuted}>
-                        {getLookupSourceLabel(lookupResult)}
+                        {activeLookupSourceLabel}
                       </span>
                     )}
-                    {lookupResult.imageUrl && productImageLabel && thumbDataUrl && (
+                    {lookupResult?.imageUrl && productImageLabel && thumbDataUrl && (
                       <span className={styles.lookupBadgeMuted}>Photo applied</span>
                     )}
                   </div>
                 </div>
                 <div className={styles.lookupSummaryLine}>
-                  {[lookupResult.brand, lookupResult.capacityOz ? `${lookupResult.capacityOz}oz` : null]
+                  {[
+                    lookupResult?.brand ?? brand,
+                    lookupDimensionAuthoritySummary.selectedSizeOz
+                      ? `${lookupDimensionAuthoritySummary.selectedSizeOz}oz`
+                      : lookupResult?.capacityOz
+                        ? `${lookupResult.capacityOz}oz`
+                        : null,
+                    activeLookupDimensions.selectedColorOrFinish ?? null,
+                  ]
                     .filter(Boolean)
                     .join(" / ")}
                 </div>
                 <div className={styles.lookupMetrics}>
-                  {formatLookupMeasurement(lookupResult.dimensions.outsideDiameterMm) && (
-                    <span>Dia {formatLookupMeasurement(lookupResult.dimensions.outsideDiameterMm)}</span>
+                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm) && (
+                    <span>Diameter authority {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm)}</span>
                   )}
-                  {formatLookupMeasurement(lookupResult.dimensions.usableHeightMm) && (
-                    <span>Print {formatLookupMeasurement(lookupResult.dimensions.usableHeightMm)}</span>
+                  <span>Authority {formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
+                  <span>{formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
+                  {formatLookupMeasurement(lookupDimensionAuthoritySummary.wrapWidthMm) && (
+                    <span>Wrap width {formatLookupMeasurement(lookupDimensionAuthoritySummary.wrapWidthMm)} = Math.PI * diameter</span>
                   )}
-                  {lookupResult.glbPath && <span>3D ready</span>}
+                  {(lookupResult?.glbPath || glbPath) && <span>3D ready</span>}
                 </div>
+                <div className={styles.lookupMetrics}>
+                  <span>Variant {activeLookupDimensions.selectedVariantLabel || "n/a"}</span>
+                  <span>Selected size {formatLookupSize(lookupDimensionAuthoritySummary.selectedSizeOz)}</span>
+                  <span>{formatLookupVariantStatus(lookupDimensionAuthoritySummary.variantStatus)}</span>
+                  {lookupDimensionAuthoritySummary.heightIgnoredForScale && (
+                    <span>Full product height is stored for context and ignored for lookup-based body contour scale.</span>
+                  )}
+                </div>
+                <details className={styles.compactDetails}>
+                  <summary className={styles.compactDetailsSummary}>
+                    Reference dimensions
+                  </summary>
+                  <div className={styles.compactDetailsContent}>
+                    <div className={styles.lookupMetrics}>
+                      {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm) && (
+                        <span>Reference body band {formatLookupMeasurement(lookupDimensionAuthoritySummary.bodyHeightMm)}</span>
+                      )}
+                      {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm) && (
+                        <span>Reference full height {formatLookupMeasurement(lookupDimensionAuthoritySummary.fullProductHeightMm)}</span>
+                      )}
+                      {lookupDimensionAuthoritySummary.heightIgnoredForScale && (
+                        <span>Height is reference only and is not used for body scale authority.</span>
+                      )}
+                    </div>
+                  </div>
+                </details>
+                {(lookupDimensionAuthoritySummary.errors.length > 0 || lookupDimensionAuthoritySummary.warnings.length > 0) && (
+                  <div className={styles.cutoutFitWarningList}>
+                    {lookupDimensionAuthoritySummary.errors.map((error) => (
+                      <div key={`lookup-dimension-error-${error}`} className={styles.cutoutFitWarningError}>
+                        {error}
+                      </div>
+                    ))}
+                    {lookupDimensionAuthoritySummary.warnings.map((warning) => (
+                      <div key={`lookup-dimension-warning-${warning}`} className={styles.cutoutFitWarning}>
+                        {warning}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
             {lookupError && <div className={styles.detectErrorBanner}>{lookupError}</div>}
 
-            {lookupResult?.fitDebug && lookupDebugImageUrl && (
-              <TumblerLookupDebugPanel
-                debug={lookupResult.fitDebug}
-                imageUrl={lookupDebugImageUrl}
-              />
+            {lookupResult?.fitDebug && lookupDebugImageUrl && templateCreateDiagnosticsVisible && (
+              <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                <summary className={styles.compactDetailsSummary}>
+                  Advanced debug · lookup fit and detection guides
+                </summary>
+                <div className={styles.compactDetailsContent}>
+                  <TumblerLookupDebugPanel
+                    debug={lookupResult.fitDebug}
+                    imageUrl={lookupDebugImageUrl}
+                    guideFrame={bodyReferenceGuideFrame}
+                  />
+                </div>
+              </details>
             )}
           </div>
         )}
@@ -1767,77 +3340,184 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       </div>
 
       {productType !== "flat" && (
-        <div className={styles.section} data-body-reference-review-scaffold="present">
-          <div className={styles.sectionTitle}>BODY REFERENCE review scaffold</div>
-
-          <div className={styles.workflowScaffold}>
-            <div className={styles.workflowStepRow}>
-              {workflowSteps.map((step) => (
-                <div
-                  key={step.step}
-                  className={[
-                    styles.workflowStepCard,
-                    step.status === "ready"
-                      ? styles.workflowStepReady
-                      : step.status === "action"
-                        ? styles.workflowStepAction
-                        : styles.workflowStepReview,
-                    workflowCurrentStep === step.step ? styles.workflowStepCurrent : "",
-                  ].join(" ")}
-                >
-                  <div className={styles.workflowStepLabel}>{step.label}</div>
-                  <div className={styles.workflowStepDetail}>{step.detail}</div>
-                </div>
-              ))}
-            </div>
-
-            <div className={styles.workflowReadinessRow}>
-              <span
-                className={
-                  templateCreateSourceReadiness.sourceReady
-                    ? styles.workflowReadinessReady
-                    : styles.workflowReadinessPending
-                }
-              >
-                {templateCreateSourceReadiness.sourceReady ? "Source ready" : "Source pending"}
-              </span>
-              <span
-                className={
-                  templateCreateSourceReadiness.detectReady
-                    ? styles.workflowReadinessReady
-                    : styles.workflowReadinessPending
-                }
-              >
-                {templateCreateSourceReadiness.detectReady ? "Detect actionable" : "Detect blocked"}
-              </span>
-              <span className={styles.workflowReadinessCurrent}>
-                Current step: {workflowCurrentStep}
-              </span>
-            </div>
-
-            {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
-              <div className={styles.workflowBlockedNote}>
-                {templateCreateSourceReadiness.blockedReason}
-              </div>
-            )}
+        <div
+          className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}
+          data-body-reference-review-scaffold="present"
+        >
+          <div className={styles.sectionTitle}>
+            {inDedicatedTemplateMode
+              ? "Steps 3-5 · Review, BODY CUTOUT QA, and WRAP / EXPORT"
+              : "BODY REFERENCE workflow"}
           </div>
+          <div className={styles.sectionLead}>
+            {inDedicatedTemplateMode
+              ? "Review and lock BODY REFERENCE first, then generate the body-only QA GLB, and only then switch into BODY CUTOUT QA or WRAP / EXPORT proof."
+              : "Move through the drinkware flow in order: stage the source, review BODY REFERENCE, generate BODY CUTOUT QA, then switch preview modes for QA or WRAP / EXPORT checks."}
+          </div>
+
+          {inDedicatedTemplateMode ? (
+            <div className={styles.workflowContextBar}>
+              <div className={styles.workflowContextRow}>
+                {workflowSourceStep && (
+                  <span
+                    className={
+                      workflowSourceStep.status === "ready"
+                        ? styles.workflowReadinessReady
+                        : workflowSourceStep.status === "action"
+                          ? styles.workflowReadinessPending
+                          : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {workflowSourceStep.label.replace(/^\d+\.\s*/, "")}
+                  </span>
+                )}
+                {workflowDetectStep && (
+                  <span
+                    className={
+                      workflowDetectStep.status === "ready"
+                        ? styles.workflowReadinessReady
+                        : workflowDetectStep.status === "action"
+                          ? styles.workflowReadinessPending
+                          : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {workflowDetectStep.label.replace(/^\d+\.\s*/, "")}
+                  </span>
+                )}
+                {workflowReviewStep && (
+                  <span
+                    className={
+                      workflowReviewStep.status === "ready"
+                        ? styles.workflowReadinessReady
+                        : workflowReviewStep.status === "action"
+                          ? styles.workflowReadinessPending
+                          : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {workflowReviewStep.label.replace(/^\d+\.\s*/, "")}
+                  </span>
+                )}
+                {workflowGenerateStep && (
+                  <span
+                    className={
+                      workflowGenerateStep.status === "ready"
+                        ? styles.workflowReadinessReady
+                        : workflowGenerateStep.status === "action"
+                          ? styles.workflowReadinessPending
+                          : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {workflowGenerateStep.label.replace(/^\d+\.\s*/, "")}
+                  </span>
+                )}
+                {workflowPreviewStep && (
+                  <span
+                    className={
+                      workflowPreviewStep.status === "ready"
+                        ? styles.workflowReadinessReady
+                        : workflowPreviewStep.status === "action"
+                          ? styles.workflowReadinessPending
+                          : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {workflowPreviewStep.label.replace(/^\d+\.\s*/, "")}
+                  </span>
+                )}
+              </div>
+              <div className={styles.workflowContextSummary}>
+                <span className={styles.workflowReadinessCurrent}>
+                  Current step: {workflowCurrentStepLabel}
+                </span>
+                <span className={styles.workflowNextNote}>
+                  Next action: {operatorNextActionHint}
+                </span>
+              </div>
+              {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
+                <div
+                  className={styles.workflowBlockedNote}
+                  data-testid="template-create-source-blocked-reason"
+                >
+                  {templateCreateSourceReadiness.blockedReason}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className={styles.workflowScaffold}>
+              <div className={styles.workflowStepRow}>
+                {workflowSteps.map((step) => (
+                  <div
+                    key={step.step}
+                    className={[
+                      styles.workflowStepCard,
+                      step.status === "ready"
+                        ? styles.workflowStepReady
+                        : step.status === "action"
+                          ? styles.workflowStepAction
+                          : styles.workflowStepReview,
+                      workflowCurrentStep === step.step ? styles.workflowStepCurrent : "",
+                    ].join(" ")}
+                  >
+                    <div className={styles.workflowStepLabel}>{step.label}</div>
+                    <div className={styles.workflowStepDetail}>{step.detail}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className={styles.workflowReadinessRow}>
+                <span
+                  className={
+                    templateCreateSourceReadiness.sourceReady
+                      ? styles.workflowReadinessReady
+                      : styles.workflowReadinessPending
+                  }
+                >
+                  {templateCreateSourceReadiness.sourceReady ? "Source ready" : "Source pending"}
+                </span>
+                <span
+                  className={
+                    templateCreateSourceReadiness.detectReady
+                      ? styles.workflowReadinessReady
+                      : styles.workflowReadinessPending
+                  }
+                >
+                  {templateCreateSourceReadiness.detectReady ? "Detect actionable" : "Detect blocked"}
+                </span>
+                <span className={styles.workflowReadinessCurrent}>
+                  Current step: {workflowCurrentStepLabel}
+                </span>
+              </div>
+
+              <div className={styles.workflowNextNote}>
+                Next action: {operatorNextActionHint}
+              </div>
+
+              {!templateCreateSourceReadiness.detectReady && templateCreateSourceReadiness.blockedReason && (
+                <div
+                  className={styles.workflowBlockedNote}
+                  data-testid="template-create-source-blocked-reason"
+                >
+                  {templateCreateSourceReadiness.blockedReason}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className={styles.reviewScaffoldCard}>
             <div className={styles.reviewScaffoldHeader}>
               <div>
-                <div className={styles.reviewScaffoldTitle}>Review handoff</div>
+                <div className={styles.reviewScaffoldTitle}>Step 4 · Generate BODY CUTOUT QA</div>
                 <div className={styles.reviewScaffoldHint}>
-                  Accept the current BODY REFERENCE snapshot, then generate a reviewed body-only GLB for BODY CUTOUT QA.
+                  Lock the accepted BODY REFERENCE (v1) first, then generate the reviewed body-only GLB used by BODY CUTOUT QA.
                 </div>
               </div>
               <span
                 className={
-                  hasAcceptedBodyReferenceReview
+                  bodyCutoutQaGlbLifecycle.status === "fresh"
                     ? styles.reviewStatusReady
                     : styles.reviewStatusPending
                 }
               >
-                {hasAcceptedBodyReferenceReview ? "Accepted" : "Pending review"}
+                {hasAcceptedBodyReferenceReview ? qaStageLabel : "Pending BODY REFERENCE"}
               </span>
             </div>
 
@@ -1846,6 +3526,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                 type="button"
                 className={styles.detectBtn}
                 disabled={!liveBodyReferencePipeline || hasAcceptedBodyReferenceReview}
+                title={acceptBodyReferenceActionReason ?? undefined}
                 onClick={() => {
                   if (!liveBodyReferencePipeline) return;
                   resetBodyReferenceFineTuneState();
@@ -1862,15 +3543,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                   );
                   setApprovedBodyReferenceQa(cloneSerializable(liveBodyReferencePipeline.qa));
                   setApprovedBodyReferenceWarnings([...liveBodyReferencePipeline.warnings]);
-                  setGeneratedReviewedBodyGeometryContract(null);
-                  setLoadedBodyGeometryContract(null);
-                  setReviewedBodyCutoutQaGeneratedSourceSignature(null);
-                  setReviewedGeneratedModelState(null);
+                  clearReviewedBodyReferenceGeneratedState();
                   setHasAcceptedBodyReferenceReview(true);
                   setPreviewModelMode("alignment-model");
                 }}
+                data-testid="body-reference-v1-accept"
               >
-                {hasAcceptedBodyReferenceReview ? "BODY REFERENCE accepted" : "Accept BODY REFERENCE review"}
+                {hasAcceptedBodyReferenceReview ? "BODY REFERENCE (v1) locked" : "Accept BODY REFERENCE (v1)"}
               </button>
               <button
                 type="button"
@@ -1880,13 +3559,35 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                   generatingReviewedBodyReferenceGlb ||
                   bodyReferenceFineTuneDraftPendingAcceptance
                 }
+                title={generateBodyCutoutActionReason ?? undefined}
                 onClick={() => {
                   void handleGenerateReviewedBodyReferenceGlb();
                 }}
+                data-testid="body-reference-v1-generate"
               >
-                {generatingReviewedBodyReferenceGlb ? "Generating BODY CUTOUT QA GLB…" : "Generate BODY CUTOUT QA GLB"}
+                {generatingReviewedBodyReferenceGlb
+                  ? "Generating BODY CUTOUT QA GLB…"
+                  : bodyCutoutQaGlbLifecycle.status === "stale"
+                    ? "Regenerate BODY CUTOUT QA GLB"
+                    : "Generate BODY CUTOUT QA GLB"}
               </button>
             </div>
+            {reviewDisabledActionReasonGroups.length > 0 && (
+              <div
+                className={styles.actionReasonList}
+                data-testid="template-create-review-action-reasons"
+              >
+                {reviewDisabledActionReasonGroups.map((group) => (
+                  <div
+                    key={`review-disabled-reason-${group.reason}`}
+                    className={styles.actionDisabledReason}
+                    data-testid="template-create-review-action-reason"
+                  >
+                    {formatTemplateCreateDisabledActionLabels(group.labels)}: {group.reason}
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className={styles.reviewScaffoldMeta}>
               {!workflowInput.hasStagedDetectResult && !liveBodyReferencePipeline && (
@@ -1901,31 +3602,15 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               )}
               {hasAcceptedBodyReferenceReview && (
                 <div className={styles.reviewScaffoldNote}>
-                  BODY REFERENCE review is accepted. Generate the reviewed GLB to switch the viewer into body-only QA proof mode.
-                </div>
-              )}
-              {approvedBodyReferenceQa && (
-                <div className={styles.reviewScaffoldInlineMeta}>
-                  <span>QA {approvedBodyReferenceQa.severity}</span>
-                  <span>{approvedBodyReferenceQa.shellAuthority}</span>
-                  <span>{approvedBodyReferenceQa.scaleAuthority}</span>
+                  BODY REFERENCE accepted. {bodyCutoutQaGlbLifecycle.label}
+                  {bodyCutoutQaGlbLifecycle.nextActionLabel
+                    ? `. Next action: ${bodyCutoutQaGlbLifecycle.nextActionLabel}.`
+                    : "."}
                 </div>
               )}
               {approvedBodyReferenceWarnings.length > 0 && (
                 <div className={styles.reviewScaffoldNote}>
                   {approvedBodyReferenceWarnings[0]}
-                </div>
-              )}
-              {loadedBodyGeometryContract && (
-                <div className={styles.reviewScaffoldInlineMeta}>
-                  <span>Runtime {loadedBodyGeometryContract.validation.status}</span>
-                  <span>
-                    {loadedBodyGeometryContract.glb.freshRelativeToSource === true
-                      ? "GLB fresh"
-                      : loadedBodyGeometryContract.glb.freshRelativeToSource === false
-                        ? "GLB stale"
-                        : "GLB freshness unknown"}
-                  </span>
                 </div>
               )}
               {bodyReferenceFineTuneDraftPendingAcceptance && (
@@ -1935,16 +3620,44 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               )}
               {saveGateReason && (
                 <div className={styles.reviewScaffoldNote}>
-                  Save gate preview: {saveGateReason}
+                  Save remains blocked: {saveGateReason}
                 </div>
               )}
-              {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
-                <div className={styles.reviewScaffoldInlineMeta}>
-                  <span>{getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)}</span>
-                  {activeDrinkwareGlbSourceLabel && (
-                    <span>{activeDrinkwareGlbSourceLabel}</span>
-                  )}
-                </div>
+              {templateCreateDiagnosticsVisible && (approvedBodyReferenceQa || loadedBodyGeometryContract || getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)) && (
+                <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                  <summary className={styles.compactDetailsSummary}>
+                    Review diagnostics and runtime detail
+                  </summary>
+                  <div className={styles.compactDetailsContent}>
+                    {approvedBodyReferenceQa && (
+                      <div className={styles.reviewScaffoldInlineMeta}>
+                        <span>QA {approvedBodyReferenceQa.severity}</span>
+                        <span>{approvedBodyReferenceQa.shellAuthority}</span>
+                        <span>{approvedBodyReferenceQa.scaleAuthority}</span>
+                      </div>
+                    )}
+                    {loadedBodyGeometryContract && (
+                      <div className={styles.reviewScaffoldInlineMeta}>
+                        <span>Runtime {loadedBodyGeometryContract.validation.status}</span>
+                        <span>
+                          {loadedBodyGeometryContract.glb.freshRelativeToSource === true
+                            ? "GLB fresh"
+                            : loadedBodyGeometryContract.glb.freshRelativeToSource === false
+                              ? "GLB stale"
+                              : "GLB freshness unknown"}
+                        </span>
+                      </div>
+                    )}
+                    {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
+                      <div className={styles.reviewScaffoldInlineMeta}>
+                        <span>{getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)}</span>
+                        {activeDrinkwareGlbSourceLabel && (
+                          <span>{activeDrinkwareGlbSourceLabel}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </details>
               )}
             </div>
 
@@ -1959,10 +3672,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               <div className={styles.previewScaffoldHeader}>
                 <div>
                   <div className={styles.previewScaffoldTitle}>
-                    {effectivePreviewModeLabel}
+                    Step 5 · Preview and operator checks
                   </div>
                   <div className={styles.previewScaffoldHint}>
-                    {effectivePreviewModeHint}
+                    Select the viewer mode here. BODY CUTOUT QA validates reviewed body-only geometry; WRAP / EXPORT stays separate and reports printable-surface readiness.
                   </div>
                 </div>
                 {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
@@ -1974,10 +3687,19 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
               {previewModeDowngradeActive && (
                 <div className={styles.reviewScaffoldInlineMeta}>
-                  <span>Requested: {requestedPreviewModeLabel}</span>
-                  <span>Showing: {effectivePreviewModeLabel}</span>
+                  <span>Selected preview: {requestedPreviewModeLabel}</span>
+                  <span>Viewer showing: {effectivePreviewModeLabel}</span>
                 </div>
               )}
+              {previewModeTransitionNote && (
+                <div className={styles.previewPlaceholderNote}>
+                  {previewModeTransitionNote}
+                </div>
+              )}
+              <div className={styles.reviewScaffoldInlineMeta}>
+                <span>Preview mode: {effectivePreviewModeLabel}</span>
+                <span>{effectivePreviewModeHint}</span>
+              </div>
               {previewModelState?.message && (
                 <div className={styles.previewPlaceholderNote}>
                   {previewModelState.message}
@@ -1987,16 +3709,51 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
               <div className={styles.previewModeRow}>
                 <button
                   type="button"
+                  className={`${styles.detectBtn} ${previewModelMode === "body-cutout-qa" ? styles.detectBtnActive : ""}`}
+                  disabled={!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)}
+                  title={getTemplateCreatePreviewActionReason({
+                    action: "body-cutout-qa",
+                    hasSourceModel: hasSourceModelForPreview,
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                  }) ?? undefined}
+                  aria-pressed={previewModelMode === "body-cutout-qa"}
+                  onClick={() => setPreviewModelMode("body-cutout-qa")}
+                  data-testid="preview-mode-body-cutout-qa"
+                >
+                  BODY CUTOUT QA
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.detectBtn} ${previewModelMode === "wrap-export" ? styles.detectBtnActive : ""}`}
+                  disabled={!glbPath.trim()}
+                  title={getTemplateCreatePreviewActionReason({
+                    action: "wrap-export",
+                    hasSourceModel: hasSourceModelForPreview,
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                  }) ?? undefined}
+                  aria-pressed={previewModelMode === "wrap-export"}
+                  onClick={() => setPreviewModelMode("wrap-export")}
+                  data-testid="preview-mode-wrap-export"
+                >
+                  WRAP / EXPORT
+                </button>
+                <button
+                  type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "alignment-model" ? styles.detectBtnActive : ""}`}
                   aria-pressed={previewModelMode === "alignment-model"}
                   onClick={() => setPreviewModelMode("alignment-model")}
                 >
-                  Alignment
+                  Alignment review
                 </button>
                 <button
                   type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "full-model" ? styles.detectBtnActive : ""}`}
                   disabled={!glbPath.trim()}
+                  title={getTemplateCreatePreviewActionReason({
+                    action: "full-model",
+                    hasSourceModel: hasSourceModelForPreview,
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                  }) ?? undefined}
                   aria-pressed={previewModelMode === "full-model"}
                   onClick={() => setPreviewModelMode("full-model")}
                 >
@@ -2004,26 +3761,13 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                 </button>
                 <button
                   type="button"
-                  className={`${styles.detectBtn} ${previewModelMode === "wrap-export" ? styles.detectBtnActive : ""}`}
-                  disabled={!glbPath.trim()}
-                  aria-pressed={previewModelMode === "wrap-export"}
-                  onClick={() => setPreviewModelMode("wrap-export")}
-                >
-                  WRAP / EXPORT
-                </button>
-                <button
-                  type="button"
-                  className={`${styles.detectBtn} ${previewModelMode === "body-cutout-qa" ? styles.detectBtnActive : ""}`}
-                  disabled={!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)}
-                  aria-pressed={previewModelMode === "body-cutout-qa"}
-                  onClick={() => setPreviewModelMode("body-cutout-qa")}
-                >
-                  Body cutout QA
-                </button>
-                <button
-                  type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "source-traced" ? styles.detectBtnActive : ""}`}
                   disabled={!glbPath.trim()}
+                  title={getTemplateCreatePreviewActionReason({
+                    action: "source-compare",
+                    hasSourceModel: hasSourceModelForPreview,
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                  }) ?? undefined}
                   aria-pressed={previewModelMode === "source-traced"}
                   onClick={() => setPreviewModelMode("source-traced")}
                 >
@@ -2031,43 +3775,55 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                 </button>
               </div>
 
-              {!glbPath.trim() && (
-                <div className={styles.previewPlaceholderNote}>
-                  Load or resolve a source model to surface the reviewed model preview in this review flow.
-                </div>
-              )}
-              {!glbPath.trim() && (
-                <div className={styles.previewPlaceholderNote}>
-                  WRAP / EXPORT preview uses the current source model plus wrap dimensions. It stays separate from BODY CUTOUT QA.
-                </div>
-              )}
-              {!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus) && (
-                <div className={styles.previewPlaceholderNote}>
-                  BODY CUTOUT QA unlocks after generating the reviewed body-only GLB from the accepted BODY REFERENCE.
+              {previewDisabledActionReasonGroups.length > 0 && (
+                <div
+                  className={styles.actionReasonList}
+                  data-testid="template-create-preview-action-reasons"
+                >
+                  {previewDisabledActionReasonGroups.map((group) => (
+                    <div
+                      key={`preview-disabled-reason-${group.reason}`}
+                      className={styles.actionDisabledReason}
+                      data-testid="template-create-preview-action-reason"
+                    >
+                      {formatTemplateCreateDisabledActionLabels(group.labels)}: {group.reason}
+                    </div>
+                  ))}
                 </div>
               )}
 
               {wrapExportSummaryVisible && (
-                <div className={styles.cutoutFitSummary} data-testid="wrap-export-summary">
+                <div
+                  className={styles.cutoutFitSummary}
+                  data-testid="wrap-export-summary"
+                  data-engraving-overlay-enabled={engravingOverlayPreviewState.enabled ? "yes" : "no"}
+                  data-engraving-overlay-count={engravingOverlayPreviewState.visibleCount}
+                  data-engraving-overlay-first-angle={engravingOverlayPreviewState.items[0]?.angleDeg ?? ""}
+                  data-engraving-overlay-first-body-y={engravingOverlayPreviewState.items[0]?.bodyYMm ?? ""}
+                  data-wrap-export-authority={wrapExportProductionReadiness.exportAuthority}
+                  data-wrap-export-body-cutout-qa-proof={wrapExportProductionReadiness.notBodyCutoutQa ? "no" : "yes"}
+                  data-wrap-export-body-bounds-source={wrapExportProductionReadiness.bodyBoundsSource}
+                  data-wrap-export-mapping-freshness={wrapExportProductionReadiness.mappingFreshness}
+                >
                   <div className={styles.cutoutFitSummaryHeader}>
                     <div>
-                      <div className={styles.cutoutFitSummaryTitle}>Wrap / Export Summary</div>
+                      <div className={styles.cutoutFitSummaryTitle}>{getWrapExportSummaryTitle()}</div>
                       <div className={styles.cutoutFitSummaryHint}>
-                        WRAP / EXPORT shows printable-surface readiness. It is not BODY CUTOUT QA and does not place artwork on the body yet.
+                        {getWrapExportSummarySubtitle()}
                       </div>
                     </div>
                     <span
                       className={
-                        wrapExportPreviewState.status === "pass"
+                        wrapExportProductionReadiness.status === "pass"
                           ? styles.reviewStatusReady
-                          : wrapExportPreviewState.status === "fail"
+                          : wrapExportProductionReadiness.status === "fail"
                             ? styles.reviewStatusFail
-                            : wrapExportPreviewState.status === "warn"
+                            : wrapExportProductionReadiness.status === "warn"
                               ? styles.reviewStatusPending
                               : styles.previewScaffoldBadge
                       }
                     >
-                      {getWrapExportPreviewStatusLabel(wrapExportPreviewState.status)}
+                      {getWrapExportPreviewStatusLabel(wrapExportProductionReadiness.status)}
                     </span>
                   </div>
 
@@ -2075,93 +3831,220 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Mapping status</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {getWrapExportMappingStatusLabel(wrapExportPreviewState.mappingStatus)}
+                        {getWrapExportMappingStatusLabel(wrapExportProductionReadiness.mappingStatus)}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Ready for preview</span>
+                      <span className={styles.cutoutFitMetricLabel}>Saved artwork placements</span>
+                      <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.placementCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Saved placement agreement</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportPreviewState.readyForPreview ? "yes" : "no"}
+                        {hasSavedArtworkPlacements
+                          ? wrapExportFreshnessLabel
+                          : "No saved artwork placement yet"}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Ready for exact placement</span>
+                      <span className={styles.cutoutFitMetricLabel}>Export source of truth</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {wrapExportPreviewState.readyForExactPlacement ? "yes" : "no"}
-                      </span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>BODY CUTOUT QA proof</span>
-                      <span className={styles.cutoutFitMetricValue}>no</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Wrap diameter</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.wrapDiameterMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Wrap width</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.wrapWidthMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Printable top</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableTopMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Printable bottom</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableBottomMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Printable height</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableHeightMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Expected body width</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.expectedBodyWidthMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Expected body height</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.expectedBodyHeightMm)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Body bounds</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatBodyBoundsMetric(wrapExportPreviewState.bodyBounds)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Scale source</span>
-                      <span className={styles.cutoutFitMetricValue}>{wrapExportPreviewState.scaleSource ?? "unknown"}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Freshness</span>
-                      <span className={styles.cutoutFitMetricValue}>{wrapExportPreviewState.freshness}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Source hash</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {formatShortHash(loadedBodyGeometryContract?.source.hash)}
-                      </span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
-                      <span className={styles.cutoutFitMetricValue}>
-                        {formatShortHash(loadedBodyGeometryContract?.glb.sourceHash)}
+                        {getWrapExportExportAuthorityLabel(wrapExportProductionReadiness.exportAuthority)}
                       </span>
                     </div>
                   </div>
+
+                  {templateCreateDiagnosticsVisible && (
+                    <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                      <summary className={styles.compactDetailsSummary}>
+                        Mapping, overlay, and signature detail
+                      </summary>
+                      <div className={styles.compactDetailsContent}>
+                      <div className={styles.cutoutFitSummaryGrid}>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Ready for preview</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.readyForPreview ? "yes" : "no"}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Ready for exact placement</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.readyForExactPlacement ? "yes" : "no"}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Viewer agreement ready</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.readyForViewerAgreement ? "yes" : "no"}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>BODY CUTOUT QA proof</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.notBodyCutoutQa ? "no" : "yes"}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Wrap diameter</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.wrapDiameterMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Wrap width</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.wrapWidthMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Printable top</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableTopMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Printable bottom</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableBottomMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Printable height</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.printableHeightMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Expected body width</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.expectedBodyWidthMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Expected body height</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(wrapExportPreviewState.expectedBodyHeightMm)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Body bounds</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatBodyBoundsMetric(wrapExportPreviewState.bodyBounds)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Scale source</span>
+                          <span className={styles.cutoutFitMetricValue}>{wrapExportPreviewState.scaleSource ?? "unknown"}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Body bounds source</span>
+                          <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.bodyBoundsSource}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Visible overlay items</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.overlayCount} / {wrapExportProductionReadiness.overlayTotalCount}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Overlay enabled</span>
+                          <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.overlayEnabled ? "yes" : "no"}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Overlay material</span>
+                          <span className={styles.cutoutFitMetricValue}>{ENGRAVING_OVERLAY_PREVIEW_MATERIAL_TOKEN}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Outside printable placements</span>
+                          <span className={styles.cutoutFitMetricValue}>{engravingOverlayPreviewState.outsidePrintableAreaCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Appearance references</span>
+                          <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.totalLayers}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Stale mapping warnings</span>
+                          <span className={styles.cutoutFitMetricValue}>{wrapExportProductionReadiness.staleMappingWarningCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Source hash</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {formatShortHash(wrapExportContract?.source.hash)}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {formatShortHash(wrapExportContract?.glb.sourceHash)}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Saved mapping signature</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {formatShortHash(
+                              wrapExportProductionReadiness.mappingSignature
+                              ?? templateArtworkPlacementMappingSignature
+                              ?? editingTemplate?.engravingPreviewState?.mappingSignature,
+                            )}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Reference-only layers</span>
+                          <span className={styles.cutoutFitMetricValue}>
+                            {wrapExportProductionReadiness.appearanceReferenceContextOnly ? "yes" : "no"}
+                          </span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Top finish band</span>
+                          <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.topFinishBandPresent ? "present" : "none"}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Bottom finish band</span>
+                          <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.bottomFinishBandPresent ? "present" : "none"}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Front logo reference</span>
+                          <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.frontLogoReferencePresent ? "present" : "none"}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Back logo reference</span>
+                          <span className={styles.cutoutFitMetricValue}>{appearanceReferenceSummary.backLogoReferencePresent ? "present" : "none"}</span>
+                        </div>
+                      </div>
+                      </div>
+                    </details>
+                  )}
 
                   <div className={styles.reviewScaffoldNote}>
-                    WRAP / EXPORT uses current body geometry freshness and printable-surface metadata when available. It never replaces BODY CUTOUT QA.
+                    {getWrapExportAuthorityNote()}
+                  </div>
+                  <div className={styles.reviewScaffoldNote}>
+                    {getWrapExportOverlayPreviewNote(ENGRAVING_OVERLAY_PREVIEW_MATERIAL_LABEL)}
+                  </div>
+                  <div className={styles.reviewScaffoldNote}>
+                    {getWrapExportRegenerateNote()}
+                  </div>
+                  <div
+                    className={styles.reviewScaffoldNote}
+                    data-testid="appearance-reference-summary"
+                  >
+                    {getWrapExportAppearanceReferenceNote()}
                   </div>
 
-                  {(wrapExportPreviewState.errors.length > 0 || wrapExportPreviewState.warnings.length > 0) && (
+                  {!hasSavedArtworkPlacements && (
+                    <div className={styles.previewPlaceholderNote}>
+                      {getWrapExportNoSavedPlacementMessage()}
+                    </div>
+                  )}
+                  {hasSavedArtworkPlacements && engravingOverlayPreviewState.disabledReason && (
+                    <div className={styles.previewPlaceholderNote}>
+                      {engravingOverlayPreviewState.disabledReason}
+                    </div>
+                  )}
+                  {wrapExportOperatorWarningNote && (
+                    <div className={styles.previewPlaceholderNote}>
+                      {wrapExportOperatorWarningNote}
+                    </div>
+                  )}
+                  {appearanceReferenceSummary.totalLayers === 0 && (
+                    <div className={styles.previewPlaceholderNote}>
+                      {getWrapExportNoAppearanceReferenceMessage()}
+                    </div>
+                  )}
+
+                  {wrapExportDiagnosticMessages.length > 0 && (
                     <div className={styles.cutoutFitWarningList}>
-                      {wrapExportPreviewState.errors.map((error) => (
-                        <div key={`wrap-error-${error}`} className={styles.cutoutFitWarningError}>
-                          {error}
-                        </div>
-                      ))}
-                      {wrapExportPreviewState.warnings.map((warning) => (
-                        <div key={`wrap-warning-${warning}`} className={styles.cutoutFitWarning}>
-                          {warning}
+                      {wrapExportDiagnosticMessages.map((entry) => (
+                        <div
+                          key={`wrap-export-diagnostic-${entry.level}-${entry.message}`}
+                          className={entry.level === "error" ? styles.cutoutFitWarningError : styles.cutoutFitWarning}
+                        >
+                          {entry.message}
                         </div>
                       ))}
                     </div>
@@ -2175,6 +4058,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                     <ModelViewer
                       modelUrl={glbPath}
                       glbPath={glbPath}
+                      placedItems={engravingOverlayPreviewState.enabled ? overlayPreviewPlacedItems : undefined}
+                      itemTextures={engravingOverlayPreviewState.enabled ? overlayPreviewTextures : undefined}
                       bedWidthMm={templateWidthMm > 0 ? templateWidthMm : undefined}
                       bedHeightMm={printHeightMm > 0 ? printHeightMm : undefined}
                       tumblerDims={previewTumblerDims}
@@ -2193,6 +4078,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                       canonicalBodyProfile={approvedCanonicalBodyProfile}
                       canonicalDimensionCalibration={approvedCanonicalDimensionCalibration}
                       bodyGeometryContractSeed={generatedReviewedBodyGeometryContract}
+                      wrapExportProductionReadiness={wrapExportProductionReadiness}
+                      showModelDebug={templateCreateDiagnosticsVisible}
                       onBodyGeometryContractChange={setLoadedBodyGeometryContract}
                     />
                   </div>
@@ -2230,6 +4117,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                     className={styles.detectBtn}
                     onClick={handleStartBodyReferenceFineTune}
                     disabled={bodyReferenceFineTuneModeEnabled}
+                    data-testid="body-reference-fine-tune-edit"
                   >
                     Edit contour
                   </button>
@@ -2238,6 +4126,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                     className={styles.detectBtn}
                     onClick={handleAcceptBodyReferenceFineTuneDraft}
                     disabled={!bodyReferenceFineTuneDraftPendingAcceptance}
+                    data-testid="body-reference-fine-tune-accept"
                   >
                     Accept corrected cutout
                   </button>
@@ -2265,23 +4154,82 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                   >
                     Discard draft
                   </button>
-                  <button
-                    type="button"
-                    className={styles.detectBtn}
-                    disabled={
-                      !canGenerateReviewedBodyReferenceGlb ||
-                      generatingReviewedBodyReferenceGlb ||
-                      bodyReferenceFineTuneDraftPendingAcceptance ||
-                      !reviewedBodyReferenceGlbFreshness.canRequestGeneration
-                    }
-                    onClick={() => {
-                      void handleGenerateReviewedBodyReferenceGlb();
-                    }}
-                  >
-                    {generatingReviewedBodyReferenceGlb
-                      ? "Regenerating reviewed GLB…"
-                      : "Regenerate reviewed GLB from corrected cutout"}
-                  </button>
+                  {reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact && (
+                    <button
+                      type="button"
+                      className={styles.detectBtn}
+                      disabled={
+                        !canGenerateReviewedBodyReferenceGlb ||
+                        generatingReviewedBodyReferenceGlb ||
+                        bodyReferenceFineTuneDraftPendingAcceptance ||
+                        !reviewedBodyReferenceGlbFreshness.canRequestGeneration
+                      }
+                      onClick={() => {
+                        void handleGenerateReviewedBodyReferenceGlb();
+                      }}
+                      data-testid="body-reference-fine-tune-regenerate"
+                    >
+                      {generatingReviewedBodyReferenceGlb
+                        ? "Regenerating BODY CUTOUT QA GLB…"
+                        : "Regenerate BODY CUTOUT QA GLB"}
+                    </button>
+                  )}
+                </div>
+
+                <div
+                  className={styles.fineTuneLifecyclePanel}
+                  data-testid="body-reference-fine-tune-lifecycle"
+                >
+                  <div className={styles.fineTuneLifecycleHeader}>
+                    <div>
+                      <div className={styles.fineTuneLifecycleEyebrow}>Draft lifecycle</div>
+                      <div className={styles.fineTuneLifecycleTitle}>
+                        {bodyReferenceFineTuneLifecycle.label}
+                      </div>
+                    </div>
+                    <span
+                      className={
+                        bodyReferenceFineTuneLifecycle.status === "reviewed-glb-fresh" ||
+                        bodyReferenceFineTuneLifecycle.status === "no-draft"
+                          ? styles.reviewStatusReady
+                          : styles.reviewStatusPending
+                      }
+                    >
+                      GLB {bodyReferenceFineTuneLifecycle.glbFreshnessLabel}
+                    </span>
+                  </div>
+                  <div className={styles.fineTuneLifecycleMessage}>
+                    {bodyReferenceFineTuneLifecycle.operatorMessage}
+                  </div>
+                  <div className={styles.fineTuneLifecycleGrid}>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>GLB freshness</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {bodyReferenceFineTuneLifecycle.glbFreshnessLabel}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Next action</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {bodyReferenceFineTuneLifecycle.nextActionLabel ?? "No regeneration required"}
+                      </span>
+                    </div>
+                  </div>
+                  {bodyReferenceFineTuneLifecycle.warnings.length > 0 && (
+                    <div className={styles.fineTuneLifecycleWarnings}>
+                      {bodyReferenceFineTuneLifecycle.warnings.map((warning) => (
+                        <div key={warning} className={styles.cutoutFitWarning}>
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className={styles.fineTuneActionConsequences}>
+                  <span>Accept corrected cutout: Replace accepted cutout and mark reviewed GLB stale.</span>
+                  <span>Reset draft: Reset draft to accepted cutout.</span>
+                  <span>Cancel draft: Discard draft edits and keep the accepted cutout.</span>
                 </div>
 
                 <div className={styles.cutoutFitSummary}>
@@ -2305,20 +4253,8 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
 
                   <div className={styles.cutoutFitSummaryGrid}>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Approved point count</span>
-                      <span className={styles.cutoutFitMetricValue}>{approvedBodyReferencePointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Draft point count</span>
-                      <span className={styles.cutoutFitMetricValue}>{draftBodyReferencePointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Approved bounds</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(approvedBodyReferenceOutlineBounds)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Draft bounds</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(draftBodyReferenceOutlineBounds)}</span>
+                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB freshness</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceFineTuneStatusLabel}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>SVG quality status</span>
@@ -2332,40 +4268,64 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                       <span className={styles.cutoutFitMetricLabel}>Expected bridge segments</span>
                       <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.expectedBridgeSegmentCount}</span>
                     </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Tiny segments</span>
-                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.tinySegmentCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Suspicious spikes</span>
-                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.suspiciousSpikeCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Duplicate points</span>
-                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.duplicatePointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Near-duplicate points</span>
-                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.nearDuplicatePointCount}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB freshness</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceFineTuneStatusLabel}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Source hash</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatShortHash(currentReviewedBodyReferenceSourceSignature)}</span>
-                    </div>
-                    <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
-                      <span className={styles.cutoutFitMetricValue}>{formatShortHash(reviewedBodyReferenceGlbSourceHash)}</span>
-                    </div>
                   </div>
 
+                  {templateCreateDiagnosticsVisible && (
+                    <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                      <summary className={styles.compactDetailsSummary}>
+                        Cutout geometry and hash detail
+                      </summary>
+                      <div className={styles.compactDetailsContent}>
+                      <div className={styles.cutoutFitSummaryGrid}>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Approved point count</span>
+                          <span className={styles.cutoutFitMetricValue}>{approvedBodyReferencePointCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Draft point count</span>
+                          <span className={styles.cutoutFitMetricValue}>{draftBodyReferencePointCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Approved bounds</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(approvedBodyReferenceOutlineBounds)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Draft bounds</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(draftBodyReferenceOutlineBounds)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Tiny segments</span>
+                          <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.tinySegmentCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Suspicious spikes</span>
+                          <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.suspiciousSpikeCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Duplicate points</span>
+                          <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.duplicatePointCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Near-duplicate points</span>
+                          <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.nearDuplicatePointCount}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>Source hash</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatShortHash(currentReviewedBodyReferenceSourceHash)}</span>
+                        </div>
+                        <div className={styles.cutoutFitMetric}>
+                          <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
+                          <span className={styles.cutoutFitMetricValue}>{formatShortHash(reviewedBodyReferenceGlbSourceHash)}</span>
+                        </div>
+                      </div>
+                      </div>
+                    </details>
+                  )}
+
                   <div className={styles.reviewScaffoldNote}>
-                    {reviewedBodyReferenceGlbFreshnessLabel}
-                    {bodyReferenceFineTuneDraftPendingAcceptance
-                      ? " Accept corrected cutout before regenerating the reviewed GLB."
+                    {bodyReferenceFineTuneLifecycle.operatorMessage}
+                    {bodyReferenceFineTuneLifecycle.nextActionLabel
+                      ? ` Next action: ${bodyReferenceFineTuneLifecycle.nextActionLabel}.`
                       : ""}
                   </div>
 
@@ -2393,6 +4353,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                   detectedOutline={bodyReferenceFineTuneDetectedBaselineOutline}
                   overallHeightMm={overallHeightMm}
                   sourceImageUrl={productPhotoFullUrl || null}
+                  fitDebug={lookupResult?.fitDebug ?? null}
                   svgQualityReport={activeBodyReferenceSvgQuality}
                   interactive={bodyReferenceFineTuneModeEnabled}
                   canUndo={bodyReferenceFineTuneUndoStack.length > 0}
@@ -2405,13 +4366,504 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
                 />
               </div>
             )}
+
+            <details
+              className={`${styles.cutoutFitSummary} ${styles.optionalPanel}`}
+              data-testid="body-reference-v2-summary"
+              data-body-reference-v2-status={bodyReferenceV2Summary.status}
+              data-body-reference-v2-operator-status={bodyReferenceV2OperatorState.status}
+              open={isBodyReferenceV2CurrentQaSource}
+            >
+              <summary className={styles.optionalPanelSummary}>
+                <span>Optional BODY REFERENCE v2</span>
+                <span
+                  className={
+                    bodyReferenceV2OperatorState.promoteMessagesToMainPath
+                      ? bodyReferenceV2OperatorState.status === "active-ready"
+                        ? styles.reviewStatusReady
+                        : styles.reviewStatusPending
+                      : styles.workflowReadinessCurrent
+                  }
+                >
+                  {bodyReferenceV2OperatorState.label}
+                </span>
+              </summary>
+              <div className={styles.optionalPanelBody}>
+              <div className={styles.cutoutFitSummaryHeader}>
+                <div>
+                  <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 capture (optional)</div>
+                  <div className={styles.cutoutFitSummaryHint}>
+                    Use v2 when you want an operator-reviewed centerline plus body-left profile. BODY CUTOUT QA stays on the accepted v1 contour until you accept the v2 draft and explicitly generate from it.
+                  </div>
+                </div>
+                <span
+                  className={
+                    bodyReferenceV2Summary.status === "pass"
+                      ? styles.reviewStatusReady
+                      : bodyReferenceV2Summary.status === "fail"
+                        ? styles.reviewStatusFail
+                        : styles.reviewStatusPending
+                  }
+                >
+                  {bodyReferenceV2Summary.status.toUpperCase()}
+                </span>
+              </div>
+
+              <div className={styles.reviewScaffoldActions}>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  data-testid="body-reference-v2-seed-centerline"
+                  disabled={!approvedBodyOutline}
+                  title={bodyReferenceV2SeedActionReason ?? undefined}
+                  onClick={handleSeedBodyReferenceV2Centerline}
+                >
+                  Capture / seed centerline
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  data-testid="body-reference-v2-seed-body-left"
+                  disabled={!approvedBodyOutline}
+                  title={bodyReferenceV2SeedActionReason ?? undefined}
+                  onClick={handleSeedBodyReferenceV2BodyLeft}
+                >
+                  Set body-left from accepted BODY REFERENCE
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  data-testid="body-reference-v2-accept-draft"
+                  disabled={!bodyReferenceV2Draft.centerline && !bodyReferenceV2Summary.bodyLeftCaptured}
+                  title={bodyReferenceV2AcceptDraftActionReason ?? undefined}
+                  onClick={handleAcceptBodyReferenceV2Draft}
+                >
+                  Accept v2 draft
+                </button>
+                <button
+                  type="button"
+                  className={styles.detectBtn}
+                  data-testid="body-reference-v2-reset-draft"
+                  onClick={handleResetBodyReferenceV2Draft}
+                >
+                  Reset v2 draft
+                </button>
+              </div>
+              {bodyReferenceV2DisabledActionReasonGroups.length > 0 && (
+                <div
+                  className={styles.actionReasonList}
+                  data-testid="body-reference-v2-action-reasons"
+                >
+                  {bodyReferenceV2DisabledActionReasonGroups
+                    .filter((group) => group.reason !== bodyReferenceV2GenerateActionReason)
+                    .map((group) => (
+                      <div
+                        key={`body-reference-v2-disabled-reason-${group.reason}`}
+                        className={styles.actionDisabledReason}
+                        data-testid="body-reference-v2-action-reason"
+                      >
+                        {formatTemplateCreateDisabledActionLabels(group.labels)}: {group.reason}
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              <div className={styles.fieldRow}>
+                <label className={styles.fieldLabel}>Centerline axis X</label>
+                <input
+                  className={styles.textInput}
+                  type="number"
+                  step="0.01"
+                  value={bodyReferenceV2Draft.centerline?.xPx ?? ""}
+                  disabled={!bodyReferenceV2Draft.centerline}
+                  onChange={(event) => {
+                    const nextValue = Number(event.target.value);
+                    if (!Number.isFinite(nextValue)) return;
+                    handleChangeBodyReferenceV2CenterlineX(nextValue);
+                  }}
+                />
+              </div>
+
+              <div className={styles.cutoutFitSummaryGrid}>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.centerlineCaptured ? "captured" : "missing"}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Body-left outline</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.bodyLeftCaptured ? "captured" : "missing"}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>Accepted v2 draft</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.accepted ? "yes" : "no"}</span>
+                </div>
+                <div className={styles.cutoutFitMetric}>
+                  <span className={styles.cutoutFitMetricLabel}>v2 generation ready</span>
+                  <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.generationReady ? "yes" : "no"}</span>
+                </div>
+              </div>
+
+              {templateCreateDiagnosticsVisible && (
+                <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                  <summary className={styles.compactDetailsSummary}>
+                    v2 reference and scale detail
+                  </summary>
+                  <div className={styles.compactDetailsContent}>
+                  <div className={styles.cutoutFitSummaryGrid}>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Mirrored right side</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.bodyRightMirroredPresent ? "derived" : "missing"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Lid references (excluded)</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lidReferenceCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Handle references (excluded)</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.handleReferenceCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Blocked regions (reference-only)</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.blockedRegionCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Scale authority</span>
+                      <span className={styles.cutoutFitMetricValue}>{formatBodyReferenceV2ScaleSourceLabel(bodyReferenceV2Summary.scaleSource)}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Lookup diameter ready</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2Summary.lookupDiameterPresent ? "present" : "missing"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Draft pending acceptance</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.hasDraftChanges ? "yes" : "no"}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>v1 BODY CUTOUT QA</span>
+                      <span className={styles.cutoutFitMetricValue}>available fallback</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
+                    </div>
+                  </div>
+                  </div>
+                </details>
+              )}
+
+              <div className={styles.reviewScaffoldNote}>
+                {approvedBodyOutline
+                  ? "Centerline = mirror axis. Body-left = the operator-reviewed left wall. The right side is derived automatically and stays read-only."
+                  : "Accept BODY REFERENCE review first if you want to seed the v2 centerline and body-left outline from the accepted v1 contour."}
+              </div>
+              <div className={styles.reviewScaffoldNote}>
+                {getBodyReferenceV2ReferenceOnlyNote()}
+              </div>
+              <div className={styles.reviewScaffoldNote}>
+                {getBodyReferenceV2WrapExportDistinctionNote()}
+              </div>
+              {bodyReferenceV2SummaryGuidanceMessages.length > 0 && (
+                <div className={styles.cutoutFitWarningList}>
+                  {bodyReferenceV2SummaryGuidanceMessages.map((entry) => (
+                    <div
+                      key={`body-reference-v2-guidance-${entry.level}-${entry.message}`}
+                      className={entry.level === "error" ? styles.cutoutFitWarningError : styles.cutoutFitWarning}
+                    >
+                      {entry.message}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div
+                className={styles.cutoutFitSummary}
+                data-testid="body-reference-v2-mirror-preview"
+                data-body-reference-v2-mirror-preview-status={bodyReferenceV2ScaleMirrorPreview.status}
+              >
+                <div className={styles.cutoutFitSummaryHeader}>
+                  <div>
+                    <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 Mirror Preview</div>
+                    <div className={styles.cutoutFitSummaryHint}>
+                      Preview only. Centerline plus body-left define the mirrored right side and lookup-diameter scale. This does not change BODY CUTOUT QA until you explicitly generate from v2.
+                    </div>
+                  </div>
+                  <span
+                    className={
+                      bodyReferenceV2ScaleMirrorPreview.status === "pass"
+                        ? styles.reviewStatusReady
+                        : bodyReferenceV2ScaleMirrorPreview.status === "fail"
+                          ? styles.reviewStatusFail
+                          : styles.reviewStatusPending
+                    }
+                  >
+                    {bodyReferenceV2ScaleMirrorPreview.status.toUpperCase()}
+                  </span>
+                </div>
+
+                {(bodyReferenceV2ScaleMirrorPreview.centerline == null && bodyReferenceV2ScaleMirrorPreview.leftBodyPointCount === 0) ? (
+                  <div className={styles.cutoutFitWarningList}>
+                    <div className={styles.cutoutFitWarning}>Capture the centerline axis.</div>
+                    <div className={styles.cutoutFitWarning}>Capture or seed the body-left outline.</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className={styles.cutoutFitSummaryGrid}>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
+                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.centerline ? "captured" : "missing"}</span>
+                      </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.leftBodyPointCount}</span>
+                    </div>
+                    </div>
+
+                    {templateCreateDiagnosticsVisible && (
+                      <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                        <summary className={styles.compactDetailsSummary}>
+                          Mirror scale and lookup detail
+                        </summary>
+                        <div className={styles.compactDetailsContent}>
+                        <div className={styles.cutoutFitSummaryGrid}>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Lookup diameter</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.lookupDiameterMm)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Lookup variant</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.lookupVariantLabel || "n/a"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Selected size</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatLookupSize(bodyReferenceV2ScaleMirrorPreview.lookupSizeOz)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Diameter (px)</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.diameterPx != null ? round2(bodyReferenceV2ScaleMirrorPreview.diameterPx) : "n/a"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>mm per px</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.mmPerPx != null ? bodyReferenceV2ScaleMirrorPreview.mmPerPx.toFixed(4) : "n/a"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Derived wrap width</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.wrapWidthMm)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Full product height</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2ScaleMirrorPreview.lookupFullProductHeightMm)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Mirrored-right points</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2ScaleMirrorPreview.mirroredRightPointCount}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Lookup diameter authority</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatLookupAuthority(bodyReferenceV2ScaleMirrorPreview.lookupDimensionAuthority)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
+                          </div>
+                        </div>
+                        </div>
+                      </details>
+                    )}
+                  </>
+                )}
+
+                <div className={styles.reviewScaffoldNote}>
+                  Mirrored-right is derived automatically. You do not edit it directly.
+                </div>
+                <div className={styles.reviewScaffoldNote}>
+                  Full product height is context only here. Lookup diameter remains the v2 scale authority.
+                </div>
+
+                {bodyReferenceV2MirrorGuidanceMessages.length > 0 && (
+                  <div className={styles.cutoutFitWarningList}>
+                    {bodyReferenceV2MirrorGuidanceMessages.map((entry) => (
+                      <div
+                        key={`body-reference-v2-mirror-guidance-${entry.level}-${entry.message}`}
+                        className={entry.level === "error" ? styles.cutoutFitWarningError : styles.cutoutFitWarning}
+                      >
+                        {entry.message}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div
+                className={styles.cutoutFitSummary}
+                data-testid="body-reference-v2-generation-readiness"
+                data-body-reference-v2-generation-status={bodyReferenceV2GenerationReadiness.status}
+              >
+                <div className={styles.cutoutFitSummaryHeader}>
+                  <div>
+                    <div className={styles.cutoutFitSummaryTitle}>BODY REFERENCE v2 Generation Readiness</div>
+                    <div className={styles.cutoutFitSummaryHint}>
+                      v2 generation unlocks only after the accepted v2 capture passes centerline, body-left, lookup-diameter scale, and mirror checks. BODY CUTOUT QA stays body-only and excludes reference and artwork layers.
+                    </div>
+                  </div>
+                  <span
+                    className={
+                      bodyReferenceV2GenerationReadiness.status === "pass"
+                        ? styles.reviewStatusReady
+                        : bodyReferenceV2GenerationReadiness.status === "fail"
+                          ? styles.reviewStatusFail
+                          : styles.reviewStatusPending
+                    }
+                  >
+                    {bodyReferenceV2GenerationReadiness.status.toUpperCase()}
+                  </span>
+                </div>
+
+                {(bodyReferenceV2GenerationReadiness.centerlineCaptured === false && bodyReferenceV2GenerationReadiness.leftBodyPointCount === 0) ? (
+                  <div className={styles.cutoutFitWarningList}>
+                    <div className={styles.cutoutFitWarning}>Capture the centerline axis.</div>
+                    <div className={styles.cutoutFitWarning}>Capture or seed the body-left outline.</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className={styles.cutoutFitSummaryGrid}>
+                      <div className={styles.cutoutFitMetric}>
+                        <span className={styles.cutoutFitMetricLabel}>Centerline axis</span>
+                        <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.centerlineCaptured ? "captured" : "missing"}</span>
+                      </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Body-left points</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.leftBodyPointCount}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Accepted draft</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.accepted ? "yes" : "no"}</span>
+                    </div>
+                  </div>
+
+                    {templateCreateDiagnosticsVisible && (
+                      <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
+                        <summary className={styles.compactDetailsSummary}>
+                          v2 generation metric detail
+                        </summary>
+                        <div className={styles.compactDetailsContent}>
+                        <div className={styles.cutoutFitSummaryGrid}>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Mirrored-right points</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.mirroredRightPointCount}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Lookup diameter</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2GenerationReadiness.lookupDiameterMm)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Diameter (px)</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.diameterPx != null ? round2(bodyReferenceV2GenerationReadiness.diameterPx) : "n/a"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>mm per px</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.mmPerPx != null ? bodyReferenceV2GenerationReadiness.mmPerPx.toFixed(4) : "n/a"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Derived wrap width</span>
+                            <span className={styles.cutoutFitMetricValue}>{formatDimensionMetric(bodyReferenceV2GenerationReadiness.wrapWidthMm)}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Blocked regions</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2GenerationReadiness.blockedRegionCount}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Draft pending acceptance</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CaptureReadiness.hasDraftChanges ? "yes" : "no"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Accepted draft ready</span>
+                            <span className={styles.cutoutFitMetricValue}>{acceptedBodyReferenceV2GenerationReadiness?.ready ? "yes" : "no"}</span>
+                          </div>
+                          <div className={styles.cutoutFitMetric}>
+                            <span className={styles.cutoutFitMetricLabel}>Current QA source</span>
+                            <span className={styles.cutoutFitMetricValue}>{bodyReferenceV2CurrentQaSourceLabel}</span>
+                          </div>
+                        </div>
+                        </div>
+                      </details>
+                    )}
+                  </>
+                )}
+
+                <div className={styles.reviewScaffoldActions}>
+                  <button
+                    type="button"
+                    className={styles.detectBtn}
+                    disabled={
+                      !bodyReferenceV2CaptureReadiness.generationReady ||
+                      generatingReviewedBodyReferenceGlb ||
+                      bodyReferenceFineTuneDraftPendingAcceptance
+                    }
+                    title={bodyReferenceV2GenerateActionReason ?? undefined}
+                    onClick={() => {
+                      void handleGenerateReviewedBodyReferenceGlb("v2-mirrored-profile");
+                    }}
+                    data-testid="body-reference-v2-generate"
+                  >
+                    {generatingReviewedBodyReferenceGlb
+                      ? "Generating BODY CUTOUT QA GLB…"
+                      : !bodyReferenceV2CaptureReadiness.accepted
+                        ? "Accept v2 draft to unlock optional v2 generation"
+                        : bodyReferenceV2CaptureReadiness.hasDraftChanges
+                          ? "Accept or reset v2 draft changes"
+                          : "Generate BODY CUTOUT QA from v2 mirrored profile"}
+                  </button>
+                </div>
+                {bodyReferenceV2GenerateActionReason && (
+                  <div
+                    className={styles.actionReasonList}
+                    data-testid="body-reference-v2-generate-action-reasons"
+                  >
+                    <div
+                      className={styles.actionDisabledReason}
+                      data-testid="body-reference-v2-generate-action-reason"
+                    >
+                      Generate BODY CUTOUT QA from v2 mirrored profile: {bodyReferenceV2GenerateActionReason}
+                    </div>
+                  </div>
+                )}
+
+                <div className={styles.reviewScaffoldNote}>
+                  {activeReviewedBodyReferenceAuthority === "BODY REFERENCE v2 mirrored profile"
+                    ? "Current source authority: BODY REFERENCE v2 mirrored profile."
+                    : bodyReferenceV2SourceAuthorityNote}
+                </div>
+                <div className={styles.reviewScaffoldNote}>
+                  {getBodyReferenceV2ReferenceOnlyNote()}
+                </div>
+                <div className={styles.reviewScaffoldNote}>
+                  {getBodyReferenceV2WrapExportDistinctionNote()}
+                </div>
+
+                {bodyReferenceV2GenerationGuidanceMessages.length > 0 && (
+                  <div className={styles.cutoutFitWarningList}>
+                    {bodyReferenceV2GenerationGuidanceMessages.map((entry) => (
+                      <div
+                        key={`body-reference-v2-generation-guidance-${entry.level}-${entry.message}`}
+                        className={entry.level === "error" ? styles.cutoutFitWarningError : styles.cutoutFitWarning}
+                      >
+                        {entry.message}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              </div>
+            </details>
           </div>
         </div>
       )}
 
+      <div className={inDedicatedTemplateMode ? styles.pageSecondaryGrid : undefined}>
+
       {/* ── Front / Back face photos ─────────────────────────────── */}
       {productType !== "flat" && (
-        <div className={styles.section}>
+        <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
           <div className={styles.sectionTitle}>Face photos (grid overlay)</div>
 
           {/* ── FRONT ── */}
@@ -2630,7 +5082,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       )}
 
       {/* ── 3D Model file ──────────────────────────────────────────── */}
-      <div className={styles.section}>
+      <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
         <div className={styles.sectionTitle}>3D Model</div>
 
         <div className={styles.fieldRow}>
@@ -2704,8 +5156,11 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       </div>
 
       {/* ── Physical dimensions ───────────────────────────────────── */}
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>Physical dimensions</div>
+      <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
+        <div className={styles.sectionTitle}>Diameter authority</div>
+        <div className={styles.sectionLead}>
+          Diameter is the only body scale authority. Other measurements are reference context and do not prove BODY CUTOUT QA scale.
+        </div>
 
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>Diameter (mm) *</label>
@@ -2719,72 +5174,103 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         </div>
 
         <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Print height (mm) *</label>
-          <input
-            className={styles.numInput}
-            type="number"
-            value={printHeightMm || ""}
-            step={0.1}
-            onChange={(e) => setPrintHeightMm(Number(e.target.value) || 0)}
-          />
-        </div>
-
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Template width</label>
+          <label className={styles.fieldLabel}>Wrap width</label>
           <span className={styles.readOnly}>
             {templateWidthMm > 0 ? `${templateWidthMm} mm` : "\u2014"}{" "}
-            <span className={styles.fieldHint}>(auto-calculated)</span>
+            <span className={styles.fieldHint}>(Math.PI * diameter)</span>
           </span>
         </div>
 
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Handle arc (&deg;)</label>
-          <input
-            className={styles.numInput}
-            type="number"
-            value={handleArcDeg}
-            step={1}
-            min={0}
-            max={360}
-            onChange={(e) => setHandleArcDeg(Number(e.target.value) || 0)}
-          />
-          <span className={styles.fieldHint}>0 = no handle, 90 = YETI Rambler style</span>
-        </div>
+        <details className={styles.compactDetails} data-testid="template-reference-dimensions-details">
+          <summary className={styles.compactDetailsSummary}>
+            Reference dimensions
+          </summary>
+          <div className={styles.compactDetailsContent}>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Reference printable band</label>
+              <input
+                className={styles.numInput}
+                data-testid="template-print-height-input"
+                type="number"
+                value={printHeightMm || ""}
+                step={0.1}
+                onChange={(e) => setPrintHeightMm(Number(e.target.value) || 0)}
+              />
+              <span className={styles.fieldHint}>Used for workspace/export context, not body scale authority.</span>
+            </div>
 
-        <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel}>Taper correction</label>
-          <select
-            className={styles.selectInput}
-            value={taperCorrection}
-            onChange={(e) => setTaperCorrection(e.target.value as "none" | "top-narrow" | "bottom-narrow")}
-          >
-            <option value="none">None</option>
-            <option value="top-narrow">Top narrow</option>
-            <option value="bottom-narrow">Bottom narrow</option>
-          </select>
-        </div>
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Handle arc (&deg;)</label>
+              <input
+                className={styles.numInput}
+                type="number"
+                value={handleArcDeg}
+                step={1}
+                min={0}
+                max={360}
+                onChange={(e) => setHandleArcDeg(Number(e.target.value) || 0)}
+              />
+              <span className={styles.fieldHint}>Reference only for product context.</span>
+            </div>
+
+            <div className={styles.fieldRow}>
+              <label className={styles.fieldLabel}>Taper correction</label>
+              <select
+                className={styles.selectInput}
+                value={taperCorrection}
+                onChange={(e) => setTaperCorrection(e.target.value as "none" | "top-narrow" | "bottom-narrow")}
+              >
+                <option value="none">None</option>
+                <option value="top-narrow">Top narrow</option>
+                <option value="bottom-narrow">Bottom narrow</option>
+              </select>
+            </div>
+          </div>
+        </details>
       </div>
 
       {/* ── Engravable zone editor ──────────────────────────────── */}
       {productType !== "flat" && frontPhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
-        <div className={styles.section}>
-          <div className={styles.sectionTitle}>Engravable zone</div>
+        <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
+          <div className={styles.sectionTitle}>Reference engravable zone</div>
+          <div className={styles.sectionLead}>
+            This visual band helps workspace/export context. BODY CUTOUT QA scale still comes from diameter plus accepted BODY REFERENCE.
+          </div>
           <EngravableZoneEditor
             photoDataUrl={frontPhotoDataUrl}
             overallHeightMm={overallHeightMm}
-            topMarginMm={topMarginMm}
-            bottomMarginMm={bottomMarginMm}
+            topMarginMm={engravableGuideAuthority?.topGuideMm ?? topMarginMm}
+            bottomMarginMm={
+              engravableGuideAuthority
+                ? round2(overallHeightMm - engravableGuideAuthority.bottomGuideMm)
+                : bottomMarginMm
+            }
             diameterMm={diameterMm}
             photoScalePct={referencePhotoScalePct}
             photoOffsetYPct={referencePhotoOffsetYPct}
             photoAnchorY={referencePhotoAnchorY}
             bodyColorHex={bodyColorHex}
             rimColorHex={rimColorHex}
-            onChange={(top, bottom) => {
-              setTopMarginMm(top);
-              setBottomMarginMm(bottom);
-              // Keep printHeightMm in sync
-              const eng = round2(overallHeightMm - top - bottom);
+            guideFrame={bodyReferenceGuideFrame}
+            bodyScaleSource={engravableGuideAuthority?.bodyScaleSource}
+            topGuideSource={engravableGuideAuthority?.topGuideSource}
+            bottomGuideSource={engravableGuideAuthority?.bottomGuideSource}
+            manualTopOverrideActive={engravableGuideAuthority?.manualTopOverrideActive}
+            manualBottomOverrideActive={engravableGuideAuthority?.manualBottomOverrideActive}
+            onChange={(top, bottom, changedLine) => {
+              const bottomGuideMm = round2(overallHeightMm - bottom);
+              if (changedLine === "top") {
+                setPrintableTopOverrideMm(top);
+              } else {
+                setPrintableBottomOverrideMm(bottomGuideMm);
+              }
+              const nextTop = changedLine === "top"
+                ? top
+                : (engravableGuideAuthority?.topGuideMm ?? topMarginMm);
+              const nextBottom = changedLine === "bottom"
+                ? bottomGuideMm
+                : (engravableGuideAuthority?.bottomGuideMm ?? overallHeightMm - bottomMarginMm);
+              const eng = round2(nextBottom - nextTop);
               if (eng > 0) setPrintHeightMm(eng);
             }}
             onPhotoScaleChange={setReferencePhotoScalePct}
@@ -2796,7 +5282,7 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       )}
 
       {/* ── Default laser settings ────────────────────────────────── */}
-      <div className={styles.section}>
+      <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
         <div className={styles.sectionTitle}>Default laser settings</div>
 
         <div className={styles.fieldRow}>
@@ -2881,8 +5367,10 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
         </div>
       </div>
 
+      </div>
+
       {/* ── Errors ────────────────────────────────────────────────── */}
-      {errors.length > 0 && (
+      {!inDedicatedTemplateMode && errors.length > 0 && (
         <div>
           {errors.map((err) => (
             <div key={err} className={styles.error}>{err}</div>
@@ -2891,13 +5379,152 @@ export function TemplateCreateForm({ onSave, onCancel, editingTemplate }: Props)
       )}
 
       {/* ── Buttons ───────────────────────────────────────────────── */}
-      <div className={styles.btnRow}>
-        <button type="button" className={styles.cancelBtn} onClick={onCancel}>
-          Cancel
-        </button>
-        <button type="button" className={styles.saveBtn} onClick={handleSave}>
-          {isEdit ? "Save changes" : "Save template"}
-        </button>
+      {!inDedicatedTemplateMode && (
+        <div className={styles.btnRow}>
+          <button type="button" className={styles.cancelBtn} onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={styles.saveBtn}
+            onClick={handleSave}
+            data-testid="template-create-save"
+          >
+            {isEdit ? "Save changes" : "Save template"}
+          </button>
+        </div>
+      )}
+
+      </div>
+      {inDedicatedTemplateMode && (
+        <aside className={styles.pageSidebar}>
+          <div className={styles.pageSidebarSticky}>
+            <section className={styles.pageSidebarCard}>
+              <div className={styles.pageSidebarEyebrow}>Current step</div>
+              <div className={styles.pageSidebarTitle}>{workflowCurrentStepDisplayLabel}</div>
+              <div className={styles.pageSidebarLead}>{workflowNextActionHint}</div>
+              <div className={styles.pageSidebarStatusGrid}>
+                <div className={styles.pageSidebarStatusItem}>
+                  <span className={styles.pageSidebarStatusLabel}>Source</span>
+                  <span
+                    className={
+                      templateCreateSourceReadiness.sourceReady
+                        ? styles.workflowReadinessReady
+                        : styles.workflowReadinessPending
+                    }
+                  >
+                    {templateCreateSourceReadiness.sourceReady ? "Ready" : "Pending"}
+                  </span>
+                </div>
+                <div className={styles.pageSidebarStatusItem}>
+                  <span className={styles.pageSidebarStatusLabel}>Detect</span>
+                  <span
+                    className={
+                      templateCreateSourceReadiness.detectReady
+                        ? styles.workflowReadinessReady
+                        : styles.workflowReadinessPending
+                    }
+                  >
+                    {templateCreateSourceReadiness.detectReady ? "Actionable" : "Blocked"}
+                  </span>
+                </div>
+                <div className={styles.pageSidebarStatusItem}>
+                  <span className={styles.pageSidebarStatusLabel}>Review</span>
+                  <span
+                    className={
+                      hasAcceptedBodyReferenceReview
+                        ? styles.workflowReadinessReady
+                        : styles.workflowReadinessPending
+                    }
+                  >
+                    {reviewStageLabel}
+                  </span>
+                </div>
+                <div className={styles.pageSidebarStatusItem}>
+                  <span className={styles.pageSidebarStatusLabel}>BODY CUTOUT QA</span>
+                  <span
+                    className={
+                      hasReviewedBodyCutoutQaGlb
+                        ? styles.workflowReadinessReady
+                        : styles.workflowReadinessCurrent
+                    }
+                  >
+                    {qaStageLabel}
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <section className={`${styles.pageSidebarCard} ${styles.pageActionCard}`}>
+              <div className={styles.pageSidebarEyebrow}>Pinned actions</div>
+              <div className={styles.pageSidebarTitle}>Save or back out cleanly</div>
+              <div className={styles.pageSidebarLead}>
+                {saveGateReason
+                  ? `Save blocked: ${saveGateReason}`
+                  : isEdit
+                    ? "Changes are ready to save whenever the operator pass is complete."
+                    : "Save the template whenever the operator pass is complete."}
+              </div>
+              {errors.length > 0 && (
+                <div className={styles.pageActionErrorList}>
+                  {errors.map((err) => (
+                    <div key={err} className={styles.error}>{err}</div>
+                  ))}
+                </div>
+              )}
+              <div className={styles.pageActionButtons}>
+                <button
+                  type="button"
+                  className={`${styles.cancelBtn} ${styles.pageActionButton}`}
+                  onClick={onCancel}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.saveBtn} ${styles.pageActionButton}`}
+                  onClick={handleSave}
+                  data-testid="template-create-save"
+                >
+                  {isEdit ? "Save changes" : "Save template"}
+                </button>
+              </div>
+            </section>
+
+            <section className={styles.pageSidebarCard}>
+              <div className={styles.pageSidebarEyebrow}>Operator checks</div>
+              <div className={styles.pageSidebarMiniGrid}>
+                <div className={styles.pageSidebarMetric}>
+                  <span className={styles.pageSidebarMetricLabel}>WRAP / EXPORT</span>
+                  <span className={styles.pageSidebarMetricValue}>{wrapExportStageLabel}</span>
+                </div>
+                <div className={styles.pageSidebarMetric}>
+                  <span className={styles.pageSidebarMetricLabel}>Appearance refs</span>
+                  <span className={styles.pageSidebarMetricValue}>{appearanceReferenceStageLabel}</span>
+                </div>
+                <div className={styles.pageSidebarMetric}>
+                  <span className={styles.pageSidebarMetricLabel}>BODY REFERENCE v2</span>
+                  <span className={styles.pageSidebarMetricValue}>{bodyReferenceV2OperatorState.label}</span>
+                </div>
+                <div className={styles.pageSidebarMetric}>
+                  <span className={styles.pageSidebarMetricLabel}>Exit path</span>
+                  <span className={styles.pageSidebarMetricValue}>Shared save/cancel/back</span>
+                </div>
+              </div>
+            </section>
+
+            <section className={styles.pageSidebarCard}>
+              <div className={styles.pageSidebarEyebrow}>Mode boundaries</div>
+              <ul className={styles.pageSidebarList}>
+                <li>BODY CUTOUT QA stays body proof only.</li>
+                <li>WRAP / EXPORT stays placement and export proof only.</li>
+                <li>BODY REFERENCE v2 stays optional beneath accepted v1 by default.</li>
+                <li>Debug mode exposes audit and hash detail; normal mode keeps operator checks visible.</li>
+              </ul>
+            </section>
+          </div>
+        </aside>
+      )}
       </div>
 
       {/* ── Tumbler mapping wizard modal ── */}

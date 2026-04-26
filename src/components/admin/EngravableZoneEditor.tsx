@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useRef, useCallback, useEffect, useState } from "react";
+import type { BodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
+import { mapBodyReferenceGuideFrameToDisplayedImage } from "@/lib/bodyReferenceGuideFrame";
 import styles from "./EngravableZoneEditor.module.css";
 
 interface Props {
@@ -24,7 +26,17 @@ interface Props {
   bodyColorHex: string;
   /** Current sampled / saved rim / engrave color */
   rimColorHex: string;
-  onChange: (topMarginMm: number, bottomMarginMm: number) => void;
+  /** Shared BODY REFERENCE guide authority used by lookup debug and UI overlays. */
+  guideFrame?: BodyReferenceGuideFrame | null;
+  /** BODY REFERENCE/body-frame source. Kept separate from engravable guide authority. */
+  bodyScaleSource?: string;
+  /** Source used for the top engravable boundary. */
+  topGuideSource?: string;
+  /** Source used for the bottom engravable boundary. */
+  bottomGuideSource?: string;
+  manualTopOverrideActive?: boolean;
+  manualBottomOverrideActive?: boolean;
+  onChange: (topMarginMm: number, bottomMarginMm: number, changedLine: "top" | "bottom") => void;
   onPhotoScaleChange: (scalePct: number) => void;
   onPhotoOffsetYChange: (offsetPct: number) => void;
   onPhotoAnchorYChange: (anchor: "center" | "bottom") => void;
@@ -225,6 +237,12 @@ export function EngravableZoneEditor({
   photoAnchorY,
   bodyColorHex,
   rimColorHex,
+  guideFrame,
+  bodyScaleSource,
+  topGuideSource,
+  bottomGuideSource,
+  manualTopOverrideActive,
+  manualBottomOverrideActive,
   onChange,
   onPhotoScaleChange,
   onPhotoOffsetYChange,
@@ -247,6 +265,23 @@ export function EngravableZoneEditor({
     let cancelled = false;
     const img = new Image();
     img.onload = () => {
+      const guideImageSize = guideFrame?.rawImageSize;
+      if (
+        guideFrame?.coordinateSpace === "raw-image-px" &&
+        guideImageSize &&
+        guideImageSize.width > 0 &&
+        guideImageSize.height > 0
+      ) {
+        if (!cancelled) {
+          setDisplayPhoto({
+            src: img.src,
+            w: guideImageSize.width,
+            h: guideImageSize.height,
+            bodyCenterX: guideFrame.rawImageBounds?.centerX ?? guideImageSize.width / 2,
+          });
+        }
+        return;
+      }
       const cropped = cropVisibleBounds(img);
       if (!cancelled) {
         setDisplayPhoto({
@@ -267,7 +302,7 @@ export function EngravableZoneEditor({
     return () => {
       cancelled = true;
     };
-  }, [photoDataUrl]);
+  }, [photoDataUrl, guideFrame]);
 
   // Pixels per mm for this display
   const pxPerMm = CANVAS_HEIGHT / overallHeightMm;
@@ -303,6 +338,23 @@ export function EngravableZoneEditor({
   const photoTopPx = Math.round(basePhotoTopPx + (clampedPhotoOffsetYPct / 100) * CANVAS_HEIGHT);
   const bodyLeftPx = Math.round((containerWidthPx - bodyWidthPx) / 2);
   const bodyCenterLineX = bodyLeftPx + bodyWidthPx / 2;
+  const mappedGuideFrame = mapBodyReferenceGuideFrameToDisplayedImage(
+    guideFrame,
+    activeDisplayPhoto
+      ? {
+          left: photoLeftPx,
+          top: photoTopPx,
+          width: photoWidthPx,
+          height: targetPhotoHeightPx,
+        }
+      : null,
+  );
+  const guideBounds = mappedGuideFrame?.mappedDomOverlayBounds ?? null;
+  const guideFrameLeftPx = guideBounds?.left ?? bodyLeftPx;
+  const guideFrameTopPx = guideBounds?.top ?? 0;
+  const guideFrameWidthPx = guideBounds?.width ?? bodyWidthPx;
+  const guideFrameHeightPx = guideBounds?.height ?? CANVAS_HEIGHT;
+  const guideFrameCenterLineX = guideBounds?.centerX ?? bodyCenterLineX;
 
   const handlePointerDown = useCallback(
     (line: "top" | "bottom") => (e: React.PointerEvent) => {
@@ -323,11 +375,11 @@ export function EngravableZoneEditor({
 
       if (dragging === "top") {
         const clamped = Math.max(MIN_MARGIN_MM, Math.min(mm, overallHeightMm - bottomMarginMm - 10));
-        onChange(round1(clamped), bottomMarginMm);
+        onChange(round1(clamped), bottomMarginMm, "top");
       } else {
         const fromBottom = overallHeightMm - mm;
         const clamped = Math.max(MIN_MARGIN_MM, Math.min(fromBottom, overallHeightMm - topMarginMm - 10));
-        onChange(topMarginMm, round1(clamped));
+        onChange(topMarginMm, round1(clamped), "bottom");
       }
     },
     [dragging, pxPerMm, overallHeightMm, topMarginMm, bottomMarginMm, onChange],
@@ -418,11 +470,21 @@ export function EngravableZoneEditor({
         >
           <div
             className={styles.bodyFrame}
-            style={{ left: bodyLeftPx, width: bodyWidthPx, height: CANVAS_HEIGHT }}
+            data-guide-source={mappedGuideFrame?.guideSource ?? "legacy-diameter-frame"}
+            data-guide-top={guideBounds?.top ?? ""}
+            data-guide-bottom={guideBounds?.bottom ?? ""}
+            data-guide-width={guideBounds?.width ?? ""}
+            data-guide-source-hash={mappedGuideFrame?.sourceHash ?? ""}
+            style={{
+              left: guideFrameLeftPx,
+              top: guideFrameTopPx,
+              width: guideFrameWidthPx,
+              height: guideFrameHeightPx,
+            }}
           />
           <div
             className={styles.centerReferenceLine}
-            style={{ left: bodyCenterLineX }}
+            style={{ left: guideFrameCenterLineX }}
             aria-hidden
           />
 
@@ -455,6 +517,10 @@ export function EngravableZoneEditor({
           <div
             className={`${styles.dragLine} ${dragging === "top" ? styles.dragLineActive : ""}`}
             style={{ top: topPx, left: bodyLeftPx, width: bodyWidthPx }}
+            data-guide-source={topGuideSource ?? "unknown"}
+            data-guide-authority="engravable-top"
+            data-body-scale-source={bodyScaleSource ?? ""}
+            data-manual-override-active={manualTopOverrideActive ? "true" : "false"}
             onPointerDown={handlePointerDown("top")}
           >
             <span className={styles.dragLineLabel}>
@@ -466,6 +532,10 @@ export function EngravableZoneEditor({
           <div
             className={`${styles.dragLine} ${styles.dragLineBottom} ${dragging === "bottom" ? styles.dragLineActive : ""}`}
             style={{ top: CANVAS_HEIGHT - bottomPx, left: bodyLeftPx, width: bodyWidthPx }}
+            data-guide-source={bottomGuideSource ?? "unknown"}
+            data-guide-authority="engravable-bottom"
+            data-body-scale-source={bodyScaleSource ?? ""}
+            data-manual-override-active={manualBottomOverrideActive ? "true" : "false"}
             onPointerDown={handlePointerDown("bottom")}
           >
             <span className={styles.dragLineLabel}>
@@ -502,8 +572,31 @@ export function EngravableZoneEditor({
             <span className={styles.readoutValue}>{round1(Math.PI * diameterMm)} mm</span>
           </div>
           <div className={styles.readoutHint}>
-            The dashed frame is the physical tumbler body. Drag the green lines to the silver rings.
+            BODY REFERENCE stays the body scale source. The green lines are engravable guide boundaries.
           </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Body scale source</span>
+            <span className={styles.readoutValue}>{bodyScaleSource ?? mappedGuideFrame?.guideSource ?? "legacy"}</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Top engrave guide</span>
+            <span className={styles.readoutValue}>{topGuideSource ?? "unknown"}</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Bottom engrave guide</span>
+            <span className={styles.readoutValue}>{bottomGuideSource ?? "unknown"}</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Manual override</span>
+            <span className={styles.readoutValue}>
+              {manualTopOverrideActive || manualBottomOverrideActive ? "active" : "inactive"}
+            </span>
+          </div>
+          {mappedGuideFrame?.warnings.length ? (
+            <div className={styles.readoutHint}>
+              {mappedGuideFrame.warnings[0]}
+            </div>
+          ) : null}
           <div className={styles.colorSwatchGroup}>
             <div className={styles.colorSwatchRow}>
               <span className={styles.readoutLabel}>Body color</span>

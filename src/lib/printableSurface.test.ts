@@ -7,7 +7,7 @@ import {
   normalizeProductTemplatePrintableSurface,
 } from "./printableSurface.ts";
 
-test("buildPrintableSurfaceResolution keeps body bounds authoritative while preserving lid/ring exclusions", () => {
+test("buildPrintableSurfaceResolution seeds printable top from detected lower rim while preserving body bounds", () => {
   const resolution = buildPrintableSurfaceResolution({
     overallHeightMm: 297,
     bodyTopFromOverallMm: 30,
@@ -22,9 +22,9 @@ test("buildPrintableSurfaceResolution keeps body bounds authoritative while pres
     handleKeepOutEndMm: 128,
   });
 
-  assert.equal(resolution.printableSurfaceContract.printableTopMm, 30);
+  assert.equal(resolution.printableSurfaceContract.printableTopMm, 49);
   assert.equal(resolution.printableSurfaceContract.printableBottomMm, 270);
-  assert.equal(resolution.printableSurfaceContract.printableHeightMm, 240);
+  assert.equal(resolution.printableSurfaceContract.printableHeightMm, 221);
   assert.deepEqual(
     resolution.printableSurfaceContract.axialExclusions,
     [
@@ -37,7 +37,7 @@ test("buildPrintableSurfaceResolution keeps body bounds authoritative while pres
     ["lid", "rim-ring"],
   );
   assert.equal(resolution.printableSurfaceContract.circumferentialExclusions[0]?.kind, "handle");
-  assert.equal(resolution.topBoundarySource, "body-top-fallback");
+  assert.equal(resolution.topBoundarySource, "rim-ring");
   assert.equal(resolution.authoritySource, "derived-fallback");
 });
 
@@ -104,10 +104,10 @@ test("getPrintableSurfaceResolutionFromDimensions rebuilds semantic top exclusio
       { kind: "rim-ring", startMm: 24, endMm: 30 },
     ],
   );
-  assert.equal(resolution?.topBoundarySource, "persisted-contract");
+  assert.equal(resolution?.topBoundarySource, "rim-ring");
 });
 
-test("getPrintableSurfaceResolutionFromDimensions keeps persisted printable bounds when seam and ring metadata drift", () => {
+test("getPrintableSurfaceResolutionFromDimensions lets saved lower silver seam beat body-frame fallback", () => {
   const resolution = getPrintableSurfaceResolutionFromDimensions({
     diameterMm: 99.82,
     printHeightMm: 216,
@@ -134,10 +134,11 @@ test("getPrintableSurfaceResolutionFromDimensions keeps persisted printable boun
   }, null);
 
   assert.ok(resolution);
-  assert.equal(resolution?.printableSurfaceContract.printableTopMm, 28);
+  assert.equal(resolution?.printableSurfaceContract.printableTopMm, 73.7);
   assert.equal(resolution?.printableSurfaceContract.printableBottomMm, 244);
-  assert.equal(resolution?.printableSurfaceContract.printableHeightMm, 216);
+  assert.equal(resolution?.printableSurfaceContract.printableHeightMm, 170.3);
   assert.equal(resolution?.authoritySource, "persisted-contract");
+  assert.equal(resolution?.topBoundarySource, "rim-ring");
   assert.equal(resolution?.automaticDetectionWeak, false);
 });
 
@@ -229,14 +230,14 @@ test("normalizeProductTemplatePrintableSurface repairs canonical printable drift
 
   assert.equal(normalized.changed, true);
   assert.equal(normalized.resolution?.authoritySource, "persisted-contract");
-  assert.equal(normalized.template.dimensions.printableSurfaceContract?.printableTopMm, 28);
+  assert.equal(normalized.template.dimensions.printableSurfaceContract?.printableTopMm, 73.7);
   assert.equal(
     normalized.template.dimensions.canonicalDimensionCalibration?.printableSurfaceContract?.printableTopMm,
-    28,
+    73.7,
   );
   assert.equal(
     normalized.template.dimensions.canonicalDimensionCalibration?.printableSurfaceContract?.printableHeightMm,
-    216,
+    170.3,
   );
 });
 
@@ -343,15 +344,15 @@ test("normalizeProductTemplatePrintableSurface repairs Stanley-style ring-derive
   });
 
   assert.equal(normalized.changed, true);
-  assert.equal(normalized.template.dimensions.printableSurfaceContract?.printableTopMm, 28);
+  assert.equal(normalized.template.dimensions.printableSurfaceContract?.printableTopMm, 73.7);
   assert.equal(normalized.template.dimensions.printableSurfaceContract?.printableBottomMm, 244);
-  assert.equal(normalized.template.dimensions.printableSurfaceContract?.printableHeightMm, 216);
+  assert.equal(normalized.template.dimensions.printableSurfaceContract?.printableHeightMm, 170.3);
   assert.equal(
     normalized.template.dimensions.canonicalDimensionCalibration?.printableSurfaceContract?.printableTopMm,
-    28,
+    73.7,
   );
   assert.equal(
     normalized.template.dimensions.canonicalDimensionCalibration?.printableSurfaceContract?.printableHeightMm,
-    216,
+    170.3,
   );
 });
