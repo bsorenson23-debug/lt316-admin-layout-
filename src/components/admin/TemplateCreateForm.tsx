@@ -13,6 +13,7 @@ import type {
   TumblerMapping,
 } from "@/types/productTemplate";
 import type { AutoDetectResult } from "@/lib/autoDetect";
+import type { PrintableSurfaceContract } from "@/types/printableSurface";
 import type {
   DimensionAuthority,
   TumblerItemLookupDimensions,
@@ -81,6 +82,10 @@ import {
 } from "@/lib/bodyReferencePreviewIntent";
 import { buildBodyReferenceGlbSourcePayload } from "@/lib/bodyReferenceGlbSource";
 import { resolveBodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
+import {
+  resolveDetectedLowerSilverSeamMm,
+  resolveEngravableZoneGuideAuthority,
+} from "@/lib/engravableGuideAuthority";
 import { parseBodyReferenceGlbResponse } from "@/lib/adminApi.schema";
 import type { BodyGeometryContract } from "@/lib/bodyGeometryContract";
 import { inferGeneratedModelStatusFromSource } from "@/lib/generatedModelUrl";
@@ -183,6 +188,16 @@ function round2(n: number): number {
 
 function cloneSerializable<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function resolveAxialBandBoundaryMm(
+  contract: PrintableSurfaceContract | null | undefined,
+  kind: "lid" | "rim-ring",
+  boundary: "start" | "end",
+): number | null {
+  const band = contract?.axialExclusions.find((candidate) => candidate.kind === kind);
+  const value = band?.[boundary === "start" ? "startMm" : "endMm"];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function buildEffectiveBodyReferenceV2Draft(args: {
@@ -692,6 +707,18 @@ export function TemplateCreateForm({
   const [bottomMarginMm, setBottomMarginMm] = React.useState(
     editingTemplate?.dimensions.bottomMarginMm ?? derivedEditingDims?.bottomMarginMm ?? 0,
   );
+  const [printableTopOverrideMm, setPrintableTopOverrideMm] = React.useState<number | null>(
+    typeof editingTemplate?.dimensions.printableTopOverrideMm === "number" &&
+      Number.isFinite(editingTemplate.dimensions.printableTopOverrideMm)
+      ? editingTemplate.dimensions.printableTopOverrideMm
+      : null,
+  );
+  const [printableBottomOverrideMm, setPrintableBottomOverrideMm] = React.useState<number | null>(
+    typeof editingTemplate?.dimensions.printableBottomOverrideMm === "number" &&
+      Number.isFinite(editingTemplate.dimensions.printableBottomOverrideMm)
+      ? editingTemplate.dimensions.printableBottomOverrideMm
+      : null,
+  );
   const [referencePhotoScalePct, setReferencePhotoScalePct] = React.useState(
     editingTemplate?.dimensions.referencePhotoScalePct ?? 100,
   );
@@ -971,12 +998,88 @@ export function TemplateCreateForm({
     [resolvedMatchedProfileId],
   );
 
+  const bodyReferenceFrameBounds = React.useMemo(() => {
+    if (!Number.isFinite(overallHeightMm) || overallHeightMm <= 0) {
+      return null;
+    }
+    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
+    const bodyBottomFromOverallMm = round2(
+      Math.max(bodyTopFromOverallMm + 1, overallHeightMm - Math.max(0, bottomMarginMm)),
+    );
+    if (bodyBottomFromOverallMm <= bodyTopFromOverallMm) return null;
+    return { bodyTopFromOverallMm, bodyBottomFromOverallMm };
+  }, [bottomMarginMm, overallHeightMm, topMarginMm]);
+
+  const persistedPrintableSurfaceContract = React.useMemo(
+    () =>
+      approvedCanonicalDimensionCalibration?.printableSurfaceContract ??
+      editingTemplate?.dimensions.printableSurfaceContract ??
+      editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract ??
+      null,
+    [
+      approvedCanonicalDimensionCalibration?.printableSurfaceContract,
+      editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract,
+      editingTemplate?.dimensions.printableSurfaceContract,
+    ],
+  );
+
+  const savedSilverBandBottomFromOverallMm = React.useMemo(() => {
+    const explicit = editingTemplate?.dimensions.silverBandBottomFromOverallMm;
+    if (typeof explicit === "number" && Number.isFinite(explicit)) return explicit;
+    return resolveAxialBandBoundaryMm(persistedPrintableSurfaceContract, "rim-ring", "end");
+  }, [editingTemplate?.dimensions.silverBandBottomFromOverallMm, persistedPrintableSurfaceContract]);
+
+  const savedLidSeamFromOverallMm = React.useMemo(() => {
+    const explicit = editingTemplate?.dimensions.lidSeamFromOverallMm;
+    if (typeof explicit === "number" && Number.isFinite(explicit)) return explicit;
+    return (
+      resolveAxialBandBoundaryMm(persistedPrintableSurfaceContract, "lid", "end") ??
+      resolveAxialBandBoundaryMm(persistedPrintableSurfaceContract, "rim-ring", "start")
+    );
+  }, [editingTemplate?.dimensions.lidSeamFromOverallMm, persistedPrintableSurfaceContract]);
+
+  const detectedLowerSilverSeamMm = React.useMemo(() => {
+    if (!bodyReferenceFrameBounds) return null;
+    return resolveDetectedLowerSilverSeamMm({
+      overallHeightMm,
+      bodyTopFromOverallMm: bodyReferenceFrameBounds.bodyTopFromOverallMm,
+      bodyBottomFromOverallMm: bodyReferenceFrameBounds.bodyBottomFromOverallMm,
+      savedSilverBandBottomFromOverallMm,
+      fitDebug: lookupResult?.fitDebug ?? null,
+    });
+  }, [bodyReferenceFrameBounds, lookupResult?.fitDebug, overallHeightMm, savedSilverBandBottomFromOverallMm]);
+
+  const engravableGuideAuthority = React.useMemo(() => {
+    if (!bodyReferenceFrameBounds) return null;
+    return resolveEngravableZoneGuideAuthority({
+      overallHeightMm,
+      bodyTopFromOverallMm: bodyReferenceFrameBounds.bodyTopFromOverallMm,
+      bodyBottomFromOverallMm: bodyReferenceFrameBounds.bodyBottomFromOverallMm,
+      acceptedBodyReferenceAvailable: Boolean(approvedBodyOutline || approvedCanonicalDimensionCalibration),
+      printableTopOverrideMm,
+      printableBottomOverrideMm,
+      savedSilverBandBottomFromOverallMm,
+      fitDebug: lookupResult?.fitDebug ?? null,
+      printableSurfaceContract: persistedPrintableSurfaceContract,
+    });
+  }, [
+    approvedBodyOutline,
+    approvedCanonicalDimensionCalibration,
+    bodyReferenceFrameBounds,
+    lookupResult?.fitDebug,
+    overallHeightMm,
+    persistedPrintableSurfaceContract,
+    printableBottomOverrideMm,
+    printableTopOverrideMm,
+    savedSilverBandBottomFromOverallMm,
+  ]);
+
   const liveBodyReferenceOutline = React.useMemo(() => {
     if (productType === "flat") return null;
     if (!Number.isFinite(overallHeightMm) || overallHeightMm <= 0) return null;
     if (!Number.isFinite(diameterMm) || diameterMm <= 0) return null;
-    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
-    const bodyBottomFromOverallMm = round2(Math.max(bodyTopFromOverallMm + 1, overallHeightMm - Math.max(0, bottomMarginMm)));
+    if (!bodyReferenceFrameBounds) return null;
+    const { bodyTopFromOverallMm, bodyBottomFromOverallMm } = bodyReferenceFrameBounds;
     if (bodyBottomFromOverallMm <= bodyTopFromOverallMm) return null;
     return createEditableBodyOutline({
       overallHeightMm,
@@ -995,7 +1098,7 @@ export function TemplateCreateForm({
       fitDebug: lookupResult?.fitDebug ?? null,
     });
   }, [
-    bottomMarginMm,
+    bodyReferenceFrameBounds,
     diameterMm,
     lookupResult?.fitDebug,
     overallHeightMm,
@@ -1004,13 +1107,12 @@ export function TemplateCreateForm({
     resolvedMatchedProfile?.outsideDiameterMm,
     resolvedMatchedProfile?.topDiameterMm,
     resolvedMatchedProfileId,
-    topMarginMm,
   ]);
 
   const liveBodyReferencePipeline = React.useMemo(() => {
     if (!liveBodyReferenceOutline || productType === "flat") return null;
-    const bodyTopFromOverallMm = round2(Math.max(0, topMarginMm));
-    const bodyBottomFromOverallMm = round2(Math.max(bodyTopFromOverallMm + 1, overallHeightMm - Math.max(0, bottomMarginMm)));
+    if (!bodyReferenceFrameBounds) return null;
+    const { bodyTopFromOverallMm, bodyBottomFromOverallMm } = bodyReferenceFrameBounds;
     if (bodyBottomFromOverallMm <= bodyTopFromOverallMm) return null;
     return deriveBodyReferencePipeline({
       outline: liveBodyReferenceOutline,
@@ -1023,19 +1125,34 @@ export function TemplateCreateForm({
         resolvedMatchedProfile?.outsideDiameterMm ??
         diameterMm,
       handleArcDeg,
+      lidSeamFromOverallMm: savedLidSeamFromOverallMm,
+      silverBandBottomFromOverallMm: detectedLowerSilverSeamMm,
+      printableTopOverrideMm,
+      printableBottomOverrideMm,
+      persistedPrintableSurfaceContract,
+      persistedCanonicalPrintableSurfaceContract:
+        approvedCanonicalDimensionCalibration?.printableSurfaceContract ??
+        editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract ??
+        null,
       fitDebug: lookupResult?.fitDebug ?? null,
     });
   }, [
-    bottomMarginMm,
+    approvedCanonicalDimensionCalibration?.printableSurfaceContract,
+    bodyReferenceFrameBounds,
+    detectedLowerSilverSeamMm,
     diameterMm,
+    editingTemplate?.dimensions.canonicalDimensionCalibration?.printableSurfaceContract,
     handleArcDeg,
     liveBodyReferenceOutline,
     lookupResult?.fitDebug,
     overallHeightMm,
+    persistedPrintableSurfaceContract,
+    printableBottomOverrideMm,
+    printableTopOverrideMm,
     productType,
     resolvedMatchedProfile?.bottomDiameterMm,
     resolvedMatchedProfile?.outsideDiameterMm,
-    topMarginMm,
+    savedLidSeamFromOverallMm,
   ]);
 
   const previewTumblerDims = React.useMemo(
@@ -2717,6 +2834,28 @@ export function TemplateCreateForm({
     setErrors([]);
 
     const now = new Date().toISOString();
+    const printableSurfaceResolutionForSave = liveBodyReferencePipeline?.printableSurfaceResolution ?? null;
+    const printableSurfaceContractForSave =
+      printableSurfaceResolutionForSave?.printableSurfaceContract ??
+      approvedCanonicalDimensionCalibration?.printableSurfaceContract ??
+      editingTemplate?.dimensions.printableSurfaceContract ??
+      undefined;
+    const axialSurfaceBandsForSave =
+      printableSurfaceResolutionForSave?.axialSurfaceBands ??
+      approvedCanonicalDimensionCalibration?.axialSurfaceBands ??
+      editingTemplate?.dimensions.axialSurfaceBands ??
+      undefined;
+    const canonicalDimensionCalibrationForSave =
+      approvedCanonicalDimensionCalibration
+        ? {
+            ...approvedCanonicalDimensionCalibration,
+            axialSurfaceBands: axialSurfaceBandsForSave,
+            printableSurfaceContract: printableSurfaceContractForSave,
+          }
+        : undefined;
+    const effectivePrintHeightMm = engravableGuideAuthority
+      ? round2(Math.max(0, engravableGuideAuthority.bottomGuideMm - engravableGuideAuthority.topGuideMm))
+      : printHeightMm;
     const template: ProductTemplate = {
       id: editingTemplate?.id ?? crypto.randomUUID(),
       name: name.trim(),
@@ -2731,11 +2870,29 @@ export function TemplateCreateForm({
       glbSourceLabel: activeDrinkwareGlbSourceLabel ?? undefined,
       dimensions: {
         diameterMm,
-        printHeightMm,
+        printHeightMm: effectivePrintHeightMm,
         templateWidthMm,
         handleArcDeg,
         taperCorrection,
         overallHeightMm: overallHeightMm > 0 ? overallHeightMm : undefined,
+        bodyTopFromOverallMm: bodyReferenceFrameBounds?.bodyTopFromOverallMm,
+        bodyBottomFromOverallMm: bodyReferenceFrameBounds?.bodyBottomFromOverallMm,
+        lidSeamFromOverallMm:
+          typeof savedLidSeamFromOverallMm === "number" && Number.isFinite(savedLidSeamFromOverallMm)
+            ? savedLidSeamFromOverallMm
+            : undefined,
+        silverBandBottomFromOverallMm:
+          typeof detectedLowerSilverSeamMm === "number" && Number.isFinite(detectedLowerSilverSeamMm)
+            ? detectedLowerSilverSeamMm
+            : undefined,
+        printableTopOverrideMm:
+          typeof printableTopOverrideMm === "number" && Number.isFinite(printableTopOverrideMm)
+            ? printableTopOverrideMm
+            : undefined,
+        printableBottomOverrideMm:
+          typeof printableBottomOverrideMm === "number" && Number.isFinite(printableBottomOverrideMm)
+            ? printableBottomOverrideMm
+            : undefined,
         topMarginMm: Number.isFinite(topMarginMm) ? topMarginMm : undefined,
         bottomMarginMm: Number.isFinite(bottomMarginMm) ? bottomMarginMm : undefined,
         referencePhotoScalePct: Number.isFinite(referencePhotoScalePct) ? referencePhotoScalePct : undefined,
@@ -2744,7 +2901,7 @@ export function TemplateCreateForm({
         bodyColorHex: bodyColorHex || undefined,
         rimColorHex: rimColorHex || undefined,
         canonicalBodyProfile: approvedCanonicalBodyProfile ?? undefined,
-        canonicalDimensionCalibration: approvedCanonicalDimensionCalibration ?? undefined,
+        canonicalDimensionCalibration: canonicalDimensionCalibrationForSave,
         bodyReferenceQA: approvedBodyReferenceQa ?? undefined,
         bodyReferenceWarnings: approvedBodyReferenceWarnings.length > 0 ? approvedBodyReferenceWarnings : undefined,
         bodyReferenceContractVersion:
@@ -2752,6 +2909,8 @@ export function TemplateCreateForm({
             ? BODY_REFERENCE_CONTRACT_VERSION
             : undefined,
         bodyOutlineProfile: approvedBodyOutline ?? undefined,
+        axialSurfaceBands: axialSurfaceBandsForSave,
+        printableSurfaceContract: printableSurfaceContractForSave,
       },
       laserSettings: {
         power,
@@ -5080,8 +5239,12 @@ export function TemplateCreateForm({
           <EngravableZoneEditor
             photoDataUrl={frontPhotoDataUrl}
             overallHeightMm={overallHeightMm}
-            topMarginMm={topMarginMm}
-            bottomMarginMm={bottomMarginMm}
+            topMarginMm={engravableGuideAuthority?.topGuideMm ?? topMarginMm}
+            bottomMarginMm={
+              engravableGuideAuthority
+                ? round2(overallHeightMm - engravableGuideAuthority.bottomGuideMm)
+                : bottomMarginMm
+            }
             diameterMm={diameterMm}
             photoScalePct={referencePhotoScalePct}
             photoOffsetYPct={referencePhotoOffsetYPct}
@@ -5089,11 +5252,25 @@ export function TemplateCreateForm({
             bodyColorHex={bodyColorHex}
             rimColorHex={rimColorHex}
             guideFrame={bodyReferenceGuideFrame}
-            onChange={(top, bottom) => {
-              setTopMarginMm(top);
-              setBottomMarginMm(bottom);
-              // Keep printHeightMm in sync
-              const eng = round2(overallHeightMm - top - bottom);
+            bodyScaleSource={engravableGuideAuthority?.bodyScaleSource}
+            topGuideSource={engravableGuideAuthority?.topGuideSource}
+            bottomGuideSource={engravableGuideAuthority?.bottomGuideSource}
+            manualTopOverrideActive={engravableGuideAuthority?.manualTopOverrideActive}
+            manualBottomOverrideActive={engravableGuideAuthority?.manualBottomOverrideActive}
+            onChange={(top, bottom, changedLine) => {
+              const bottomGuideMm = round2(overallHeightMm - bottom);
+              if (changedLine === "top") {
+                setPrintableTopOverrideMm(top);
+              } else {
+                setPrintableBottomOverrideMm(bottomGuideMm);
+              }
+              const nextTop = changedLine === "top"
+                ? top
+                : (engravableGuideAuthority?.topGuideMm ?? topMarginMm);
+              const nextBottom = changedLine === "bottom"
+                ? bottomGuideMm
+                : (engravableGuideAuthority?.bottomGuideMm ?? overallHeightMm - bottomMarginMm);
+              const eng = round2(nextBottom - nextTop);
               if (eng > 0) setPrintHeightMm(eng);
             }}
             onPhotoScaleChange={setReferencePhotoScalePct}

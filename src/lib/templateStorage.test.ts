@@ -298,6 +298,45 @@ test("saveTemplate preserves lookup dimension authority metadata exactly", () =>
   assert.equal(saved.lookupDimensions?.wrapWidthMm, 319.19);
 });
 
+test("saveTemplate preserves engravable seam guide and manual printable overrides exactly", () => {
+  const template = createTemplate({
+    id: "template-engravable-seam-authority",
+    dimensions: {
+      diameterMm: 88.9,
+      templateWidthMm: 279.29,
+      handleArcDeg: 0,
+      taperCorrection: "none",
+      overallHeightMm: 256,
+      bodyTopFromOverallMm: 25,
+      bodyBottomFromOverallMm: 224.8,
+      lidSeamFromOverallMm: 52,
+      silverBandBottomFromOverallMm: 63.4,
+      printableTopOverrideMm: 70.2,
+      printableBottomOverrideMm: 218.6,
+      printHeightMm: 148.4,
+      printableSurfaceContract: {
+        printableTopMm: 70.2,
+        printableBottomMm: 218.6,
+        printableHeightMm: 148.4,
+        axialExclusions: [
+          { kind: "lid", startMm: 0, endMm: 52 },
+          { kind: "rim-ring", startMm: 52, endMm: 63.4 },
+        ],
+        circumferentialExclusions: [],
+      },
+    },
+  });
+
+  saveTemplate(template);
+  const saved = getTemplate(template.id);
+
+  assert.ok(saved);
+  assert.equal(saved.dimensions.silverBandBottomFromOverallMm, 63.4);
+  assert.equal(saved.dimensions.printableTopOverrideMm, 70.2);
+  assert.equal(saved.dimensions.printableBottomOverrideMm, 218.6);
+  assert.deepEqual(saved.dimensions.printableSurfaceContract, template.dimensions.printableSurfaceContract);
+});
+
 test("saveTemplate preserves accepted BODY REFERENCE v2 draft metadata exactly", () => {
   const template = createTemplate({
     id: "template-body-reference-v2-accepted",
