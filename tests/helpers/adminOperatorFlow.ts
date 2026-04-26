@@ -209,6 +209,20 @@ export async function openTemplateGallery(page: Page): Promise<void> {
   await changeButton.click();
 }
 
+export async function openBodyReferenceV2Panel(page: Page): Promise<Locator> {
+  const panel = page.getByTestId("body-reference-v2-summary");
+  await panel.waitFor({ state: "visible", timeout: 30_000 });
+  const isOpen = await panel.evaluate((node) => (node as HTMLDetailsElement).open).catch(() => false);
+  if (!isOpen) {
+    await panel.locator(":scope > summary").click();
+  }
+  await page.getByTestId("body-reference-v2-seed-centerline").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  return panel;
+}
+
 export async function openBodyContractInspector(page: Page): Promise<void> {
   const summary = page.getByTestId("body-contract-inspector-summary");
   await expect(summary).toBeVisible();

@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   clickAndReadJsonResponse,
+  openBodyReferenceV2Panel,
   openTemplateGallery,
   waitForLocatorDisabledState,
   waitForLocatorEnabled,
@@ -54,6 +55,7 @@ test("disabled actions explain exactly why they are blocked during template crea
   await expect(page.getByTestId("template-create-preview-action-reasons")).toContainText(
     "WRAP / EXPORT, Full model, and Source compare: Load or generate a model first.",
   );
+  await openBodyReferenceV2Panel(page);
   await expect(page.getByTestId("body-reference-v2-action-reasons")).toContainText(
     "Capture / seed centerline and Set body-left from accepted BODY REFERENCE: Accept BODY REFERENCE (v1) first.",
   );
@@ -100,6 +102,7 @@ test("disabled actions explain exactly why they are blocked during template crea
   await expect(page.getByTestId("body-reference-v2-generate-action-reasons")).toContainText(
     "Generate BODY CUTOUT QA from v2 mirrored profile: Capture centerline first.",
   );
+  await openBodyReferenceV2Panel(page);
   await waitForLocatorEnabled(page.getByTestId("body-reference-v2-seed-centerline"), 30_000);
   await waitForLocatorEnabled(page.getByTestId("body-reference-v2-seed-body-left"), 30_000);
   await waitForLocatorDisabledState(page.getByTestId("body-reference-v2-generate"), true, 30_000);
