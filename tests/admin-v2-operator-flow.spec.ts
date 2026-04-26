@@ -5,6 +5,7 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   clickAndReadJsonResponse,
   downloadBodyContractDebugReport,
+  openBodyReferenceV2Panel,
   openBodyContractInspector,
   openTemplateGallery,
   readMetricMap,
@@ -254,6 +255,7 @@ test("normal operator mode keeps diagnostics out of the default path", async ({ 
   await expect(page.getByTestId("body-geometry-status-badge-note")).toContainText("Valid for body contour QA");
   await expect(page.getByTestId("body-contract-inspector")).toHaveCount(0);
 
+  await openBodyReferenceV2Panel(page);
   await expect(page.getByTestId("body-reference-v2-summary")).toBeVisible();
   await expect(page.getByTestId("body-reference-v2-mirror-preview")).toBeVisible();
   await expect(page.getByTestId("body-reference-v2-generation-readiness")).toBeVisible();
@@ -451,6 +453,7 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
 
   await test.step("verify v2 gating and generate BODY CUTOUT QA from the accepted mirrored profile", async () => {
     await page.getByTestId("preview-mode-body-cutout-qa").click();
+    await openBodyReferenceV2Panel(page);
 
     const bodyReferenceV2Summary = page.getByTestId("body-reference-v2-summary");
     const bodyReferenceV2MirrorPreview = page.getByTestId("body-reference-v2-mirror-preview");
@@ -635,6 +638,7 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     await page.getByTestId("template-gallery-manage-button").click({ timeout: 30_000 });
     await expect(page.getByLabel(`Edit ${templateName}`, { exact: true })).toBeVisible({ timeout: 30_000 });
     await page.getByLabel(`Edit ${templateName}`, { exact: true }).click({ timeout: 30_000 });
+    await openBodyReferenceV2Panel(page);
 
     const persistedV2SummaryMetrics = await readMetricMap(page.getByTestId("body-reference-v2-summary"), [
       "Accepted v2 draft",
@@ -701,6 +705,7 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     await page.getByTestId("template-gallery-manage-button").click({ timeout: 30_000 });
     await expect(page.getByLabel(`Edit ${templateName}`, { exact: true })).toBeVisible({ timeout: 30_000 });
     await page.getByLabel(`Edit ${templateName}`, { exact: true }).click({ timeout: 30_000 });
+    await openBodyReferenceV2Panel(page);
 
     await waitForLocatorText(
       page.getByTestId("body-reference-v2-summary"),
