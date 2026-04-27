@@ -1,0 +1,574 @@
+{
+  "version": "2026-04-09-v3",
+  "key": "a2176da3abe78adb005a917e3c5a0ddce9dea7678101dd3dfe61354597245d87",
+  "createdAt": "2026-04-21T15:54:08.263Z",
+  "updatedAt": "2026-04-21T15:54:08.263Z",
+  "payload": {
+    "sourceType": "url",
+    "category": "tumbler",
+    "confidence": 0.98,
+    "reviewRequired": false,
+    "matchedProfileId": "stanley-quencher-40",
+    "matchedFlatItemId": null,
+    "categoryReason": "Drinkware-specific lookup signals were stronger than flat-item matches.",
+    "templateDraft": {
+      "name": "Stanley Quencher H2.0 40oz 40oz",
+      "brand": "Stanley",
+      "capacity": "40oz",
+      "laserType": null,
+      "productType": "tumbler",
+      "materialSlug": null,
+      "materialLabel": null,
+      "materialFinishType": null,
+      "materialProfileId": null,
+      "materialProfileLabel": null,
+      "productPhotoUrl": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Front.png?v=1770952011&width=1920",
+      "productPhotoLabel": "Stanley1913 product photo",
+      "backPhotoUrl": null,
+      "backPhotoLabel": null,
+      "productReferenceSet": {
+        "productKey": "stanley-quencher-40",
+        "images": [
+          {
+            "id": "ref-9267096e8817",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Front.png?v=1770952011&width=1920",
+            "source": "official",
+            "hash": "9267096e88175555d125cb431ab13be8c05a8a15",
+            "width": 1515,
+            "height": 1515,
+            "viewClass": "front-3q",
+            "approxAzimuthDeg": 45,
+            "handleVisible": true,
+            "handleSide": "right",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 121,
+              "y": 75,
+              "w": 60,
+              "h": 48
+            },
+            "confidence": 0.86
+          },
+          {
+            "id": "ref-06af532f635a",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Hero_Back.png?v=1768920588&width=1920",
+            "source": "official",
+            "hash": "06af532f635a656ac2d4b38fa4b1f94418099540",
+            "width": 1515,
+            "height": 1515,
+            "viewClass": "back",
+            "approxAzimuthDeg": 180,
+            "handleVisible": false,
+            "handleSide": "unknown",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 143,
+              "y": 61,
+              "w": 53,
+              "h": 67
+            },
+            "confidence": 0.726
+          },
+          {
+            "id": "ref-bda5c6415907",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Lid_Detail.png?v=1768920597&width=1920",
+            "source": "official",
+            "hash": "bda5c6415907c95fd41b6c12d2667d408daa56b6",
+            "width": 1515,
+            "height": 1515,
+            "viewClass": "detail",
+            "handleVisible": false,
+            "handleSide": "hidden",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 68,
+              "y": 62,
+              "w": 110,
+              "h": 101
+            },
+            "confidence": 0.86
+          }
+        ],
+        "canonicalFrontImageId": "ref-9267096e8817",
+        "canonicalHandleSideImageId": "ref-9267096e8817",
+        "orientationConfidence": 0.815,
+        "canonicalViewSelection": {
+          "canonicalFrontImageId": "ref-9267096e8817",
+          "canonicalBackStatus": "only-back-3q-found",
+          "frontConfidence": 0.86,
+          "backConfidence": 0.726,
+          "bestAuxBack3qImageId": "ref-06af532f635a"
+        }
+      },
+      "glbPath": "/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb",
+      "glbStatus": "verified-product-model",
+      "glbSourceLabel": "Generated Stanley Quencher product model",
+      "dimensions": {
+        "diameterMm": 99.8,
+        "bodyDiameterMm": 99.8,
+        "topOuterDiameterMm": 99.8,
+        "baseDiameterMm": 78.7,
+        "printHeightMm": 216,
+        "templateWidthMm": 313.6,
+        "handleArcDeg": 90,
+        "taperCorrection": "bottom-narrow",
+        "overallHeightMm": 273.8,
+        "bodyTopFromOverallMm": null,
+        "bodyBottomFromOverallMm": null,
+        "bodyHeightMm": null,
+        "handleSpanMm": 147.8,
+        "topMarginMm": 28,
+        "bottomMarginMm": 29.8,
+        "bodyColorHex": null,
+        "rimColorHex": null
+      }
+    },
+    "nextPrompts": [
+      "choose-laser-type",
+      "choose-material-profile"
+    ],
+    "warnings": [],
+    "notes": [
+      "Detected an opposite-side product photo from the scraped gallery.",
+      "Retained 3 reference images for orientation analysis.",
+      "No strict true back face was assigned. The best opposite-side reference remains auxiliary only (treated as back-3q for UI, 73% confidence).",
+      "Applied internal Stanley Quencher 40oz profile for geometry and printable-height fallback.",
+      "Top margin fallback: 28 mm. Bottom margin fallback: 29.8 mm.",
+      "Handle arc fallback: 90°.",
+      "GLB fallback: /models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb."
+    ],
+    "flatLookupResult": {
+      "lookupInput": "https://www.stanley1913.com/products/adventure-quencher-travel-tumbler-40-oz",
+      "resolvedUrl": "https://www.stanley1913.com/products/adventure-quencher-travel-tumbler-40-oz",
+      "title": "The Quencher H2.0 Flowstate™ Tumbler",
+      "brand": "Stanley",
+      "label": "The Quencher H2.0 Flowstate™ Tumbler",
+      "matchedItemId": null,
+      "familyKey": "rect-plate",
+      "category": "other",
+      "widthMm": 80,
+      "heightMm": 120,
+      "thicknessMm": 4,
+      "material": "plastic-abs",
+      "materialLabel": "Plastic - ABS",
+      "imageUrl": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Front.png?v=1770952011",
+      "imageUrls": [
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Front.png?v=1770952011",
+        "https://www.stanley1913.com/cdn/shop/files/flag-usa.jpg?v=1702939937&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/021726_Site-Nav_Shop_Vitalize-Collection.jpg?v=1771040925&width=512",
+        "https://www.stanley1913.com/cdn/shop/files/021726_Site-Nav_Shop_Vitalize-Collection.jpg?v=1771040925&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/040726_Site-Nav_Trending_Spring-Picnic.jpg?v=1775507463&width=512",
+        "https://www.stanley1913.com/cdn/shop/files/040726_Site-Nav_Trending_Spring-Picnic.jpg?v=1775507463&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_MD_6ee8ecfb-fd34-40f2-b4e4-04ec9d10c00f.jpg?v=1776294911&width=512",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_MD_6ee8ecfb-fd34-40f2-b4e4-04ec9d10c00f.jpg?v=1776294911&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_Clutch_007fb035-74ae-441e-ae20-58889bc386d0.jpg?v=1776179910&width=512",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_Clutch_007fb035-74ae-441e-ae20-58889bc386d0.jpg?v=1776179910&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/033126_Site-Nav_Trending_Seaglass_43156970-ed41-4fd6-854e-bfab866d2fb1.jpg?v=1776294924&width=512",
+        "https://www.stanley1913.com/cdn/shop/files/033126_Site-Nav_Trending_Seaglass_43156970-ed41-4fd6-854e-bfab866d2fb1.jpg?v=1776294924&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Front.png?v=1770952011&width=800"
+      ],
+      "glbPath": "/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb",
+      "modelStrategy": "image-trace",
+      "modelSourceUrl": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Front.png?v=1770952011",
+      "requiresReview": true,
+      "isProxy": false,
+      "traceScore": 1.2,
+      "traceDebug": {
+        "kind": "silhouette-trace",
+        "sourceImageUrl": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Front.png?v=1770952011",
+        "imageWidthPx": 720,
+        "imageHeightPx": 720,
+        "silhouetteBoundsPx": {
+          "minX": 200,
+          "minY": 14,
+          "maxX": 518,
+          "maxY": 705,
+          "area": 127100
+        },
+        "coverage": 0.25,
+        "traceScore": 1.2,
+        "accepted": true,
+        "rejectionReason": null,
+        "targetWidthMm": 80,
+        "targetHeightMm": 120,
+        "outlinePointsPx": [
+          {
+            "xPx": 302,
+            "yPx": 16
+          },
+          {
+            "xPx": 300,
+            "yPx": 121
+          },
+          {
+            "xPx": 275,
+            "yPx": 127
+          },
+          {
+            "xPx": 274,
+            "yPx": 135
+          },
+          {
+            "xPx": 205,
+            "yPx": 136
+          },
+          {
+            "xPx": 202,
+            "yPx": 168
+          },
+          {
+            "xPx": 203,
+            "yPx": 476
+          },
+          {
+            "xPx": 226,
+            "yPx": 522
+          },
+          {
+            "xPx": 231,
+            "yPx": 686
+          },
+          {
+            "xPx": 235,
+            "yPx": 693
+          },
+          {
+            "xPx": 248,
+            "yPx": 700
+          },
+          {
+            "xPx": 292,
+            "yPx": 707
+          },
+          {
+            "xPx": 353,
+            "yPx": 704
+          },
+          {
+            "xPx": 372,
+            "yPx": 699
+          },
+          {
+            "xPx": 383,
+            "yPx": 692
+          },
+          {
+            "xPx": 387,
+            "yPx": 672
+          },
+          {
+            "xPx": 393,
+            "yPx": 517
+          },
+          {
+            "xPx": 414,
+            "yPx": 481
+          },
+          {
+            "xPx": 415,
+            "yPx": 471
+          },
+          {
+            "xPx": 470,
+            "yPx": 461
+          },
+          {
+            "xPx": 490,
+            "yPx": 453
+          },
+          {
+            "xPx": 510,
+            "yPx": 432
+          },
+          {
+            "xPx": 518,
+            "yPx": 407
+          },
+          {
+            "xPx": 520,
+            "yPx": 251
+          },
+          {
+            "xPx": 514,
+            "yPx": 224
+          },
+          {
+            "xPx": 503,
+            "yPx": 210
+          },
+          {
+            "xPx": 483,
+            "yPx": 199
+          },
+          {
+            "xPx": 418,
+            "yPx": 196
+          },
+          {
+            "xPx": 416,
+            "yPx": 137
+          },
+          {
+            "xPx": 349,
+            "yPx": 135
+          },
+          {
+            "xPx": 347,
+            "yPx": 127
+          },
+          {
+            "xPx": 321,
+            "yPx": 121
+          },
+          {
+            "xPx": 320,
+            "yPx": 17
+          },
+          {
+            "xPx": 317,
+            "yPx": 16
+          }
+        ]
+      },
+      "confidence": 0.4,
+      "mode": "safe-fallback",
+      "notes": [
+        "Traced the product silhouette from a pulled product image (quality 1.2).",
+        "Resolved 3D model: /models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb.",
+        "Generated from product metadata. Verify before saving."
+      ],
+      "sources": [
+        {
+          "title": "The Quencher H2.0 Flowstate™ Tumbler",
+          "url": "https://www.stanley1913.com/products/adventure-quencher-travel-tumbler-40-oz",
+          "kind": "general"
+        }
+      ]
+    },
+    "tumblerLookupResult": {
+      "lookupInput": "https://www.stanley1913.com/products/adventure-quencher-travel-tumbler-40-oz",
+      "resolvedUrl": "https://www.stanley1913.com/products/adventure-quencher-travel-tumbler-40-oz",
+      "title": "Adventure Quencher H2.0 Travel Tumbler | 40 oz | Stanley",
+      "brand": "Stanley",
+      "model": "Quencher H2.0 40oz",
+      "capacityOz": 40,
+      "matchedProfileId": "stanley-quencher-40",
+      "glbPath": "/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb",
+      "modelStatus": "verified-product-model",
+      "modelSourceLabel": "Generated Stanley Quencher product model",
+      "imageUrl": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Front.png?v=1770952011&width=1920",
+      "backImageUrl": null,
+      "imageUrls": [
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Front.png?v=1770952011&width=1920",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Hero_Back.png?v=1768920588&width=1920",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Lid_Detail.png?v=1768920597&width=1920",
+        "https://www.stanley1913.com/cdn/shop/files/DTC_Color_Swatch-Purple_Dust_-_Color_Swatch.png?height=48&v=1769462092",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherH2.0FlowStateTumbler40OZ-Daffodil-Front.png?v=1769098467&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherH2.0FlowStateTumbler40OZ-SpringGreen-Front.png?v=1769097993&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Soft_Orchid_-_Front.png?v=1768921701&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.O_FlowState_Tumbler_40OZ_-_Peach_Rose_-_Front_c895e2a1-5737-40b8-8c67-815476da8d4c.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherH2.OFlowState_Tumbler40OZ-CherryBlossom-Front_7c8403a5-b466-4acf-a155-015cba1f3107.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherH2.OFlowState_Tumbler40OZ-Meadow-Front.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherH2.OFlowState_Tumbler40OZ-Toast-Front.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherH2.OFlowState_Tumbler40OZ-DriedPine-Front.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherH2.OFlowState_Tumbler40OZ-Twilight-Front.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/B2B_Web_PNG-TheQuencherH2.OFlowStateTumbler40OZ-RoseQuartz2.0-Front.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/B2B_Web_PNG-TheQuencherH2.OFlowStateTumbler40OZ-Cream2.0-Front.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/B2B_Web_PNG-The-Quencher-H2-O-FlowState-Tumbler-40OZ-Frost-Front_7eab5cfc-c65d-4371-bfc5-ea3fbbc49ff1.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherH2.OFlowState_Tumbler40OZ-Ash2.0-Front.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/B2B_Web_PNG-TheQuencherH2.OFlowStateTumbler40OZ-Stone-Front.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/B2B_Web_PNG-TheQuencherH2.OFlowStateTumbler40OZ-Black2.0-Front.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherH2.OFlowState_Tumbler40OZ-CreamMoon-Front_d65e98b6-0665-480c-9b29-49566dcf4d95.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/WEB_PN_2_07b994e8-d1fd-4152-bda6-0aa3a70bedbf.png?v=1770327737&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-2025-10-17_The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Coastal_Teal_-_Front.png?v=1771971485&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.O_FlowState_Tumbler_40OZ_-_Peony_-_Front_565b62f5-4ced-4c7b-a68d-5d8d384b6261.png?v=1771970863&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.O_FlowState_Tumbler_40OZ_-_Azure_-_Front_8cc662d2-6054-4949-8d9d-aca115d8fc54.png?v=1772578080&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/021726_Site-Nav_Shop_Vitalize-Collection.jpg?v=1771040925&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/040726_Site-Nav_Trending_Spring-Picnic.jpg?v=1775507463&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_MD_6ee8ecfb-fd34-40f2-b4e4-04ec9d10c00f.jpg?v=1776294911&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_Clutch_007fb035-74ae-441e-ae20-58889bc386d0.jpg?v=1776179910&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/033126_Site-Nav_Trending_Seaglass_43156970-ed41-4fd6-854e-bfab866d2fb1.jpg?v=1776294924&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/Loyalty_Benefit_Icons_2.png?v=1722532877&width=77",
+        "https://www.stanley1913.com/cdn/shop/files/Loyalty_Benefit_Icons.png?v=1722532877&width=78",
+        "https://www.stanley1913.com/cdn/shop/files/Loyalty_Benefit_Icons_1.png?v=1722532877&width=77",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherProTourFlipStrawTumbler30OZ-Black2.0-Front.png?v=1758731232&width=1515",
+        "https://www.stanley1913.com/cdn/shop/files/Web_JPG-Stanley_RecycledSS_OriginalLogo_041222.jpg?v=1707504288&width=700",
+        "https://www.stanley1913.com/cdn/shop/files/Large_JPG-Stanley_FW23-Cupholder_DSF5453_1.jpg?v=1706750376&width=700",
+        "https://www.stanley1913.com/cdn/shop/files/flag-usa.jpg?v=1702939937&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/flag-canada.jpg?v=1702930570&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_1409.jpg?v=1703099119&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_365.png?v=1719939696&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/custom-flag-korea.png?v=1759269527&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_365.jpg?v=1703099502&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_383_200x_3c380f51-b856-4ed0-9656-b23aa7205adc.webp?v=1703099423&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/custom-flag-indonesia.png?v=1759269527&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/Flag_of_Taiwan_Republic_of_China-32x21.png?v=1767832380&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_379.jpg?v=1703099572&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_1409_88c833e5-4812-4d28-8351-91f1c0890e6a.jpg?v=1703099364&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_1.png?v=1715880022&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_2.png?v=1715879919&width=64"
+      ],
+      "productReferenceSet": {
+        "productKey": "stanley-quencher-40",
+        "images": [
+          {
+            "id": "ref-9267096e8817",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Front.png?v=1770952011&width=1920",
+            "source": "official",
+            "hash": "9267096e88175555d125cb431ab13be8c05a8a15",
+            "width": 1515,
+            "height": 1515,
+            "viewClass": "front-3q",
+            "approxAzimuthDeg": 45,
+            "handleVisible": true,
+            "handleSide": "right",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 121,
+              "y": 75,
+              "w": 60,
+              "h": 48
+            },
+            "confidence": 0.86
+          },
+          {
+            "id": "ref-06af532f635a",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Hero_Back.png?v=1768920588&width=1920",
+            "source": "official",
+            "hash": "06af532f635a656ac2d4b38fa4b1f94418099540",
+            "width": 1515,
+            "height": 1515,
+            "viewClass": "back",
+            "approxAzimuthDeg": 180,
+            "handleVisible": false,
+            "handleSide": "unknown",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 143,
+              "y": 61,
+              "w": 53,
+              "h": 67
+            },
+            "confidence": 0.726
+          },
+          {
+            "id": "ref-bda5c6415907",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_Quencher_H2.0_FlowState_Tumbler_40OZ_-_Purple_Dust_-_Lid_Detail.png?v=1768920597&width=1920",
+            "source": "official",
+            "hash": "bda5c6415907c95fd41b6c12d2667d408daa56b6",
+            "width": 1515,
+            "height": 1515,
+            "viewClass": "detail",
+            "handleVisible": false,
+            "handleSide": "hidden",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 68,
+              "y": 62,
+              "w": 110,
+              "h": 101
+            },
+            "confidence": 0.86
+          }
+        ],
+        "canonicalFrontImageId": "ref-9267096e8817",
+        "canonicalHandleSideImageId": "ref-9267096e8817",
+        "orientationConfidence": 0.815,
+        "canonicalViewSelection": {
+          "canonicalFrontImageId": "ref-9267096e8817",
+          "canonicalBackStatus": "only-back-3q-found",
+          "frontConfidence": 0.86,
+          "backConfidence": 0.726,
+          "bestAuxBack3qImageId": "ref-06af532f635a"
+        }
+      },
+      "bodyColorHex": null,
+      "rimColorHex": null,
+      "fitDebug": null,
+      "dimensions": {
+        "overallHeightMm": 273.8,
+        "outsideDiameterMm": 99.8,
+        "topDiameterMm": 99.8,
+        "bottomDiameterMm": 78.7,
+        "usableHeightMm": 216,
+        "handleSpanMm": 147.8
+      },
+      "mode": "matched-profile",
+      "notes": [
+        "Detected an opposite-side product photo from the scraped gallery.",
+        "Retained 3 reference images for orientation analysis.",
+        "No strict true back face was assigned. The best opposite-side reference remains auxiliary only (treated as back-3q for UI, 73% confidence).",
+        "Applied internal Stanley Quencher 40oz profile for geometry and printable-height fallback.",
+        "Top margin fallback: 28 mm. Bottom margin fallback: 29.8 mm.",
+        "Handle arc fallback: 90°.",
+        "GLB fallback: /models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb."
+      ],
+      "sources": [
+        {
+          "title": "Adventure Quencher H2.0 Travel Tumbler | 40 oz | Stanley",
+          "url": "https://www.stanley1913.com/products/adventure-quencher-travel-tumbler-40-oz",
+          "kind": "official"
+        }
+      ]
+    },
+    "diagnostics": {
+      "runId": "tpl-mo8t0ger-o8nnhp13",
+      "traceId": null,
+      "sectionId": null,
+      "startedAt": "2026-04-21T15:54:05.715Z",
+      "inputFingerprints": {
+        "sourceImage": null,
+        "smartLookupInput": "txt:76:5efcc5a2",
+        "smartLookupResult": "json:5c81fc53"
+      },
+      "stages": [
+        {
+          "id": "smart-lookup",
+          "status": "ready",
+          "timingMs": 2546,
+          "authority": "matched-profile",
+          "cache": {
+            "hit": false,
+            "key": "a2176da3abe78adb005a917e3c5a0ddce9dea7678101dd3dfe61354597245d87",
+            "scope": "runtime"
+          },
+          "warnings": [],
+          "errors": [],
+          "artifacts": {
+            "sourceType": "url",
+            "category": "tumbler",
+            "matchedProfileId": "stanley-quencher-40",
+            "matchedFlatItemId": null,
+            "glbPath": "/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb",
+            "materialProfileId": null,
+            "lookupMode": "matched-profile",
+            "branchChosen": "drinkware",
+            "glbSource": "Generated Stanley Quencher product model",
+            "materialAuthority": "none",
+            "dimensionsAuthority": "matched-profile",
+            "textCacheHit": false,
+            "imageCacheHit": false,
+            "generatedGlb": false
+          },
+          "updatedAt": "2026-04-21T15:54:08.261Z"
+        },
+        {
+          "id": "source-image",
+          "status": "skip",
+          "authority": "text-only-lookup",
+          "warnings": [],
+          "errors": [],
+          "artifacts": {
+            "reason": "No analysis image was supplied."
+          },
+          "updatedAt": "2026-04-21T15:54:05.715Z"
+        }
+      ],
+      "blockingIssues": [],
+      "warnings": [],
+      "contractVersions": {
+        "smartLookupCache": "2026-04-09-v3"
+      }
+    }
+  }
+}

@@ -1,0 +1,400 @@
+{
+  "version": "2026-04-09-v3",
+  "key": "45570d9b659d44a2e86cc444974894605f8f8b65e8f583b41e1d3ce9b5177a76",
+  "createdAt": "2026-04-20T22:18:23.359Z",
+  "updatedAt": "2026-04-20T22:18:23.359Z",
+  "payload": {
+    "tumblerLookup": {
+      "lookupInput": "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz?variant=53973995716968",
+      "resolvedUrl": "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz?variant=53973995716968",
+      "title": "The IceFlow Flip Straw Tumbler | 30 OZ | Insulated Water Bottle",
+      "brand": "Stanley",
+      "model": "IceFlow Flip Straw 30oz",
+      "capacityOz": 30,
+      "matchedProfileId": "stanley-iceflow-30",
+      "glbPath": "",
+      "modelStatus": "missing-model",
+      "modelSourceLabel": null,
+      "imageUrl": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Daffodil_-_Hero_Back.png?v=1772239867&width=1920",
+      "backImageUrl": null,
+      "imageUrls": [
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Daffodil_-_Front.png?v=1772239809&width=1920",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Daffodil_-_Hero_Back.png?v=1772239867&width=1920",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Daffodil_-_Lid_Detail.png?v=1772239870&width=1920",
+        "https://www.stanley1913.com/cdn/shop/files/DTC_Color_Swatch-Daffodil-_Color_Swatch_0eaf6739-ed18-4da0-b6e9-d06e562a4f90.png?height=48&v=1769548858",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-HARO_ZEB-CZ_The_IceFlow_Flip_Straw_Tumbler_30OZ_-_Pink_Mesa_-_Front.png?v=1762181950&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-2026-03-25__The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Sea_Glass_Aura_-_Front.png?v=1774644664&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_-_30oz_-_Sea_Glass_Plume_-_Front.png?v=1774644666&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-2025-08-29_TheIceFlow_FlipStraw2.0Tumbler30OZ-CoastalTeal-Front.png?v=1769194197&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-2025-10-07_The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Blue_Sky_-_Front.png?v=1769194029&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheIceFlowFlipStraw2.0Tumbler30OZ-ChiliBlack-Front_10b44f4e-81a7-490a-a306-ed0590c5959a.png?v=1769194066&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Soft_Orchid_-_Front.png?v=1768921736&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_purple_dust_-_Front.png?v=1768920354&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Dark_Blossom_-_Front.png?v=1768847983&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Peach_Rose_-_Front.png?v=1768847221&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Honeydew_Hypergrip_-_Front.png?v=1767106927&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-2025-11-26_The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Sahara_Hypergrip_-_Front.png?v=1767106995&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheIceFlowFlipStraw2.0Tumbler30OZ-Pistachio-Front.png?v=1752587955&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheIceFlow_FlipStrawTumbler30OZ-Twilight-Front.png?v=1753463797&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheIceFlow_FlipStraw2.0Tumbler30OZ-DriedPine49.png?v=1753463797&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheIceFlow_FlipStraw2.0Tumbler30OZ-Toast-Front.png?v=1753463797&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheIceFlow_FlipStraw2.0Tumbler30OZ-SageGrey40.png?v=1756226638&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-2024-10-03_TheIceFlow_FlipStraw2.0Tumbler30OZ-Chalk-Front.png?v=1753463797&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_Tumbler_30OZ_-_Frost_-_Front.png?v=1753463797&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/B2B_Web_PNG-TheIceFlowTMFlipStrawTumbler30OZ-Navy-Front.png?v=1753463797&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/B2B_Web_PNG-TheIceFlowTMFlipStrawTumbler30OZ-Black2.0-Front.png?v=1753463797&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/B2B_Web_PNG-TheIceFlowTMFlipStrawTumbler30OZ-Ash-Front.png?v=1753463797&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheIceFlow_FlipStraw2.0Tumbler30OZ-RoseQuartz-Front.png?v=1753463797&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Spring_Green_-_Front.png?v=1772239823&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Hydrangea_-_Front.png?v=1772574689&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Cobalt_Chartreuse_-_Front.png?v=1775680868&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Orange_Sherbet_-_Front.png?v=1775680858&width=800",
+        "https://www.stanley1913.com/cdn/shop/files/021726_Site-Nav_Shop_Vitalize-Collection.jpg?v=1771040925&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/040726_Site-Nav_Trending_Spring-Picnic.jpg?v=1775507463&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_MD_6ee8ecfb-fd34-40f2-b4e4-04ec9d10c00f.jpg?v=1776294911&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_Clutch_007fb035-74ae-441e-ae20-58889bc386d0.jpg?v=1776179910&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/033126_Site-Nav_Trending_Seaglass_43156970-ed41-4fd6-854e-bfab866d2fb1.jpg?v=1776294924&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/Loyalty_Benefit_Icons_2.png?v=1722532877&width=77",
+        "https://www.stanley1913.com/cdn/shop/files/Loyalty_Benefit_Icons.png?v=1722532877&width=78",
+        "https://www.stanley1913.com/cdn/shop/files/Loyalty_Benefit_Icons_1.png?v=1722532877&width=77",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheQuencherProTourFlipStrawTumbler30OZ-Black2.0-Front.png?v=1758731232&width=1515",
+        "https://www.stanley1913.com/cdn/shop/files/flag-usa.jpg?v=1702939937&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/flag-canada.jpg?v=1702930570&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_1409.jpg?v=1703099119&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_365.png?v=1719939696&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/custom-flag-korea.png?v=1759269527&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_365.jpg?v=1703099502&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/image_383_200x_3c380f51-b856-4ed0-9656-b23aa7205adc.webp?v=1703099423&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/custom-flag-indonesia.png?v=1759269527&width=64"
+      ],
+      "productReferenceSet": {
+        "productKey": "stanley-iceflow-30",
+        "images": [
+          {
+            "id": "ref-fa01e0384322",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-HARO_ZEB-CZ_The_IceFlow_Flip_Straw_Tumbler_30OZ_-_Pink_Mesa_-_Front.png?v=1762181950&width=800",
+            "source": "official",
+            "hash": "fa01e0384322790420691b68e1ff8ab8ad022105",
+            "width": 800,
+            "height": 800,
+            "viewClass": "front",
+            "approxAzimuthDeg": 0,
+            "handleVisible": false,
+            "handleSide": "unknown",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 136,
+              "y": 61,
+              "w": 47,
+              "h": 73
+            },
+            "confidence": 0.763
+          },
+          {
+            "id": "ref-921b39efe2d4",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Cobalt_Chartreuse_-_Front.png?v=1775680868&width=800",
+            "source": "official",
+            "hash": "921b39efe2d429406fcdf1f10aa0c2d3de0c70e2",
+            "width": 800,
+            "height": 800,
+            "viewClass": "front",
+            "approxAzimuthDeg": 0,
+            "handleVisible": false,
+            "handleSide": "unknown",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 136,
+              "y": 61,
+              "w": 47,
+              "h": 74
+            },
+            "confidence": 0.768
+          },
+          {
+            "id": "ref-039d5bcbc663",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-TheIceFlow_FlipStraw2.0Tumbler30OZ-Toast-Front.png?v=1753463797&width=800",
+            "source": "official",
+            "hash": "039d5bcbc6634a74ecabe473d920946998146b9d",
+            "width": 800,
+            "height": 800,
+            "viewClass": "front",
+            "approxAzimuthDeg": 0,
+            "handleVisible": false,
+            "handleSide": "unknown",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 136,
+              "y": 61,
+              "w": 46,
+              "h": 75
+            },
+            "confidence": 0.763
+          },
+          {
+            "id": "ref-544df2cab96e",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Daffodil_-_Hero_Back.png?v=1772239867&width=1920",
+            "source": "official",
+            "hash": "544df2cab96ea5f496f27f441bf1e3553c08af42",
+            "width": 1515,
+            "height": 1515,
+            "viewClass": "back-3q",
+            "approxAzimuthDeg": 135,
+            "handleVisible": true,
+            "handleSide": "right",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 125,
+              "y": 84,
+              "w": 56,
+              "h": 47
+            },
+            "confidence": 0.766
+          },
+          {
+            "id": "ref-aef868f837d1",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-2025-08-29_TheIceFlow_FlipStraw2.0Tumbler30OZ-CoastalTeal-Front.png?v=1769194197&width=800",
+            "source": "official",
+            "hash": "aef868f837d1f78fbd91479f452a16f9651d5040",
+            "width": 800,
+            "height": 800,
+            "viewClass": "front",
+            "approxAzimuthDeg": 0,
+            "handleVisible": false,
+            "handleSide": "unknown",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 136,
+              "y": 61,
+              "w": 47,
+              "h": 74
+            },
+            "confidence": 0.766
+          },
+          {
+            "id": "ref-800c704f7346",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_purple_dust_-_Front.png?v=1768920354&width=800",
+            "source": "official",
+            "hash": "800c704f73467fba6bc53b42538206942498fe19",
+            "width": 800,
+            "height": 800,
+            "viewClass": "front",
+            "approxAzimuthDeg": 0,
+            "handleVisible": false,
+            "handleSide": "unknown",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 137,
+              "y": 61,
+              "w": 46,
+              "h": 74
+            },
+            "confidence": 0.765
+          },
+          {
+            "id": "ref-812c79e499f2",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Daffodil_-_Front.png?v=1772239809&width=1920",
+            "source": "official",
+            "hash": "812c79e499f2629311265d3f0f51a067f055f2ce",
+            "width": 1515,
+            "height": 1515,
+            "viewClass": "front",
+            "approxAzimuthDeg": 0,
+            "handleVisible": false,
+            "handleSide": "unknown",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 136,
+              "y": 61,
+              "w": 47,
+              "h": 73
+            },
+            "confidence": 0.762
+          },
+          {
+            "id": "ref-3ec3dd2cae0d",
+            "url": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-2025-10-07_The_IceFlow_Flip_Straw_2.0_Tumbler_30OZ_-_Blue_Sky_-_Front.png?v=1769194029&width=800",
+            "source": "official",
+            "hash": "3ec3dd2cae0d69ce4465780c8c5e7123638a158b",
+            "width": 800,
+            "height": 800,
+            "viewClass": "front",
+            "approxAzimuthDeg": 0,
+            "handleVisible": false,
+            "handleSide": "unknown",
+            "logoDetected": true,
+            "logoBox": {
+              "x": 136,
+              "y": 61,
+              "w": 47,
+              "h": 73
+            },
+            "confidence": 0.762
+          }
+        ],
+        "canonicalFrontImageId": "ref-544df2cab96e",
+        "canonicalHandleSideImageId": "ref-544df2cab96e",
+        "orientationConfidence": 0.766,
+        "canonicalViewSelection": {
+          "canonicalFrontImageId": "ref-544df2cab96e",
+          "canonicalBackStatus": "unknown",
+          "frontConfidence": 0.766,
+          "backConfidence": 0
+        }
+      },
+      "bodyColorHex": null,
+      "rimColorHex": null,
+      "fitDebug": null,
+      "dimensions": {
+        "overallHeightMm": 218.4,
+        "outsideDiameterMm": null,
+        "topDiameterMm": 88.9,
+        "bottomDiameterMm": 76.2,
+        "usableHeightMm": 150,
+        "handleSpanMm": null
+      },
+      "mode": "matched-profile",
+      "notes": [
+        "Selected the strongest product photo from the scraped page images.",
+        "Detected an opposite-side product photo from the scraped gallery.",
+        "Retained 8 reference images for orientation analysis.",
+        "Selected the canonical front view from the retained reference gallery.",
+        "No strict true back face was identified from the retained reference gallery.",
+        "Applied internal Stanley IceFlow 30oz profile for geometry and printable-height fallback.",
+        "Top margin fallback: 25 mm. Bottom margin fallback: 43.4 mm.",
+        "Handle arc fallback: 0°.",
+        "GLB fallback: none available locally."
+      ],
+      "sources": [
+        {
+          "title": "The IceFlow Flip Straw Tumbler | 30 OZ | Insulated Water Bottle",
+          "url": "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz?variant=53973995716968",
+          "kind": "official"
+        }
+      ]
+    },
+    "flatLookup": {
+      "lookupInput": "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz?variant=53973995716968",
+      "resolvedUrl": "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz?variant=53973995716968",
+      "title": "The IceFlow™ Flip Straw Tumbler",
+      "brand": "Stanley",
+      "label": "The IceFlow™ Flip Straw Tumbler",
+      "matchedItemId": null,
+      "familyKey": "rect-plate",
+      "category": "other",
+      "widthMm": 80,
+      "heightMm": 120,
+      "thicknessMm": 4,
+      "material": "plastic-abs",
+      "materialLabel": "Plastic - ABS",
+      "imageUrl": "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-HARO_ZEB-CZ_The_IceFlow_Flip_Straw_Tumbler_30OZ_-_Pink_Mesa_-_Front.png?v=1762181950",
+      "imageUrls": [
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-HARO_ZEB-CZ_The_IceFlow_Flip_Straw_Tumbler_30OZ_-_Pink_Mesa_-_Front.png?v=1762181950",
+        "https://www.stanley1913.com/cdn/shop/files/flag-usa.jpg?v=1702939937&width=64",
+        "https://www.stanley1913.com/cdn/shop/files/021726_Site-Nav_Shop_Vitalize-Collection.jpg?v=1771040925&width=512",
+        "https://www.stanley1913.com/cdn/shop/files/021726_Site-Nav_Shop_Vitalize-Collection.jpg?v=1771040925&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/040726_Site-Nav_Trending_Spring-Picnic.jpg?v=1775507463&width=512",
+        "https://www.stanley1913.com/cdn/shop/files/040726_Site-Nav_Trending_Spring-Picnic.jpg?v=1775507463&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_MD_6ee8ecfb-fd34-40f2-b4e4-04ec9d10c00f.jpg?v=1776294911&width=512",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_MD_6ee8ecfb-fd34-40f2-b4e4-04ec9d10c00f.jpg?v=1776294911&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_Clutch_007fb035-74ae-441e-ae20-58889bc386d0.jpg?v=1776179910&width=512",
+        "https://www.stanley1913.com/cdn/shop/files/041426_Site-Nav_Trending_Clutch_007fb035-74ae-441e-ae20-58889bc386d0.jpg?v=1776179910&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/033126_Site-Nav_Trending_Seaglass_43156970-ed41-4fd6-854e-bfab866d2fb1.jpg?v=1776294924&width=512",
+        "https://www.stanley1913.com/cdn/shop/files/033126_Site-Nav_Trending_Seaglass_43156970-ed41-4fd6-854e-bfab866d2fb1.jpg?v=1776294924&width=670",
+        "https://www.stanley1913.com/cdn/shop/files/Web_PNG_Square-HARO_ZEB-CZ_The_IceFlow_Flip_Straw_Tumbler_30OZ_-_Pink_Mesa_-_Front.png?v=1762181950&width=800"
+      ],
+      "glbPath": "/models/generated/the-iceflow-flip-straw-tumbler-trace-2685e7433f.glb",
+      "modelStrategy": "image-trace",
+      "modelSourceUrl": "https://www.stanley1913.com/cdn/shop/files/021726_Site-Nav_Shop_Vitalize-Collection.jpg?v=1771040925&width=512",
+      "requiresReview": true,
+      "isProxy": false,
+      "traceScore": 1.18,
+      "traceDebug": {
+        "kind": "silhouette-trace",
+        "sourceImageUrl": "https://www.stanley1913.com/cdn/shop/files/021726_Site-Nav_Shop_Vitalize-Collection.jpg?v=1771040925&width=512",
+        "imageWidthPx": 512,
+        "imageHeightPx": 576,
+        "silhouetteBoundsPx": {
+          "minX": 1,
+          "minY": 1,
+          "maxX": 510,
+          "maxY": 574,
+          "area": 256380
+        },
+        "coverage": 0.87,
+        "traceScore": 1.18,
+        "accepted": true,
+        "rejectionReason": null,
+        "targetWidthMm": 80,
+        "targetHeightMm": 120,
+        "outlinePointsPx": [
+          {
+            "xPx": 2,
+            "yPx": 2
+          },
+          {
+            "xPx": 2,
+            "yPx": 290
+          },
+          {
+            "xPx": 92,
+            "yPx": 296
+          },
+          {
+            "xPx": 98,
+            "yPx": 297
+          },
+          {
+            "xPx": 97,
+            "yPx": 304
+          },
+          {
+            "xPx": 105,
+            "yPx": 307
+          },
+          {
+            "xPx": 2,
+            "yPx": 310
+          },
+          {
+            "xPx": 2,
+            "yPx": 528
+          },
+          {
+            "xPx": 33,
+            "yPx": 531
+          },
+          {
+            "xPx": 2,
+            "yPx": 532
+          },
+          {
+            "xPx": 2,
+            "yPx": 575
+          },
+          {
+            "xPx": 511,
+            "yPx": 575
+          },
+          {
+            "xPx": 511,
+            "yPx": 2
+          }
+        ]
+      },
+      "confidence": 0.4,
+      "mode": "safe-fallback",
+      "notes": [
+        "Traced the product silhouette from a pulled product image (quality 1.18).",
+        "Resolved 3D model: /models/generated/the-iceflow-flip-straw-tumbler-trace-2685e7433f.glb.",
+        "Generated from product metadata. Verify before saving."
+      ],
+      "sources": [
+        {
+          "title": "The IceFlow™ Flip Straw Tumbler",
+          "url": "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz?variant=53973995716968",
+          "kind": "general"
+        }
+      ]
+    }
+  }
+}

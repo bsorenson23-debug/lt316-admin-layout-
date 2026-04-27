@@ -1,0 +1,75 @@
+{
+  "version": "2026-04-09-v3",
+  "key": "4afae18d517dd79572cb6261d1d3ff2760ae546439f802a40ab5eeba993d2b63",
+  "createdAt": "2026-04-21T15:53:57.777Z",
+  "updatedAt": "2026-04-21T15:53:57.777Z",
+  "payload": {
+    "tumblerLookup": {
+      "lookupInput": "Stanley Quencher 40 oz",
+      "resolvedUrl": null,
+      "title": null,
+      "brand": "Stanley",
+      "model": "Quencher H2.0 40oz",
+      "capacityOz": 40,
+      "matchedProfileId": "stanley-quencher-40",
+      "glbPath": "/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb",
+      "modelStatus": "verified-product-model",
+      "modelSourceLabel": "Generated Stanley Quencher product model",
+      "imageUrl": null,
+      "backImageUrl": null,
+      "imageUrls": [],
+      "productReferenceSet": null,
+      "bodyColorHex": null,
+      "rimColorHex": null,
+      "fitDebug": null,
+      "dimensions": {
+        "overallHeightMm": 273.8,
+        "outsideDiameterMm": 99.8,
+        "topDiameterMm": 99.8,
+        "bottomDiameterMm": 78.7,
+        "usableHeightMm": 216,
+        "handleSpanMm": 147.8
+      },
+      "mode": "matched-profile",
+      "notes": [
+        "Applied internal Stanley Quencher 40oz profile for geometry and printable-height fallback.",
+        "Top margin fallback: 28 mm. Bottom margin fallback: 29.8 mm.",
+        "Handle arc fallback: 90°.",
+        "GLB fallback: /models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb."
+      ],
+      "sources": []
+    },
+    "flatLookup": {
+      "lookupInput": "Stanley Quencher 40 oz",
+      "resolvedUrl": null,
+      "title": null,
+      "brand": null,
+      "label": "Stanley Quencher 40 oz",
+      "matchedItemId": null,
+      "familyKey": "rect-plate",
+      "category": "other",
+      "widthMm": 80,
+      "heightMm": 120,
+      "thicknessMm": 4,
+      "material": "plastic-abs",
+      "materialLabel": "Plastic - ABS",
+      "imageUrl": null,
+      "imageUrls": [],
+      "glbPath": "/models/generated/rect-plate-proxy-v2-80x120x4-plastic-abs.glb",
+      "modelStrategy": "family-generated",
+      "modelSourceUrl": null,
+      "requiresReview": true,
+      "isProxy": true,
+      "traceScore": null,
+      "traceDebug": null,
+      "confidence": 0.4,
+      "mode": "safe-fallback",
+      "notes": [
+        "No source model or usable product image was available, so the app fell back to the family shape generator.",
+        "Resolved 3D model: /models/generated/rect-plate-proxy-v2-80x120x4-plastic-abs.glb.",
+        "Generated from product metadata. Verify before saving."
+      ],
+      "sources": []
+    }
+  }
+}

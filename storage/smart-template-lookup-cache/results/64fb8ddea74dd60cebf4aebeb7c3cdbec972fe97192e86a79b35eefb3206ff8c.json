@@ -1,0 +1,191 @@
+{
+  "version": "2026-04-09-v3",
+  "key": "64fb8ddea74dd60cebf4aebeb7c3cdbec972fe97192e86a79b35eefb3206ff8c",
+  "createdAt": "2026-04-21T15:53:57.783Z",
+  "updatedAt": "2026-04-21T15:53:57.783Z",
+  "payload": {
+    "sourceType": "text",
+    "category": "tumbler",
+    "confidence": 0.98,
+    "reviewRequired": false,
+    "matchedProfileId": "stanley-quencher-40",
+    "matchedFlatItemId": null,
+    "categoryReason": "Drinkware-specific lookup signals were stronger than flat-item matches.",
+    "templateDraft": {
+      "name": "Stanley Quencher H2.0 40oz 40oz",
+      "brand": "Stanley",
+      "capacity": "40oz",
+      "laserType": null,
+      "productType": "tumbler",
+      "materialSlug": null,
+      "materialLabel": null,
+      "materialFinishType": null,
+      "materialProfileId": null,
+      "materialProfileLabel": null,
+      "productPhotoUrl": null,
+      "productPhotoLabel": null,
+      "backPhotoUrl": null,
+      "backPhotoLabel": null,
+      "productReferenceSet": null,
+      "glbPath": "/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb",
+      "glbStatus": "verified-product-model",
+      "glbSourceLabel": "Generated Stanley Quencher product model",
+      "dimensions": {
+        "diameterMm": 99.8,
+        "bodyDiameterMm": 99.8,
+        "topOuterDiameterMm": 99.8,
+        "baseDiameterMm": 78.7,
+        "printHeightMm": 216,
+        "templateWidthMm": 313.6,
+        "handleArcDeg": 90,
+        "taperCorrection": "bottom-narrow",
+        "overallHeightMm": 273.8,
+        "bodyTopFromOverallMm": null,
+        "bodyBottomFromOverallMm": null,
+        "bodyHeightMm": null,
+        "handleSpanMm": 147.8,
+        "topMarginMm": 28,
+        "bottomMarginMm": 29.8,
+        "bodyColorHex": null,
+        "rimColorHex": null
+      }
+    },
+    "nextPrompts": [
+      "choose-laser-type",
+      "choose-material-profile"
+    ],
+    "warnings": [],
+    "notes": [
+      "Applied internal Stanley Quencher 40oz profile for geometry and printable-height fallback.",
+      "Top margin fallback: 28 mm. Bottom margin fallback: 29.8 mm.",
+      "Handle arc fallback: 90°.",
+      "GLB fallback: /models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb."
+    ],
+    "flatLookupResult": {
+      "lookupInput": "Stanley Quencher 40 oz",
+      "resolvedUrl": null,
+      "title": null,
+      "brand": null,
+      "label": "Stanley Quencher 40 oz",
+      "matchedItemId": null,
+      "familyKey": "rect-plate",
+      "category": "other",
+      "widthMm": 80,
+      "heightMm": 120,
+      "thicknessMm": 4,
+      "material": "plastic-abs",
+      "materialLabel": "Plastic - ABS",
+      "imageUrl": null,
+      "imageUrls": [],
+      "glbPath": "/models/generated/rect-plate-proxy-v2-80x120x4-plastic-abs.glb",
+      "modelStrategy": "family-generated",
+      "modelSourceUrl": null,
+      "requiresReview": true,
+      "isProxy": true,
+      "traceScore": null,
+      "traceDebug": null,
+      "confidence": 0.4,
+      "mode": "safe-fallback",
+      "notes": [
+        "No source model or usable product image was available, so the app fell back to the family shape generator.",
+        "Resolved 3D model: /models/generated/rect-plate-proxy-v2-80x120x4-plastic-abs.glb.",
+        "Generated from product metadata. Verify before saving."
+      ],
+      "sources": []
+    },
+    "tumblerLookupResult": {
+      "lookupInput": "Stanley Quencher 40 oz",
+      "resolvedUrl": null,
+      "title": null,
+      "brand": "Stanley",
+      "model": "Quencher H2.0 40oz",
+      "capacityOz": 40,
+      "matchedProfileId": "stanley-quencher-40",
+      "glbPath": "/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb",
+      "modelStatus": "verified-product-model",
+      "modelSourceLabel": "Generated Stanley Quencher product model",
+      "imageUrl": null,
+      "backImageUrl": null,
+      "imageUrls": [],
+      "productReferenceSet": null,
+      "bodyColorHex": null,
+      "rimColorHex": null,
+      "fitDebug": null,
+      "dimensions": {
+        "overallHeightMm": 273.8,
+        "outsideDiameterMm": 99.8,
+        "topDiameterMm": 99.8,
+        "bottomDiameterMm": 78.7,
+        "usableHeightMm": 216,
+        "handleSpanMm": 147.8
+      },
+      "mode": "matched-profile",
+      "notes": [
+        "Applied internal Stanley Quencher 40oz profile for geometry and printable-height fallback.",
+        "Top margin fallback: 28 mm. Bottom margin fallback: 29.8 mm.",
+        "Handle arc fallback: 90°.",
+        "GLB fallback: /models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb."
+      ],
+      "sources": []
+    },
+    "diagnostics": {
+      "runId": "tpl-mo8t0a9x-ak29q4kq",
+      "traceId": null,
+      "sectionId": null,
+      "startedAt": "2026-04-21T15:53:57.765Z",
+      "inputFingerprints": {
+        "sourceImage": null,
+        "smartLookupInput": "txt:22:a5331037",
+        "smartLookupResult": "json:5c81fc53"
+      },
+      "stages": [
+        {
+          "id": "smart-lookup",
+          "status": "ready",
+          "timingMs": 16,
+          "authority": "matched-profile",
+          "cache": {
+            "hit": false,
+            "key": "64fb8ddea74dd60cebf4aebeb7c3cdbec972fe97192e86a79b35eefb3206ff8c",
+            "scope": "runtime"
+          },
+          "warnings": [],
+          "errors": [],
+          "artifacts": {
+            "sourceType": "text",
+            "category": "tumbler",
+            "matchedProfileId": "stanley-quencher-40",
+            "matchedFlatItemId": null,
+            "glbPath": "/models/generated/the-quencher-h2-0-flowstate-tumbler-trace-c84baea8c2.glb",
+            "materialProfileId": null,
+            "lookupMode": "matched-profile",
+            "branchChosen": "drinkware",
+            "glbSource": "Generated Stanley Quencher product model",
+            "materialAuthority": "none",
+            "dimensionsAuthority": "matched-profile",
+            "textCacheHit": false,
+            "imageCacheHit": false,
+            "generatedGlb": false
+          },
+          "updatedAt": "2026-04-21T15:53:57.781Z"
+        },
+        {
+          "id": "source-image",
+          "status": "skip",
+          "authority": "text-only-lookup",
+          "warnings": [],
+          "errors": [],
+          "artifacts": {
+            "reason": "No analysis image was supplied."
+          },
+          "updatedAt": "2026-04-21T15:53:57.766Z"
+        }
+      ],
+      "blockingIssues": [],
+      "warnings": [],
+      "contractVersions": {
+        "smartLookupCache": "2026-04-09-v3"
+      }
+    }
+  }
+}
