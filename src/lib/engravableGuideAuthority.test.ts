@@ -4,6 +4,9 @@ import test from "node:test";
 import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
 import {
   fitDebugYToOverallMm,
+  mapBodyLocalGuideMmToOverallMm,
+  mapOverallGuideMmToBodyLocalMm,
+  resolveAcceptedBodyReferenceOverallHeightMm,
   resolveEngravableZoneGuideAuthority,
 } from "./engravableGuideAuthority.ts";
 
@@ -62,6 +65,40 @@ test("manual top override wins over detected lower silver seam", () => {
   assert.equal(authority.topGuideSource, "manual-override");
   assert.equal(authority.topGuideMm, 71.2);
   assert.equal(authority.manualTopOverrideActive, true);
+});
+
+test("manual bottom override wins only when active", () => {
+  const withManual = resolveEngravableZoneGuideAuthority({
+    overallHeightMm: 256,
+    bodyTopFromOverallMm: 25,
+    bodyBottomFromOverallMm: 224,
+    printableBottomOverrideMm: 210.5,
+    printableSurfaceContract: {
+      printableTopMm: 64.5,
+      printableBottomMm: 218,
+      printableHeightMm: 153.5,
+      axialExclusions: [],
+      circumferentialExclusions: [],
+    },
+  });
+  const withoutManual = resolveEngravableZoneGuideAuthority({
+    overallHeightMm: 256,
+    bodyTopFromOverallMm: 25,
+    bodyBottomFromOverallMm: 224,
+    printableSurfaceContract: {
+      printableTopMm: 64.5,
+      printableBottomMm: 218,
+      printableHeightMm: 153.5,
+      axialExclusions: [],
+      circumferentialExclusions: [],
+    },
+  });
+
+  assert.equal(withManual.bottomGuideSource, "manual-override");
+  assert.equal(withManual.bottomGuideMm, 210.5);
+  assert.equal(withManual.manualBottomOverrideActive, true);
+  assert.equal(withoutManual.bottomGuideSource, "saved-printable-surface-contract");
+  assert.equal(withoutManual.bottomGuideMm, 218);
 });
 
 test("clearing manual override returns to lower silver seam", () => {
@@ -140,4 +177,34 @@ test("saved printable contract is lower priority than detected seam", () => {
 
   assert.equal(authority.topGuideSource, "detected-lower-silver-seam");
   assert.equal(authority.topGuideMm, 62.4);
+});
+
+test("accepted BODY REFERENCE full product height ignores body-only contour height", () => {
+  const resolved = resolveAcceptedBodyReferenceOverallHeightMm({
+    canonicalTotalHeightMm: 256,
+    lookupFullProductHeightMm: 255.8,
+    currentOverallHeightMm: 199,
+  });
+
+  assert.equal(resolved, 256);
+});
+
+test("body-only editor maps silver seam from full-product to body-local coordinates", () => {
+  const local = mapOverallGuideMmToBodyLocalMm({
+    overallGuideMm: 63,
+    bodyTopFromOverallMm: 25,
+    bodyOnlyHeightMm: 199,
+  });
+
+  assert.equal(local, 38);
+});
+
+test("body-only drag override maps back to full-product coordinates", () => {
+  const overall = mapBodyLocalGuideMmToOverallMm({
+    localGuideMm: 38,
+    bodyTopFromOverallMm: 25,
+    bodyBottomFromOverallMm: 224,
+  });
+
+  assert.equal(overall, 63);
 });

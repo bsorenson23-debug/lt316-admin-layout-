@@ -46,6 +46,46 @@ function firstFinite(...values: Array<number | null | undefined>): number | null
   return null;
 }
 
+function firstPositive(...values: Array<number | null | undefined>): number | null {
+  for (const value of values) {
+    if (isFiniteNumber(value) && value > 0) return value;
+  }
+  return null;
+}
+
+export function resolveAcceptedBodyReferenceOverallHeightMm(args: {
+  canonicalTotalHeightMm?: number | null;
+  lookupFullProductHeightMm?: number | null;
+  currentOverallHeightMm?: number | null;
+}): number {
+  return round2(firstPositive(
+    args.canonicalTotalHeightMm,
+    args.lookupFullProductHeightMm,
+    args.currentOverallHeightMm,
+  ) ?? 0);
+}
+
+export function mapOverallGuideMmToBodyLocalMm(args: {
+  overallGuideMm: number | null | undefined;
+  bodyTopFromOverallMm: number;
+  bodyOnlyHeightMm: number;
+}): number | null {
+  if (!isFiniteNumber(args.overallGuideMm) || !(args.bodyOnlyHeightMm > 0)) return null;
+  return round2(clamp(args.overallGuideMm - args.bodyTopFromOverallMm, 0, args.bodyOnlyHeightMm));
+}
+
+export function mapBodyLocalGuideMmToOverallMm(args: {
+  localGuideMm: number;
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+}): number {
+  const bodyTopMm = round2(args.bodyTopFromOverallMm);
+  const bodyBottomMm = round2(Math.max(bodyTopMm, args.bodyBottomFromOverallMm));
+  const bodyHeightMm = round2(Math.max(0, bodyBottomMm - bodyTopMm));
+  const localGuideMm = isFiniteNumber(args.localGuideMm) ? args.localGuideMm : 0;
+  return round2(bodyTopMm + clamp(localGuideMm, 0, bodyHeightMm));
+}
+
 export function fitDebugYToOverallMm(args: {
   fitDebug: TumblerItemLookupFitDebug | null | undefined;
   yPx: number | null | undefined;
@@ -105,8 +145,6 @@ export function resolveEngravableZoneGuideAuthority(args: {
   bodyTopFromOverallMm: number;
   bodyBottomFromOverallMm: number;
   acceptedBodyReferenceAvailable?: boolean;
-  lookupFullProductHeightMm?: number | null;
-  lookupBodyHeightMm?: number | null;
   printableTopOverrideMm?: number | null;
   printableBottomOverrideMm?: number | null;
   savedSilverBandBottomFromOverallMm?: number | null;

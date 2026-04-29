@@ -83,6 +83,9 @@ import {
 import { buildBodyReferenceGlbSourcePayload } from "@/lib/bodyReferenceGlbSource";
 import { resolveBodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
 import {
+  mapBodyLocalGuideMmToOverallMm,
+  mapOverallGuideMmToBodyLocalMm,
+  resolveAcceptedBodyReferenceOverallHeightMm,
   resolveDetectedLowerSilverSeamMm,
   resolveEngravableZoneGuideAuthority,
 } from "@/lib/engravableGuideAuthority";
@@ -180,6 +183,16 @@ interface Props {
   editingTemplate?: ProductTemplate;
   workspaceArtworkPlacements?: LaserBedArtworkPlacement[] | null;
   surfaceMode?: "modal" | "page";
+}
+
+type BodyOnlyEditorFrame = {
+  bodyTopFromOverallMm: number;
+  bodyBottomFromOverallMm: number;
+  bodyHeightMm: number;
+};
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function round2(n: number): number {
@@ -939,14 +952,6 @@ export function TemplateCreateForm({
     setBodyReferenceFineTuneUndoStack([]);
   }, []);
 
-  React.useEffect(() => {
-    if (!hasAcceptedBodyReferenceReview) return;
-    if (printableTopOverrideMm == null && printableBottomOverrideMm == null) return;
-    // Accepted BODY REFERENCE is the authority; clear stale guide drag overrides.
-    setPrintableTopOverrideMm(null);
-    setPrintableBottomOverrideMm(null);
-  }, [hasAcceptedBodyReferenceReview, printableBottomOverrideMm, printableTopOverrideMm]);
-
   // Auto-mirror front photo as back when mirrorForBack is enabled
   React.useEffect(() => {
     if (!mirrorForBack || !frontPhotoDataUrl) {
@@ -1085,8 +1090,6 @@ export function TemplateCreateForm({
       bodyTopFromOverallMm: bodyReferenceFrameBounds.bodyTopFromOverallMm,
       bodyBottomFromOverallMm: bodyReferenceFrameBounds.bodyBottomFromOverallMm,
       acceptedBodyReferenceAvailable: Boolean(approvedBodyOutline || approvedCanonicalDimensionCalibration),
-      lookupFullProductHeightMm: lookupResult?.dimensions?.fullProductHeightMm ?? null,
-      lookupBodyHeightMm: lookupResult?.dimensions?.bodyHeightMm ?? lookupResult?.dimensions?.usableHeightMm ?? null,
       printableTopOverrideMm,
       printableBottomOverrideMm,
       savedSilverBandBottomFromOverallMm,
@@ -1097,9 +1100,6 @@ export function TemplateCreateForm({
       approvedBodyOutline,
       approvedCanonicalDimensionCalibration,
       bodyReferenceFrameBounds,
-      lookupResult?.dimensions?.bodyHeightMm,
-      lookupResult?.dimensions?.fullProductHeightMm,
-      lookupResult?.dimensions?.usableHeightMm,
       lookupResult?.fitDebug,
       overallHeightMm,
       persistedPrintableSurfaceContract,
@@ -1131,51 +1131,97 @@ export function TemplateCreateForm({
     () => round2(Math.max(1, authorityBottomGuideMm - authorityTopGuideMm)),
     [authorityBottomGuideMm, authorityTopGuideMm],
   );
-  const bodyOnlyCutoutTotalHeightMm = React.useMemo(
-    () => {
-      if (!acceptedBodyOnlyZoneMode) return null;
-      if (!approvedCanonicalDimensionCalibration) return null;
-      const bodyHeightMm = approvedCanonicalDimensionCalibration.bodyHeightMm;
-      if (Number.isFinite(bodyHeightMm) && bodyHeightMm > 0) {
-        return round2(bodyHeightMm);
-      }
-      const bodyBottomMm = approvedCanonicalDimensionCalibration.bodyBottomMm;
-      if (Number.isFinite(bodyBottomMm) && bodyBottomMm > 0) {
-        return round2(bodyBottomMm);
-      }
-      return null;
-    },
-    [acceptedBodyOnlyZoneMode, approvedCanonicalDimensionCalibration],
-  );
-  const engravableEditorOverallHeightMm = acceptedBodyOnlyZoneMode
-    ? (bodyOnlyCutoutTotalHeightMm ?? engravableBodyCutoutHeightMm)
-    : overallHeightMm;
-  const powderCoatTopGuideMm = React.useMemo(() => {
+  const bodyOnlyEditorFrame = React.useMemo<BodyOnlyEditorFrame | null>(() => {
     if (!acceptedBodyOnlyZoneMode) return null;
-    if (typeof detectedLowerSilverSeamMm !== "number" || !Number.isFinite(detectedLowerSilverSeamMm)) {
-      return null;
-    }
-    const maxTopGuideMm = Math.max(0, engravableEditorOverallHeightMm - 1);
-    return round2(Math.min(maxTopGuideMm, Math.max(0, detectedLowerSilverSeamMm)));
-  }, [acceptedBodyOnlyZoneMode, detectedLowerSilverSeamMm, engravableEditorOverallHeightMm]);
-  const engravableEditorTopMarginMm = acceptedBodyOnlyZoneMode
-    ? (powderCoatTopGuideMm ?? 0)
+    const acceptedBodyTopMm = approvedCanonicalDimensionCalibration?.lidBodyLineMm;
+    const fallbackBodyTopMm = bodyReferenceFrameBounds?.bodyTopFromOverallMm;
+    const bodyTopFromOverallMm = isFiniteNumber(acceptedBodyTopMm)
+      ? acceptedBodyTopMm
+      : isFiniteNumber(fallbackBodyTopMm)
+        ? fallbackBodyTopMm
+        : null;
+    const acceptedBodyBottomMm = approvedCanonicalDimensionCalibration?.bodyBottomMm;
+    const fallbackBodyBottomMm = bodyReferenceFrameBounds?.bodyBottomFromOverallMm;
+    const bodyBottomFromOverallMm = isFiniteNumber(acceptedBodyBottomMm)
+      ? acceptedBodyBottomMm
+      : isFiniteNumber(fallbackBodyBottomMm)
+        ? fallbackBodyBottomMm
+        : null;
+    if (bodyTopFromOverallMm == null || bodyBottomFromOverallMm == null) return null;
+    if (bodyTopFromOverallMm < 0 || bodyBottomFromOverallMm <= bodyTopFromOverallMm) return null;
+
+    const acceptedBodyHeightMm = approvedCanonicalDimensionCalibration?.bodyHeightMm;
+    const bodyHeightMm = isFiniteNumber(acceptedBodyHeightMm) && acceptedBodyHeightMm > 0
+      ? acceptedBodyHeightMm
+      : bodyBottomFromOverallMm - bodyTopFromOverallMm;
+    if (!(bodyHeightMm > 0)) return null;
+
+    return {
+      bodyTopFromOverallMm: round2(bodyTopFromOverallMm),
+      bodyBottomFromOverallMm: round2(bodyTopFromOverallMm + bodyHeightMm),
+      bodyHeightMm: round2(bodyHeightMm),
+    };
+  }, [
+    acceptedBodyOnlyZoneMode,
+    approvedCanonicalDimensionCalibration?.bodyBottomMm,
+    approvedCanonicalDimensionCalibration?.bodyHeightMm,
+    approvedCanonicalDimensionCalibration?.lidBodyLineMm,
+    bodyReferenceFrameBounds?.bodyBottomFromOverallMm,
+    bodyReferenceFrameBounds?.bodyTopFromOverallMm,
+  ]);
+  const bodyOnlyEditorMode = acceptedBodyOnlyZoneMode && bodyOnlyEditorFrame != null;
+  const bodyOnlyCutoutTotalHeightMm = bodyOnlyEditorFrame?.bodyHeightMm ?? null;
+  const engravableEditorOverallHeightMm = bodyOnlyEditorMode && bodyOnlyCutoutTotalHeightMm != null
+    ? bodyOnlyCutoutTotalHeightMm
+    : overallHeightMm;
+  const bodyOnlyTopGuideLocalMm = React.useMemo(() => {
+    if (!bodyOnlyEditorFrame) return null;
+    return mapOverallGuideMmToBodyLocalMm({
+      overallGuideMm: authorityTopGuideMm,
+      bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
+      bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
+    });
+  }, [
+    authorityTopGuideMm,
+    bodyOnlyEditorFrame,
+  ]);
+  const bodyOnlyBottomGuideLocalMm = React.useMemo(() => {
+    if (!bodyOnlyEditorFrame) return null;
+    return mapOverallGuideMmToBodyLocalMm({
+      overallGuideMm: authorityBottomGuideMm,
+      bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
+      bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
+    });
+  }, [
+    authorityBottomGuideMm,
+    bodyOnlyEditorFrame,
+  ]);
+  const engravableEditorTopMarginMm = bodyOnlyEditorMode
+    ? (bodyOnlyTopGuideLocalMm ?? 0)
     : authorityTopGuideMm;
-  const engravableEditorBottomMarginMm = acceptedBodyOnlyZoneMode
-    ? 0
+  const engravableEditorBottomMarginMm = bodyOnlyEditorMode
+    ? round2(Math.max(0, engravableEditorOverallHeightMm - (bodyOnlyBottomGuideLocalMm ?? engravableEditorOverallHeightMm)))
     : round2(Math.max(0, overallHeightMm - authorityBottomGuideMm));
   const engravableEditorSilverRingMm = React.useMemo(() => {
     if (typeof detectedLowerSilverSeamMm !== "number" || !Number.isFinite(detectedLowerSilverSeamMm)) {
       return null;
     }
+    if (bodyOnlyEditorMode) {
+      if (!bodyOnlyEditorFrame) return null;
+      return mapOverallGuideMmToBodyLocalMm({
+        overallGuideMm: detectedLowerSilverSeamMm,
+        bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
+        bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
+      });
+    }
     return round2(Math.max(0, detectedLowerSilverSeamMm));
-  }, [detectedLowerSilverSeamMm]);
-  const engravableEditorTopGuideSource = acceptedBodyOnlyZoneMode
-    ? (powderCoatTopGuideMm != null ? "detected-silver-band-bottom" : (engravableGuideAuthority?.topGuideSource ?? "unknown"))
-    : engravableGuideAuthority?.topGuideSource;
-  const engravableEditorBottomGuideSource = acceptedBodyOnlyZoneMode
-    ? "accepted-body-reference"
-    : engravableGuideAuthority?.bottomGuideSource;
+  }, [
+    bodyOnlyEditorFrame,
+    bodyOnlyEditorMode,
+    detectedLowerSilverSeamMm,
+  ]);
+  const engravableEditorTopGuideSource = engravableGuideAuthority?.topGuideSource;
+  const engravableEditorBottomGuideSource = engravableGuideAuthority?.bottomGuideSource;
 
   const liveBodyReferenceOutline = React.useMemo(() => {
     if (productType === "flat") return null;
@@ -2805,11 +2851,6 @@ export function TemplateCreateForm({
       fitDebug: lookupResult?.fitDebug ?? null,
     });
     if (!rebuiltSnapshot) return;
-    const acceptedOutlineBounds = resolveOutlineBounds(rebuiltSnapshot.approvedBodyOutline);
-    const acceptedContourHeightMm =
-      acceptedOutlineBounds && Number.isFinite(acceptedOutlineBounds.height) && acceptedOutlineBounds.height > 0
-        ? round2(acceptedOutlineBounds.height)
-        : null;
     setApprovedBodyOutline(cloneSerializable(rebuiltSnapshot.approvedBodyOutline));
     setApprovedCanonicalBodyProfile(
       rebuiltSnapshot.approvedCanonicalBodyProfile
@@ -2827,19 +2868,18 @@ export function TemplateCreateForm({
         : null,
     );
     setApprovedBodyReferenceWarnings([...rebuiltSnapshot.approvedBodyReferenceWarnings]);
-    setOverallHeightMm(
-      acceptedContourHeightMm
-      ?? (
-        rebuiltSnapshot.approvedCanonicalDimensionCalibration
-          ? round2(rebuiltSnapshot.approvedCanonicalDimensionCalibration.totalHeightMm)
-          : overallHeightMm
-      ),
-    );
+    setOverallHeightMm(resolveAcceptedBodyReferenceOverallHeightMm({
+      canonicalTotalHeightMm: rebuiltSnapshot.approvedCanonicalDimensionCalibration?.totalHeightMm,
+      lookupFullProductHeightMm: lookupResult?.dimensions?.fullProductHeightMm,
+      currentOverallHeightMm: overallHeightMm,
+    }));
     setTopMarginMm(rebuiltSnapshot.nextTopMarginMm);
     setBottomMarginMm(rebuiltSnapshot.nextBottomMarginMm);
     setPrintHeightMm(rebuiltSnapshot.nextPrintHeightMm);
     setDiameterMm(rebuiltSnapshot.nextDiameterMm);
     clearReviewedBodyReferenceGeneratedState();
+    setPrintableTopOverrideMm(null);
+    setPrintableBottomOverrideMm(null);
     setPreviewModelMode("alignment-model");
     setHasAcceptedBodyReferenceReview(true);
     resetBodyReferenceFineTuneState();
@@ -2850,6 +2890,7 @@ export function TemplateCreateForm({
     clearReviewedBodyReferenceGeneratedState,
     diameterMm,
     handleArcDeg,
+    lookupResult?.dimensions?.fullProductHeightMm,
     lookupResult?.fitDebug,
     overallHeightMm,
     resetBodyReferenceFineTuneState,
@@ -3761,11 +3802,6 @@ export function TemplateCreateForm({
                 onClick={() => {
                   if (!liveBodyReferencePipeline) return;
                   resetBodyReferenceFineTuneState();
-                  const acceptedOutlineBounds = resolveOutlineBounds(liveBodyReferencePipeline.outline);
-                  const acceptedContourHeightMm =
-                    acceptedOutlineBounds && Number.isFinite(acceptedOutlineBounds.height) && acceptedOutlineBounds.height > 0
-                      ? round2(acceptedOutlineBounds.height)
-                      : null;
                   setApprovedBodyOutline(
                     liveBodyReferencePipeline.outline
                       ? cloneSerializable(liveBodyReferencePipeline.outline)
@@ -3778,10 +3814,13 @@ export function TemplateCreateForm({
                   setApprovedCanonicalDimensionCalibration(
                     cloneSerializable(acceptedCal),
                   );
-                  setOverallHeightMm(acceptedContourHeightMm ?? round2(acceptedCal.totalHeightMm));
-                  // Update margins from the actual measured contour bounds so the
-                  // engravable zone reflects physical reality, not the profile's
-                  // conservative usableHeightMm estimate.
+                  setOverallHeightMm(resolveAcceptedBodyReferenceOverallHeightMm({
+                    canonicalTotalHeightMm: acceptedCal.totalHeightMm,
+                    lookupFullProductHeightMm: lookupResult?.dimensions?.fullProductHeightMm,
+                    currentOverallHeightMm: overallHeightMm,
+                  }));
+                  // Keep body bounds in full-product coordinates from the accepted
+                  // BODY REFERENCE calibration.
                   setTopMarginMm(round2(acceptedCal.lidBodyLineMm));
                   setBottomMarginMm(round2(Math.max(0, acceptedCal.totalHeightMm - acceptedCal.bodyBottomMm)));
                   setPrintHeightMm(round2(acceptedCal.bodyHeightMm));
@@ -5495,8 +5534,8 @@ export function TemplateCreateForm({
             rimColorHex={rimColorHex}
             guideFrame={bodyReferenceGuideFrame}
             silverRingIndicatorMm={engravableEditorSilverRingMm}
-            bodyOnlyScaleMode={acceptedBodyOnlyZoneMode}
-            outline={acceptedBodyOnlyZoneMode ? approvedBodyOutline : null}
+            bodyOnlyScaleMode={bodyOnlyEditorMode}
+            outline={bodyOnlyEditorMode ? approvedBodyOutline : null}
             bodyScaleSource={engravableGuideAuthority?.bodyScaleSource}
             topGuideSource={engravableEditorTopGuideSource}
             bottomGuideSource={engravableEditorBottomGuideSource}
@@ -5506,14 +5545,29 @@ export function TemplateCreateForm({
               let nextTopGuideMm: number;
               let nextBottomGuideMm: number;
 
-              if (acceptedBodyOnlyZoneMode) {
-                const normalizedBottomGuideMm = round2(engravableEditorOverallHeightMm - bottom);
-                nextTopGuideMm = changedLine === "top"
+              if (bodyOnlyEditorMode && bodyOnlyEditorFrame) {
+                const bodyTopOverallMm = bodyOnlyEditorFrame.bodyTopFromOverallMm;
+                const bodyBottomOverallMm = bodyOnlyEditorFrame.bodyBottomFromOverallMm;
+                const localBottomGuideMm = round2(engravableEditorOverallHeightMm - bottom);
+                const currentLocalBottomGuideMm = round2(
+                  engravableEditorOverallHeightMm - engravableEditorBottomMarginMm,
+                );
+                const nextLocalTopGuideMm = changedLine === "top"
                   ? top
                   : engravableEditorTopMarginMm;
-                nextBottomGuideMm = changedLine === "bottom"
-                  ? normalizedBottomGuideMm
-                  : engravableEditorOverallHeightMm;
+                const nextLocalBottomGuideMm = changedLine === "bottom"
+                  ? localBottomGuideMm
+                  : currentLocalBottomGuideMm;
+                nextTopGuideMm = mapBodyLocalGuideMmToOverallMm({
+                  localGuideMm: nextLocalTopGuideMm,
+                  bodyTopFromOverallMm: bodyTopOverallMm,
+                  bodyBottomFromOverallMm: bodyBottomOverallMm,
+                });
+                nextBottomGuideMm = mapBodyLocalGuideMmToOverallMm({
+                  localGuideMm: nextLocalBottomGuideMm,
+                  bodyTopFromOverallMm: bodyTopOverallMm,
+                  bodyBottomFromOverallMm: bodyBottomOverallMm,
+                });
               } else {
                 const bottomGuideMm = round2(overallHeightMm - bottom);
                 nextTopGuideMm = changedLine === "top"
@@ -5522,6 +5576,14 @@ export function TemplateCreateForm({
                 nextBottomGuideMm = changedLine === "bottom"
                   ? bottomGuideMm
                   : authorityBottomGuideMm;
+              }
+
+              if (nextBottomGuideMm < nextTopGuideMm) {
+                if (changedLine === "top") {
+                  nextTopGuideMm = nextBottomGuideMm;
+                } else {
+                  nextBottomGuideMm = nextTopGuideMm;
+                }
               }
 
               if (changedLine === "top") {

@@ -29,7 +29,7 @@ interface Props {
   rimColorHex: string;
   /** Shared BODY REFERENCE guide authority used by lookup debug and UI overlays. */
   guideFrame?: BodyReferenceGuideFrame | null;
-  /** Detected lower silver seam / silver band bottom, from product top in mm. */
+  /** Detected lower silver seam / silver band bottom in the displayed editor coordinate space. */
   silverRingIndicatorMm?: number | null;
   /** When true, show accepted body-only BODY REFERENCE as the body scale authority. */
   bodyOnlyScaleMode?: boolean;
