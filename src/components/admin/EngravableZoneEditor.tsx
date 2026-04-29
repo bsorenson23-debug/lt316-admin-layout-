@@ -110,14 +110,14 @@ function measureContourBounds(points: Array<{ x: number; y: number }>): {
 function buildMappedOutlinePath(args: {
   outline?: EditableBodyOutline | null;
   enabled: boolean;
-  photoRect: { left: number; top: number; width: number; height: number } | null;
-  fallbackBounds: { left: number; top: number; width: number; height: number };
+  targetBounds: { left: number; top: number; width: number; height: number } | null;
 }): string | null {
   if (!args.enabled || !args.outline) return null;
   const points = args.outline.directContour?.length
     ? args.outline.directContour
     : args.outline.points;
   if (!points || points.length < 3) return null;
+  if (!args.targetBounds || args.targetBounds.width <= 1 || args.targetBounds.height <= 1) return null;
 
   const sourceBounds = args.outline.sourceContourViewport
     ? {
@@ -129,7 +129,7 @@ function buildMappedOutlinePath(args: {
     : measureContourBounds(points);
   if (!sourceBounds) return null;
 
-  const target = args.photoRect ?? args.fallbackBounds;
+  const target = args.targetBounds;
   const mapped = points
     .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
     .map((point) => {
@@ -462,15 +462,7 @@ export function EngravableZoneEditor({
   const acceptedBodyOutlinePath = buildMappedOutlinePath({
     outline,
     enabled: bodyOnlyScaleMode,
-    photoRect: activeDisplayPhoto
-      ? {
-          left: photoLeftPx,
-          top: photoTopPx,
-          width: photoWidthPx,
-          height: targetPhotoHeightPx,
-        }
-      : null,
-    fallbackBounds: {
+    targetBounds: {
       left: guideFrameLeftPx,
       top: guideFrameTopPx,
       width: guideFrameWidthPx,

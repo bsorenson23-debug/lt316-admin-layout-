@@ -21,6 +21,13 @@ export type ProductAppearanceSurfaceAuthoritySource =
   | "fallback-body-frame"
   | "unknown";
 
+export type ProductAppearanceBottomSafeInsetSource =
+  | "lookup-profile"
+  | "body-reference-profile"
+  | "rounded-base-fallback"
+  | "manual-override"
+  | "none";
+
 export interface ProductEngravableSurfaceBand {
   coordinateSpace: ProductAppearanceCoordinateSpace;
   printableTopMm: number;
@@ -29,6 +36,9 @@ export interface ProductEngravableSurfaceBand {
   topGuideSource: EngravableGuideSource;
   bottomGuideSource: EngravableGuideSource;
   authoritySource: ProductAppearanceSurfaceAuthoritySource;
+  bottomSafeInsetMm?: number;
+  bottomSafeInsetSource?: ProductAppearanceBottomSafeInsetSource;
+  bottomGuideAdjustedForLowerBowl?: boolean;
   bodyReferenceSourceHash?: string;
 }
 
@@ -154,6 +164,18 @@ function resolveLayerSourceFromGuideSource(
   }
 }
 
+function resolveRoundedBaseSafeInsetMm(args: {
+  bodyTopMm: number;
+  bodyBottomMm: number;
+}): number {
+  const bodyHeightMm = Math.max(0, args.bodyBottomMm - args.bodyTopMm);
+  return round2(clamp(bodyHeightMm * 0.05, 6, 14));
+}
+
+function shouldApplyLowerBowlFallback(bottomGuideSource: EngravableGuideSource): boolean {
+  return bottomGuideSource === "accepted-body-reference" || bottomGuideSource === "fallback-body-frame";
+}
+
 function resolveEngravableSurface(args: ResolveProductAppearanceSurfaceAuthorityArgs): ProductEngravableSurfaceBand {
   const overallHeightMm = Math.max(0, args.overallHeightMm);
   const bodyTopMm = round2(clamp(args.bodyTopFromOverallMm, 0, overallHeightMm));
@@ -178,7 +200,31 @@ function resolveEngravableSurface(args: ResolveProductAppearanceSurfaceAuthority
   }
 
   const printableTopMm = round2(clamp(topMm, bodyTopMm, bodyBottomMm));
-  const printableBottomMm = round2(clamp(bottomMm, printableTopMm, bodyBottomMm));
+  const rawPrintableBottomMm = round2(clamp(bottomMm, printableTopMm, bodyBottomMm));
+  let printableBottomMm = rawPrintableBottomMm;
+  let bottomSafeInsetMm: number | undefined;
+  let bottomSafeInsetSource: ProductAppearanceBottomSafeInsetSource = "none";
+  let bottomGuideAdjustedForLowerBowl = false;
+
+  if (shouldApplyLowerBowlFallback(bottomGuideSource)) {
+    const lowerBowlSafeInsetMm = resolveRoundedBaseSafeInsetMm({ bodyTopMm, bodyBottomMm });
+    const safeBottomMm = round2(clamp(bodyBottomMm - lowerBowlSafeInsetMm, printableTopMm, bodyBottomMm));
+    const usefulHeightMm = Math.min(20, Math.max(0, bodyBottomMm - printableTopMm));
+    const minUsefulBottomMm = round2(printableTopMm + usefulHeightMm);
+    const adjustedBottomMm = bodyBottomMm - printableTopMm > usefulHeightMm
+      ? round2(clamp(safeBottomMm, minUsefulBottomMm, bodyBottomMm))
+      : safeBottomMm;
+
+    if (adjustedBottomMm < rawPrintableBottomMm) {
+      printableBottomMm = adjustedBottomMm;
+      bottomGuideAdjustedForLowerBowl = true;
+    }
+
+    bottomSafeInsetMm = round2(Math.max(0, bodyBottomMm - printableBottomMm));
+    bottomSafeInsetSource = bottomGuideAdjustedForLowerBowl ? "rounded-base-fallback" : "none";
+  } else if (bottomGuideSource === "manual-override") {
+    bottomSafeInsetSource = "manual-override";
+  }
 
   return {
     coordinateSpace: "full-product-mm",
@@ -188,6 +234,9 @@ function resolveEngravableSurface(args: ResolveProductAppearanceSurfaceAuthority
     topGuideSource,
     bottomGuideSource,
     authoritySource: resolveSurfaceAuthoritySource(topGuideSource, bottomGuideSource),
+    ...(bottomSafeInsetMm != null ? { bottomSafeInsetMm } : {}),
+    bottomSafeInsetSource,
+    bottomGuideAdjustedForLowerBowl,
     ...(normalizeString(args.bodyReferenceSourceHash)
       ? { bodyReferenceSourceHash: normalizeString(args.bodyReferenceSourceHash) }
       : {}),

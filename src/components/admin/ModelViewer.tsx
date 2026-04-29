@@ -459,18 +459,23 @@ function EngravableZoneRing({
 }: { dims: TumblerDimensions; modelBounds: THREE.Box3 }) {
   const size = modelBounds.getSize(new THREE.Vector3());
   const center = modelBounds.getCenter(new THREE.Vector3());
+  const topY = modelBounds.max.y;
+  const scaleY = dims.overallHeightMm > 0 ? size.y / dims.overallHeightMm : 1;
+  const zoneHeight = Math.max(0.1, dims.printableHeightMm * scaleY);
+  const zoneTopOffset = Math.max(0, dims.printableTopOffsetMm ?? 0) * scaleY;
+  const zoneCenterY = topY - zoneTopOffset - zoneHeight / 2;
 
   // Radius: slightly proud of the model surface
   const radMm = Math.max(size.x, size.z) / 2 + 1.2;
 
-  // Zone spans from center ± half the printable height
-  const halfH = dims.printableHeightMm / 2;
+  // Zone spans from the upstream printable top/bottom, not from model center.
+  const halfH = zoneHeight / 2;
 
   return (
-    <group position={[center.x, center.y, center.z]}>
+    <group position={[center.x, zoneCenterY, center.z]}>
       {/* Translucent zone fill */}
       <mesh>
-        <cylinderGeometry args={[radMm, radMm, dims.printableHeightMm, 64, 1, true]} />
+        <cylinderGeometry args={[radMm, radMm, zoneHeight, 64, 1, true]} />
         <meshBasicMaterial
           color="#4a8fe8" transparent opacity={0.06}
           side={THREE.BackSide} depthWrite={false}

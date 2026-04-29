@@ -71,6 +71,75 @@ test("saved printable surface contract remains engravable surface source when st
   ]);
 });
 
+test("accepted body-reference bottom guide is raised above rounded bowl bottom by fallback inset", () => {
+  const authority = resolveProductAppearanceSurfaceAuthority({
+    overallHeightMm: 228.3,
+    bodyTopFromOverallMm: 57.3,
+    bodyBottomFromOverallMm: 228.3,
+    engravableGuideAuthority: createGuideAuthority({
+      topGuideMm: 57.3,
+      bottomGuideMm: 228.3,
+      topGuideSource: "accepted-body-reference",
+      bottomGuideSource: "accepted-body-reference",
+      detectedLowerSilverSeamMm: null,
+    }),
+  });
+
+  assert.equal(authority.engravableSurface.printableTopMm, 57.3);
+  assert.equal(authority.engravableSurface.printableBottomMm, 219.75);
+  assert.equal(authority.engravableSurface.printableBottomMm < 228.3, true);
+  assert.equal(authority.engravableSurface.bottomSafeInsetMm, 8.55);
+  assert.equal(authority.engravableSurface.bottomSafeInsetSource, "rounded-base-fallback");
+  assert.equal(authority.engravableSurface.bottomGuideAdjustedForLowerBowl, true);
+});
+
+test("manual bottom override is not moved by lower bowl fallback", () => {
+  const authority = resolveProductAppearanceSurfaceAuthority({
+    overallHeightMm: 228.3,
+    bodyTopFromOverallMm: 57.3,
+    bodyBottomFromOverallMm: 228.3,
+    engravableGuideAuthority: createGuideAuthority({
+      topGuideMm: 57.3,
+      bottomGuideMm: 224.2,
+      topGuideSource: "accepted-body-reference",
+      bottomGuideSource: "manual-override",
+      manualBottomOverrideActive: true,
+      detectedLowerSilverSeamMm: null,
+    }),
+  });
+
+  assert.equal(authority.engravableSurface.printableBottomMm, 224.2);
+  assert.equal(authority.engravableSurface.bottomSafeInsetSource, "manual-override");
+  assert.equal(authority.engravableSurface.bottomGuideAdjustedForLowerBowl, false);
+});
+
+test("saved printable surface contract bottom is not moved by lower bowl fallback", () => {
+  const authority = resolveProductAppearanceSurfaceAuthority({
+    overallHeightMm: 228.3,
+    bodyTopFromOverallMm: 57.3,
+    bodyBottomFromOverallMm: 228.3,
+    printableSurfaceContract: {
+      printableTopMm: 63,
+      printableBottomMm: 222,
+      printableHeightMm: 159,
+      axialExclusions: [],
+      circumferentialExclusions: [],
+    },
+    engravableGuideAuthority: createGuideAuthority({
+      topGuideMm: 63,
+      bottomGuideMm: 222,
+      topGuideSource: "saved-printable-surface-contract",
+      bottomGuideSource: "saved-printable-surface-contract",
+      detectedLowerSilverSeamMm: null,
+    }),
+  });
+
+  assert.equal(authority.engravableSurface.authoritySource, "printable-surface-contract");
+  assert.equal(authority.engravableSurface.printableBottomMm, 222);
+  assert.equal(authority.engravableSurface.bottomSafeInsetSource, "none");
+  assert.equal(authority.engravableSurface.bottomGuideAdjustedForLowerBowl, false);
+});
+
 test("manual top and bottom overrides remain full-product coordinates", () => {
   const authority = resolveProductAppearanceSurfaceAuthority({
     overallHeightMm: 256,

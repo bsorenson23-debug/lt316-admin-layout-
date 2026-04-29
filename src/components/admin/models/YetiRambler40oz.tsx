@@ -547,22 +547,22 @@ export function YetiRambler40oz({
       resolvedLidSeam + 0.8,
       overallHeightMm,
     );
-    const resolvedBodyTop = THREE.MathUtils.clamp(
-      bodyTopOffsetMm ?? resolvedSilverBandBottom ?? fallbackBodyTop,
-      resolvedSilverBandBottom,
+    const resolvedPrintableTop = THREE.MathUtils.clamp(
+      printableTopOffsetMm,
+      0,
       overallHeightMm,
     );
-    const resolvedBodyBottom = THREE.MathUtils.clamp(
-      resolvedBodyTop + (bodyHeightMm ?? fallbackBodyHeight),
-      resolvedBodyTop + 1,
+    const resolvedPrintableBottom = THREE.MathUtils.clamp(
+      resolvedPrintableTop + fallbackBodyHeight,
+      resolvedPrintableTop + 1,
       overallHeightMm,
     );
 
     const mmToLocalY = (mmFromTop: number) =>
       rimAnalysis.topY - (mmFromTop / (scaleFactorY > 0 ? scaleFactorY : 1));
     const expandedRadius = bodyRadiusLocal + 0.32;
-    const bodyCenterY = (mmToLocalY(resolvedBodyTop) + mmToLocalY(resolvedBodyBottom)) / 2;
-    const bodyHeightLocal = (resolvedBodyBottom - resolvedBodyTop) / (scaleFactorY > 0 ? scaleFactorY : 1);
+    const bodyCenterY = (mmToLocalY(resolvedPrintableTop) + mmToLocalY(resolvedPrintableBottom)) / 2;
+    const bodyHeightLocal = (resolvedPrintableBottom - resolvedPrintableTop) / (scaleFactorY > 0 ? scaleFactorY : 1);
     const silverCenterY = (mmToLocalY(resolvedLidSeam) + mmToLocalY(resolvedSilverBandBottom)) / 2;
     const silverHeightLocal =
       (resolvedSilverBandBottom - resolvedLidSeam) / (scaleFactorY > 0 ? scaleFactorY : 1);
@@ -580,8 +580,6 @@ export function YetiRambler40oz({
     printableTopOffsetMm,
     printHeightMm,
     upstreamSilverBandLayer,
-    bodyTopOffsetMm,
-    bodyHeightMm,
     lidSeamFromOverallMm,
     silverBandBottomFromOverallMm,
     rimAnalysis.topY,
@@ -679,6 +677,12 @@ export function YetiRambler40oz({
           <mesh
             position={[0, overlayZoneConfig.bodyCenterY, 0]}
             renderOrder={4}
+            name="upstream_engravable_surface_reference"
+            userData={{
+              bodyContractIgnore: true,
+              appearanceReferenceLayer: true,
+              referenceOnly: true,
+            }}
           >
             <cylinderGeometry
               args={[
@@ -703,6 +707,12 @@ export function YetiRambler40oz({
           <mesh
             position={[0, overlayZoneConfig.silverCenterY, 0]}
             renderOrder={5}
+            name="upstream_silver_ring_reference"
+            userData={{
+              bodyContractIgnore: true,
+              appearanceReferenceLayer: true,
+              referenceOnly: true,
+            }}
           >
             <cylinderGeometry
               args={[

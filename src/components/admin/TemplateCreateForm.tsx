@@ -1199,34 +1199,6 @@ export function TemplateCreateForm({
   const engravableEditorOverallHeightMm = bodyOnlyEditorMode && bodyOnlyCutoutTotalHeightMm != null
     ? bodyOnlyCutoutTotalHeightMm
     : overallHeightMm;
-  const bodyOnlyTopGuideLocalMm = React.useMemo(() => {
-    if (!bodyOnlyEditorFrame) return null;
-    return mapOverallGuideMmToBodyLocalMm({
-      overallGuideMm: authorityTopGuideMm,
-      bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
-      bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
-    });
-  }, [
-    authorityTopGuideMm,
-    bodyOnlyEditorFrame,
-  ]);
-  const bodyOnlyBottomGuideLocalMm = React.useMemo(() => {
-    if (!bodyOnlyEditorFrame) return null;
-    return mapOverallGuideMmToBodyLocalMm({
-      overallGuideMm: authorityBottomGuideMm,
-      bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
-      bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
-    });
-  }, [
-    authorityBottomGuideMm,
-    bodyOnlyEditorFrame,
-  ]);
-  const engravableEditorTopMarginMm = bodyOnlyEditorMode
-    ? (bodyOnlyTopGuideLocalMm ?? 0)
-    : authorityTopGuideMm;
-  const engravableEditorBottomMarginMm = bodyOnlyEditorMode
-    ? round2(Math.max(0, engravableEditorOverallHeightMm - (bodyOnlyBottomGuideLocalMm ?? engravableEditorOverallHeightMm)))
-    : round2(Math.max(0, overallHeightMm - authorityBottomGuideMm));
   const detectedEngravableEditorSilverRingMm = React.useMemo(() => {
     if (typeof detectedLowerSilverSeamMm !== "number" || !Number.isFinite(detectedLowerSilverSeamMm)) {
       return null;
@@ -1477,6 +1449,42 @@ export function TemplateCreateForm({
       return layer;
     });
   }, [bodyOnlyEditorFrame, bodyOnlyEditorMode, templateAppearanceReferenceLayers]);
+  const upstreamSurfaceTopGuideMm = React.useMemo(
+    () => round2(productAppearanceSurfaceAuthority?.engravableSurface.printableTopMm ?? authorityTopGuideMm),
+    [authorityTopGuideMm, productAppearanceSurfaceAuthority?.engravableSurface.printableTopMm],
+  );
+  const upstreamSurfaceBottomGuideMm = React.useMemo(
+    () => round2(productAppearanceSurfaceAuthority?.engravableSurface.printableBottomMm ?? authorityBottomGuideMm),
+    [authorityBottomGuideMm, productAppearanceSurfaceAuthority?.engravableSurface.printableBottomMm],
+  );
+  const upstreamBodyOnlyTopGuideLocalMm = React.useMemo(() => {
+    if (!bodyOnlyEditorFrame) return null;
+    return mapOverallGuideMmToBodyLocalMm({
+      overallGuideMm: upstreamSurfaceTopGuideMm,
+      bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
+      bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
+    });
+  }, [
+    bodyOnlyEditorFrame,
+    upstreamSurfaceTopGuideMm,
+  ]);
+  const upstreamBodyOnlyBottomGuideLocalMm = React.useMemo(() => {
+    if (!bodyOnlyEditorFrame) return null;
+    return mapOverallGuideMmToBodyLocalMm({
+      overallGuideMm: upstreamSurfaceBottomGuideMm,
+      bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
+      bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
+    });
+  }, [
+    bodyOnlyEditorFrame,
+    upstreamSurfaceBottomGuideMm,
+  ]);
+  const upstreamEngravableEditorTopMarginMm = bodyOnlyEditorMode
+    ? (upstreamBodyOnlyTopGuideLocalMm ?? 0)
+    : upstreamSurfaceTopGuideMm;
+  const upstreamEngravableEditorBottomMarginMm = bodyOnlyEditorMode
+    ? round2(Math.max(0, engravableEditorOverallHeightMm - (upstreamBodyOnlyBottomGuideLocalMm ?? engravableEditorOverallHeightMm)))
+    : round2(Math.max(0, overallHeightMm - upstreamSurfaceBottomGuideMm));
   const appearanceReferenceSummary = React.useMemo(
     () => summarizeAppearanceReferenceLayers(templateAppearanceReferenceLayers),
     [templateAppearanceReferenceLayers],
@@ -5726,8 +5734,8 @@ export function TemplateCreateForm({
           <EngravableZoneEditor
             photoDataUrl={productPhotoFullUrl || frontPhotoDataUrl}
             overallHeightMm={engravableEditorOverallHeightMm}
-            topMarginMm={engravableEditorTopMarginMm}
-            bottomMarginMm={engravableEditorBottomMarginMm}
+            topMarginMm={upstreamEngravableEditorTopMarginMm}
+            bottomMarginMm={upstreamEngravableEditorBottomMarginMm}
             diameterMm={diameterMm}
             photoScalePct={referencePhotoScalePct}
             photoOffsetYPct={referencePhotoOffsetYPct}
@@ -5753,11 +5761,11 @@ export function TemplateCreateForm({
                 const bodyBottomOverallMm = bodyOnlyEditorFrame.bodyBottomFromOverallMm;
                 const localBottomGuideMm = round2(engravableEditorOverallHeightMm - bottom);
                 const currentLocalBottomGuideMm = round2(
-                  engravableEditorOverallHeightMm - engravableEditorBottomMarginMm,
+                  engravableEditorOverallHeightMm - upstreamEngravableEditorBottomMarginMm,
                 );
                 const nextLocalTopGuideMm = changedLine === "top"
                   ? top
-                  : engravableEditorTopMarginMm;
+                  : upstreamEngravableEditorTopMarginMm;
                 const nextLocalBottomGuideMm = changedLine === "bottom"
                   ? localBottomGuideMm
                   : currentLocalBottomGuideMm;
@@ -5775,10 +5783,10 @@ export function TemplateCreateForm({
                 const bottomGuideMm = round2(overallHeightMm - bottom);
                 nextTopGuideMm = changedLine === "top"
                   ? top
-                  : authorityTopGuideMm;
+                  : upstreamSurfaceTopGuideMm;
                 nextBottomGuideMm = changedLine === "bottom"
                   ? bottomGuideMm
-                  : authorityBottomGuideMm;
+                  : upstreamSurfaceBottomGuideMm;
               }
 
               if (nextBottomGuideMm < nextTopGuideMm) {
@@ -6071,5 +6079,3 @@ export function TemplateCreateForm({
     </div>
   );
 }
-
-
