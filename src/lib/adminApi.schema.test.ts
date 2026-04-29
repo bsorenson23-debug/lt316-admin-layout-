@@ -63,6 +63,9 @@ test("parseBodyReferenceGlbResponse accepts runtime-truth reviewed GLB payloads"
         suspiciousSpikeCount: 0,
         suspiciousJumpCount: 0,
         expectedBridgeSegmentCount: 2,
+        appearsBodyOnly: true,
+        bodyOnlyConfidence: "high",
+        bodyOnlyReasonCodes: [],
         warnings: [],
         errors: [],
       },
@@ -79,6 +82,7 @@ test("parseBodyReferenceGlbResponse accepts runtime-truth reviewed GLB payloads"
   assert.equal(parsed?.bodyGeometryContract?.meshes.bodyMeshNames[0], "body_mesh");
   assert.equal(parsed?.bodyGeometryContract?.glb.freshRelativeToSource, true);
   assert.equal(parsed?.bodyGeometryContract?.svgQuality?.expectedBridgeSegmentCount, 2);
+  assert.equal(parsed?.bodyGeometryContract?.svgQuality?.appearsBodyOnly, true);
 });
 
 test("parseBodyGeometryAuditArtifact accepts body-only audit artifacts", () => {
@@ -133,6 +137,9 @@ test("parseBodyGeometryAuditArtifact accepts body-only audit artifacts", () => {
       suspiciousSpikeCount: 0,
       suspiciousJumpCount: 0,
       expectedBridgeSegmentCount: 2,
+      appearsBodyOnly: true,
+      bodyOnlyConfidence: "high",
+      bodyOnlyReasonCodes: [],
       warnings: [],
       errors: [],
     },
@@ -143,6 +150,7 @@ test("parseBodyGeometryAuditArtifact accepts body-only audit artifacts", () => {
   assert.equal(parsed?.meshes.fallbackDetected, false);
   assert.equal(parsed?.validation.status, "pass");
   assert.equal(parsed?.svgQuality?.expectedBridgeSegmentCount, 2);
+  assert.equal(parsed?.svgQuality?.bodyOnlyConfidence, "high");
 });
 
 test("runtime-truth parsers accept BODY REFERENCE v2 mirrored-profile contracts", () => {

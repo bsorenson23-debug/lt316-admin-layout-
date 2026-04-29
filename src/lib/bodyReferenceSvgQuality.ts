@@ -52,6 +52,39 @@ export interface BodyReferenceSvgQualityReport {
   suspiciousJumpCount: number;
   expectedBridgeSegmentCount: number;
   aspectRatio?: number;
+  appearsBodyOnly?: boolean;
+  bodyOnlyConfidence?: "high" | "medium" | "low";
+  bodyOnlyReasonCodes?: string[];
+  warnings: string[];
+  errors: string[];
+}
+
+export interface BodyReferenceSvgCutoutLineageInput {
+  hasAcceptedCutout?: boolean;
+  hasReviewedGlb?: boolean;
+  acceptedSourceHash?: string | null;
+  correctedDraftSourceHash?: string | null;
+  reviewedGlbSourceHash?: string | null;
+  svgQualityStatus?: BodyReferenceSvgQualityReport["status"] | null;
+}
+
+export interface BodyReferenceSvgCutoutLineageReport {
+  status:
+    | "missing-accepted-cutout"
+    | "quality-failed"
+    | "draft-pending"
+    | "reviewed-glb-missing"
+    | "reviewed-glb-unknown"
+    | "reviewed-glb-stale"
+    | "reviewed-glb-current";
+  acceptedCutoutAuthoritative: boolean;
+  correctedDraftAuthoritative: false;
+  hasPendingCorrectedDraft: boolean;
+  requiresReviewedGlbRegeneration: boolean;
+  blocksReviewedGlbGeneration: boolean;
+  acceptedSourceHash?: string;
+  correctedDraftSourceHash?: string;
+  reviewedGlbSourceHash?: string;
   warnings: string[];
   errors: string[];
 }
@@ -111,6 +144,11 @@ function round2(value: number): number {
 
 function normalizeStringArray(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function normalizeOptionalHash(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function parseLinearContourPathPoints(path: string | null): {
@@ -385,8 +423,71 @@ function createUnavailableReport(input: BodyReferenceSvgQualityInput, warning: s
     suspiciousJumpCount: 0,
     expectedBridgeSegmentCount: 0,
     aspectRatio: undefined,
+    appearsBodyOnly: false,
+    bodyOnlyConfidence: "low",
+    bodyOnlyReasonCodes: ["contour-unavailable"],
     warnings: [warning],
     errors: [],
+  };
+}
+
+function assessBodyOnlyShape(args: {
+  status: BodyReferenceSvgQualityReport["status"];
+  contourSource: BodyReferenceSvgQualityReport["contourSource"];
+  pointCount: number;
+  closed: boolean;
+  closeable: boolean;
+  bounds: BodyReferenceSvgQualityReport["bounds"];
+  aspectRatio?: number;
+  duplicatePointCount: number;
+  nearDuplicatePointCount: number;
+  tinySegmentCount: number;
+  suspiciousJumpCount: number;
+  suspiciousSpikeCount: number;
+}): Pick<BodyReferenceSvgQualityReport, "appearsBodyOnly" | "bodyOnlyConfidence" | "bodyOnlyReasonCodes"> {
+  const blockingReasons: string[] = [];
+  const cautionReasons: string[] = [];
+
+  if (args.status === "fail") blockingReasons.push("quality-failed");
+  if (args.contourSource === "unavailable") blockingReasons.push("contour-unavailable");
+  if (args.pointCount < 3) blockingReasons.push("too-few-points");
+  if (!args.bounds || args.bounds.width <= 0 || args.bounds.height <= 0) {
+    blockingReasons.push("invalid-bounds");
+  }
+  if (!args.closed) {
+    if (args.closeable) {
+      cautionReasons.push("open-closeable-contour");
+    } else {
+      blockingReasons.push("open-contour");
+    }
+  }
+  if (args.suspiciousJumpCount > 0) blockingReasons.push("suspicious-jump");
+  if (args.suspiciousSpikeCount > 0) blockingReasons.push("suspicious-spike");
+  if (
+    typeof args.aspectRatio === "number" &&
+    (
+      args.aspectRatio <= BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.extremeAspectRatioMin ||
+      args.aspectRatio >= BODY_REFERENCE_SVG_QUALITY_THRESHOLDS.extremeAspectRatioMax
+    )
+  ) {
+    blockingReasons.push("extreme-aspect-ratio");
+  }
+  if (args.duplicatePointCount > 0) cautionReasons.push("duplicate-points");
+  if (args.nearDuplicatePointCount > 0) cautionReasons.push("near-duplicate-points");
+  if (args.tinySegmentCount > 0) cautionReasons.push("tiny-segments");
+
+  if (blockingReasons.length > 0) {
+    return {
+      appearsBodyOnly: false,
+      bodyOnlyConfidence: "low",
+      bodyOnlyReasonCodes: normalizeStringArray([...blockingReasons, ...cautionReasons]),
+    };
+  }
+
+  return {
+    appearsBodyOnly: true,
+    bodyOnlyConfidence: cautionReasons.length > 0 ? "medium" : "high",
+    bodyOnlyReasonCodes: normalizeStringArray(cautionReasons),
   };
 }
 
@@ -655,6 +756,21 @@ export function buildBodyReferenceSvgQualityReport(
     warnings.push(`Contour aspect ratio ${aspectRatio} looks suspicious.`);
   }
 
+  const bodyOnlyAssessment = assessBodyOnlyShape({
+    status: errors.length > 0 ? "fail" : warnings.length > 0 ? "warn" : "pass",
+    contourSource,
+    pointCount: usablePoints.length,
+    closed,
+    closeable,
+    bounds,
+    aspectRatio,
+    duplicatePointCount,
+    nearDuplicatePointCount,
+    tinySegmentCount,
+    suspiciousJumpCount,
+    suspiciousSpikeCount,
+  });
+
   return {
     status: errors.length > 0 ? "fail" : warnings.length > 0 ? "warn" : "pass",
     contourSource,
@@ -673,8 +789,120 @@ export function buildBodyReferenceSvgQualityReport(
     suspiciousJumpCount,
     expectedBridgeSegmentCount,
     aspectRatio,
+    ...bodyOnlyAssessment,
     warnings: normalizeStringArray(warnings),
     errors: normalizeStringArray(errors),
+  };
+}
+
+export function summarizeBodyReferenceSvgCutoutLineage(
+  input: BodyReferenceSvgCutoutLineageInput,
+): BodyReferenceSvgCutoutLineageReport {
+  const acceptedSourceHash = normalizeOptionalHash(input.acceptedSourceHash);
+  const correctedDraftSourceHash = normalizeOptionalHash(input.correctedDraftSourceHash);
+  const reviewedGlbSourceHash = normalizeOptionalHash(input.reviewedGlbSourceHash);
+  const hasAcceptedCutout = Boolean(input.hasAcceptedCutout) && Boolean(acceptedSourceHash);
+  const hasReviewedGlb = Boolean(input.hasReviewedGlb);
+  const hasPendingCorrectedDraft = Boolean(
+    hasAcceptedCutout &&
+    correctedDraftSourceHash &&
+    correctedDraftSourceHash !== acceptedSourceHash,
+  );
+
+  const base = {
+    acceptedCutoutAuthoritative: hasAcceptedCutout,
+    correctedDraftAuthoritative: false as const,
+    hasPendingCorrectedDraft,
+    acceptedSourceHash,
+    correctedDraftSourceHash,
+    reviewedGlbSourceHash,
+  };
+
+  if (!hasAcceptedCutout) {
+    return {
+      ...base,
+      status: "missing-accepted-cutout",
+      acceptedCutoutAuthoritative: false,
+      requiresReviewedGlbRegeneration: false,
+      blocksReviewedGlbGeneration: true,
+      warnings: [],
+      errors: ["Accepted BODY REFERENCE SVG cutout is missing."],
+    };
+  }
+
+  if (input.svgQualityStatus === "fail") {
+    return {
+      ...base,
+      status: "quality-failed",
+      requiresReviewedGlbRegeneration: false,
+      blocksReviewedGlbGeneration: true,
+      warnings: [],
+      errors: ["Accepted BODY REFERENCE SVG cutout quality is failing."],
+    };
+  }
+
+  if (hasPendingCorrectedDraft) {
+    return {
+      ...base,
+      status: "draft-pending",
+      requiresReviewedGlbRegeneration: false,
+      blocksReviewedGlbGeneration: true,
+      warnings: ["Corrected cutout draft is pending acceptance and is not authoritative yet."],
+      errors: [],
+    };
+  }
+
+  const qualityWarnings =
+    input.svgQualityStatus === "warn"
+      ? ["Accepted BODY REFERENCE SVG cutout has quality warnings."]
+      : [];
+
+  if (!hasReviewedGlb) {
+    return {
+      ...base,
+      status: "reviewed-glb-missing",
+      requiresReviewedGlbRegeneration: true,
+      blocksReviewedGlbGeneration: false,
+      warnings: qualityWarnings,
+      errors: [],
+    };
+  }
+
+  if (!reviewedGlbSourceHash) {
+    return {
+      ...base,
+      status: "reviewed-glb-unknown",
+      requiresReviewedGlbRegeneration: true,
+      blocksReviewedGlbGeneration: false,
+      warnings: [
+        ...qualityWarnings,
+        "Reviewed BODY CUTOUT QA GLB source hash is unavailable; freshness cannot be trusted.",
+      ],
+      errors: [],
+    };
+  }
+
+  if (reviewedGlbSourceHash !== acceptedSourceHash) {
+    return {
+      ...base,
+      status: "reviewed-glb-stale",
+      requiresReviewedGlbRegeneration: true,
+      blocksReviewedGlbGeneration: false,
+      warnings: [
+        ...qualityWarnings,
+        "Accepted BODY REFERENCE SVG cutout is newer than the reviewed BODY CUTOUT QA GLB.",
+      ],
+      errors: [],
+    };
+  }
+
+  return {
+    ...base,
+    status: "reviewed-glb-current",
+    requiresReviewedGlbRegeneration: false,
+    blocksReviewedGlbGeneration: false,
+    warnings: qualityWarnings,
+    errors: [],
   };
 }
 

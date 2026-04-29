@@ -6,7 +6,7 @@ const finiteNumber = z.number().finite();
 
 const bodyReferenceSvgQualityReportSchema = z.object({
   status: z.enum(["pass", "warn", "fail"]),
-  contourSource: z.enum(["direct-contour", "source-contour", "profile-points", "path-svg", "unavailable"]),
+  contourSource: z.enum(["direct-contour", "outline-points", "source-contour", "profile-points", "path-svg", "unavailable"]),
   boundsUnits: z.enum(["mm", "source-px", "unknown"]),
   pointCount: z.number().int().nonnegative(),
   segmentCount: z.number().int().nonnegative(),
@@ -29,6 +29,9 @@ const bodyReferenceSvgQualityReportSchema = z.object({
   suspiciousJumpCount: z.number().int().nonnegative(),
   expectedBridgeSegmentCount: z.number().int().nonnegative(),
   aspectRatio: finiteNumber.optional(),
+  appearsBodyOnly: z.boolean().optional(),
+  bodyOnlyConfidence: z.enum(["high", "medium", "low"]).optional(),
+  bodyOnlyReasonCodes: z.array(z.string()).optional(),
   warnings: z.array(z.string()),
   errors: z.array(z.string()),
 });
