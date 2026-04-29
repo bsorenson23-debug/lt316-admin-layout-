@@ -359,6 +359,27 @@ function formatBodyBoundsMetric(
   return `${round2(bounds.width)} × ${round2(bounds.height)} × ${round2(bounds.depth)} mm`;
 }
 
+function formatBodyReferenceOutlineSourceLabel(
+  outline: EditableBodyOutline | null | undefined,
+): string {
+  if (!outline) return "pending";
+  if (outline.sourceContourMode === "body-only") return "body-only contour";
+  switch (outline.contourFrame?.kind) {
+    case "full-body-only-source":
+      return "full body source";
+    case "printable-band":
+      return "printable band";
+    case "body-band-from-overall-product":
+      return "body band from product";
+    case "explicit-body-trace-frame":
+      return "explicit body trace";
+    case "ui-only-guide":
+      return "UI-only guide";
+    default:
+      return "detected contour";
+  }
+}
+
 function buildWrapExportSurfaceMapping(
   contract: BodyGeometryContract | null | undefined,
   frontCenterAngleDeg?: number,
@@ -918,6 +939,14 @@ export function TemplateCreateForm({
     setBodyReferenceFineTuneUndoStack([]);
   }, []);
 
+  React.useEffect(() => {
+    if (!hasAcceptedBodyReferenceReview) return;
+    if (printableTopOverrideMm == null && printableBottomOverrideMm == null) return;
+    // Accepted BODY REFERENCE is the authority; clear stale guide drag overrides.
+    setPrintableTopOverrideMm(null);
+    setPrintableBottomOverrideMm(null);
+  }, [hasAcceptedBodyReferenceReview, printableBottomOverrideMm, printableTopOverrideMm]);
+
   // Auto-mirror front photo as back when mirrorForBack is enabled
   React.useEffect(() => {
     if (!mirrorForBack || !frontPhotoDataUrl) {
@@ -1056,23 +1085,97 @@ export function TemplateCreateForm({
       bodyTopFromOverallMm: bodyReferenceFrameBounds.bodyTopFromOverallMm,
       bodyBottomFromOverallMm: bodyReferenceFrameBounds.bodyBottomFromOverallMm,
       acceptedBodyReferenceAvailable: Boolean(approvedBodyOutline || approvedCanonicalDimensionCalibration),
+      lookupFullProductHeightMm: lookupResult?.dimensions?.fullProductHeightMm ?? null,
+      lookupBodyHeightMm: lookupResult?.dimensions?.bodyHeightMm ?? lookupResult?.dimensions?.usableHeightMm ?? null,
       printableTopOverrideMm,
       printableBottomOverrideMm,
       savedSilverBandBottomFromOverallMm,
       fitDebug: lookupResult?.fitDebug ?? null,
       printableSurfaceContract: persistedPrintableSurfaceContract,
     });
-  }, [
-    approvedBodyOutline,
-    approvedCanonicalDimensionCalibration,
-    bodyReferenceFrameBounds,
-    lookupResult?.fitDebug,
-    overallHeightMm,
-    persistedPrintableSurfaceContract,
-    printableBottomOverrideMm,
-    printableTopOverrideMm,
-    savedSilverBandBottomFromOverallMm,
-  ]);
+    }, [
+      approvedBodyOutline,
+      approvedCanonicalDimensionCalibration,
+      bodyReferenceFrameBounds,
+      lookupResult?.dimensions?.bodyHeightMm,
+      lookupResult?.dimensions?.fullProductHeightMm,
+      lookupResult?.dimensions?.usableHeightMm,
+      lookupResult?.fitDebug,
+      overallHeightMm,
+      persistedPrintableSurfaceContract,
+      printableBottomOverrideMm,
+      printableTopOverrideMm,
+      savedSilverBandBottomFromOverallMm,
+    ]);
+
+  const acceptedBodyOnlyZoneMode = React.useMemo(
+    () => (
+      hasAcceptedBodyReferenceReview &&
+      productType !== "flat" &&
+      approvedBodyOutline?.sourceContourMode === "body-only"
+    ),
+    [approvedBodyOutline?.sourceContourMode, hasAcceptedBodyReferenceReview, productType],
+  );
+  const authorityTopGuideMm = React.useMemo(
+    () => round2(engravableGuideAuthority?.topGuideMm ?? topMarginMm),
+    [engravableGuideAuthority?.topGuideMm, topMarginMm],
+  );
+  const authorityBottomGuideMm = React.useMemo(
+    () => round2(
+      engravableGuideAuthority?.bottomGuideMm
+      ?? Math.max(authorityTopGuideMm, overallHeightMm - Math.max(0, bottomMarginMm)),
+    ),
+    [authorityTopGuideMm, bottomMarginMm, engravableGuideAuthority?.bottomGuideMm, overallHeightMm],
+  );
+  const engravableBodyCutoutHeightMm = React.useMemo(
+    () => round2(Math.max(1, authorityBottomGuideMm - authorityTopGuideMm)),
+    [authorityBottomGuideMm, authorityTopGuideMm],
+  );
+  const bodyOnlyCutoutTotalHeightMm = React.useMemo(
+    () => {
+      if (!acceptedBodyOnlyZoneMode) return null;
+      if (!approvedCanonicalDimensionCalibration) return null;
+      const bodyHeightMm = approvedCanonicalDimensionCalibration.bodyHeightMm;
+      if (Number.isFinite(bodyHeightMm) && bodyHeightMm > 0) {
+        return round2(bodyHeightMm);
+      }
+      const bodyBottomMm = approvedCanonicalDimensionCalibration.bodyBottomMm;
+      if (Number.isFinite(bodyBottomMm) && bodyBottomMm > 0) {
+        return round2(bodyBottomMm);
+      }
+      return null;
+    },
+    [acceptedBodyOnlyZoneMode, approvedCanonicalDimensionCalibration],
+  );
+  const engravableEditorOverallHeightMm = acceptedBodyOnlyZoneMode
+    ? (bodyOnlyCutoutTotalHeightMm ?? engravableBodyCutoutHeightMm)
+    : overallHeightMm;
+  const powderCoatTopGuideMm = React.useMemo(() => {
+    if (!acceptedBodyOnlyZoneMode) return null;
+    if (typeof detectedLowerSilverSeamMm !== "number" || !Number.isFinite(detectedLowerSilverSeamMm)) {
+      return null;
+    }
+    const maxTopGuideMm = Math.max(0, engravableEditorOverallHeightMm - 1);
+    return round2(Math.min(maxTopGuideMm, Math.max(0, detectedLowerSilverSeamMm)));
+  }, [acceptedBodyOnlyZoneMode, detectedLowerSilverSeamMm, engravableEditorOverallHeightMm]);
+  const engravableEditorTopMarginMm = acceptedBodyOnlyZoneMode
+    ? (powderCoatTopGuideMm ?? 0)
+    : authorityTopGuideMm;
+  const engravableEditorBottomMarginMm = acceptedBodyOnlyZoneMode
+    ? 0
+    : round2(Math.max(0, overallHeightMm - authorityBottomGuideMm));
+  const engravableEditorSilverRingMm = React.useMemo(() => {
+    if (typeof detectedLowerSilverSeamMm !== "number" || !Number.isFinite(detectedLowerSilverSeamMm)) {
+      return null;
+    }
+    return round2(Math.max(0, detectedLowerSilverSeamMm));
+  }, [detectedLowerSilverSeamMm]);
+  const engravableEditorTopGuideSource = acceptedBodyOnlyZoneMode
+    ? (powderCoatTopGuideMm != null ? "detected-silver-band-bottom" : (engravableGuideAuthority?.topGuideSource ?? "unknown"))
+    : engravableGuideAuthority?.topGuideSource;
+  const engravableEditorBottomGuideSource = acceptedBodyOnlyZoneMode
+    ? "accepted-body-reference"
+    : engravableGuideAuthority?.bottomGuideSource;
 
   const liveBodyReferenceOutline = React.useMemo(() => {
     if (productType === "flat") return null;
@@ -1821,6 +1924,11 @@ export function TemplateCreateForm({
       setProductType("tumbler");
       setGlbPath(result.glbPath || "");
 
+        // New lookup dimensions should become the active zone authority.
+        // Clear any prior manual drag overrides before applying lookup/profile values.
+        setPrintableTopOverrideMm(null);
+        setPrintableBottomOverrideMm(null);
+
       applyProfileOrDimensions({
         brand: result.brand,
         model: result.model,
@@ -2557,6 +2665,68 @@ export function TemplateCreateForm({
     reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
     reviewedBodyReferenceGlbFreshness.status,
   ]);
+  const sourceTruthSummary = React.useMemo(() => {
+    const staleReasons: string[] = [];
+    if (approvedBodyReferenceWarnings.length > 0) {
+      staleReasons.push(...approvedBodyReferenceWarnings.slice(0, 2));
+    }
+    if (bodyReferenceFineTuneDraftPendingAcceptance) {
+      staleReasons.push("Corrected cutout draft is pending acceptance and is not authoritative yet.");
+    }
+    if (
+      reviewedBodyReferenceGlbFreshness.status === "stale" &&
+      reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact
+    ) {
+      staleReasons.push("Accepted cutout is newer than the reviewed GLB. Regenerate BODY CUTOUT QA.");
+    }
+    if (loadedBodyGeometryContract?.validation.status === "fail") {
+      staleReasons.push("Runtime BODY CUTOUT QA validation is failing.");
+    }
+
+    let runtimeQaLabel = "pending";
+    if (loadedBodyGeometryContract) {
+      runtimeQaLabel = `${loadedBodyGeometryContract.validation.status} / ${
+        loadedBodyGeometryContract.runtimeInspection?.status ?? "pending"
+      }`;
+    } else if (generatedReviewedBodyGeometryContract) {
+      runtimeQaLabel = "generated, runtime pending";
+    }
+
+    let authoritativeStageLabel = "source context";
+    if (hasReviewedBodyCutoutQaGlb && loadedBodyGeometryContract?.glb.freshRelativeToSource) {
+      authoritativeStageLabel = "reviewed QA GLB";
+    } else if (bodyReferenceFineTuneDraftPendingAcceptance) {
+      authoritativeStageLabel = "accepted BODY REFERENCE + draft pending";
+    } else if (hasAcceptedBodyReferenceReview) {
+      authoritativeStageLabel = "accepted BODY REFERENCE";
+    } else if (templateCreateSourceReadiness.detectReady) {
+      authoritativeStageLabel = "staged detection";
+    }
+
+    return {
+      activeSourceOfTruth: authoritativeStageLabel,
+      acceptedBodyReferenceLabel: hasAcceptedBodyReferenceReview ? "accepted" : "pending",
+      approvedSvgShortHash: formatShortHash(currentReviewedBodyReferenceSourceHash),
+      sourceProvenanceLabel: formatBodyReferenceOutlineSourceLabel(approvedBodyOutline),
+      reviewedGlbFreshnessLabel: bodyCutoutQaGlbLifecycle.label.replace(/^BODY CUTOUT QA GLB:\s*/, ""),
+      runtimeQaLabel,
+      authoritativeStageLabel,
+      staleReasons,
+    };
+  }, [
+    approvedBodyOutline,
+    approvedBodyReferenceWarnings,
+    bodyCutoutQaGlbLifecycle.label,
+    bodyReferenceFineTuneDraftPendingAcceptance,
+    currentReviewedBodyReferenceSourceHash,
+    generatedReviewedBodyGeometryContract,
+    hasAcceptedBodyReferenceReview,
+    hasReviewedBodyCutoutQaGlb,
+    loadedBodyGeometryContract,
+    reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
+    reviewedBodyReferenceGlbFreshness.status,
+    templateCreateSourceReadiness.detectReady,
+  ]);
 
   const clearReviewedBodyReferenceGeneratedState = React.useCallback(() => {
     setGeneratedReviewedBodyGeometryContract(null);
@@ -2635,6 +2805,11 @@ export function TemplateCreateForm({
       fitDebug: lookupResult?.fitDebug ?? null,
     });
     if (!rebuiltSnapshot) return;
+    const acceptedOutlineBounds = resolveOutlineBounds(rebuiltSnapshot.approvedBodyOutline);
+    const acceptedContourHeightMm =
+      acceptedOutlineBounds && Number.isFinite(acceptedOutlineBounds.height) && acceptedOutlineBounds.height > 0
+        ? round2(acceptedOutlineBounds.height)
+        : null;
     setApprovedBodyOutline(cloneSerializable(rebuiltSnapshot.approvedBodyOutline));
     setApprovedCanonicalBodyProfile(
       rebuiltSnapshot.approvedCanonicalBodyProfile
@@ -2652,6 +2827,14 @@ export function TemplateCreateForm({
         : null,
     );
     setApprovedBodyReferenceWarnings([...rebuiltSnapshot.approvedBodyReferenceWarnings]);
+    setOverallHeightMm(
+      acceptedContourHeightMm
+      ?? (
+        rebuiltSnapshot.approvedCanonicalDimensionCalibration
+          ? round2(rebuiltSnapshot.approvedCanonicalDimensionCalibration.totalHeightMm)
+          : overallHeightMm
+      ),
+    );
     setTopMarginMm(rebuiltSnapshot.nextTopMarginMm);
     setBottomMarginMm(rebuiltSnapshot.nextBottomMarginMm);
     setPrintHeightMm(rebuiltSnapshot.nextPrintHeightMm);
@@ -3025,6 +3208,54 @@ export function TemplateCreateForm({
             )}
           </div>
         </section>
+      )}
+
+      {inDedicatedTemplateMode && (
+        <div className={styles.sourceTruthCard} data-template-pipeline-summary="present">
+          <div className={styles.sourceTruthHeader}>
+            <div>
+              <div className={styles.sourceTruthEyebrow}>Active source of truth</div>
+              <div className={styles.sourceTruthTitle}>
+                {sourceTruthSummary.activeSourceOfTruth}
+              </div>
+            </div>
+          </div>
+
+          <div className={styles.sourceTruthGrid}>
+            <div className={styles.sourceTruthMetric}>
+              <span>Accepted BODY REFERENCE</span>
+              <strong>{sourceTruthSummary.acceptedBodyReferenceLabel}</strong>
+            </div>
+            <div className={styles.sourceTruthMetric}>
+              <span>Approved SVG hash</span>
+              <strong>{sourceTruthSummary.approvedSvgShortHash}</strong>
+            </div>
+            <div className={styles.sourceTruthMetric}>
+              <span>Contour source</span>
+              <strong>{sourceTruthSummary.sourceProvenanceLabel}</strong>
+            </div>
+            <div className={styles.sourceTruthMetric}>
+              <span>Reviewed GLB freshness</span>
+              <strong>{sourceTruthSummary.reviewedGlbFreshnessLabel}</strong>
+            </div>
+            <div className={styles.sourceTruthMetric}>
+              <span>Runtime QA</span>
+              <strong>{sourceTruthSummary.runtimeQaLabel}</strong>
+            </div>
+            <div className={styles.sourceTruthMetric}>
+              <span>Authoritative stage</span>
+              <strong>{sourceTruthSummary.authoritativeStageLabel}</strong>
+            </div>
+          </div>
+
+          {sourceTruthSummary.staleReasons.length > 0 && (
+            <div className={styles.sourceTruthWarnings}>
+              {sourceTruthSummary.staleReasons.map((reason) => (
+                <span key={reason}>{reason}</span>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       <div className={inDedicatedTemplateMode ? styles.pageWorkspace : undefined}>
@@ -3530,6 +3761,11 @@ export function TemplateCreateForm({
                 onClick={() => {
                   if (!liveBodyReferencePipeline) return;
                   resetBodyReferenceFineTuneState();
+                  const acceptedOutlineBounds = resolveOutlineBounds(liveBodyReferencePipeline.outline);
+                  const acceptedContourHeightMm =
+                    acceptedOutlineBounds && Number.isFinite(acceptedOutlineBounds.height) && acceptedOutlineBounds.height > 0
+                      ? round2(acceptedOutlineBounds.height)
+                      : null;
                   setApprovedBodyOutline(
                     liveBodyReferencePipeline.outline
                       ? cloneSerializable(liveBodyReferencePipeline.outline)
@@ -3538,12 +3774,22 @@ export function TemplateCreateForm({
                   setApprovedCanonicalBodyProfile(
                     cloneSerializable(liveBodyReferencePipeline.canonicalBodyProfile),
                   );
+                  const acceptedCal = liveBodyReferencePipeline.canonicalDimensionCalibration;
                   setApprovedCanonicalDimensionCalibration(
-                    cloneSerializable(liveBodyReferencePipeline.canonicalDimensionCalibration),
+                    cloneSerializable(acceptedCal),
                   );
+                  setOverallHeightMm(acceptedContourHeightMm ?? round2(acceptedCal.totalHeightMm));
+                  // Update margins from the actual measured contour bounds so the
+                  // engravable zone reflects physical reality, not the profile's
+                  // conservative usableHeightMm estimate.
+                  setTopMarginMm(round2(acceptedCal.lidBodyLineMm));
+                  setBottomMarginMm(round2(Math.max(0, acceptedCal.totalHeightMm - acceptedCal.bodyBottomMm)));
+                  setPrintHeightMm(round2(acceptedCal.bodyHeightMm));
                   setApprovedBodyReferenceQa(cloneSerializable(liveBodyReferencePipeline.qa));
                   setApprovedBodyReferenceWarnings([...liveBodyReferencePipeline.warnings]);
                   clearReviewedBodyReferenceGeneratedState();
+                  setPrintableTopOverrideMm(null);
+                  setPrintableBottomOverrideMm(null);
                   setHasAcceptedBodyReferenceReview(true);
                   setPreviewModelMode("alignment-model");
                 }}
@@ -5229,22 +5475,18 @@ export function TemplateCreateForm({
         </details>
       </div>
 
-      {/* ── Engravable zone editor ──────────────────────────────── */}
-      {productType !== "flat" && frontPhotoDataUrl && overallHeightMm > 0 && diameterMm > 0 && (
+        {/* ── Engravable zone editor ──────────────────────────────── */}
+        {productType !== "flat" && hasAcceptedBodyReferenceReview && approvedBodyOutline && (productPhotoFullUrl || frontPhotoDataUrl) && overallHeightMm > 0 && diameterMm > 0 && (
         <div className={`${styles.section} ${inDedicatedTemplateMode ? styles.pageSection : ""}`}>
           <div className={styles.sectionTitle}>Reference engravable zone</div>
           <div className={styles.sectionLead}>
             This visual band helps workspace/export context. BODY CUTOUT QA scale still comes from diameter plus accepted BODY REFERENCE.
           </div>
           <EngravableZoneEditor
-            photoDataUrl={frontPhotoDataUrl}
-            overallHeightMm={overallHeightMm}
-            topMarginMm={engravableGuideAuthority?.topGuideMm ?? topMarginMm}
-            bottomMarginMm={
-              engravableGuideAuthority
-                ? round2(overallHeightMm - engravableGuideAuthority.bottomGuideMm)
-                : bottomMarginMm
-            }
+            photoDataUrl={productPhotoFullUrl || frontPhotoDataUrl}
+            overallHeightMm={engravableEditorOverallHeightMm}
+            topMarginMm={engravableEditorTopMarginMm}
+            bottomMarginMm={engravableEditorBottomMarginMm}
             diameterMm={diameterMm}
             photoScalePct={referencePhotoScalePct}
             photoOffsetYPct={referencePhotoOffsetYPct}
@@ -5252,25 +5494,42 @@ export function TemplateCreateForm({
             bodyColorHex={bodyColorHex}
             rimColorHex={rimColorHex}
             guideFrame={bodyReferenceGuideFrame}
+            silverRingIndicatorMm={engravableEditorSilverRingMm}
+            bodyOnlyScaleMode={acceptedBodyOnlyZoneMode}
+            outline={acceptedBodyOnlyZoneMode ? approvedBodyOutline : null}
             bodyScaleSource={engravableGuideAuthority?.bodyScaleSource}
-            topGuideSource={engravableGuideAuthority?.topGuideSource}
-            bottomGuideSource={engravableGuideAuthority?.bottomGuideSource}
+            topGuideSource={engravableEditorTopGuideSource}
+            bottomGuideSource={engravableEditorBottomGuideSource}
             manualTopOverrideActive={engravableGuideAuthority?.manualTopOverrideActive}
             manualBottomOverrideActive={engravableGuideAuthority?.manualBottomOverrideActive}
             onChange={(top, bottom, changedLine) => {
-              const bottomGuideMm = round2(overallHeightMm - bottom);
-              if (changedLine === "top") {
-                setPrintableTopOverrideMm(top);
+              let nextTopGuideMm: number;
+              let nextBottomGuideMm: number;
+
+              if (acceptedBodyOnlyZoneMode) {
+                const normalizedBottomGuideMm = round2(engravableEditorOverallHeightMm - bottom);
+                nextTopGuideMm = changedLine === "top"
+                  ? top
+                  : engravableEditorTopMarginMm;
+                nextBottomGuideMm = changedLine === "bottom"
+                  ? normalizedBottomGuideMm
+                  : engravableEditorOverallHeightMm;
               } else {
-                setPrintableBottomOverrideMm(bottomGuideMm);
+                const bottomGuideMm = round2(overallHeightMm - bottom);
+                nextTopGuideMm = changedLine === "top"
+                  ? top
+                  : authorityTopGuideMm;
+                nextBottomGuideMm = changedLine === "bottom"
+                  ? bottomGuideMm
+                  : authorityBottomGuideMm;
               }
-              const nextTop = changedLine === "top"
-                ? top
-                : (engravableGuideAuthority?.topGuideMm ?? topMarginMm);
-              const nextBottom = changedLine === "bottom"
-                ? bottomGuideMm
-                : (engravableGuideAuthority?.bottomGuideMm ?? overallHeightMm - bottomMarginMm);
-              const eng = round2(nextBottom - nextTop);
+
+              if (changedLine === "top") {
+                setPrintableTopOverrideMm(nextTopGuideMm);
+              } else {
+                setPrintableBottomOverrideMm(nextBottomGuideMm);
+              }
+              const eng = round2(nextBottomGuideMm - nextTopGuideMm);
               if (eng > 0) setPrintHeightMm(eng);
             }}
             onPhotoScaleChange={setReferencePhotoScalePct}
