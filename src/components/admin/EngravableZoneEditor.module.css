@@ -49,6 +49,24 @@
   pointer-events: none;
 }
 
+.bodyOnlyOutlineOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.bodyOnlyOutlinePath {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 86%, var(--success) 14%);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.9;
+}
+
 .productPhoto {
   display: block;
   object-fit: contain;
@@ -78,6 +96,25 @@
   pointer-events: none;
   border-left: 1px solid rgba(80, 200, 120, 0.15);
   border-right: 1px solid rgba(80, 200, 120, 0.15);
+}
+
+.silverRingIndicator {
+  position: absolute;
+  height: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--accent) 82%, var(--warning) 18%);
+  z-index: 4;
+  pointer-events: none;
+}
+
+.silverRingIndicatorLabel {
+  position: absolute;
+  left: 4px;
+  top: -14px;
+  font-size: 9px;
+  font-family: monospace;
+  color: color-mix(in srgb, var(--accent) 82%, var(--warning) 18%);
+  white-space: nowrap;
+  text-shadow: 0 0 4px var(--bg-base), 0 0 8px var(--bg-base);
 }
 
 /* ── Drag lines ────────────────────────────────────────────────── */

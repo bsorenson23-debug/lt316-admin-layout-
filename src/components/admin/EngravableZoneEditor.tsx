@@ -3,6 +3,7 @@
 import React, { useRef, useCallback, useEffect, useState } from "react";
 import type { BodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
 import { mapBodyReferenceGuideFrameToDisplayedImage } from "@/lib/bodyReferenceGuideFrame";
+import type { EditableBodyOutline } from "@/types/productTemplate";
 import styles from "./EngravableZoneEditor.module.css";
 
 interface Props {
@@ -28,7 +29,21 @@ interface Props {
   rimColorHex: string;
   /** Shared BODY REFERENCE guide authority used by lookup debug and UI overlays. */
   guideFrame?: BodyReferenceGuideFrame | null;
-  onChange: (topMarginMm: number, bottomMarginMm: number) => void;
+  /** Detected lower silver seam / silver band bottom in the displayed editor coordinate space. */
+  silverRingIndicatorMm?: number | null;
+  /** When true, show accepted body-only BODY REFERENCE as the body scale authority. */
+  bodyOnlyScaleMode?: boolean;
+  /** Accepted BODY REFERENCE outline used for read-only body-only scale overlay. */
+  outline?: EditableBodyOutline | null;
+  /** BODY REFERENCE/body-frame source. Kept separate from engravable guide authority. */
+  bodyScaleSource?: string;
+  /** Source used for the top engravable boundary. */
+  topGuideSource?: string;
+  /** Source used for the bottom engravable boundary. */
+  bottomGuideSource?: string;
+  manualTopOverrideActive?: boolean;
+  manualBottomOverrideActive?: boolean;
+  onChange: (topMarginMm: number, bottomMarginMm: number, changedLine: "top" | "bottom") => void;
   onPhotoScaleChange: (scalePct: number) => void;
   onPhotoOffsetYChange: (offsetPct: number) => void;
   onPhotoAnchorYChange: (anchor: "center" | "bottom") => void;
@@ -51,6 +66,73 @@ function round1(n: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function measureContourBounds(points: Array<{ x: number; y: number }>): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  width: number;
+  height: number;
+} | null {
+  if (points.length < 2) return null;
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return null;
+  }
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  };
+}
+
+function buildMappedOutlinePath(args: {
+  outline?: EditableBodyOutline | null;
+  enabled: boolean;
+  photoRect: { left: number; top: number; width: number; height: number } | null;
+  fallbackBounds: { left: number; top: number; width: number; height: number };
+}): string | null {
+  if (!args.enabled || !args.outline) return null;
+  const points = args.outline.directContour?.length
+    ? args.outline.directContour
+    : args.outline.points;
+  if (!points || points.length < 3) return null;
+
+  const sourceBounds = args.outline.sourceContourViewport
+    ? {
+        minX: args.outline.sourceContourViewport.minX,
+        minY: args.outline.sourceContourViewport.minY,
+        width: Math.max(1, args.outline.sourceContourViewport.width),
+        height: Math.max(1, args.outline.sourceContourViewport.height),
+      }
+    : measureContourBounds(points);
+  if (!sourceBounds) return null;
+
+  const target = args.photoRect ?? args.fallbackBounds;
+  const mapped = points
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .map((point) => {
+      const x = target.left + ((point.x - sourceBounds.minX) / sourceBounds.width) * target.width;
+      const y = target.top + ((point.y - sourceBounds.minY) / sourceBounds.height) * target.height;
+      return `${round1(x)},${round1(y)}`;
+    });
+  if (mapped.length < 3) return null;
+  return `M ${mapped.join(" L ")}${args.outline.closed ? " Z" : ""}`;
 }
 
 function rgbToHex(r: number, g: number, b: number): string {
@@ -230,6 +312,14 @@ export function EngravableZoneEditor({
   bodyColorHex,
   rimColorHex,
   guideFrame,
+  silverRingIndicatorMm,
+  bodyOnlyScaleMode = false,
+  outline,
+  bodyScaleSource,
+  topGuideSource,
+  bottomGuideSource,
+  manualTopOverrideActive,
+  manualBottomOverrideActive,
   onChange,
   onPhotoScaleChange,
   onPhotoOffsetYChange,
@@ -342,6 +432,28 @@ export function EngravableZoneEditor({
   const guideFrameWidthPx = guideBounds?.width ?? bodyWidthPx;
   const guideFrameHeightPx = guideBounds?.height ?? CANVAS_HEIGHT;
   const guideFrameCenterLineX = guideBounds?.centerX ?? bodyCenterLineX;
+  const readOnlySilverRingPx =
+    typeof silverRingIndicatorMm === "number" && Number.isFinite(silverRingIndicatorMm)
+      ? clamp(silverRingIndicatorMm * pxPerMm, 0, CANVAS_HEIGHT)
+      : null;
+  const acceptedBodyOutlinePath = buildMappedOutlinePath({
+    outline,
+    enabled: bodyOnlyScaleMode,
+    photoRect: activeDisplayPhoto
+      ? {
+          left: photoLeftPx,
+          top: photoTopPx,
+          width: photoWidthPx,
+          height: targetPhotoHeightPx,
+        }
+      : null,
+    fallbackBounds: {
+      left: guideFrameLeftPx,
+      top: guideFrameTopPx,
+      width: guideFrameWidthPx,
+      height: guideFrameHeightPx,
+    },
+  });
 
   const handlePointerDown = useCallback(
     (line: "top" | "bottom") => (e: React.PointerEvent) => {
@@ -362,11 +474,11 @@ export function EngravableZoneEditor({
 
       if (dragging === "top") {
         const clamped = Math.max(MIN_MARGIN_MM, Math.min(mm, overallHeightMm - bottomMarginMm - 10));
-        onChange(round1(clamped), bottomMarginMm);
+        onChange(round1(clamped), bottomMarginMm, "top");
       } else {
         const fromBottom = overallHeightMm - mm;
         const clamped = Math.max(MIN_MARGIN_MM, Math.min(fromBottom, overallHeightMm - topMarginMm - 10));
-        onChange(topMarginMm, round1(clamped));
+        onChange(topMarginMm, round1(clamped), "bottom");
       }
     },
     [dragging, pxPerMm, overallHeightMm, topMarginMm, bottomMarginMm, onChange],
@@ -474,6 +586,15 @@ export function EngravableZoneEditor({
             style={{ left: guideFrameCenterLineX }}
             aria-hidden
           />
+          {acceptedBodyOutlinePath && (
+            <svg
+              className={styles.bodyOnlyOutlineOverlay}
+              viewBox={`0 0 ${containerWidthPx} ${CANVAS_HEIGHT}`}
+              aria-hidden
+            >
+              <path d={acceptedBodyOutlinePath} className={styles.bodyOnlyOutlinePath} />
+            </svg>
+          )}
 
           {/* Product photo */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -499,11 +620,27 @@ export function EngravableZoneEditor({
             className={styles.engravableZone}
             style={{ top: engravableTopPx, height: engravableZoneHeightPx, left: bodyLeftPx, width: bodyWidthPx }}
           />
+          {readOnlySilverRingPx != null && (
+            <div
+              className={styles.silverRingIndicator}
+              style={{ top: readOnlySilverRingPx, left: bodyLeftPx, width: bodyWidthPx }}
+              data-guide-source="detected-lower-silver-seam"
+              aria-hidden
+            >
+              <span className={styles.silverRingIndicatorLabel}>
+                Silver seam: {round1(silverRingIndicatorMm ?? 0)} mm
+              </span>
+            </div>
+          )}
 
           {/* Top drag line */}
           <div
             className={`${styles.dragLine} ${dragging === "top" ? styles.dragLineActive : ""}`}
             style={{ top: topPx, left: bodyLeftPx, width: bodyWidthPx }}
+            data-guide-source={topGuideSource ?? "unknown"}
+            data-guide-authority="engravable-top"
+            data-body-scale-source={bodyScaleSource ?? ""}
+            data-manual-override-active={manualTopOverrideActive ? "true" : "false"}
             onPointerDown={handlePointerDown("top")}
           >
             <span className={styles.dragLineLabel}>
@@ -515,6 +652,10 @@ export function EngravableZoneEditor({
           <div
             className={`${styles.dragLine} ${styles.dragLineBottom} ${dragging === "bottom" ? styles.dragLineActive : ""}`}
             style={{ top: CANVAS_HEIGHT - bottomPx, left: bodyLeftPx, width: bodyWidthPx }}
+            data-guide-source={bottomGuideSource ?? "unknown"}
+            data-guide-authority="engravable-bottom"
+            data-body-scale-source={bodyScaleSource ?? ""}
+            data-manual-override-active={manualBottomOverrideActive ? "true" : "false"}
             onPointerDown={handlePointerDown("bottom")}
           >
             <span className={styles.dragLineLabel}>
@@ -551,11 +692,25 @@ export function EngravableZoneEditor({
             <span className={styles.readoutValue}>{round1(Math.PI * diameterMm)} mm</span>
           </div>
           <div className={styles.readoutHint}>
-            The dashed frame uses the shared BODY REFERENCE guide authority. Drag the green lines to the silver rings.
+            BODY REFERENCE stays the body scale source. The green lines are engravable guide boundaries.
           </div>
           <div className={styles.readoutRow}>
-            <span className={styles.readoutLabel}>Guide source</span>
-            <span className={styles.readoutValue}>{mappedGuideFrame?.guideSource ?? "legacy"}</span>
+            <span className={styles.readoutLabel}>Body scale source</span>
+            <span className={styles.readoutValue}>{bodyScaleSource ?? mappedGuideFrame?.guideSource ?? "legacy"}</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Top engrave guide</span>
+            <span className={styles.readoutValue}>{topGuideSource ?? "unknown"}</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Bottom engrave guide</span>
+            <span className={styles.readoutValue}>{bottomGuideSource ?? "unknown"}</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Manual override</span>
+            <span className={styles.readoutValue}>
+              {manualTopOverrideActive || manualBottomOverrideActive ? "active" : "inactive"}
+            </span>
           </div>
           {mappedGuideFrame?.warnings.length ? (
             <div className={styles.readoutHint}>

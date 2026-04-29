@@ -791,7 +791,7 @@
 
 .workflowStepRow {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -874,44 +874,89 @@
 }
 
 .workflowBlockedNote {
-  width: fit-content;
-  max-width: 100%;
-  padding: 5px 8px;
-  border: 1px solid var(--warning-border);
-  border-radius: var(--radius-sm);
   font-size: 11px;
   line-height: 1.4;
   color: var(--warning);
-  background: var(--warning-bg);
 }
 
-.workflowNextNote {
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-
-.workflowContextBar {
+.sourceTruthCard {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   padding: 12px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--info-border);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bg-card) 92%, var(--bg-hover));
+  background: var(--info-bg);
 }
 
-.workflowContextRow {
+.sourceTruthHeader {
   display: flex;
-  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sourceTruthEyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--info);
+}
+
+.sourceTruthTitle {
+  margin-top: 3px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.sourceTruthGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
   gap: 8px;
 }
 
-.workflowContextSummary {
+.sourceTruthMetric {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px 10px;
-  align-items: center;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.sourceTruthMetric span {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.sourceTruthMetric strong {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.sourceTruthWarnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sourceTruthWarnings span {
+  padding: 7px 9px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .reviewScaffoldCard,

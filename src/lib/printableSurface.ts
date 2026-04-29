@@ -472,12 +472,6 @@ export function resolveAuthoritativePrintableSurfaceResolution(
     });
   }
 
-  const resolvedTopMm = hasManualTopOverride
-    ? round2(clamp(args.printableTopOverrideMm ?? bodyTopMm, bodyTopMm, bodyBottomMm))
-    : round2(clamp(persisted.contract.printableTopMm, bodyTopMm, bodyBottomMm));
-  const resolvedBottomMm = hasManualBottomOverride
-    ? round2(clamp(args.printableBottomOverrideMm ?? bodyBottomMm, resolvedTopMm, bodyBottomMm))
-    : round2(clamp(persisted.contract.printableBottomMm, resolvedTopMm, bodyBottomMm));
   const persistedLidBoundaryMm = resolvePersistedLidBoundaryMm(persisted.contract);
   const persistedRimBoundaryMm = resolvePersistedRimBoundaryMm(persisted.contract);
   const persistedBaseBandStartMm = resolvePersistedBaseBandStartMm(persisted.contract);
@@ -487,9 +481,19 @@ export function resolveAuthoritativePrintableSurfaceResolution(
     (isFiniteNumber(args.lidSeamFromOverallMm) ? args.lidSeamFromOverallMm ?? null : null) ??
     (isFiniteNumber(args.detection?.lidSeamFromOverallMm) ? args.detection?.lidSeamFromOverallMm ?? null : null);
   const fallbackRimBoundaryMm =
-    persistedRimBoundaryMm ??
     (isFiniteNumber(args.silverBandBottomFromOverallMm) ? args.silverBandBottomFromOverallMm ?? null : null) ??
-    (isFiniteNumber(args.detection?.rimRingBottomFromOverallMm) ? args.detection?.rimRingBottomFromOverallMm ?? null : null);
+    (isFiniteNumber(args.detection?.rimRingBottomFromOverallMm) ? args.detection?.rimRingBottomFromOverallMm ?? null : null) ??
+    persistedRimBoundaryMm;
+  const resolvedTopMm = hasManualTopOverride
+    ? round2(clamp(args.printableTopOverrideMm ?? bodyTopMm, bodyTopMm, bodyBottomMm))
+    : round2(clamp(
+        fallbackRimBoundaryMm ?? persisted.contract.printableTopMm,
+        bodyTopMm,
+        bodyBottomMm,
+      ));
+  const resolvedBottomMm = hasManualBottomOverride
+    ? round2(clamp(args.printableBottomOverrideMm ?? bodyBottomMm, resolvedTopMm, bodyBottomMm))
+    : round2(clamp(persisted.contract.printableBottomMm, resolvedTopMm, bodyBottomMm));
 
   const resolved = buildFixedPrintableSurfaceResolution({
     overallHeightMm,
@@ -502,7 +506,9 @@ export function resolveAuthoritativePrintableSurfaceResolution(
     baseBandStartMm: persistedBaseBandStartMm ?? args.baseBandStartMm,
     handleKeepOutStartMm: persistedHandleKeepOut.startMm ?? args.handleKeepOutStartMm,
     handleKeepOutEndMm: persistedHandleKeepOut.endMm ?? args.handleKeepOutEndMm,
-    topBoundarySource: hasManualTopOverride ? "manual-override" : "persisted-contract",
+    topBoundarySource: hasManualTopOverride
+      ? "manual-override"
+      : (fallbackRimBoundaryMm != null ? "rim-ring" : "persisted-contract"),
     bottomBoundarySource: hasManualBottomOverride ? "manual-override" : "persisted-contract",
     authoritySource,
     topConfidence: 1,
@@ -544,7 +550,7 @@ export function buildPrintableSurfaceResolution(
   const hasManualBottomOverride = isFiniteNumber(args.printableBottomOverrideMm);
   const resolvedTopCandidate = hasManualTopOverride
     ? (args.printableTopOverrideMm ?? bodyTopMm)
-    : bodyTopMm;
+    : (detectedRingBottomMm ?? bodyTopMm);
   const resolvedBottomCandidate = hasManualBottomOverride
     ? (args.printableBottomOverrideMm ?? bodyBottomMm)
     : (isFiniteNumber(args.baseBandStartMm) ? args.baseBandStartMm ?? bodyBottomMm : bodyBottomMm);
@@ -557,7 +563,7 @@ export function buildPrintableSurfaceResolution(
   const detectionConfidence = clamp(args.detection?.confidence ?? 0, 0, 1);
   const topBoundarySource: PrintableSurfaceBoundarySource = hasManualTopOverride
     ? "manual-override"
-    : "body-top-fallback";
+    : (detectedRingBottomMm != null ? "rim-ring" : "body-top-fallback");
   const bottomBoundarySource: PrintableSurfaceBoundarySource = hasManualBottomOverride
     ? "manual-override"
     : isFiniteNumber(args.baseBandStartMm)
@@ -566,7 +572,9 @@ export function buildPrintableSurfaceResolution(
   const topConfidence = round2(
     hasManualTopOverride
       ? 1
-      : 1,
+      : detectedRingBottomMm != null
+        ? Math.max(0.42, detectionConfidence || 0.68)
+        : 1,
   );
   const bottomConfidence = round2(
     hasManualBottomOverride
