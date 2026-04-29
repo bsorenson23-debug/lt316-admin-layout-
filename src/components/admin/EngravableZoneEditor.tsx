@@ -3,6 +3,10 @@
 import React, { useRef, useCallback, useEffect, useState } from "react";
 import type { BodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
 import { mapBodyReferenceGuideFrameToDisplayedImage } from "@/lib/bodyReferenceGuideFrame";
+import type {
+  BrandLogoReference,
+  ProductAppearanceReferenceLayer,
+} from "@/lib/productAppearanceReferenceLayers";
 import type { EditableBodyOutline } from "@/types/productTemplate";
 import styles from "./EngravableZoneEditor.module.css";
 
@@ -31,6 +35,8 @@ interface Props {
   guideFrame?: BodyReferenceGuideFrame | null;
   /** Detected lower silver seam / silver band bottom in the displayed editor coordinate space. */
   silverRingIndicatorMm?: number | null;
+  /** Upstream product appearance references in the displayed editor coordinate space. */
+  appearanceReferenceLayers?: ProductAppearanceReferenceLayer[] | null;
   /** When true, show accepted body-only BODY REFERENCE as the body scale authority. */
   bodyOnlyScaleMode?: boolean;
   /** Accepted BODY REFERENCE outline used for read-only body-only scale overlay. */
@@ -313,6 +319,7 @@ export function EngravableZoneEditor({
   rimColorHex,
   guideFrame,
   silverRingIndicatorMm,
+  appearanceReferenceLayers,
   bodyOnlyScaleMode = false,
   outline,
   bodyScaleSource,
@@ -436,6 +443,22 @@ export function EngravableZoneEditor({
     typeof silverRingIndicatorMm === "number" && Number.isFinite(silverRingIndicatorMm)
       ? clamp(silverRingIndicatorMm * pxPerMm, 0, CANVAS_HEIGHT)
       : null;
+  const frontLogoLayer = appearanceReferenceLayers?.find(
+    (layer): layer is BrandLogoReference =>
+      layer.kind === "front-brand-logo" && layer.visibility === "visible",
+  );
+  const frontLogoIndicator = (
+    frontLogoLayer &&
+    typeof frontLogoLayer.centerYMm === "number" &&
+    Number.isFinite(frontLogoLayer.centerYMm)
+  )
+    ? {
+        label: frontLogoLayer.label,
+        topPx: clamp(frontLogoLayer.centerYMm * pxPerMm, 0, CANVAS_HEIGHT),
+        widthPx: clamp((frontLogoLayer.widthMm ?? diameterMm * 0.32) * pxPerMm, 22, bodyWidthPx * 0.9),
+        heightPx: clamp((frontLogoLayer.heightMm ?? 12) * pxPerMm, 8, Math.max(10, CANVAS_HEIGHT * 0.16)),
+      }
+    : null;
   const acceptedBodyOutlinePath = buildMappedOutlinePath({
     outline,
     enabled: bodyOnlyScaleMode,
@@ -628,8 +651,24 @@ export function EngravableZoneEditor({
               aria-hidden
             >
               <span className={styles.silverRingIndicatorLabel}>
-                Silver seam: {round1(silverRingIndicatorMm ?? 0)} mm
+                Silver seam: {round1(silverRingIndicatorMm ?? 0)} mm from {bodyOnlyScaleMode ? "body top" : "product top"}
               </span>
+            </div>
+          )}
+          {frontLogoIndicator && (
+            <div
+              className={styles.logoReferenceIndicator}
+              style={{
+                top: frontLogoIndicator.topPx - frontLogoIndicator.heightPx / 2,
+                left: guideFrameCenterLineX - frontLogoIndicator.widthPx / 2,
+                width: frontLogoIndicator.widthPx,
+                height: frontLogoIndicator.heightPx,
+              }}
+              data-guide-source={frontLogoLayer?.source ?? "unknown"}
+              data-appearance-reference="front-brand-logo"
+              aria-hidden
+            >
+              <span className={styles.logoReferenceLabel}>{frontLogoIndicator.label}</span>
             </div>
           )}
 

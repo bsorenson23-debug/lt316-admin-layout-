@@ -102,6 +102,7 @@ import {
   summarizeAppearanceReferenceLayers,
   type ProductAppearanceReferenceLayer,
 } from "@/lib/productAppearanceReferenceLayers";
+import { resolveProductAppearanceSurfaceAuthority } from "@/lib/productAppearanceSurface";
 import {
   buildWrapExportPreviewState,
   getWrapExportMappingStatusLabel,
@@ -632,10 +633,21 @@ function buildPreviewTumblerDimensions(args: {
   diameterMm: number;
   printHeightMm: number;
   overallHeightMm: number;
+  printableTopOffsetMm?: number | null;
+  bodyTopOffsetMm?: number | null;
+  bodyBottomFromOverallMm?: number | null;
+  lidSeamFromOverallMm?: number | null;
+  silverBandBottomFromOverallMm?: number | null;
 }): TumblerDimensions | null {
   if (args.productType === "flat") return null;
   if (!Number.isFinite(args.diameterMm) || args.diameterMm <= 0) return null;
   if (!Number.isFinite(args.printHeightMm) || args.printHeightMm <= 0) return null;
+  const bodyHeightMm =
+    isFiniteNumber(args.bodyTopOffsetMm) &&
+    isFiniteNumber(args.bodyBottomFromOverallMm) &&
+    args.bodyBottomFromOverallMm > args.bodyTopOffsetMm
+      ? round2(args.bodyBottomFromOverallMm - args.bodyTopOffsetMm)
+      : undefined;
   return {
     overallHeightMm:
       Number.isFinite(args.overallHeightMm) && args.overallHeightMm > 0
@@ -643,6 +655,19 @@ function buildPreviewTumblerDimensions(args: {
         : args.printHeightMm,
     diameterMm: args.diameterMm,
     printableHeightMm: args.printHeightMm,
+    printableTopOffsetMm: isFiniteNumber(args.printableTopOffsetMm)
+      ? round2(args.printableTopOffsetMm)
+      : undefined,
+    bodyTopOffsetMm: isFiniteNumber(args.bodyTopOffsetMm)
+      ? round2(args.bodyTopOffsetMm)
+      : undefined,
+    bodyHeightMm,
+    lidSeamFromOverallMm: isFiniteNumber(args.lidSeamFromOverallMm)
+      ? round2(args.lidSeamFromOverallMm)
+      : undefined,
+    silverBandBottomFromOverallMm: isFiniteNumber(args.silverBandBottomFromOverallMm)
+      ? round2(args.silverBandBottomFromOverallMm)
+      : undefined,
   };
 }
 
@@ -1202,7 +1227,7 @@ export function TemplateCreateForm({
   const engravableEditorBottomMarginMm = bodyOnlyEditorMode
     ? round2(Math.max(0, engravableEditorOverallHeightMm - (bodyOnlyBottomGuideLocalMm ?? engravableEditorOverallHeightMm)))
     : round2(Math.max(0, overallHeightMm - authorityBottomGuideMm));
-  const engravableEditorSilverRingMm = React.useMemo(() => {
+  const detectedEngravableEditorSilverRingMm = React.useMemo(() => {
     if (typeof detectedLowerSilverSeamMm !== "number" || !Number.isFinite(detectedLowerSilverSeamMm)) {
       return null;
     }
@@ -1304,14 +1329,189 @@ export function TemplateCreateForm({
     savedLidSeamFromOverallMm,
   ]);
 
+  const savedAppearanceReferenceLayers = React.useMemo<ProductAppearanceReferenceLayer[]>(
+    () => cloneSerializable(editingTemplate?.appearanceReferenceLayers ?? []),
+    [editingTemplate?.appearanceReferenceLayers],
+  );
+  const upstreamManufacturerLogoReference = React.useMemo(() => {
+    const lookupBrand = lookupResult?.brand?.trim();
+    if (lookupBrand) {
+      return {
+        label: lookupBrand,
+        source: "lookup" as const,
+        confidence: lookupResult?.dimensions.confidence ?? null,
+      };
+    }
+
+    const logoDetection = detectResult?.response.analysis.logoDetection;
+    const detectedBrand = logoDetection?.matchedBrand?.trim();
+    if (detectedBrand) {
+      return {
+        label: detectedBrand,
+        source: "auto-detect" as const,
+        confidence: logoDetection?.confidence ?? null,
+      };
+    }
+
+    return null;
+  }, [
+    detectResult?.response.analysis.logoDetection,
+    lookupResult?.brand,
+    lookupResult?.dimensions.confidence,
+  ]);
+  const productAppearanceSurfaceAuthority = React.useMemo(() => {
+    if (productType === "flat") return null;
+    const fallbackOverallHeightMm = Number.isFinite(overallHeightMm) && overallHeightMm > 0
+      ? overallHeightMm
+      : printHeightMm;
+    if (!Number.isFinite(fallbackOverallHeightMm) || fallbackOverallHeightMm <= 0) {
+      return null;
+    }
+    const bodyTopFromOverallMm = bodyReferenceFrameBounds?.bodyTopFromOverallMm ?? 0;
+    const bodyBottomFromOverallMm =
+      bodyReferenceFrameBounds?.bodyBottomFromOverallMm ?? fallbackOverallHeightMm;
+    if (bodyBottomFromOverallMm <= bodyTopFromOverallMm) return null;
+
+    return resolveProductAppearanceSurfaceAuthority({
+      overallHeightMm: fallbackOverallHeightMm,
+      bodyTopFromOverallMm,
+      bodyBottomFromOverallMm,
+      engravableGuideAuthority,
+      printableSurfaceContract:
+        liveBodyReferencePipeline?.printableSurfaceResolution?.printableSurfaceContract ??
+        persistedPrintableSurfaceContract,
+      existingAppearanceReferenceLayers: savedAppearanceReferenceLayers,
+      lidSeamFromOverallMm: savedLidSeamFromOverallMm,
+      silverBandBottomFromOverallMm: detectedLowerSilverSeamMm,
+      bodyColorHex,
+      rimColorHex,
+      bodyReferenceSourceHash: currentReviewedBodyReferenceSourceHash,
+      manufacturerLogo: upstreamManufacturerLogoReference,
+    });
+  }, [
+    bodyColorHex,
+    bodyReferenceFrameBounds?.bodyBottomFromOverallMm,
+    bodyReferenceFrameBounds?.bodyTopFromOverallMm,
+    currentReviewedBodyReferenceSourceHash,
+    detectedLowerSilverSeamMm,
+    engravableGuideAuthority,
+    liveBodyReferencePipeline?.printableSurfaceResolution?.printableSurfaceContract,
+    overallHeightMm,
+    persistedPrintableSurfaceContract,
+    printHeightMm,
+    productType,
+    rimColorHex,
+    savedAppearanceReferenceLayers,
+    savedLidSeamFromOverallMm,
+    upstreamManufacturerLogoReference,
+  ]);
+  const templateAppearanceReferenceLayers = React.useMemo<ProductAppearanceReferenceLayer[]>(
+    () => productAppearanceSurfaceAuthority?.appearanceReferenceLayers ?? savedAppearanceReferenceLayers,
+    [productAppearanceSurfaceAuthority?.appearanceReferenceLayers, savedAppearanceReferenceLayers],
+  );
+  const upstreamSilverRingOverallMm = React.useMemo(() => {
+    const layer = productAppearanceSurfaceAuthority?.silverBandLayer;
+    if (!layer) return detectedLowerSilverSeamMm;
+    const yMm = layer.yMm;
+    const heightMm = layer.heightMm;
+    if (!isFiniteNumber(yMm) || !isFiniteNumber(heightMm)) return detectedLowerSilverSeamMm;
+    return round2(yMm + heightMm);
+  }, [detectedLowerSilverSeamMm, productAppearanceSurfaceAuthority?.silverBandLayer]);
+  const engravableEditorSilverRingMm = React.useMemo(() => {
+    if (!isFiniteNumber(upstreamSilverRingOverallMm)) {
+      return detectedEngravableEditorSilverRingMm;
+    }
+    if (bodyOnlyEditorMode) {
+      if (!bodyOnlyEditorFrame) return null;
+      return mapOverallGuideMmToBodyLocalMm({
+        overallGuideMm: upstreamSilverRingOverallMm,
+        bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
+        bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
+      });
+    }
+    return round2(Math.max(0, upstreamSilverRingOverallMm));
+  }, [
+    bodyOnlyEditorFrame,
+    bodyOnlyEditorMode,
+    detectedEngravableEditorSilverRingMm,
+    upstreamSilverRingOverallMm,
+  ]);
+  const engravableEditorAppearanceReferenceLayers = React.useMemo<ProductAppearanceReferenceLayer[]>(() => {
+    if (!bodyOnlyEditorMode || !bodyOnlyEditorFrame) return templateAppearanceReferenceLayers;
+    return templateAppearanceReferenceLayers.map((layer) => {
+      if (layer.kind === "top-finish-band") {
+        const yMm = layer.yMm;
+        const heightMm = layer.heightMm;
+        const bottomMm = isFiniteNumber(yMm) && isFiniteNumber(heightMm)
+          ? yMm + heightMm
+          : null;
+        const localTopMm = mapOverallGuideMmToBodyLocalMm({
+          overallGuideMm: yMm,
+          bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
+          bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
+        });
+        const localBottomMm = mapOverallGuideMmToBodyLocalMm({
+          overallGuideMm: bottomMm,
+          bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
+          bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
+        });
+        return {
+          ...layer,
+          ...(localTopMm != null ? { yMm: localTopMm } : {}),
+          ...(localTopMm != null && localBottomMm != null
+            ? { heightMm: round2(Math.max(0.1, localBottomMm - localTopMm)) }
+            : {}),
+        };
+      }
+      if (layer.kind === "front-brand-logo" || layer.kind === "back-brand-logo") {
+        const localCenterYMm = mapOverallGuideMmToBodyLocalMm({
+          overallGuideMm: layer.centerYMm,
+          bodyTopFromOverallMm: bodyOnlyEditorFrame.bodyTopFromOverallMm,
+          bodyOnlyHeightMm: bodyOnlyEditorFrame.bodyHeightMm,
+        });
+        return {
+          ...layer,
+          ...(localCenterYMm != null ? { centerYMm: localCenterYMm } : {}),
+        };
+      }
+      return layer;
+    });
+  }, [bodyOnlyEditorFrame, bodyOnlyEditorMode, templateAppearanceReferenceLayers]);
+  const appearanceReferenceSummary = React.useMemo(
+    () => summarizeAppearanceReferenceLayers(templateAppearanceReferenceLayers),
+    [templateAppearanceReferenceLayers],
+  );
   const previewTumblerDims = React.useMemo(
     () => buildPreviewTumblerDimensions({
       productType,
       diameterMm,
-      printHeightMm,
+      printHeightMm: productAppearanceSurfaceAuthority?.engravableSurface.printableHeightMm ?? printHeightMm,
       overallHeightMm,
+      printableTopOffsetMm: productAppearanceSurfaceAuthority?.engravableSurface.printableTopMm,
+      bodyTopOffsetMm: bodyReferenceFrameBounds?.bodyTopFromOverallMm,
+      bodyBottomFromOverallMm: bodyReferenceFrameBounds?.bodyBottomFromOverallMm,
+      lidSeamFromOverallMm: savedLidSeamFromOverallMm,
+      silverBandBottomFromOverallMm:
+        productAppearanceSurfaceAuthority?.silverBandLayer
+          ? round2(
+              (productAppearanceSurfaceAuthority.silverBandLayer.yMm ?? 0) +
+              (productAppearanceSurfaceAuthority.silverBandLayer.heightMm ?? 0),
+            )
+          : detectedLowerSilverSeamMm,
     }),
-    [diameterMm, overallHeightMm, printHeightMm, productType],
+    [
+      bodyReferenceFrameBounds?.bodyBottomFromOverallMm,
+      bodyReferenceFrameBounds?.bodyTopFromOverallMm,
+      detectedLowerSilverSeamMm,
+      diameterMm,
+      overallHeightMm,
+      printHeightMm,
+      productAppearanceSurfaceAuthority?.engravableSurface.printableHeightMm,
+      productAppearanceSurfaceAuthority?.engravableSurface.printableTopMm,
+      productAppearanceSurfaceAuthority?.silverBandLayer,
+      productType,
+      savedLidSeamFromOverallMm,
+    ],
   );
   const previewCanonicalBounds = React.useMemo(() => {
     if (!previewTumblerDims) return null;
@@ -1373,14 +1573,6 @@ export function TemplateCreateForm({
       editingTemplate?.engravingPreviewState?.placements,
       workspaceArtworkPlacements,
     ],
-  );
-  const templateAppearanceReferenceLayers = React.useMemo<ProductAppearanceReferenceLayer[]>(
-    () => cloneSerializable(editingTemplate?.appearanceReferenceLayers ?? []),
-    [editingTemplate?.appearanceReferenceLayers],
-  );
-  const appearanceReferenceSummary = React.useMemo(
-    () => summarizeAppearanceReferenceLayers(templateAppearanceReferenceLayers),
-    [templateAppearanceReferenceLayers],
   );
   const activeLookupDimensions = React.useMemo(
     () => lookupResult?.dimensions ?? lookupDimensionsSnapshot ?? null,
@@ -3060,6 +3252,7 @@ export function TemplateCreateForm({
     const now = new Date().toISOString();
     const printableSurfaceResolutionForSave = liveBodyReferencePipeline?.printableSurfaceResolution ?? null;
     const printableSurfaceContractForSave =
+      productAppearanceSurfaceAuthority?.printableSurfaceContract ??
       printableSurfaceResolutionForSave?.printableSurfaceContract ??
       approvedCanonicalDimensionCalibration?.printableSurfaceContract ??
       editingTemplate?.dimensions.printableSurfaceContract ??
@@ -3077,9 +3270,17 @@ export function TemplateCreateForm({
             printableSurfaceContract: printableSurfaceContractForSave,
           }
         : undefined;
-    const effectivePrintHeightMm = engravableGuideAuthority
+    const effectivePrintHeightMm = productAppearanceSurfaceAuthority
+      ? productAppearanceSurfaceAuthority.engravableSurface.printableHeightMm
+      : engravableGuideAuthority
       ? round2(Math.max(0, engravableGuideAuthority.bottomGuideMm - engravableGuideAuthority.topGuideMm))
       : printHeightMm;
+    const silverBandBottomForSave = productAppearanceSurfaceAuthority?.silverBandLayer
+      ? round2(
+          (productAppearanceSurfaceAuthority.silverBandLayer.yMm ?? 0) +
+          (productAppearanceSurfaceAuthority.silverBandLayer.heightMm ?? 0),
+        )
+      : detectedLowerSilverSeamMm;
     const template: ProductTemplate = {
       id: editingTemplate?.id ?? crypto.randomUUID(),
       name: name.trim(),
@@ -3106,8 +3307,8 @@ export function TemplateCreateForm({
             ? savedLidSeamFromOverallMm
             : undefined,
         silverBandBottomFromOverallMm:
-          typeof detectedLowerSilverSeamMm === "number" && Number.isFinite(detectedLowerSilverSeamMm)
-            ? detectedLowerSilverSeamMm
+          typeof silverBandBottomForSave === "number" && Number.isFinite(silverBandBottomForSave)
+            ? silverBandBottomForSave
             : undefined,
         printableTopOverrideMm:
           typeof printableTopOverrideMm === "number" && Number.isFinite(printableTopOverrideMm)
@@ -4352,6 +4553,7 @@ export function TemplateCreateForm({
                       tumblerMapping={tumblerMapping}
                       bodyTintColor={bodyColorHex}
                       rimTintColor={rimColorHex}
+                      appearanceReferenceLayers={templateAppearanceReferenceLayers}
                       showTemplateSurfaceZones={
                         effectivePreviewModelMode === "alignment-model" ||
                         effectivePreviewModelMode === "wrap-export"
@@ -5534,6 +5736,7 @@ export function TemplateCreateForm({
             rimColorHex={rimColorHex}
             guideFrame={bodyReferenceGuideFrame}
             silverRingIndicatorMm={engravableEditorSilverRingMm}
+            appearanceReferenceLayers={engravableEditorAppearanceReferenceLayers}
             bodyOnlyScaleMode={bodyOnlyEditorMode}
             outline={bodyOnlyEditorMode ? approvedBodyOutline : null}
             bodyScaleSource={engravableGuideAuthority?.bodyScaleSource}

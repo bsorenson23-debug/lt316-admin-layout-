@@ -66,6 +66,7 @@ import { BodyGeometryStatusBadge } from "./BodyGeometryStatusBadge";
 import { YetiRambler40oz } from "./models/YetiRambler40oz";
 import type { DecalItem } from "./models/YetiRambler40oz";
 import { getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
+import type { ProductAppearanceReferenceLayer } from "@/lib/productAppearanceReferenceLayers";
 
 // ---------------------------------------------------------------------------
 // Suppress noisy Three.js deprecation warnings
@@ -130,6 +131,8 @@ export interface ModelViewerProps {
   bodyTintColor?: string;
   /** Rim / engraved artwork tint */
   rimTintColor?: string;
+  /** Reference-only product appearance layers resolved upstream. */
+  appearanceReferenceLayers?: ProductAppearanceReferenceLayer[] | null;
   /** Show template surface guide zones on supported tumbler templates */
   showTemplateSurfaceZones?: boolean;
   /** Review preview scaffold mode used by later BODY REFERENCE flows */
@@ -740,14 +743,14 @@ const KNOWN_MODELS: { match: string; key: string }[] = [
 ];
 
 function ModelByExtension({
-  url, ext, dims, scaleTargetHeightMm, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, rimTintColor, showTemplateSurfaceZones, onReady,
+  url, ext, dims, scaleTargetHeightMm, handleArcDeg, placedItems, itemTextures, bedWidthMm, bedHeightMm, glbPath, sourceName, tumblerMapping, bodyTintColor, rimTintColor, appearanceReferenceLayers, showTemplateSurfaceZones, onReady,
 }: {
   url: string; ext: string; dims?: TumblerDimensions | null; handleArcDeg?: number;
   scaleTargetHeightMm?: number | null;
   placedItems?: PlacedItem[]; itemTextures?: Map<string, HTMLCanvasElement>;
   bedWidthMm?: number; bedHeightMm?: number; glbPath?: string | null;
   sourceName?: string;
-  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; rimTintColor?: string; showTemplateSurfaceZones?: boolean; onReady?: OnReady;
+  tumblerMapping?: import("@/types/productTemplate").TumblerMapping; bodyTintColor?: string; rimTintColor?: string; appearanceReferenceLayers?: ProductAppearanceReferenceLayer[] | null; showTemplateSurfaceZones?: boolean; onReady?: OnReady;
 }) {
   if (ext === "stl") return <StlMesh url={url} dims={dims} scaleTargetHeightMm={scaleTargetHeightMm} onReady={onReady} />;
   if (ext === "obj") return <ObjMesh url={url} dims={dims} scaleTargetHeightMm={scaleTargetHeightMm} onReady={onReady} />;
@@ -774,6 +777,7 @@ function ModelByExtension({
             tumblerMapping={tumblerMapping}
             bodyTintColor={bodyTintColor}
             rimTintColor={rimTintColor}
+            appearanceReferenceLayers={appearanceReferenceLayers}
             bodyTopOffsetMm={dims.bodyTopOffsetMm}
             bodyHeightMm={dims.bodyHeightMm}
             lidSeamFromOverallMm={dims.lidSeamFromOverallMm}
@@ -857,6 +861,7 @@ export default function ModelViewer({
   tumblerMapping,
   bodyTintColor,
   rimTintColor,
+  appearanceReferenceLayers,
   showTemplateSurfaceZones,
   previewModelMode,
   sourceModelStatus,
@@ -1695,6 +1700,7 @@ export default function ModelViewer({
                   tumblerMapping={tumblerMapping}
                   bodyTintColor={bodyTintColor}
                   rimTintColor={rimTintColor}
+                  appearanceReferenceLayers={appearanceReferenceLayers}
                   showTemplateSurfaceZones={showTemplateSurfaceZones}
                   onReady={handleModelReady}
                 />
@@ -1790,6 +1796,7 @@ function LegacyScaffoldModelViewer({
   tumblerMapping,
   bodyTintColor,
   rimTintColor,
+  appearanceReferenceLayers,
   showTemplateSurfaceZones,
   previewModelMode,
   sourceModelStatus,
@@ -1999,6 +2006,7 @@ function LegacyScaffoldModelViewer({
                   tumblerMapping={tumblerMapping}
                   bodyTintColor={bodyTintColor}
                   rimTintColor={rimTintColor}
+                  appearanceReferenceLayers={appearanceReferenceLayers}
                   showTemplateSurfaceZones={showTemplateSurfaceZones}
                   onReady={handleModelReady}
                 />
