@@ -3,6 +3,10 @@
 import React, { useRef, useCallback, useEffect, useState } from "react";
 import type { BodyReferenceGuideFrame } from "@/lib/bodyReferenceGuideFrame";
 import { mapBodyReferenceGuideFrameToDisplayedImage } from "@/lib/bodyReferenceGuideFrame";
+import type {
+  BrandLogoReference,
+  ProductAppearanceReferenceLayer,
+} from "@/lib/productAppearanceReferenceLayers";
 import type { EditableBodyOutline } from "@/types/productTemplate";
 import styles from "./EngravableZoneEditor.module.css";
 
@@ -31,6 +35,8 @@ interface Props {
   guideFrame?: BodyReferenceGuideFrame | null;
   /** Detected lower silver seam / silver band bottom in the displayed editor coordinate space. */
   silverRingIndicatorMm?: number | null;
+  /** Upstream product appearance references in the displayed editor coordinate space. */
+  appearanceReferenceLayers?: ProductAppearanceReferenceLayer[] | null;
   /** When true, show accepted body-only BODY REFERENCE as the body scale authority. */
   bodyOnlyScaleMode?: boolean;
   /** Accepted BODY REFERENCE outline used for read-only body-only scale overlay. */
@@ -104,14 +110,14 @@ function measureContourBounds(points: Array<{ x: number; y: number }>): {
 function buildMappedOutlinePath(args: {
   outline?: EditableBodyOutline | null;
   enabled: boolean;
-  photoRect: { left: number; top: number; width: number; height: number } | null;
-  fallbackBounds: { left: number; top: number; width: number; height: number };
+  targetBounds: { left: number; top: number; width: number; height: number } | null;
 }): string | null {
   if (!args.enabled || !args.outline) return null;
   const points = args.outline.directContour?.length
     ? args.outline.directContour
     : args.outline.points;
   if (!points || points.length < 3) return null;
+  if (!args.targetBounds || args.targetBounds.width <= 1 || args.targetBounds.height <= 1) return null;
 
   const sourceBounds = args.outline.sourceContourViewport
     ? {
@@ -123,7 +129,7 @@ function buildMappedOutlinePath(args: {
     : measureContourBounds(points);
   if (!sourceBounds) return null;
 
-  const target = args.photoRect ?? args.fallbackBounds;
+  const target = args.targetBounds;
   const mapped = points
     .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
     .map((point) => {
@@ -313,6 +319,7 @@ export function EngravableZoneEditor({
   rimColorHex,
   guideFrame,
   silverRingIndicatorMm,
+  appearanceReferenceLayers,
   bodyOnlyScaleMode = false,
   outline,
   bodyScaleSource,
@@ -436,18 +443,26 @@ export function EngravableZoneEditor({
     typeof silverRingIndicatorMm === "number" && Number.isFinite(silverRingIndicatorMm)
       ? clamp(silverRingIndicatorMm * pxPerMm, 0, CANVAS_HEIGHT)
       : null;
+  const frontLogoLayer = appearanceReferenceLayers?.find(
+    (layer): layer is BrandLogoReference =>
+      layer.kind === "front-brand-logo" && layer.visibility === "visible",
+  );
+  const frontLogoIndicator = (
+    frontLogoLayer &&
+    typeof frontLogoLayer.centerYMm === "number" &&
+    Number.isFinite(frontLogoLayer.centerYMm)
+  )
+    ? {
+        label: frontLogoLayer.label,
+        topPx: clamp(frontLogoLayer.centerYMm * pxPerMm, 0, CANVAS_HEIGHT),
+        widthPx: clamp((frontLogoLayer.widthMm ?? diameterMm * 0.32) * pxPerMm, 22, bodyWidthPx * 0.9),
+        heightPx: clamp((frontLogoLayer.heightMm ?? 12) * pxPerMm, 8, Math.max(10, CANVAS_HEIGHT * 0.16)),
+      }
+    : null;
   const acceptedBodyOutlinePath = buildMappedOutlinePath({
     outline,
     enabled: bodyOnlyScaleMode,
-    photoRect: activeDisplayPhoto
-      ? {
-          left: photoLeftPx,
-          top: photoTopPx,
-          width: photoWidthPx,
-          height: targetPhotoHeightPx,
-        }
-      : null,
-    fallbackBounds: {
+    targetBounds: {
       left: guideFrameLeftPx,
       top: guideFrameTopPx,
       width: guideFrameWidthPx,
@@ -628,8 +643,24 @@ export function EngravableZoneEditor({
               aria-hidden
             >
               <span className={styles.silverRingIndicatorLabel}>
-                Silver seam: {round1(silverRingIndicatorMm ?? 0)} mm
+                Silver seam: {round1(silverRingIndicatorMm ?? 0)} mm from {bodyOnlyScaleMode ? "body top" : "product top"}
               </span>
+            </div>
+          )}
+          {frontLogoIndicator && (
+            <div
+              className={styles.logoReferenceIndicator}
+              style={{
+                top: frontLogoIndicator.topPx - frontLogoIndicator.heightPx / 2,
+                left: guideFrameCenterLineX - frontLogoIndicator.widthPx / 2,
+                width: frontLogoIndicator.widthPx,
+                height: frontLogoIndicator.heightPx,
+              }}
+              data-guide-source={frontLogoLayer?.source ?? "unknown"}
+              data-appearance-reference="front-brand-logo"
+              aria-hidden
+            >
+              <span className={styles.logoReferenceLabel}>{frontLogoIndicator.label}</span>
             </div>
           )}
 

@@ -117,6 +117,32 @@
   text-shadow: 0 0 4px var(--bg-base), 0 0 8px var(--bg-base);
 }
 
+.logoReferenceIndicator {
+  position: absolute;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 64%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-elevated) 68%, transparent);
+  pointer-events: none;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg-base) 52%, transparent);
+}
+
+.logoReferenceLabel {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0 3px;
+  color: var(--text-primary);
+  font-size: 9px;
+  font-family: monospace;
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-shadow: 0 0 4px var(--bg-base), 0 0 8px var(--bg-base);
+}
+
 /* ── Drag lines ────────────────────────────────────────────────── */
 .dragLine {
   position: absolute;

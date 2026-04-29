@@ -1,11 +1,16 @@
 import * as THREE from "three";
 import { useRef, useMemo, useEffect } from "react";
-import { useGLTF } from "@react-three/drei";
+import { Text, useGLTF } from "@react-three/drei";
 import type { GLTF } from "three-stdlib";
 import type { TumblerMapping } from "@/types/productTemplate";
 import { normalizeGeometry } from "@/lib/modelAxisCorrection";
 import { analyzeTumblerMesh } from "@/lib/analyzeTumblerMesh";
 import { getTumblerWrapLayout } from "@/utils/tumblerWrapLayout";
+import type {
+  BrandLogoReference,
+  FinishBandReference,
+  ProductAppearanceReferenceLayer,
+} from "@/lib/productAppearanceReferenceLayers";
 
 type GLTFResult = GLTF & {
   nodes: Record<string, THREE.Object3D>;
@@ -73,6 +78,7 @@ interface Props {
   tumblerMapping?: TumblerMapping;
   bodyTintColor?: string;
   rimTintColor?: string;
+  appearanceReferenceLayers?: ProductAppearanceReferenceLayer[] | null;
   showTemplateSurfaceZones?: boolean;
   bodyTopOffsetMm?: number;
   bodyHeightMm?: number;
@@ -211,6 +217,36 @@ function buildWrapTexture(
   return texture;
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function findVisibleSilverBandLayer(
+  layers: readonly ProductAppearanceReferenceLayer[] | null | undefined,
+): FinishBandReference | null {
+  return (
+    layers?.find(
+      (layer): layer is FinishBandReference =>
+        layer.kind === "top-finish-band" &&
+        layer.visibility === "visible" &&
+        isFiniteNumber(layer.yMm) &&
+        isFiniteNumber(layer.heightMm),
+    ) ?? null
+  );
+}
+
+function findVisibleFrontLogoLayer(
+  layers: readonly ProductAppearanceReferenceLayer[] | null | undefined,
+): BrandLogoReference | null {
+  return (
+    layers?.find(
+      (layer): layer is BrandLogoReference =>
+        layer.kind === "front-brand-logo" &&
+        layer.visibility === "visible",
+    ) ?? null
+  );
+}
+
 export function YetiRambler40oz({
   placedItems,
   diameterMm,
@@ -224,6 +260,7 @@ export function YetiRambler40oz({
   tumblerMapping,
   bodyTintColor = "#1f2322",
   rimTintColor = "#cfd2d0",
+  appearanceReferenceLayers = null,
   showTemplateSurfaceZones = false,
   bodyTopOffsetMm,
   bodyHeightMm,
@@ -474,6 +511,15 @@ export function YetiRambler40oz({
     };
   }, [baseBandMaterial]);
 
+  const upstreamSilverBandLayer = useMemo(
+    () => findVisibleSilverBandLayer(appearanceReferenceLayers),
+    [appearanceReferenceLayers],
+  );
+  const upstreamFrontLogoLayer = useMemo(
+    () => findVisibleFrontLogoLayer(appearanceReferenceLayers),
+    [appearanceReferenceLayers],
+  );
+
   const overlayZoneConfig = useMemo(() => {
     if (!showTemplateSurfaceZones || overallHeightMm <= 0) return null;
 
@@ -484,33 +530,39 @@ export function YetiRambler40oz({
       fallbackLidSeam + 1,
       Math.min(fallbackBodyTop, overallHeightMm),
     );
+    const upstreamSilverBandTop = upstreamSilverBandLayer?.yMm;
+    const upstreamSilverBandBottom =
+      isFiniteNumber(upstreamSilverBandLayer?.yMm) &&
+      isFiniteNumber(upstreamSilverBandLayer?.heightMm)
+        ? upstreamSilverBandLayer.yMm + upstreamSilverBandLayer.heightMm
+        : null;
 
     const resolvedLidSeam = THREE.MathUtils.clamp(
-      lidSeamFromOverallMm ?? fallbackLidSeam,
+      upstreamSilverBandTop ?? lidSeamFromOverallMm ?? fallbackLidSeam,
       0,
       overallHeightMm - 1,
     );
     const resolvedSilverBandBottom = THREE.MathUtils.clamp(
-      silverBandBottomFromOverallMm ?? fallbackSilverBandBottom,
+      upstreamSilverBandBottom ?? silverBandBottomFromOverallMm ?? fallbackSilverBandBottom,
       resolvedLidSeam + 0.8,
       overallHeightMm,
     );
-    const resolvedBodyTop = THREE.MathUtils.clamp(
-      bodyTopOffsetMm ?? resolvedSilverBandBottom ?? fallbackBodyTop,
-      resolvedSilverBandBottom,
+    const resolvedPrintableTop = THREE.MathUtils.clamp(
+      printableTopOffsetMm,
+      0,
       overallHeightMm,
     );
-    const resolvedBodyBottom = THREE.MathUtils.clamp(
-      resolvedBodyTop + (bodyHeightMm ?? fallbackBodyHeight),
-      resolvedBodyTop + 1,
+    const resolvedPrintableBottom = THREE.MathUtils.clamp(
+      resolvedPrintableTop + fallbackBodyHeight,
+      resolvedPrintableTop + 1,
       overallHeightMm,
     );
 
     const mmToLocalY = (mmFromTop: number) =>
       rimAnalysis.topY - (mmFromTop / (scaleFactorY > 0 ? scaleFactorY : 1));
     const expandedRadius = bodyRadiusLocal + 0.32;
-    const bodyCenterY = (mmToLocalY(resolvedBodyTop) + mmToLocalY(resolvedBodyBottom)) / 2;
-    const bodyHeightLocal = (resolvedBodyBottom - resolvedBodyTop) / (scaleFactorY > 0 ? scaleFactorY : 1);
+    const bodyCenterY = (mmToLocalY(resolvedPrintableTop) + mmToLocalY(resolvedPrintableBottom)) / 2;
+    const bodyHeightLocal = (resolvedPrintableBottom - resolvedPrintableTop) / (scaleFactorY > 0 ? scaleFactorY : 1);
     const silverCenterY = (mmToLocalY(resolvedLidSeam) + mmToLocalY(resolvedSilverBandBottom)) / 2;
     const silverHeightLocal =
       (resolvedSilverBandBottom - resolvedLidSeam) / (scaleFactorY > 0 ? scaleFactorY : 1);
@@ -527,13 +579,67 @@ export function YetiRambler40oz({
     overallHeightMm,
     printableTopOffsetMm,
     printHeightMm,
-    bodyTopOffsetMm,
-    bodyHeightMm,
+    upstreamSilverBandLayer,
     lidSeamFromOverallMm,
     silverBandBottomFromOverallMm,
     rimAnalysis.topY,
     scaleFactorY,
     bodyRadiusLocal,
+  ]);
+
+  const frontLogoConfig = useMemo(() => {
+    if (!upstreamFrontLogoLayer || overallHeightMm <= 0) return null;
+    const safeScaleY = scaleFactorY > 0 ? scaleFactorY : 1;
+    const safeScaleXz = scaleFactorXz > 0 ? scaleFactorXz : 1;
+    const centerYMm = THREE.MathUtils.clamp(
+      isFiniteNumber(upstreamFrontLogoLayer.centerYMm)
+        ? upstreamFrontLogoLayer.centerYMm
+        : printableTopOffsetMm + printHeightMm * 0.28,
+      0,
+      overallHeightMm,
+    );
+    const widthMm = THREE.MathUtils.clamp(
+      isFiniteNumber(upstreamFrontLogoLayer.widthMm)
+        ? upstreamFrontLogoLayer.widthMm
+        : 32,
+      8,
+      Math.max(8, computedWrapWidthMm * 0.22),
+    );
+    const heightMm = THREE.MathUtils.clamp(
+      isFiniteNumber(upstreamFrontLogoLayer.heightMm)
+        ? upstreamFrontLogoLayer.heightMm
+        : 12,
+      4,
+      Math.max(4, printHeightMm * 0.18),
+    );
+    const angleRad = frontRotation + THREE.MathUtils.degToRad(upstreamFrontLogoLayer.angleDeg ?? 0);
+    const radiusLocal = bodyRadiusLocal + 0.42;
+    const widthLocal = widthMm / safeScaleXz;
+    const heightLocal = heightMm / safeScaleY;
+
+    return {
+      label: upstreamFrontLogoLayer.label,
+      position: [
+        Math.sin(angleRad) * radiusLocal,
+        rimAnalysis.topY - centerYMm / safeScaleY,
+        Math.cos(angleRad) * radiusLocal,
+      ] as [number, number, number],
+      rotationY: angleRad,
+      widthLocal,
+      heightLocal,
+      fontSizeLocal: Math.max(1.6, Math.min(heightLocal * 0.46, widthLocal * 0.16)),
+    };
+  }, [
+    bodyRadiusLocal,
+    computedWrapWidthMm,
+    frontRotation,
+    overallHeightMm,
+    printHeightMm,
+    printableTopOffsetMm,
+    rimAnalysis.topY,
+    scaleFactorXz,
+    scaleFactorY,
+    upstreamFrontLogoLayer,
   ]);
 
   return (
@@ -571,6 +677,12 @@ export function YetiRambler40oz({
           <mesh
             position={[0, overlayZoneConfig.bodyCenterY, 0]}
             renderOrder={4}
+            name="upstream_engravable_surface_reference"
+            userData={{
+              bodyContractIgnore: true,
+              appearanceReferenceLayer: true,
+              referenceOnly: true,
+            }}
           >
             <cylinderGeometry
               args={[
@@ -595,6 +707,12 @@ export function YetiRambler40oz({
           <mesh
             position={[0, overlayZoneConfig.silverCenterY, 0]}
             renderOrder={5}
+            name="upstream_silver_ring_reference"
+            userData={{
+              bodyContractIgnore: true,
+              appearanceReferenceLayer: true,
+              referenceOnly: true,
+            }}
           >
             <cylinderGeometry
               args={[
@@ -616,6 +734,49 @@ export function YetiRambler40oz({
               polygonOffsetFactor={-6}
             />
           </mesh>
+        </group>
+      )}
+
+      {frontLogoConfig && (
+        <group
+          position={frontLogoConfig.position}
+          rotation={[0, frontLogoConfig.rotationY, 0]}
+          renderOrder={6}
+          name="manufacturer_logo_reference"
+          userData={{
+            bodyContractIgnore: true,
+            appearanceReferenceLayer: true,
+            referenceOnly: true,
+          }}
+        >
+          <mesh renderOrder={6}>
+            <planeGeometry args={[frontLogoConfig.widthLocal, frontLogoConfig.heightLocal]} />
+            <meshBasicMaterial
+              color={rimTintColor}
+              transparent
+              opacity={0.9}
+              depthWrite={false}
+              polygonOffset
+              polygonOffsetFactor={-7}
+            />
+          </mesh>
+          <Text
+            position={[0, 0, 0.03]}
+            renderOrder={7}
+            fontSize={frontLogoConfig.fontSizeLocal}
+            color={bodyTintColor}
+            anchorX="center"
+            anchorY="middle"
+            maxWidth={frontLogoConfig.widthLocal * 0.86}
+            textAlign="center"
+            userData={{
+              bodyContractIgnore: true,
+              appearanceReferenceLayer: true,
+              referenceOnly: true,
+            }}
+          >
+            {frontLogoConfig.label}
+          </Text>
         </group>
       )}
     </group>
