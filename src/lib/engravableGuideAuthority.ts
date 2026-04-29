@@ -105,6 +105,8 @@ export function resolveEngravableZoneGuideAuthority(args: {
   bodyTopFromOverallMm: number;
   bodyBottomFromOverallMm: number;
   acceptedBodyReferenceAvailable?: boolean;
+  lookupFullProductHeightMm?: number | null;
+  lookupBodyHeightMm?: number | null;
   printableTopOverrideMm?: number | null;
   printableBottomOverrideMm?: number | null;
   savedSilverBandBottomFromOverallMm?: number | null;
