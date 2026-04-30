@@ -70,6 +70,28 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
+function formatGuideSourceLabel(source: string | null | undefined): string {
+  switch (source) {
+    case "detected-lower-silver-seam":
+    case "detected-silver-band-bottom":
+      return "upstream appearance/surface authority";
+    case "saved-printable-surface-contract":
+      return "saved printable surface contract";
+    case "accepted-body-reference":
+      return "accepted BODY REFERENCE";
+    case "manual-override":
+      return "manual override";
+    case "legacy-diameter-frame":
+      return "legacy diameter frame";
+    default:
+      return source ?? "unknown";
+  }
+}
+
+function formatOverrideLabel(active: boolean): string {
+  return active ? "active - stored as full-product coordinates" : "inactive";
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -443,6 +465,10 @@ export function EngravableZoneEditor({
     typeof silverRingIndicatorMm === "number" && Number.isFinite(silverRingIndicatorMm)
       ? clamp(silverRingIndicatorMm * pxPerMm, 0, CANVAS_HEIGHT)
       : null;
+  const topGuideSourceLabel = formatGuideSourceLabel(topGuideSource);
+  const bottomGuideSourceLabel = formatGuideSourceLabel(bottomGuideSource);
+  const topOverrideLabel = formatOverrideLabel(Boolean(manualTopOverrideActive));
+  const bottomOverrideLabel = formatOverrideLabel(Boolean(manualBottomOverrideActive));
   const frontLogoLayer = appearanceReferenceLayers?.find(
     (layer): layer is BrandLogoReference =>
       layer.kind === "front-brand-logo" && layer.visibility === "visible",
@@ -639,11 +665,12 @@ export function EngravableZoneEditor({
             <div
               className={styles.silverRingIndicator}
               style={{ top: readOnlySilverRingPx, left: bodyLeftPx, width: bodyWidthPx }}
-              data-guide-source="detected-lower-silver-seam"
+              data-guide-source={topGuideSource ?? "unknown"}
+              data-appearance-reference="top-finish-band"
               aria-hidden
             >
               <span className={styles.silverRingIndicatorLabel}>
-                Silver seam: {round1(silverRingIndicatorMm ?? 0)} mm from {bodyOnlyScaleMode ? "body top" : "product top"}
+                Silver ring / top engrave guide - {topGuideSourceLabel}
               </span>
             </div>
           )}
@@ -675,7 +702,7 @@ export function EngravableZoneEditor({
             onPointerDown={handlePointerDown("top")}
           >
             <span className={styles.dragLineLabel}>
-              Top: {round1(topMarginMm)} mm
+              Silver ring / top guide: {round1(topMarginMm)} mm
             </span>
           </div>
 
@@ -690,7 +717,7 @@ export function EngravableZoneEditor({
             onPointerDown={handlePointerDown("bottom")}
           >
             <span className={styles.dragLineLabel}>
-              Bottom: {round1(bottomMarginMm)} mm
+              Safe rounded-base bottom guide: {round1(bottomMarginMm)} mm
             </span>
           </div>
         </div>
@@ -723,25 +750,36 @@ export function EngravableZoneEditor({
             <span className={styles.readoutValue}>{round1(Math.PI * diameterMm)} mm</span>
           </div>
           <div className={styles.readoutHint}>
-            BODY REFERENCE stays the body scale source. The green lines are engravable guide boundaries.
+            BODY REFERENCE stays the body scale source. The green lines are draggable engravable guides; silver ring and logo overlays are reference-only.
           </div>
           <div className={styles.readoutRow}>
             <span className={styles.readoutLabel}>Body scale source</span>
             <span className={styles.readoutValue}>{bodyScaleSource ?? mappedGuideFrame?.guideSource ?? "legacy"}</span>
           </div>
           <div className={styles.readoutRow}>
-            <span className={styles.readoutLabel}>Top engrave guide</span>
-            <span className={styles.readoutValue}>{topGuideSource ?? "unknown"}</span>
+            <span className={styles.readoutLabel}>Silver ring / top engrave guide</span>
+            <span className={styles.readoutValue}>{topGuideSourceLabel}</span>
           </div>
           <div className={styles.readoutRow}>
-            <span className={styles.readoutLabel}>Bottom engrave guide</span>
-            <span className={styles.readoutValue}>{bottomGuideSource ?? "unknown"}</span>
+            <span className={styles.readoutLabel}>Safe rounded-base bottom guide</span>
+            <span className={styles.readoutValue}>{bottomGuideSourceLabel}</span>
           </div>
           <div className={styles.readoutRow}>
-            <span className={styles.readoutLabel}>Manual override</span>
+            <span className={styles.readoutLabel}>Top manual override</span>
+            <span className={styles.readoutValue}>{topOverrideLabel}</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Bottom manual override</span>
+            <span className={styles.readoutValue}>{bottomOverrideLabel}</span>
+          </div>
+          <div className={styles.readoutRow}>
+            <span className={styles.readoutLabel}>Override state</span>
             <span className={styles.readoutValue}>
               {manualTopOverrideActive || manualBottomOverrideActive ? "active" : "inactive"}
             </span>
+          </div>
+          <div className={styles.readoutHint}>
+            Bottom guide is raised to avoid the bowl/rounded base unless manually overridden. Manual overrides still store full-product coordinates upstream.
           </div>
           {mappedGuideFrame?.warnings.length ? (
             <div className={styles.readoutHint}>

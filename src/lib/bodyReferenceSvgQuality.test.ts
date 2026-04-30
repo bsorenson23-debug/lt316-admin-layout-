@@ -6,6 +6,8 @@ import {
   buildBodyReferenceSvgQualityReport,
   buildBodyReferenceSvgQualityReportFromOutline,
   buildBodyReferenceSvgQualityVisualization,
+  summarizeBodyReferenceSvgCutoutLineageForOperator,
+  summarizeBodyReferenceSvgQualityForOperator,
   summarizeBodyReferenceSvgCutoutLineage,
 } from "./bodyReferenceSvgQuality.ts";
 import {
@@ -624,6 +626,12 @@ test("cutout lineage keeps corrected drafts non-authoritative until accepted", (
   assert.equal(lineage.requiresReviewedGlbRegeneration, false);
   assert.equal(lineage.blocksReviewedGlbGeneration, true);
   assert.match(lineage.warnings.join(" "), /pending acceptance/i);
+
+  const operatorSummary = summarizeBodyReferenceSvgCutoutLineageForOperator(lineage);
+  assert.equal(operatorSummary.stateLabel, "Corrected draft pending");
+  assert.match(operatorSummary.acceptedSourceLabel, /Accepted source remains authoritative/i);
+  assert.match(operatorSummary.correctedDraftLabel, /not authoritative/i);
+  assert.match(operatorSummary.nextActionLabel, /Accept corrected cutout/i);
 });
 
 test("cutout lineage requires regeneration after accepted source hash changes", () => {
@@ -641,6 +649,11 @@ test("cutout lineage requires regeneration after accepted source hash changes", 
   assert.equal(lineage.requiresReviewedGlbRegeneration, true);
   assert.equal(lineage.blocksReviewedGlbGeneration, false);
   assert.match(lineage.warnings.join(" "), /newer than the reviewed BODY CUTOUT QA GLB/i);
+
+  const operatorSummary = summarizeBodyReferenceSvgCutoutLineageForOperator(lineage);
+  assert.equal(operatorSummary.stateLabel, "Reviewed GLB stale");
+  assert.match(operatorSummary.reviewedGlbLabel, /stale/i);
+  assert.match(operatorSummary.nextActionLabel, /Regenerate BODY CUTOUT QA GLB/i);
 });
 
 test("cutout lineage blocks generation when accepted SVG quality fails", () => {
@@ -655,6 +668,20 @@ test("cutout lineage blocks generation when accepted SVG quality fails", () => {
   assert.equal(lineage.requiresReviewedGlbRegeneration, false);
   assert.equal(lineage.blocksReviewedGlbGeneration, true);
   assert.match(lineage.errors.join(" "), /quality is failing/i);
+
+  const operatorSummary = summarizeBodyReferenceSvgQualityForOperator(
+    buildBodyReferenceSvgQualityReport({
+      points: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+      ],
+      closed: false,
+    }),
+  );
+  assert.equal(operatorSummary.statusLabel, "FAIL");
+  assert.equal(operatorSummary.generationBlocked, true);
+  assert.match(operatorSummary.generationBlockedReason ?? "", /blocked/i);
+  assert.ok(operatorSummary.reasonLabels.some((label) => /fewer than 3 usable points/i.test(label)));
 });
 
 test("cutout lineage reports fresh reviewed GLB when accepted source hash matches", () => {

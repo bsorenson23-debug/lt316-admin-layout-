@@ -101,7 +101,8 @@
 .silverRingIndicator {
   position: absolute;
   height: 0;
-  border-top: 1px dashed color-mix(in srgb, var(--accent) 82%, var(--warning) 18%);
+  border-top: 2px solid color-mix(in srgb, var(--text-primary) 72%, var(--warning) 28%);
+  filter: drop-shadow(0 0 3px var(--bg-base)) drop-shadow(0 0 5px var(--bg-elevated));
   z-index: 4;
   pointer-events: none;
 }
@@ -109,22 +110,29 @@
 .silverRingIndicatorLabel {
   position: absolute;
   left: 4px;
-  top: -14px;
+  top: -18px;
+  max-width: calc(100% - 8px);
+  overflow: hidden;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 28%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   font-size: 9px;
   font-family: monospace;
-  color: color-mix(in srgb, var(--accent) 82%, var(--warning) 18%);
+  color: color-mix(in srgb, var(--text-primary) 88%, var(--warning) 12%);
+  text-overflow: ellipsis;
   white-space: nowrap;
   text-shadow: 0 0 4px var(--bg-base), 0 0 8px var(--bg-base);
 }
 
 .logoReferenceIndicator {
   position: absolute;
-  z-index: 3;
+  z-index: 2;
   display: grid;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--text-primary) 64%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-elevated) 68%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 42%, transparent);
   pointer-events: none;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg-base) 52%, transparent);
 }
@@ -148,7 +156,7 @@
   position: absolute;
   height: 3px;
   background: var(--success);
-  z-index: 4;
+  z-index: 6;
   cursor: ns-resize;
   transform: translateY(-1px);
   transition: background 100ms;
@@ -176,10 +184,16 @@
 .dragLineLabel {
   position: absolute;
   right: 4px;
-  top: -16px;
+  top: -18px;
+  max-width: calc(100% - 8px);
+  overflow: hidden;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   font-size: 9px;
   font-family: monospace;
   color: var(--success);
+  text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
   text-shadow: 0 0 4px var(--bg-base), 0 0 8px var(--bg-base);
@@ -187,7 +201,7 @@
 
 .dragLineBottom .dragLineLabel {
   top: auto;
-  bottom: -16px;
+  bottom: -18px;
 }
 
 .dragLineActive .dragLineLabel,
