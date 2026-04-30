@@ -6,6 +6,7 @@ import {
   buildBodyReferenceSvgQualityReport,
   buildBodyReferenceSvgQualityReportFromOutline,
   buildBodyReferenceSvgQualityVisualization,
+  summarizeBodyReferenceSvgCutoutLineage,
 } from "./bodyReferenceSvgQuality.ts";
 import {
   nudgeOutlinePoint,
@@ -65,6 +66,9 @@ test("clean closed contour passes", () => {
   });
 
   assert.equal(report.status, "pass");
+  assert.equal(report.appearsBodyOnly, true);
+  assert.equal(report.bodyOnlyConfidence, "high");
+  assert.deepEqual(report.bodyOnlyReasonCodes, []);
   assert.equal(report.pointCount, 4);
   assert.equal(report.segmentCount, 4);
   assert.equal(report.closed, true);
@@ -84,6 +88,9 @@ test("missing contour fails", () => {
   const report = buildBodyReferenceSvgQualityReport({});
 
   assert.equal(report.status, "fail");
+  assert.equal(report.appearsBodyOnly, false);
+  assert.equal(report.bodyOnlyConfidence, "low");
+  assert.ok(report.bodyOnlyReasonCodes?.includes("quality-failed"));
   assert.match(report.errors.join(" "), /Approved contour is missing/i);
 });
 
@@ -136,7 +143,8 @@ test("near-duplicate points warn", () => {
     points: [
       { x: 0, y: 0 },
       { x: 100, y: 0 },
-      { x: 100.01, y: 0.01 },
+      { x: 100, y: 110 },
+      { x: 100.01, y: 110.01 },
       { x: 100, y: 220 },
       { x: 0, y: 220 },
     ],
@@ -144,6 +152,9 @@ test("near-duplicate points warn", () => {
   });
 
   assert.equal(report.status, "warn");
+  assert.equal(report.appearsBodyOnly, false);
+  assert.equal(report.bodyOnlyConfidence, "low");
+  assert.ok(report.bodyOnlyReasonCodes?.includes("near-duplicate-points"));
   assert.equal(report.nearDuplicatePointCount, 1);
   assert.match(report.warnings.join(" "), /near-duplicate adjacent point pair/i);
 });
@@ -178,6 +189,9 @@ test("suspicious jump warns", () => {
   });
 
   assert.equal(report.status, "warn");
+  assert.equal(report.appearsBodyOnly, false);
+  assert.equal(report.bodyOnlyConfidence, "low");
+  assert.ok(report.bodyOnlyReasonCodes?.includes("suspicious-jump"));
   assert.ok(report.suspiciousJumpCount >= 1);
   assert.equal(report.expectedBridgeSegmentCount, 0);
   assert.match(report.warnings.join(" "), /suspicious large jump/i);
@@ -215,6 +229,8 @@ test("closed full-body silhouette bridges are excluded from suspicious jump warn
   });
 
   assert.equal(report.status, "pass");
+  assert.equal(report.appearsBodyOnly, true);
+  assert.equal(report.bodyOnlyConfidence, "high");
   assert.equal(report.suspiciousJumpCount, 0);
   assert.equal(report.expectedBridgeSegmentCount, 2);
   assert.doesNotMatch(report.warnings.join(" "), /suspicious large jump/i);
@@ -480,6 +496,9 @@ test("open contour warns but does not fail when the shape is otherwise usable", 
 
   assert.equal(report.status, "warn");
   assert.equal(report.closed, false);
+  assert.equal(report.appearsBodyOnly, false);
+  assert.equal(report.bodyOnlyConfidence, "low");
+  assert.ok(report.bodyOnlyReasonCodes?.includes("open-contour"));
   assert.match(report.warnings.join(" "), /Contour is open/i);
 });
 
@@ -586,4 +605,70 @@ test("outline helper rebuilds manual body-only contours from saved points when c
   assert.ok(report.bounds);
   assert.equal(report.bounds.maxX, 54);
   assert.equal(report.bounds.minX, -54);
+});
+
+test("cutout lineage keeps corrected drafts non-authoritative until accepted", () => {
+  const lineage = summarizeBodyReferenceSvgCutoutLineage({
+    hasAcceptedCutout: true,
+    hasReviewedGlb: true,
+    acceptedSourceHash: "accepted-source",
+    correctedDraftSourceHash: "corrected-draft-source",
+    reviewedGlbSourceHash: "accepted-source",
+    svgQualityStatus: "pass",
+  });
+
+  assert.equal(lineage.status, "draft-pending");
+  assert.equal(lineage.acceptedCutoutAuthoritative, true);
+  assert.equal(lineage.correctedDraftAuthoritative, false);
+  assert.equal(lineage.hasPendingCorrectedDraft, true);
+  assert.equal(lineage.requiresReviewedGlbRegeneration, false);
+  assert.equal(lineage.blocksReviewedGlbGeneration, true);
+  assert.match(lineage.warnings.join(" "), /pending acceptance/i);
+});
+
+test("cutout lineage requires regeneration after accepted source hash changes", () => {
+  const lineage = summarizeBodyReferenceSvgCutoutLineage({
+    hasAcceptedCutout: true,
+    hasReviewedGlb: true,
+    acceptedSourceHash: "accepted-source-v2",
+    reviewedGlbSourceHash: "accepted-source-v1",
+    svgQualityStatus: "pass",
+  });
+
+  assert.equal(lineage.status, "reviewed-glb-stale");
+  assert.equal(lineage.acceptedCutoutAuthoritative, true);
+  assert.equal(lineage.hasPendingCorrectedDraft, false);
+  assert.equal(lineage.requiresReviewedGlbRegeneration, true);
+  assert.equal(lineage.blocksReviewedGlbGeneration, false);
+  assert.match(lineage.warnings.join(" "), /newer than the reviewed BODY CUTOUT QA GLB/i);
+});
+
+test("cutout lineage blocks generation when accepted SVG quality fails", () => {
+  const lineage = summarizeBodyReferenceSvgCutoutLineage({
+    hasAcceptedCutout: true,
+    hasReviewedGlb: false,
+    acceptedSourceHash: "accepted-source",
+    svgQualityStatus: "fail",
+  });
+
+  assert.equal(lineage.status, "quality-failed");
+  assert.equal(lineage.requiresReviewedGlbRegeneration, false);
+  assert.equal(lineage.blocksReviewedGlbGeneration, true);
+  assert.match(lineage.errors.join(" "), /quality is failing/i);
+});
+
+test("cutout lineage reports fresh reviewed GLB when accepted source hash matches", () => {
+  const lineage = summarizeBodyReferenceSvgCutoutLineage({
+    hasAcceptedCutout: true,
+    hasReviewedGlb: true,
+    acceptedSourceHash: "accepted-source",
+    reviewedGlbSourceHash: "accepted-source",
+    svgQualityStatus: "pass",
+  });
+
+  assert.equal(lineage.status, "reviewed-glb-current");
+  assert.equal(lineage.requiresReviewedGlbRegeneration, false);
+  assert.equal(lineage.blocksReviewedGlbGeneration, false);
+  assert.deepEqual(lineage.warnings, []);
+  assert.deepEqual(lineage.errors, []);
 });

@@ -339,6 +339,44 @@ test("BODY REFERENCE GLB source signature ignores unrelated caller state", () =>
   );
 });
 
+test("BODY REFERENCE GLB source signature ignores product appearance reference layers", () => {
+  assert.equal(
+    signature(),
+    signature({
+      appearanceReferenceLayers: [
+        {
+          id: "upstream-silver-ring",
+          kind: "top-finish-band",
+          label: "Upstream silver ring",
+          referenceOnly: true,
+          includedInBodyCutoutQa: false,
+          visibility: "visible",
+          materialToken: "silver-finish",
+          source: "lookup",
+          yMm: 12,
+          heightMm: 5,
+          bodyRelative: "top",
+        },
+        {
+          id: "factory-logo",
+          kind: "front-brand-logo",
+          label: "Factory logo",
+          referenceOnly: true,
+          includedInBodyCutoutQa: false,
+          visibility: "visible",
+          materialToken: "factory-logo",
+          source: "lookup",
+          centerXMm: 0,
+          centerYMm: 72,
+          widthMm: 18,
+          heightMm: 8,
+          angleDeg: 0,
+        },
+      ],
+    } as Partial<Parameters<typeof buildBodyReferenceGlbSourceSignature>[0]>),
+  );
+});
+
 test("reviewed BODY REFERENCE GLB input requires approved outline and canonical calibration", () => {
   assert.equal(
     resolveReviewedBodyReferenceGlbInput({
