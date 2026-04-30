@@ -4949,6 +4949,7 @@ export function TemplateCreateForm({
                   fitDebug={lookupResult?.fitDebug ?? null}
                   svgQualityReport={activeBodyReferenceSvgQuality}
                   interactive={bodyReferenceFineTuneModeEnabled}
+                  debugMode={templateCreateDiagnosticsVisible}
                   canUndo={bodyReferenceFineTuneUndoStack.length > 0}
                   onUndo={handleUndoBodyReferenceFineTuneEdit}
                   onEditAction={handleBodyReferenceFineTuneEditStart}

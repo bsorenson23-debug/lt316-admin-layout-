@@ -45,6 +45,7 @@ type Props = {
   detectedOutline?: EditableBodyOutline | null;
   overallHeightMm?: number | null;
   interactive?: boolean;
+  debugMode?: boolean;
   sourceImageUrl?: string | null;
   fitDebug?: TumblerItemLookupFitDebug | null;
   svgQualityReport?: BodyReferenceSvgQualityReport | null;
@@ -286,6 +287,7 @@ export function BodyReferenceFineTuneEditor({
   detectedOutline = null,
   overallHeightMm = null,
   interactive = false,
+  debugMode = false,
   sourceImageUrl = null,
   fitDebug = null,
   svgQualityReport = null,
@@ -310,7 +312,13 @@ export function BodyReferenceFineTuneEditor({
     bridgeGuides: true,
     qualityWarnings: true,
   });
-  const [guideOverlayVisible, setGuideOverlayVisible] = React.useState(true);
+  const [guideOverlayVisible, setGuideOverlayVisible] = React.useState(() => debugMode);
+
+  React.useEffect(() => {
+    if (debugMode) {
+      setGuideOverlayVisible(true);
+    }
+  }, [debugMode]);
 
   const sourceImagePlacement = React.useMemo(
     () => buildSourceImagePlacement(outline),
@@ -341,11 +349,6 @@ export function BodyReferenceFineTuneEditor({
     () => resolvePrimaryBodyReferenceVisualContour(detectedOutline),
     [detectedOutline],
   );
-  const draftVisualContour = React.useMemo(
-    () => resolvePrimaryBodyReferenceVisualContour(outline),
-    [outline],
-  );
-  const activeVisualContour = draftVisualContour ?? approvedVisualContour ?? detectedVisualContour;
   const approvedPath = React.useMemo(
     () => buildPrimaryVisualPath(approvedVisualContour),
     [approvedVisualContour],
@@ -355,24 +358,8 @@ export function BodyReferenceFineTuneEditor({
     [detectedVisualContour],
   );
   const draftPath = React.useMemo(
-    () => buildPrimaryVisualPath(draftVisualContour),
-    [draftVisualContour],
-  );
-  const controlOutlinePath = React.useMemo(
     () => buildOutlinePath(outline),
     [outline],
-  );
-  const draftMatchesApproved = React.useMemo(
-    () => (
-      Boolean(outline && approvedOutline) &&
-      buildOutlineGeometrySignature(outline) === buildOutlineGeometrySignature(approvedOutline)
-    ),
-    [approvedOutline, outline],
-  );
-  const shouldShowDraftPath = Boolean(
-    overlayState.draftContour &&
-    draftPath &&
-    (interactive || !approvedPath || !draftMatchesApproved),
   );
   const sortedPoints = React.useMemo(
     () => sortEditableOutlinePoints(outline?.points ?? []),
@@ -424,6 +411,16 @@ export function BodyReferenceFineTuneEditor({
     )).length,
     [guideCandidateReport.candidates],
   );
+  const showUiOnlyGuides = guideOverlayVisible;
+  const showSourceImage = overlayState.sourceImage && Boolean(sourceImageUrl && sourceImagePlacement);
+  const showBodyBounds = showUiOnlyGuides && overlayState.bodyBounds && Boolean(outlineBounds);
+  const showRimReferenceGuide = showUiOnlyGuides && Boolean(uiOnlyRimReferenceGuide && outlineBounds);
+  const showGuideCandidateOverlay = showUiOnlyGuides && guideCandidateReport.candidates.length > 0;
+  const showDetectedContour = showUiOnlyGuides && overlayState.detectedContour && Boolean(detectedPath);
+  const showDraftContour = showUiOnlyGuides && overlayState.draftContour && Boolean(draftPath);
+  const showBridgeGuides = showUiOnlyGuides && overlayState.bridgeGuides;
+  const showQualityWarnings = showUiOnlyGuides && overlayState.qualityWarnings;
+  const showEditablePoints = interactive && overlayState.points;
 
   React.useEffect(() => {
     if (!sourceImageUrl || !sourceImagePlacement) {
@@ -687,7 +684,7 @@ export function BodyReferenceFineTuneEditor({
             className={styles.statusValue}
             data-testid="body-reference-primary-outline-source"
           >
-            {activeVisualContour?.source ?? "unavailable"}
+            {approvedVisualContour?.source ?? "unavailable"}
           </span>
         </div>
         <div className={styles.statusCard}>
@@ -744,7 +741,7 @@ export function BodyReferenceFineTuneEditor({
             className={styles.guidesNote}
             data-testid="body-reference-guides-ui-only-note"
           >
-            UI-only guide overlay. Does not affect approved SVG or BODY CUTOUT QA GLB.
+            UI-only guides are hidden by default. They help debug bridge segments and symmetry, but they are not exported, not saved as the approved cutout, and not used for BODY CUTOUT QA GLB generation.
           </span>
         </div>
         <div
@@ -764,7 +761,7 @@ export function BodyReferenceFineTuneEditor({
         )}
       </div>
 
-      {overlayState.qualityWarnings && qualityMessages.length > 0 && (
+      {showQualityWarnings && qualityMessages.length > 0 && (
         <div className={styles.warningList}>
           {qualityMessages.map((warning) => (
             <div
@@ -791,7 +788,7 @@ export function BodyReferenceFineTuneEditor({
           focusEditor();
         }}
       >
-        {overlayState.sourceImage && sourceImageUrl && sourceImagePlacement && (
+        {showSourceImage && sourceImageUrl && sourceImagePlacement && (
           <image
             href={sourceImageUrl}
             x={sourceImagePlacement.x}
@@ -803,7 +800,7 @@ export function BodyReferenceFineTuneEditor({
           />
         )}
 
-        {overlayState.bodyBounds && outlineBounds && (
+        {showBodyBounds && outlineBounds && (
           <>
             <rect
               x={outlineBounds.minX}
@@ -833,15 +830,17 @@ export function BodyReferenceFineTuneEditor({
           </>
         )}
 
-        <line
-          x1={0}
-          y1={viewBox.minY}
-          x2={0}
-          y2={viewBox.minY + viewBox.height}
-          className={styles.centerLine}
-        />
+        {showUiOnlyGuides && (
+          <line
+            x1={0}
+            y1={viewBox.minY}
+            x2={0}
+            y2={viewBox.minY + viewBox.height}
+            className={styles.centerLine}
+          />
+        )}
 
-        {uiOnlyRimReferenceGuide && outlineBounds && (
+        {showRimReferenceGuide && uiOnlyRimReferenceGuide && outlineBounds && (
           <line
             x1={outlineBounds.minX}
             y1={uiOnlyRimReferenceGuide.y}
@@ -861,7 +860,7 @@ export function BodyReferenceFineTuneEditor({
           />
         )}
 
-        {guideOverlayVisible && guideCandidateReport.candidates.length > 0 && (
+        {showGuideCandidateOverlay && (
           <g
             className={styles.guideOverlay}
             data-testid="body-reference-guide-overlay"
@@ -871,29 +870,18 @@ export function BodyReferenceFineTuneEditor({
           </g>
         )}
 
-        {overlayState.detectedContour && detectedPath && (
+        {showDetectedContour && detectedPath && (
           <path d={detectedPath} className={styles.detectedPath} />
         )}
-        {overlayState.approvedContour && approvedPath && (
+        {showDraftContour && draftPath && (
           <path
-            d={approvedPath}
-            className={styles.approvedPath}
-            data-testid="body-reference-approved-primary-outline"
-            data-outline-source={approvedVisualContour?.source ?? "unknown"}
-            data-top-guide-y={approvedVisualContour?.topGuideY ?? ""}
-          />
-        )}
-        {shouldShowDraftPath && (
-          <path
-            d={draftPath!}
+            d={draftPath}
             className={styles.draftPath}
-            data-testid="body-reference-draft-svg-cutout-outline"
-            data-outline-source={draftVisualContour?.source ?? "unknown"}
-            data-top-guide-y={draftVisualContour?.topGuideY ?? ""}
+            data-testid="body-reference-secondary-control-outline"
           />
         )}
 
-        {overlayState.bridgeGuides && qualityVisualization.expectedBridgeSegments.map((segment) => (
+        {showBridgeGuides && qualityVisualization.expectedBridgeSegments.map((segment) => (
           <line
             key={`bridge:${segment.segmentIndex}`}
             x1={segment.from.x}
@@ -904,7 +892,7 @@ export function BodyReferenceFineTuneEditor({
           />
         ))}
 
-        {overlayState.qualityWarnings && qualityVisualization.suspiciousJumpSegments.map((segment) => (
+        {showQualityWarnings && qualityVisualization.suspiciousJumpSegments.map((segment) => (
           <line
             key={`warning:${segment.segmentIndex}`}
             x1={segment.from.x}
@@ -915,16 +903,17 @@ export function BodyReferenceFineTuneEditor({
           />
         ))}
 
-        {overlayState.points && controlOutlinePath && (
+        {overlayState.approvedContour && approvedPath && (
           <path
-            d={controlOutlinePath}
-            className={styles.controlPath}
-            data-testid="body-reference-secondary-control-outline"
-            aria-hidden="true"
+            d={approvedPath}
+            className={styles.approvedPath}
+            data-testid="body-reference-approved-primary-outline"
+            data-outline-source={approvedVisualContour?.source ?? "unknown"}
+            data-top-guide-y={approvedVisualContour?.topGuideY ?? ""}
           />
         )}
 
-        {overlayState.points && sortedPoints.slice(0, -1).map((point, index) => {
+        {showEditablePoints && sortedPoints.slice(0, -1).map((point, index) => {
           const nextPoint = sortedPoints[index + 1];
           if (!nextPoint) return null;
           const isSelected = selectedSegmentIndex === index;
@@ -946,7 +935,7 @@ export function BodyReferenceFineTuneEditor({
           );
         })}
 
-        {overlayState.points && sortedPoints.map((point) => (
+        {showEditablePoints && sortedPoints.map((point) => (
           <circle
             key={`mirror:${point.id}`}
             cx={-point.x}
@@ -956,7 +945,7 @@ export function BodyReferenceFineTuneEditor({
           />
         ))}
 
-        {overlayState.points && sortedPoints.map((point, index) => {
+        {showEditablePoints && sortedPoints.map((point, index) => {
           const isSelected = point.id === selectedPointId;
           return (
             <circle

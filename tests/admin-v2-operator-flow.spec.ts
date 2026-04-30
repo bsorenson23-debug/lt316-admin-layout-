@@ -235,6 +235,19 @@ test("normal operator mode keeps diagnostics out of the default path", async ({ 
   await waitForLocatorEnabled(acceptV1Button, 120_000);
   await acceptV1Button.click();
   await expect(acceptV1Button).toContainText("BODY REFERENCE (v1) locked", { timeout: 60_000 });
+  await expect(page.getByTestId("body-reference-guides-panel")).toBeVisible();
+  await expect(page.getByTestId("body-reference-guides-toggle")).toContainText("Show UI-only guides");
+  await expect(page.getByTestId("body-reference-guides-ui-only-note")).toContainText(
+    "UI-only guides are hidden by default",
+  );
+  await expect(page.getByTestId("body-reference-approved-primary-outline")).toHaveCount(1);
+  await expect(page.getByTestId("body-reference-guide-overlay")).toBeHidden();
+  await expect(page.getByTestId("body-reference-guide-centerline")).toHaveCount(0);
+  await page.getByTestId("body-reference-guides-toggle").click();
+  await expect(page.getByTestId("body-reference-guide-overlay")).toBeVisible();
+  await expect(page.getByTestId("body-reference-guide-centerline")).toHaveCount(1);
+  await page.getByTestId("body-reference-guides-toggle").click();
+  await expect(page.getByTestId("body-reference-guide-overlay")).toBeHidden();
 
   const generateV1Button = page.getByTestId("body-reference-v1-generate");
   const generatedPayload = await clickAndReadJsonResponse<GeneratedBodyReferenceResponse>(
@@ -347,7 +360,7 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     await expect(page.getByTestId("body-reference-guides-panel")).toBeVisible();
     await expect(page.getByTestId("body-reference-guides-panel")).toContainText("UI-only guide overlay");
     await expect(page.getByTestId("body-reference-guides-ui-only-note")).toContainText(
-      "Does not affect approved SVG or BODY CUTOUT QA GLB",
+      "not used for BODY CUTOUT QA GLB generation",
     );
     await expect(page.getByTestId("body-reference-guides-source-hash-note")).toContainText(
       "excluded from source hash, GLB input, WRAP / EXPORT, and v2 authority",
