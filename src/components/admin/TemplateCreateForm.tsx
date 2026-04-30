@@ -4773,9 +4773,21 @@ export function TemplateCreateForm({
                   </div>
                   <div className={styles.fineTuneLifecycleGrid}>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>GLB freshness</span>
+                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB freshness</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {bodyReferenceFineTuneLifecycle.glbFreshnessLabel}
+                        {bodyReferenceFineTuneLifecycle.label}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Source hash</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {bodyReferenceFineTuneLifecycle.acceptedSourceHashLabel}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {bodyReferenceFineTuneLifecycle.reviewedGlbSourceHashLabel}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
@@ -4799,8 +4811,9 @@ export function TemplateCreateForm({
                 <div className={styles.fineTuneActionConsequences}>
                   <span>Accepted cutout: authoritative BODY CUTOUT QA source.</span>
                   <span>Corrected draft: pending only until accepted.</span>
-                  <span>Accept corrected cutout: replace accepted source and mark reviewed GLB stale.</span>
-                  <span>Reset or discard draft: keep the accepted cutout authoritative.</span>
+                  <span>Accept corrected cutout: Replace accepted cutout and mark reviewed GLB stale.</span>
+                  <span>Reset draft: Reset draft to accepted cutout.</span>
+                  <span>Cancel draft: Discard draft edits and keep the accepted cutout.</span>
                 </div>
 
                 <div className={styles.cutoutFitSummary}>
