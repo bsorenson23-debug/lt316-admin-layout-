@@ -2856,8 +2856,10 @@ export function TemplateCreateForm({
   );
   const bodyReferenceFineTuneStatusLabel = bodyReferenceFineTuneLifecycle.label;
   const activeBodyReferenceSvgQualityOperatorSummary = React.useMemo(
-    () => summarizeBodyReferenceSvgQualityForOperator(activeBodyReferenceSvgQuality),
-    [activeBodyReferenceSvgQuality],
+    () => summarizeBodyReferenceSvgQualityForOperator(activeBodyReferenceSvgQuality, {
+      hasAcceptedCutout: hasAcceptedBodyReferenceReview && Boolean(approvedBodyOutline),
+    }),
+    [activeBodyReferenceSvgQuality, approvedBodyOutline, hasAcceptedBodyReferenceReview],
   );
   const bodyReferenceSvgCutoutLineage = React.useMemo(
     () => summarizeBodyReferenceSvgCutoutLineage({
@@ -2887,7 +2889,7 @@ export function TemplateCreateForm({
   );
   const bodyReferenceFineTuneVisualWarnings = React.useMemo(() => {
     const warnings: Array<{ level: "warn" | "error"; message: string }> = [];
-    if (activeBodyReferenceSvgQuality.status === "fail") {
+    if (hasAcceptedBodyReferenceReview && activeBodyReferenceSvgQuality.status === "fail") {
       warnings.push({
         level: "error",
         message:
@@ -2895,7 +2897,11 @@ export function TemplateCreateForm({
           "Draft contour fails SVG quality and should be corrected before regeneration.",
       });
     }
-    if (activeBodyReferenceSvgQualityOperatorSummary.generationBlocked && activeBodyReferenceSvgQualityOperatorSummary.operatorFixHint) {
+    if (
+      hasAcceptedBodyReferenceReview &&
+      activeBodyReferenceSvgQualityOperatorSummary.generationBlocked &&
+      activeBodyReferenceSvgQualityOperatorSummary.operatorFixHint
+    ) {
       warnings.push({
         level: "error",
         message: activeBodyReferenceSvgQualityOperatorSummary.operatorFixHint,
@@ -2952,6 +2958,7 @@ export function TemplateCreateForm({
     currentReviewedBodyReferenceSourceSignature,
     draftBodyReferenceOutlineBounds,
     draftBodyReferencePointCount,
+    hasAcceptedBodyReferenceReview,
     reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
     reviewedBodyReferenceGlbFreshness.status,
   ]);

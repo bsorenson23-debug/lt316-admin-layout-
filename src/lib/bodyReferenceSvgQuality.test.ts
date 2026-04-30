@@ -634,6 +634,21 @@ test("cutout lineage keeps corrected drafts non-authoritative until accepted", (
   assert.match(operatorSummary.nextActionLabel, /Accept corrected cutout/i);
 });
 
+test("operator summary waits for BODY REFERENCE before assessing missing cutout quality", () => {
+  const missingReport = buildBodyReferenceSvgQualityReport({});
+  const operatorSummary = summarizeBodyReferenceSvgQualityForOperator(missingReport, {
+    hasAcceptedCutout: false,
+  });
+
+  assert.equal(missingReport.status, "fail");
+  assert.equal(operatorSummary.statusLabel, "Waiting for BODY REFERENCE");
+  assert.equal(operatorSummary.statusTone, "unknown");
+  assert.equal(operatorSummary.bodyOnlyConfidenceLabel, "not assessed");
+  assert.equal(operatorSummary.generationBlocked, false);
+  assert.doesNotMatch(operatorSummary.operatorFixHint ?? "", /fine-tune/i);
+  assert.match(operatorSummary.bodyOnlySummary, /accept BODY REFERENCE before SVG cutout quality is assessed/i);
+});
+
 test("cutout lineage requires regeneration after accepted source hash changes", () => {
   const lineage = summarizeBodyReferenceSvgCutoutLineage({
     hasAcceptedCutout: true,
@@ -681,7 +696,43 @@ test("cutout lineage blocks generation when accepted SVG quality fails", () => {
   assert.equal(operatorSummary.statusLabel, "FAIL");
   assert.equal(operatorSummary.generationBlocked, true);
   assert.match(operatorSummary.generationBlockedReason ?? "", /blocked/i);
+  assert.match(operatorSummary.operatorFixHint ?? "", /fine-tune/i);
   assert.ok(operatorSummary.reasonLabels.some((label) => /fewer than 3 usable points/i.test(label)));
+});
+
+test("operator summary preserves pass and warn labels after cutout acceptance", () => {
+  const passSummary = summarizeBodyReferenceSvgQualityForOperator(
+    buildBodyReferenceSvgQualityReport({
+      points: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 220 },
+        { x: 0, y: 220 },
+      ],
+      closed: true,
+    }),
+    { hasAcceptedCutout: true },
+  );
+
+  const warnSummary = summarizeBodyReferenceSvgQualityForOperator(
+    buildBodyReferenceSvgQualityReport({
+      points: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 110 },
+        { x: 100.01, y: 110.01 },
+        { x: 100, y: 220 },
+        { x: 0, y: 220 },
+      ],
+      closed: true,
+    }),
+    { hasAcceptedCutout: true },
+  );
+
+  assert.equal(passSummary.statusLabel, "PASS");
+  assert.equal(passSummary.generationBlocked, false);
+  assert.equal(warnSummary.statusLabel, "WARN");
+  assert.equal(warnSummary.statusTone, "warn");
 });
 
 test("cutout lineage reports fresh reviewed GLB when accepted source hash matches", () => {

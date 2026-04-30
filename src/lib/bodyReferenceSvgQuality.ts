@@ -110,7 +110,7 @@ export interface BodyReferenceSvgQualityVisualization {
 }
 
 export interface BodyReferenceSvgQualityOperatorSummary {
-  statusLabel: "PASS" | "WARN" | "FAIL" | "UNKNOWN";
+  statusLabel: "PASS" | "WARN" | "FAIL" | "UNKNOWN" | "Waiting for BODY REFERENCE";
   statusTone: "pass" | "warn" | "fail" | "unknown";
   bodyOnlyConfidenceLabel: string;
   bodyOnlySummary: string;
@@ -213,7 +213,23 @@ export function formatBodyReferenceSvgQualityReasonCode(code: string): string {
 
 export function summarizeBodyReferenceSvgQualityForOperator(
   report: BodyReferenceSvgQualityReport | null | undefined,
+  options: {
+    hasAcceptedCutout?: boolean;
+  } = {},
 ): BodyReferenceSvgQualityOperatorSummary {
+  if (options.hasAcceptedCutout === false) {
+    return {
+      statusLabel: "Waiting for BODY REFERENCE",
+      statusTone: "unknown",
+      bodyOnlyConfidenceLabel: "not assessed",
+      bodyOnlySummary: "Upload/detect and accept BODY REFERENCE before SVG cutout quality is assessed.",
+      reasonLabels: ["Upload/detect and accept BODY REFERENCE before SVG cutout quality is assessed."],
+      generationBlocked: false,
+      generationBlockedReason: undefined,
+      operatorFixHint: "Accept BODY REFERENCE to assess cutout quality.",
+    };
+  }
+
   if (!report) {
     return {
       statusLabel: "UNKNOWN",
