@@ -81,6 +81,11 @@ export function buildOutlineGeometrySignature(outline: EditableBodyOutline | nul
     closed: outline.closed,
     version: outline.version ?? 1,
     sourceContourMode: outline.sourceContourMode ?? null,
+    lowerCutoffInsetMm:
+      typeof outline.lowerCutoffInsetMm === "number" && Number.isFinite(outline.lowerCutoffInsetMm)
+        ? round2(outline.lowerCutoffInsetMm)
+        : null,
+    lowerCutoffSource: outline.lowerCutoffSource ?? null,
     points: outline.points.map((point) => ({
       x: round2(point.x),
       y: round2(point.y),
@@ -162,7 +167,13 @@ export function rebuildAcceptedBodyReferenceSnapshot(
   }
   const approvedBodyOutline = normalizeEditableBodyOutlineForBodyCutoutAuthority(acceptedOutline);
 
-  const derived = deriveDimensionsFromEditableBodyOutline(approvedBodyOutline);
+  const preservedBodyBottomFromOverallMm =
+    approvedBodyOutline.sourceContourMode === "body-only" && args.overallHeightMm > 0
+      ? round2(Math.max(args.topMarginMm + 1, args.overallHeightMm - Math.max(0, args.bottomMarginMm)))
+      : null;
+  const derived = deriveDimensionsFromEditableBodyOutline(approvedBodyOutline, {
+    preserveBodyBottomFromOverallMm: preservedBodyBottomFromOverallMm,
+  });
   const nextTopMarginMm =
     typeof derived.bodyTopFromOverallMm === "number"
       ? round2(Math.max(0, derived.bodyTopFromOverallMm))

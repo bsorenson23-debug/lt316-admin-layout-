@@ -25,7 +25,9 @@ import {
 } from "@/lib/bodyReferenceFineTune";
 import {
   buildContourSvgPath,
+  resolveBodyOnlyFlatBottomCutoffControl,
   sortEditableOutlinePoints,
+  updateBodyOnlyFlatBottomCutoff,
 } from "@/lib/editableBodyOutline";
 import styles from "./BodyReferenceFineTuneEditor.module.css";
 
@@ -218,6 +220,11 @@ function formatBounds(bounds: ReturnType<typeof resolveOutlineBounds>): string {
   return `${bounds.width} x ${bounds.height} contour units`;
 }
 
+function formatMm(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
+  return `${round1(value)} mm`;
+}
+
 function formatQualityStatus(status: BodyReferenceSvgQualityReport["status"] | undefined): string {
   if (status === "pass") return "SVG quality: pass";
   if (status === "warn") return "SVG quality: warn";
@@ -383,6 +390,10 @@ export function BodyReferenceFineTuneEditor({
     () => resolveOutlineBounds(outline),
     [outline],
   );
+  const cutoffControl = React.useMemo(
+    () => resolveBodyOnlyFlatBottomCutoffControl(outline),
+    [outline],
+  );
   const qualityVisualization = React.useMemo(
     () => buildBodyReferenceSvgQualityVisualizationFromOutline({ outline }),
     [outline],
@@ -540,6 +551,29 @@ export function BodyReferenceFineTuneEditor({
     applyOutlineChange(nextOutline);
   }, [applyOutlineChange, interactive, outline, recordEditStart, selectedSegmentIndex]);
 
+  const handleCutoffInsetChange = React.useCallback((nextInsetMm: number) => {
+    if (!interactive || !outline || !cutoffControl) return;
+    recordEditStart();
+    const nextOutline = updateBodyOnlyFlatBottomCutoff({
+      outline,
+      lowerCutoffInsetMm: nextInsetMm,
+      lowerCutoffSource: "manual",
+    });
+    applyOutlineChange(nextOutline);
+  }, [applyOutlineChange, cutoffControl, interactive, outline, recordEditStart]);
+
+  const handleResetCutoffToAuto = React.useCallback(() => {
+    if (!interactive || !outline) return;
+    recordEditStart();
+    const nextOutline = updateBodyOnlyFlatBottomCutoff({
+      outline,
+      lowerCutoffInsetMm: null,
+      lowerCutoffSource: "auto",
+    });
+    applyOutlineChange(nextOutline);
+    endEditGesture();
+  }, [applyOutlineChange, endEditGesture, interactive, outline, recordEditStart]);
+
   const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!interactive || !selectedPointId || !outline) return;
 
@@ -675,7 +709,11 @@ export function BodyReferenceFineTuneEditor({
 
       <div className={styles.statusGrid}>
         <div className={styles.statusCard}>
-          <span className={styles.statusLabel}>Draft bounds</span>
+          <span className={styles.statusLabel}>Product total height</span>
+          <span className={styles.statusValue}>{formatMm(overallHeightMm)}</span>
+        </div>
+        <div className={styles.statusCard}>
+          <span className={styles.statusLabel}>SVG cutout bounds</span>
           <span className={styles.statusValue}>{formatBounds(outlineBounds)}</span>
         </div>
         <div className={styles.statusCard}>
@@ -700,6 +738,64 @@ export function BodyReferenceFineTuneEditor({
           <span className={styles.statusValue}>{qualityVisualization.expectedBridgeSegments.length}</span>
         </div>
       </div>
+
+      {cutoffControl && (
+        <div className={styles.cutoffPanel} data-testid="body-reference-flat-bottom-cutoff-control">
+          <div className={styles.cutoffHeader}>
+            <div>
+              <div className={styles.cutoffEyebrow}>Flat bottom cutoff</div>
+              <div className={styles.cutoffTitle}>
+                Cutoff: {formatMm(cutoffControl.insetMm)} above rounded base
+              </div>
+            </div>
+            <span className={styles.cutoffBadge}>
+              {cutoffControl.source === "manual" ? "Manual" : "Auto"}
+            </span>
+          </div>
+          <div className={styles.cutoffControls}>
+            <input
+              type="range"
+              min={cutoffControl.minInsetMm}
+              max={cutoffControl.maxInsetMm}
+              step={0.5}
+              value={cutoffControl.insetMm}
+              disabled={!interactive}
+              aria-label="Flat bottom cutoff inset"
+              data-testid="body-reference-flat-bottom-cutoff-slider"
+              onChange={(event) => handleCutoffInsetChange(Number(event.currentTarget.value))}
+            />
+            <input
+              type="number"
+              min={cutoffControl.minInsetMm}
+              max={cutoffControl.maxInsetMm}
+              step={0.5}
+              value={cutoffControl.insetMm}
+              disabled={!interactive}
+              aria-label="Flat bottom cutoff inset millimeters"
+              className={styles.cutoffNumber}
+              data-testid="body-reference-flat-bottom-cutoff-input"
+              onChange={(event) => handleCutoffInsetChange(Number(event.currentTarget.value))}
+            />
+            <button
+              type="button"
+              className={styles.actionButton}
+              disabled={!interactive || cutoffControl.source === "auto"}
+              onClick={handleResetCutoffToAuto}
+              data-testid="body-reference-flat-bottom-cutoff-reset"
+            >
+              Reset cutoff to auto
+            </button>
+          </div>
+          <div className={styles.cutoffRange}>
+            <span>Min {formatMm(cutoffControl.minInsetMm)}</span>
+            <span>Auto {formatMm(cutoffControl.autoInsetMm)}</span>
+            <span>Max {formatMm(cutoffControl.maxInsetMm)}</span>
+          </div>
+          <div className={styles.cutoffNote}>
+            Raise to remove more rounded base. Lower to keep more body height. Accept corrected cutout before regenerating BODY CUTOUT QA GLB.
+          </div>
+        </div>
+      )}
 
       <div
         className={styles.guidesPanel}
@@ -828,6 +924,27 @@ export function BodyReferenceFineTuneEditor({
               className={styles.boundsGuideEdge}
             />
           </>
+        )}
+
+        {interactive && cutoffControl && (
+          <g
+            className={styles.cutoffGuide}
+            data-testid="body-reference-flat-bottom-cutoff-line"
+            data-cutoff-source={cutoffControl.source}
+            data-cutoff-inset-mm={cutoffControl.insetMm}
+          >
+            <line
+              x1={cutoffControl.leftCutoffX}
+              y1={cutoffControl.cutoffY}
+              x2={cutoffControl.rightCutoffX}
+              y2={cutoffControl.cutoffY}
+            />
+            <circle
+              cx={cutoffControl.rightCutoffX}
+              cy={cutoffControl.cutoffY}
+              r={3}
+            />
+          </g>
         )}
 
         {showUiOnlyGuides && (

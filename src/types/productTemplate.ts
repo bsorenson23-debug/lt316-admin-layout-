@@ -80,6 +80,8 @@ export interface EditableBodyOutline {
   printableBandContour?: EditableBodyOutlineContourPoint[];
   printableBandContourBounds?: EditableBodyOutlineContourBounds;
   contourFrame?: EditableBodyOutlineContourFrame;
+  lowerCutoffInsetMm?: number;
+  lowerCutoffSource?: "auto" | "manual";
   sourceContourMode?: "full-image" | "body-only";
   sourceContourViewport?: {
     minX: number;

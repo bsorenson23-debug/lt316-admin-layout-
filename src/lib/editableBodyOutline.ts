@@ -658,6 +658,8 @@ export function resolveEditableBodyOutlineDirectContour(
       sourceContourMode: outline.sourceContourMode,
       sourceContour: outline.sourceContour,
       contourFrame: outline.contourFrame,
+      lowerCutoffInsetMm: outline.lowerCutoffInsetMm,
+      lowerCutoffSource: outline.lowerCutoffSource,
     });
     if (regularized) return regularized.directContour;
     return outline.directContour;
@@ -704,6 +706,8 @@ export function resolveAuthoritativeEditableBodyOutlineContour(
       sourceContourMode: outline.sourceContourMode,
       sourceContour: outline.sourceContour,
       contourFrame: outline.contourFrame,
+      lowerCutoffInsetMm: outline.lowerCutoffInsetMm,
+      lowerCutoffSource: outline.lowerCutoffSource,
     });
     if (regularized) return regularized.directContour;
   }
@@ -779,6 +783,11 @@ type RegularizedBodyOnlyDirectContour = {
   directContour: EditableBodyOutlineContourPoint[];
   bounds: EditableBodyOutlineContourBounds;
   safeInsetMm: number;
+  autoInsetMm: number;
+  minInsetMm: number;
+  maxInsetMm: number;
+  cutoffY: number;
+  lowerCutoffSource: NonNullable<EditableBodyOutline["lowerCutoffSource"]>;
   baselineRaised: boolean;
 };
 
@@ -789,6 +798,23 @@ export type FlatBottomBodyCutoutContour = {
   leftCutoffX: number;
   rightCutoffX: number;
   safeInsetMm: number;
+  autoInsetMm: number;
+  minInsetMm: number;
+  maxInsetMm: number;
+  rawBottomY: number;
+  lowerCutoffSource: NonNullable<EditableBodyOutline["lowerCutoffSource"]>;
+};
+
+export type BodyOnlyFlatBottomCutoffControl = {
+  source: NonNullable<EditableBodyOutline["lowerCutoffSource"]>;
+  insetMm: number;
+  autoInsetMm: number;
+  minInsetMm: number;
+  maxInsetMm: number;
+  cutoffY: number;
+  rawBottomY: number;
+  leftCutoffX: number;
+  rightCutoffX: number;
 };
 
 function getContourSegmentsAtY(
@@ -816,8 +842,52 @@ function getContourSegmentsAtY(
   return segments;
 }
 
-function resolveRoundedBaseSafeInsetMmFromBounds(bounds: EditableBodyOutlineContourBounds): number {
-  return round1(clamp(bounds.height * 0.05, 6, 14));
+function resolveRoundedBaseAutoInsetMmFromBounds(bounds: EditableBodyOutlineContourBounds): number {
+  return round1(clamp(bounds.height * 0.035, 4, 10));
+}
+
+function resolveRoundedBaseMinInsetMmFromBounds(bounds: EditableBodyOutlineContourBounds): number {
+  return round1(clamp(bounds.height * 0.012, 2, 4));
+}
+
+function resolveRoundedBaseCutoffInset(args: {
+  bounds: EditableBodyOutlineContourBounds;
+  lowerShoulderY?: number | null;
+  lowerCutoffInsetMm?: number | null;
+  lowerCutoffSource?: EditableBodyOutline["lowerCutoffSource"] | null;
+}) {
+  const autoInsetMm = resolveRoundedBaseAutoInsetMmFromBounds(args.bounds);
+  const minInsetMm = resolveRoundedBaseMinInsetMmFromBounds(args.bounds);
+  const minSpacingMm = round1(clamp(args.bounds.height * 0.015, 2, 5));
+  const rawBottomY = round1(args.bounds.maxY);
+  const lowerShoulderY =
+    typeof args.lowerShoulderY === "number" && Number.isFinite(args.lowerShoulderY)
+      ? args.lowerShoulderY
+      : null;
+  const minCutoffY = round1(Math.max(
+    args.bounds.minY + minSpacingMm,
+    lowerShoulderY != null && lowerShoulderY < rawBottomY - minSpacingMm
+      ? lowerShoulderY + minSpacingMm
+      : args.bounds.minY + minSpacingMm,
+  ));
+  const maxInsetMm = round1(Math.max(minInsetMm, rawBottomY - minCutoffY));
+  const requestedInsetMm =
+    args.lowerCutoffSource === "manual" &&
+    typeof args.lowerCutoffInsetMm === "number" &&
+    Number.isFinite(args.lowerCutoffInsetMm)
+      ? args.lowerCutoffInsetMm
+      : autoInsetMm;
+  const safeInsetMm = round1(clamp(requestedInsetMm, minInsetMm, maxInsetMm));
+  const cutoffY = round1(clamp(rawBottomY - safeInsetMm, minCutoffY, rawBottomY - minInsetMm));
+  return {
+    autoInsetMm,
+    minInsetMm,
+    maxInsetMm,
+    safeInsetMm: round1(rawBottomY - cutoffY),
+    cutoffY,
+    rawBottomY,
+    lowerCutoffSource: args.lowerCutoffSource === "manual" ? "manual" as const : "auto" as const,
+  };
 }
 
 function contourIntersectionPointAtY(
@@ -902,6 +972,8 @@ export function clipBodyOnlyContourAtRoundedBaseCutoff(args: {
   directContour?: EditableBodyOutlineContourPoint[] | null;
   sourceContourMode?: EditableBodyOutline["sourceContourMode"];
   lowerShoulderY?: number | null;
+  lowerCutoffInsetMm?: number | null;
+  lowerCutoffSource?: EditableBodyOutline["lowerCutoffSource"] | null;
 }): FlatBottomBodyCutoutContour | null {
   const directContour = args.directContour ?? null;
   if (args.sourceContourMode !== "body-only" || !directContour || directContour.length < 3) {
@@ -912,20 +984,14 @@ export function clipBodyOnlyContourAtRoundedBaseCutoff(args: {
   if (!bounds || !(bounds.height > 0)) return null;
 
   const rawBottomY = round1(bounds.maxY);
-  const safeInsetMm = resolveRoundedBaseSafeInsetMmFromBounds(bounds);
-  const minSpacingMm = round1(clamp(bounds.height * 0.015, 2, 5));
-  const lowerShoulderY =
-    typeof args.lowerShoulderY === "number" && Number.isFinite(args.lowerShoulderY)
-      ? args.lowerShoulderY
-      : null;
-  const minCutoffY = round1(Math.max(
-    bounds.minY + minSpacingMm,
-    lowerShoulderY != null && lowerShoulderY < rawBottomY - minSpacingMm
-      ? lowerShoulderY + minSpacingMm
-      : bounds.minY + minSpacingMm,
-  ));
-  const maxCutoffY = round1(rawBottomY - 0.5);
-  const cutoffY = round1(clamp(rawBottomY - safeInsetMm, minCutoffY, maxCutoffY));
+  const cutoffResolution = resolveRoundedBaseCutoffInset({
+    bounds,
+    lowerShoulderY: args.lowerShoulderY,
+    lowerCutoffInsetMm: args.lowerCutoffInsetMm,
+    lowerCutoffSource: args.lowerCutoffSource,
+  });
+  const safeInsetMm = cutoffResolution.safeInsetMm;
+  const cutoffY = cutoffResolution.cutoffY;
   if (cutoffY >= rawBottomY - 0.05) return null;
 
   const segments = getContourSegmentsAtY(directContour, cutoffY);
@@ -955,6 +1021,11 @@ export function clipBodyOnlyContourAtRoundedBaseCutoff(args: {
     leftCutoffX: segment.leftX,
     rightCutoffX: segment.rightX,
     safeInsetMm,
+    autoInsetMm: cutoffResolution.autoInsetMm,
+    minInsetMm: cutoffResolution.minInsetMm,
+    maxInsetMm: cutoffResolution.maxInsetMm,
+    rawBottomY: cutoffResolution.rawBottomY,
+    lowerCutoffSource: cutoffResolution.lowerCutoffSource,
   };
 }
 
@@ -1009,11 +1080,14 @@ function regularizeBodyOnlyDirectContourLowerShape(args: {
   sourceContourMode?: EditableBodyOutline["sourceContourMode"];
   sourceContour?: EditableBodyOutlineContourPoint[] | null;
   contourFrame?: EditableBodyOutlineContourFrame | null;
+  lowerCutoffInsetMm?: number | null;
+  lowerCutoffSource?: EditableBodyOutline["lowerCutoffSource"] | null;
+  forceReclip?: boolean;
 }): RegularizedBodyOnlyDirectContour | null {
   const directContour = args.directContour ?? null;
   if (
     args.sourceContourMode !== "body-only" ||
-    args.contourFrame?.lowerBowlBaselineRaised === true ||
+    (args.contourFrame?.lowerBowlBaselineRaised === true && args.forceReclip !== true) ||
     !directContour ||
     directContour.length < 3 ||
     !args.sourceContour ||
@@ -1036,6 +1110,8 @@ function regularizeBodyOnlyDirectContourLowerShape(args: {
     directContour,
     sourceContourMode: args.sourceContourMode,
     lowerShoulderY: lowerShoulder?.y ?? null,
+    lowerCutoffInsetMm: args.lowerCutoffInsetMm,
+    lowerCutoffSource: args.lowerCutoffSource,
   });
   if (!cutoff) return null;
   const adjusted = adjustBodyOnlyPointsForFlatCutoff({
@@ -1048,6 +1124,11 @@ function regularizeBodyOnlyDirectContourLowerShape(args: {
     directContour: cutoff.directContour,
     bounds: cutoff.bounds,
     safeInsetMm: cutoff.safeInsetMm,
+    autoInsetMm: cutoff.autoInsetMm,
+    minInsetMm: cutoff.minInsetMm,
+    maxInsetMm: cutoff.maxInsetMm,
+    cutoffY: cutoff.cutoffY,
+    lowerCutoffSource: cutoff.lowerCutoffSource,
     baselineRaised: true,
   };
 }
@@ -1061,6 +1142,8 @@ export function normalizeEditableBodyOutlineForBodyCutoutAuthority(
     sourceContourMode: outline.sourceContourMode,
     sourceContour: outline.sourceContour,
     contourFrame: outline.contourFrame,
+    lowerCutoffInsetMm: outline.lowerCutoffInsetMm,
+    lowerCutoffSource: outline.lowerCutoffSource,
   });
   if (!regularized) {
     return outline;
@@ -1093,6 +1176,150 @@ export function normalizeEditableBodyOutlineForBodyCutoutAuthority(
     ...outline,
     points: regularized.points,
     directContour: regularized.directContour,
+    lowerCutoffInsetMm: regularized.safeInsetMm,
+    lowerCutoffSource: regularized.lowerCutoffSource,
+    contourFrame,
+  };
+}
+
+function mapSourceContourToBodyOnlyMmFrame(
+  outline: EditableBodyOutline,
+): EditableBodyOutlineContourPoint[] | null {
+  const sourceContour = outline.sourceContour ?? null;
+  if (!sourceContour || sourceContour.length < 3) return null;
+  const sourceBounds = getBounds(sourceContour);
+  if (!sourceBounds || !(sourceBounds.height > 0)) return null;
+
+  const frame = outline.contourFrame;
+  const scale = frame?.mmPerSourceUnit;
+  const acceptedBounds =
+    frame?.acceptedPreviewBounds ??
+    frame?.glbInputBounds ??
+    frame?.canonicalInputBounds ??
+    getBounds(outline.directContour ?? []);
+  if (
+    typeof scale === "number" &&
+    Number.isFinite(scale) &&
+    scale > 0 &&
+    acceptedBounds
+  ) {
+    const centerX = estimateBodyCenterX(sourceContour);
+    const mapped = dedupeContourPoints(sourceContour.map((point) => ({
+      x: round1Symmetric((point.x - centerX) * scale),
+      y: round1(acceptedBounds.minY + ((point.y - sourceBounds.minY) * scale)),
+    })));
+    return mapped.length >= 3 ? mapped : null;
+  }
+
+  const directBounds = getBounds(outline.directContour ?? []);
+  if (
+    directBounds &&
+    sourceBounds.height <= directBounds.height * 1.6 &&
+    sourceBounds.width <= Math.max(1, directBounds.width * 1.6)
+  ) {
+    return sourceContour.map((point) => ({ ...point }));
+  }
+
+  return null;
+}
+
+function resolveBodyOnlyRoundedBaseSourceContour(
+  outline: EditableBodyOutline,
+): EditableBodyOutlineContourPoint[] | null {
+  const fromSource = mapSourceContourToBodyOnlyMmFrame(outline);
+  if (fromSource && fromSource.length >= 3) return fromSource;
+  return outline.directContour && outline.directContour.length >= 3
+    ? outline.directContour.map((point) => ({ ...point }))
+    : null;
+}
+
+function resolveLowerShoulderY(points: EditableBodyOutlinePoint[]): number | null {
+  const lowerShoulder =
+    [...sortEditableOutlinePoints(points)]
+      .reverse()
+      .find((point) => point.role === "lowerTaper" || point.role === "shoulder")
+    ?? null;
+  return lowerShoulder?.y ?? null;
+}
+
+export function resolveBodyOnlyFlatBottomCutoffControl(
+  outline: EditableBodyOutline | null | undefined,
+): BodyOnlyFlatBottomCutoffControl | null {
+  if (!outline || outline.sourceContourMode !== "body-only") return null;
+  const rawContour = resolveBodyOnlyRoundedBaseSourceContour(outline);
+  if (!rawContour) return null;
+  const cutoff = clipBodyOnlyContourAtRoundedBaseCutoff({
+    directContour: rawContour,
+    sourceContourMode: outline.sourceContourMode,
+    lowerShoulderY: resolveLowerShoulderY(outline.points),
+    lowerCutoffInsetMm: outline.lowerCutoffInsetMm,
+    lowerCutoffSource: outline.lowerCutoffSource,
+  });
+  if (!cutoff) return null;
+  return {
+    source: cutoff.lowerCutoffSource,
+    insetMm: cutoff.safeInsetMm,
+    autoInsetMm: cutoff.autoInsetMm,
+    minInsetMm: cutoff.minInsetMm,
+    maxInsetMm: cutoff.maxInsetMm,
+    cutoffY: cutoff.cutoffY,
+    rawBottomY: cutoff.rawBottomY,
+    leftCutoffX: cutoff.leftCutoffX,
+    rightCutoffX: cutoff.rightCutoffX,
+  };
+}
+
+export function updateBodyOnlyFlatBottomCutoff(args: {
+  outline: EditableBodyOutline | null | undefined;
+  lowerCutoffInsetMm?: number | null;
+  lowerCutoffSource: NonNullable<EditableBodyOutline["lowerCutoffSource"]>;
+}): EditableBodyOutline | null {
+  const outline = args.outline;
+  if (!outline || outline.sourceContourMode !== "body-only") return outline ?? null;
+  const rawContour = resolveBodyOnlyRoundedBaseSourceContour(outline);
+  if (!rawContour) return outline;
+
+  const regularized = regularizeBodyOnlyDirectContourLowerShape({
+    points: outline.points,
+    directContour: rawContour,
+    sourceContourMode: outline.sourceContourMode,
+    sourceContour: outline.sourceContour ?? rawContour,
+    contourFrame: outline.contourFrame,
+    lowerCutoffInsetMm: args.lowerCutoffInsetMm,
+    lowerCutoffSource: args.lowerCutoffSource,
+    forceReclip: true,
+  });
+  if (!regularized) return outline;
+
+  const contourFrame: EditableBodyOutlineContourFrame = outline.contourFrame
+    ? {
+        ...outline.contourFrame,
+        acceptedPreviewBounds: regularized.bounds,
+        glbInputBounds: regularized.bounds,
+        canonicalInputBounds: regularized.bounds,
+        lowerBowlBaselineRaised: true,
+        lowerBowlSafeInsetMm: regularized.safeInsetMm,
+      }
+    : {
+        kind: "full-body-only-source",
+        sourceCoordinateSpace: "unknown",
+        authoritativeForBodyCutoutQa: true,
+        authoritativeForPrintableBand: false,
+        bandCropApplied: false,
+        bodyOnlyReCropSkipped: true,
+        acceptedPreviewBounds: regularized.bounds,
+        glbInputBounds: regularized.bounds,
+        canonicalInputBounds: regularized.bounds,
+        lowerBowlBaselineRaised: true,
+        lowerBowlSafeInsetMm: regularized.safeInsetMm,
+      };
+
+  return {
+    ...outline,
+    points: regularized.points,
+    directContour: regularized.directContour,
+    lowerCutoffInsetMm: regularized.safeInsetMm,
+    lowerCutoffSource: regularized.lowerCutoffSource,
     contourFrame,
   };
 }
@@ -2452,6 +2679,8 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
         version: 1,
         points: acceptedPoints,
         directContour: acceptedDirectContour,
+        lowerCutoffInsetMm: regularized?.safeInsetMm,
+        lowerCutoffSource: regularized?.lowerCutoffSource,
         sourceContour: scaledBodyContour.sourceContour,
         sourceContourBounds: scaledBodyContour.sourceBounds,
         sourceContourMode: "body-only",
@@ -2613,6 +2842,8 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
       version: 1,
       points: acceptedPoints,
       directContour: acceptedDirectContour,
+      lowerCutoffInsetMm: regularized?.safeInsetMm,
+      lowerCutoffSource: regularized?.lowerCutoffSource,
       sourceContour: fullBodySourceContour.map((point) => ({ ...point })),
       sourceContourBounds: scaledFullBodyContour.sourceBounds,
       printableBandContour: printableBandContour?.map((point) => ({ ...point })),
@@ -2796,6 +3027,8 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
         version: 1,
         points: acceptedPoints,
         directContour: acceptedDirectContour,
+        lowerCutoffInsetMm: regularized?.safeInsetMm,
+        lowerCutoffSource: regularized?.lowerCutoffSource,
         sourceContour: fullBodySourceContour.map((point) => ({ ...point })),
         sourceContourBounds: scaledFullBodyContour.sourceBounds,
         printableBandContour: printableBandContour?.map((point) => ({ ...point })),
@@ -2931,6 +3164,8 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
     version: 1,
     points: regularized?.points ?? rawPoints,
     directContour: regularized?.directContour ?? rawDirectContour,
+    lowerCutoffInsetMm: regularized?.safeInsetMm,
+    lowerCutoffSource: regularized?.lowerCutoffSource,
     sourceContour: previewSourceContour.map((point) => ({ ...point })),
     sourceContourBounds: previewBounds,
     sourceContourMode: "body-only",

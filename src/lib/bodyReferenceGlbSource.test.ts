@@ -13,6 +13,7 @@ import {
   resolveReviewedBodyReferenceGlbInput,
   shouldRequestReviewedBodyReferenceGlb,
 } from "./bodyReferenceGlbSource.ts";
+import { updateBodyOnlyFlatBottomCutoff } from "./editableBodyOutline.ts";
 
 const baseOutline: EditableBodyOutline = {
   closed: true,
@@ -199,11 +200,63 @@ test("BODY REFERENCE GLB source payload uses clipped accepted contour instead of
   });
   const authoritativeContour = payload.bodyOutline?.authoritativeContour ?? [];
 
-  assert.equal(authoritativeContour.some((point) => point.y > 209), false);
+  assert.equal(authoritativeContour.some((point) => point.y > 212.3), false);
   assert.equal(authoritativeContour.some((point) => point.x === 8 && point.y === 220), false);
   assert.deepEqual(
-    authoritativeContour.filter((point) => point.y === 209).map((point) => point.x),
-    [21.5, -21.5],
+    authoritativeContour.filter((point) => point.y === 212.3).map((point) => point.x),
+    [19.2, -19.2],
+  );
+});
+
+test("BODY REFERENCE GLB source payload uses accepted adjusted flat cutoff", () => {
+  const roundedBaseOutline: EditableBodyOutline = {
+    closed: true,
+    version: 1,
+    sourceContourMode: "body-only",
+    points: [
+      { id: "top", x: 45, y: 0, role: "topOuter", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "body", x: 45, y: 80, role: "body", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "shoulder", x: 43, y: 155, role: "shoulder", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "lowerTaper", x: 35, y: 190, role: "lowerTaper", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "bevel", x: 18, y: 214, role: "bevel", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "base", x: 8, y: 220, role: "base", pointType: "corner", inHandle: null, outHandle: null },
+    ],
+    directContour: [
+      { x: 45, y: 0 },
+      { x: 45, y: 80 },
+      { x: 43, y: 155 },
+      { x: 35, y: 190 },
+      { x: 18, y: 214 },
+      { x: 8, y: 220 },
+      { x: -8, y: 220 },
+      { x: -18, y: 214 },
+      { x: -35, y: 190 },
+      { x: -43, y: 155 },
+      { x: -45, y: 80 },
+      { x: -45, y: 0 },
+    ],
+  };
+  roundedBaseOutline.sourceContour = roundedBaseOutline.directContour?.map((point) => ({ ...point }));
+  const adjusted = updateBodyOnlyFlatBottomCutoff({
+    outline: roundedBaseOutline,
+    lowerCutoffSource: "manual",
+    lowerCutoffInsetMm: 3,
+  });
+
+  const payload = buildBodyReferenceGlbSourcePayload({
+    renderMode: "body-cutout-qa",
+    bodyOutline: adjusted,
+    canonicalBodyProfile: baseProfile,
+    canonicalDimensionCalibration: baseCalibration,
+  });
+  const authoritativeContour = payload.bodyOutline?.authoritativeContour ?? [];
+
+  assert.equal(payload.bodyOutline?.lowerCutoffSource, "manual");
+  assert.equal(payload.bodyOutline?.lowerCutoffInsetMm, 3);
+  assert.equal(authoritativeContour.some((point) => point.y > 217), false);
+  assert.deepEqual(
+    authoritativeContour.filter((point) => point.y === 217).map((point) => point.x),
+    [13, -13],
   );
 });
 

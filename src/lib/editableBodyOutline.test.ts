@@ -9,7 +9,9 @@ import {
   createEditableBodyOutlineFromImportedSvg,
   createEditableBodyOutlineFromTraceDebug,
   normalizeMeasurementContour,
+  resolveBodyOnlyFlatBottomCutoffControl,
   resolveAuthoritativeEditableBodyOutlineContour,
+  updateBodyOnlyFlatBottomCutoff,
 } from "./editableBodyOutline.ts";
 import { buildBodyReferenceSvgQualityReportFromOutline } from "./bodyReferenceSvgQuality.ts";
 
@@ -449,17 +451,108 @@ test("body-only directContour with U-shaped bottom is clipped to a flat cutoff",
   assert.ok(contour);
   assert.ok(bounds);
   assert.equal(rawBounds?.maxY, 220);
-  assert.equal(clipped!.safeInsetMm, 11);
-  assert.equal(clipped!.cutoffY, 209);
-  assert.equal(bounds?.maxY, 209);
-  assert.ok(contour!.every((point) => point.y <= 209.001));
-  assert.ok(widthAtY(contour ?? [], bounds!.maxY) >= 60);
+  assert.equal(clipped!.safeInsetMm, 7.7);
+  assert.equal(clipped!.cutoffY, 212.3);
+  assert.equal(bounds?.maxY, 212.3);
+  assert.ok(contour!.every((point) => point.y <= 212.301));
+  assert.ok(widthAtY(contour ?? [], bounds!.maxY) >= 55);
   const bottomXs = xValuesAtY(contour!, bounds!.maxY);
   assert.equal(bottomXs.length, 2);
-  assert.equal(bottomXs[0], -35.3);
-  assert.equal(bottomXs[1], 35.3);
+  assert.equal(bottomXs[0], -28.8);
+  assert.equal(bottomXs[1], 28.8);
   assert.equal(widthAtY(contour!, 220), 0);
   assert.equal(rightXAtY(contour!, 220), null);
+});
+
+test("manual lower flat cutoff keeps more body height than auto", () => {
+  const outline = makeBowlDirectContourOutline();
+  const auto = resolveBodyOnlyFlatBottomCutoffControl(outline);
+  const lowered = updateBodyOnlyFlatBottomCutoff({
+    outline,
+    lowerCutoffSource: "manual",
+    lowerCutoffInsetMm: 3,
+  });
+  const loweredControl = resolveBodyOnlyFlatBottomCutoffControl(lowered);
+  const autoBounds = boundsOf(resolveAuthoritativeEditableBodyOutlineContour(outline));
+  const loweredContour = resolveAuthoritativeEditableBodyOutlineContour(lowered);
+  const loweredBounds = boundsOf(loweredContour);
+
+  assert.ok(auto);
+  assert.ok(lowered);
+  assert.ok(loweredControl);
+  assert.ok(autoBounds);
+  assert.ok(loweredBounds);
+  assert.equal(auto!.insetMm, 7.7);
+  assert.equal(loweredControl!.source, "manual");
+  assert.equal(loweredControl!.insetMm, 3);
+  assert.ok((loweredBounds?.height ?? 0) > (autoBounds?.height ?? 0));
+  assert.equal(loweredBounds?.maxY, 217);
+  assert.ok(loweredContour!.every((point) => point.y <= 217.001));
+  assert.equal(widthAtY(loweredContour ?? [], 220), 0);
+});
+
+test("manual higher flat cutoff removes more rounded base than auto", () => {
+  const outline = makeBowlDirectContourOutline();
+  const raised = updateBodyOnlyFlatBottomCutoff({
+    outline,
+    lowerCutoffSource: "manual",
+    lowerCutoffInsetMm: 15,
+  });
+  const autoBounds = boundsOf(resolveAuthoritativeEditableBodyOutlineContour(outline));
+  const raisedContour = resolveAuthoritativeEditableBodyOutlineContour(raised);
+  const raisedBounds = boundsOf(raisedContour);
+
+  assert.ok(raised);
+  assert.ok(autoBounds);
+  assert.ok(raisedBounds);
+  assert.equal(raised?.lowerCutoffSource, "manual");
+  assert.equal(raised?.lowerCutoffInsetMm, 15);
+  assert.ok((raisedBounds?.height ?? 0) < (autoBounds?.height ?? 0));
+  assert.equal(raisedBounds?.maxY, 205);
+  assert.ok(raisedContour!.every((point) => point.y <= 205.001));
+});
+
+test("manual flat cutoff is clamped to a safe body-relative range", () => {
+  const outline = makeBowlDirectContourOutline();
+  const tooLow = updateBodyOnlyFlatBottomCutoff({
+    outline,
+    lowerCutoffSource: "manual",
+    lowerCutoffInsetMm: 0,
+  });
+  const tooHigh = updateBodyOnlyFlatBottomCutoff({
+    outline,
+    lowerCutoffSource: "manual",
+    lowerCutoffInsetMm: 999,
+  });
+  const lowControl = resolveBodyOnlyFlatBottomCutoffControl(tooLow);
+  const highControl = resolveBodyOnlyFlatBottomCutoffControl(tooHigh);
+
+  assert.ok(lowControl);
+  assert.ok(highControl);
+  assert.equal(lowControl!.insetMm, lowControl!.minInsetMm);
+  assert.ok(highControl!.insetMm <= highControl!.maxInsetMm);
+  assert.equal(tooHigh?.lowerCutoffInsetMm, highControl!.insetMm);
+  assert.ok((boundsOf(resolveAuthoritativeEditableBodyOutlineContour(tooHigh))?.maxY ?? 0) > 190);
+});
+
+test("reset flat cutoff to auto restores the auto inset", () => {
+  const outline = makeBowlDirectContourOutline();
+  const manual = updateBodyOnlyFlatBottomCutoff({
+    outline,
+    lowerCutoffSource: "manual",
+    lowerCutoffInsetMm: 15,
+  });
+  const reset = updateBodyOnlyFlatBottomCutoff({
+    outline: manual,
+    lowerCutoffSource: "auto",
+    lowerCutoffInsetMm: null,
+  });
+  const resetControl = resolveBodyOnlyFlatBottomCutoffControl(reset);
+
+  assert.ok(resetControl);
+  assert.equal(reset?.lowerCutoffSource, "auto");
+  assert.equal(resetControl!.insetMm, resetControl!.autoInsetMm);
+  assert.equal(boundsOf(resolveAuthoritativeEditableBodyOutlineContour(reset))?.maxY, 212.3);
 });
 
 test("body-only direct contour keeps angled lower taper and bevel segments", () => {
@@ -469,7 +562,7 @@ test("body-only direct contour keeps angled lower taper and bevel segments", () 
   const straightShellX = rightXAtY(contour, 130);
   const shoulderX = rightXAtY(contour, 155);
   const lowerSideX = rightXAtY(contour, 180);
-  const cutoffX = rightXAtY(contour, 209);
+  const cutoffX = rightXAtY(contour, 212.3);
   assert.ok(straightShellX != null);
   assert.ok(straightShellX > 45);
   assert.ok(shoulderX != null);
@@ -478,7 +571,7 @@ test("body-only direct contour keeps angled lower taper and bevel segments", () 
   assert.ok(straightShellX - shoulderX > 3);
   assert.ok(shoulderX - lowerSideX > 3);
   assert.ok(lowerSideX - cutoffX > 3);
-  assert.ok(cutoffX >= 30);
+  assert.ok(cutoffX >= 28);
 });
 
 test("approved resolved SVG cutout path does not include raw rounded-base arc", () => {
@@ -488,7 +581,7 @@ test("approved resolved SVG cutout path does not include raw rounded-base arc", 
   assert.ok(contour);
   assert.notDeepEqual(contour, outline.directContour);
   assert.ok((boundsOf(contour)?.maxY ?? 0) < (boundsOf(outline.directContour)?.maxY ?? 0));
-  assert.equal(contour.some((point) => point.y > 209), false);
+  assert.equal(contour.some((point) => point.y > 212.3), false);
   assert.equal(contour.some((point) => point.x === 8 && point.y === 220), false);
   assert.equal(contour.some((point) => point.x === -8 && point.y === 220), false);
 });
@@ -497,7 +590,7 @@ test("body-only direct contour regularization preserves left-right symmetry", ()
   const contour = resolveAuthoritativeEditableBodyOutlineContour(makeBowlDirectContourOutline());
 
   assert.ok(contour);
-  for (const y of [160, 180, 200, 209]) {
+  for (const y of [160, 180, 200, 212.3]) {
     const left = leftXAtY(contour, y);
     const right = rightXAtY(contour, y);
     assert.ok(left != null, `expected left side at ${y}`);
@@ -519,11 +612,11 @@ test("body-only direct contour regularization is generic across tapered and stra
 
   assert.ok(tapered);
   assert.ok(straight);
-  assert.equal(taperedBounds?.maxY, 209);
-  assert.equal(straightBounds?.maxY, 209);
+  assert.equal(taperedBounds?.maxY, 212.3);
+  assert.equal(straightBounds?.maxY, 212.3);
   assert.ok((taperedBounds?.width ?? 0) <= 100);
   assert.ok((straightBounds?.width ?? 0) <= 104);
-  assert.ok(widthAtY(straight ?? [], 209) >= 90);
+  assert.ok(widthAtY(straight ?? [], 212.3) >= 80);
 });
 
 test("body-only imported outline preserves full source frame instead of masquerading as body-band fit", () => {

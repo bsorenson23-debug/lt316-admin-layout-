@@ -104,6 +104,93 @@
   color: var(--text-primary);
 }
 
+.cutoffPanel {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--warning-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warning-bg) 45%, var(--bg-card));
+}
+
+.cutoffHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cutoffEyebrow {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.cutoffTitle {
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.cutoffBadge {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--warning-border);
+  background: var(--bg-card);
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cutoffControls {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 86px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.cutoffControls input[type="range"] {
+  width: 100%;
+}
+
+.cutoffNumber {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-normal);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.cutoffRange {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.cutoffRange span {
+  padding: 4px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-card);
+}
+
+.cutoffNote {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .guidesPanel {
   display: grid;
   gap: 8px;
@@ -304,6 +391,23 @@
   pointer-events: none;
 }
 
+.cutoffGuide {
+  pointer-events: none;
+}
+
+.cutoffGuide line {
+  stroke: var(--warning);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 2;
+  stroke-linecap: round;
+}
+
+.cutoffGuide circle {
+  fill: var(--bg-elevated);
+  stroke: var(--warning);
+  stroke-width: 1.1;
+}
+
 .detectedPath {
   fill: none;
   stroke: var(--warning);
@@ -392,4 +496,10 @@
   color: var(--text-secondary);
   background: var(--bg-card);
   font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .cutoffControls {
+    grid-template-columns: 1fr;
+  }
 }

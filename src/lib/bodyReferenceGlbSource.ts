@@ -39,6 +39,11 @@ function normalizeReviewedBodyReferenceOutline(outline: EditableBodyOutline | nu
     closed: outline.closed,
     version: outline.version ?? 1,
     sourceContourMode: outline.sourceContourMode ?? null,
+    lowerCutoffInsetMm:
+      typeof outline.lowerCutoffInsetMm === "number" && Number.isFinite(outline.lowerCutoffInsetMm)
+        ? round2(outline.lowerCutoffInsetMm)
+        : null,
+    lowerCutoffSource: outline.lowerCutoffSource ?? null,
     points: normalizeOutlinePoints(outline),
     authoritativeContour: resolveAuthoritativeEditableBodyOutlineContour(outline)?.map(normalizePoint) ?? null,
   };

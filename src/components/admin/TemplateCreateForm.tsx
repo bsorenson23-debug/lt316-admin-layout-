@@ -4892,11 +4892,11 @@ export function TemplateCreateForm({
                           <span className={styles.cutoutFitMetricValue}>{draftBodyReferencePointCount}</span>
                         </div>
                         <div className={styles.cutoutFitMetric}>
-                          <span className={styles.cutoutFitMetricLabel}>Approved bounds</span>
+                          <span className={styles.cutoutFitMetricLabel}>Approved SVG cutout bounds</span>
                           <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(approvedBodyReferenceOutlineBounds)}</span>
                         </div>
                         <div className={styles.cutoutFitMetric}>
-                          <span className={styles.cutoutFitMetricLabel}>Draft bounds</span>
+                          <span className={styles.cutoutFitMetricLabel}>Draft SVG cutout bounds</span>
                           <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(draftBodyReferenceOutlineBounds)}</span>
                         </div>
                         <div className={styles.cutoutFitMetric}>
