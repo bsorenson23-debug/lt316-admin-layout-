@@ -4667,7 +4667,7 @@ export function TemplateCreateForm({
                   <div>
                     <div className={styles.reviewScaffoldTitle}>BODY REFERENCE Cutout Fine-Tune</div>
                     <div className={styles.reviewScaffoldHint}>
-                      Draft edits stay non-authoritative until you accept the corrected cutout.
+                      Draft edits stay non-authoritative until you accept the corrected cutout. Use lower anchors for the shoulder angle and keep the bottom edge above the rounded base.
                     </div>
                   </div>
                   <span

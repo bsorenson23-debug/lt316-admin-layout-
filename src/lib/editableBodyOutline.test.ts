@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { FlatItemLookupTraceDebug } from "../types/flatItemLookup.ts";
+import type { EditableBodyOutline } from "../types/productTemplate.ts";
 import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
 import {
   createEditableBodyOutline,
@@ -161,6 +162,62 @@ function widthAtY(points: Array<{ x: number; y: number }>, y: number): number {
   return xs[xs.length - 1]! - xs[0]!;
 }
 
+function rightXAtY(points: Array<{ x: number; y: number }>, y: number): number | null {
+  const xs = xValuesAtY(points, y);
+  return xs.length > 0 ? xs[xs.length - 1]! : null;
+}
+
+function leftXAtY(points: Array<{ x: number; y: number }>, y: number): number | null {
+  const xs = xValuesAtY(points, y);
+  return xs.length > 0 ? xs[0]! : null;
+}
+
+function xValuesAtY(points: Array<{ x: number; y: number }>, y: number): number[] {
+  const xs: number[] = [];
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]!;
+    const next = points[(index + 1) % points.length]!;
+    if (Math.abs(current.y - y) < 0.0001) {
+      xs.push(current.x);
+    }
+    if (Math.abs(next.y - current.y) < 0.0001) continue;
+    const minY = Math.min(current.y, next.y);
+    const maxY = Math.max(current.y, next.y);
+    if (y < minY || y > maxY) continue;
+    const t = (y - current.y) / (next.y - current.y);
+    if (t < 0 || t > 1) continue;
+    xs.push(round1(current.x + ((next.x - current.x) * t)));
+  }
+  return [...new Set(xs)].sort((a, b) => a - b);
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function makeAngularManualBodyOnlyOutline(): EditableBodyOutline {
+  return {
+    closed: true,
+    version: 1,
+    sourceContourMode: "body-only",
+    points: [
+      { id: "top", x: 50, y: 20, role: "topOuter", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "body", x: 50, y: 80, role: "body", pointType: "smooth", inHandle: null, outHandle: null },
+      { id: "shoulder", x: 50, y: 120, role: "shoulder", pointType: "smooth", inHandle: null, outHandle: null },
+      { id: "upper-taper", x: 45, y: 160, role: "upperTaper", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "lower-taper", x: 41, y: 190, role: "lowerTaper", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "bevel", x: 37, y: 210, role: "bevel", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "base", x: 39, y: 220, role: "base", pointType: "corner", inHandle: null, outHandle: null },
+    ],
+    directContour: [
+      { x: 50, y: 20 },
+      { x: 39, y: 220 },
+      { x: -39, y: 220 },
+      { x: -50, y: 20 },
+    ],
+  };
+}
+
 function boundsOf(points: Array<{ x: number; y: number }> | null | undefined) {
   if (!points || points.length === 0) return null;
   const xs = points.map((point) => point.x);
@@ -291,6 +348,43 @@ test("manual body-only overrides rebuild authoritative contours from saved point
   assert.ok((authoritativeContour?.length ?? 0) > 6);
   assert.equal(authoritativeContour?.[0]?.x, 54);
   assert.equal(authoritativeContour?.at(-1)?.x, -54);
+});
+
+test("manual body-only outline keeps a flat lower baseline instead of a bowl", () => {
+  const outline = makeAngularManualBodyOnlyOutline();
+  const contour = resolveAuthoritativeEditableBodyOutlineContour(outline);
+  const bounds = boundsOf(contour);
+  const bottomPoints = contour?.filter((point) => Math.abs(point.y - (bounds?.maxY ?? 0)) < 0.001) ?? [];
+
+  assert.ok(contour);
+  assert.ok(bounds);
+  assert.equal(bounds?.maxY, 220);
+  assert.ok(bottomPoints.some((point) => point.x === 39));
+  assert.ok(bottomPoints.some((point) => point.x === -39));
+  assert.ok(bottomPoints.every((point) => Math.abs(point.y - 220) < 0.001));
+  assert.ok(widthAtY(contour ?? [], 220) >= 78);
+});
+
+test("manual body-only outline keeps angled shoulder and lower transition segments", () => {
+  const contour = resolveAuthoritativeEditableBodyOutlineContour(makeAngularManualBodyOnlyOutline());
+
+  assert.ok(contour);
+  assert.equal(rightXAtY(contour, 130), 48.8);
+  assert.equal(rightXAtY(contour, 195), 40);
+  assert.equal(rightXAtY(contour, 215), 38);
+});
+
+test("manual body-only outline mirrors right-side contour edits symmetrically", () => {
+  const contour = resolveAuthoritativeEditableBodyOutlineContour(makeAngularManualBodyOnlyOutline());
+
+  assert.ok(contour);
+  for (const y of [130, 195, 215, 220]) {
+    const left = leftXAtY(contour, y);
+    const right = rightXAtY(contour, y);
+    assert.ok(left != null);
+    assert.ok(right != null);
+    assert.equal(Math.abs(left), right);
+  }
 });
 
 test("body-only imported outline preserves full source frame instead of masquerading as body-band fit", () => {

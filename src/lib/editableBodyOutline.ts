@@ -596,10 +596,11 @@ function buildSmoothedContourFromProfile(
     const current = sorted[index]!;
     const next = sorted[index + 1]!;
     const count = Math.max(2, samplesPerSegment);
+    const useAngularTransition = shouldUseAngularBodyReferenceSegment(current, next);
     for (let sampleIndex = 0; sampleIndex < count; sampleIndex += 1) {
       if (index > 0 && sampleIndex === 0) continue;
       const t = sampleIndex / count;
-      const eased = smoothstep(t);
+      const eased = useAngularTransition ? t : smoothstep(t);
       rightSide.push({
         x: round1(current.x + ((next.x - current.x) * eased)),
         y: round1(current.y + ((next.y - current.y) * t)),
@@ -613,6 +614,29 @@ function buildSmoothedContourFromProfile(
     .reverse()
     .map((point) => ({ x: round1(-point.x), y: point.y }));
   return [...rightSide, ...leftSide];
+}
+
+function shouldUseAngularBodyReferenceSegment(
+  current: EditableBodyOutlinePoint,
+  next: EditableBodyOutlinePoint,
+): boolean {
+  const angularStartRoles: Array<EditableBodyOutlinePoint["role"]> = [
+    "shoulder",
+    "upperTaper",
+    "lowerTaper",
+    "bevel",
+    "base",
+  ];
+  const angularEndRoles: Array<EditableBodyOutlinePoint["role"]> = [
+    "upperTaper",
+    "lowerTaper",
+    "bevel",
+    "base",
+  ];
+  return (
+    angularStartRoles.includes(current.role) ||
+    angularEndRoles.includes(next.role)
+  );
 }
 
 export function resolveEditableBodyOutlineDirectContour(
