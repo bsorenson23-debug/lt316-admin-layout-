@@ -143,7 +143,7 @@ test("primary review outline prefers approved direct contour over sparse edit co
   const visual = resolvePrimaryBodyReferenceVisualContour(outline);
 
   assert.ok(visual);
-  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.source, "svg-cutout");
   assert.equal(visual!.topGuideY, 25);
   assert.equal(visual!.bounds.height, 199.8);
   assert.equal(visual!.points.length, outline.directContour.length);
@@ -179,7 +179,7 @@ test("primary review outline uses regularized body-only direct contour", () => {
   const visual = resolvePrimaryBodyReferenceVisualContour(outline);
 
   assert.ok(visual);
-  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.source, "svg-cutout");
   assert.equal(visual!.bounds.maxY, 193.6);
   assert.ok(visual!.points.every((point) => point.y <= 193.601));
   assert.notDeepEqual(visual!.points, outline.directContour);
@@ -211,7 +211,7 @@ test("printable band metadata cannot replace approved SVG visual authority", () 
   const visual = resolvePrimaryBodyReferenceVisualContour(outline);
 
   assert.ok(visual);
-  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.source, "svg-cutout");
   assert.equal(visual!.topGuideY, 25);
   assert.equal(visual!.bounds.minY, 25);
   assert.equal(visual!.bounds.maxY, 224.8);
@@ -288,7 +288,7 @@ test("printable top cannot create the rim reference guide or top-band body geome
 
   assert.equal(guide, null);
   assert.ok(visual);
-  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.source, "svg-cutout");
   assert.equal(visual!.bounds.minY, 25);
   assert.equal(visual!.bounds.maxY, 243.29);
 });

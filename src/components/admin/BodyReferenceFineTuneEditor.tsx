@@ -341,6 +341,11 @@ export function BodyReferenceFineTuneEditor({
     () => resolvePrimaryBodyReferenceVisualContour(detectedOutline),
     [detectedOutline],
   );
+  const draftVisualContour = React.useMemo(
+    () => resolvePrimaryBodyReferenceVisualContour(outline),
+    [outline],
+  );
+  const activeVisualContour = draftVisualContour ?? approvedVisualContour ?? detectedVisualContour;
   const approvedPath = React.useMemo(
     () => buildPrimaryVisualPath(approvedVisualContour),
     [approvedVisualContour],
@@ -350,8 +355,24 @@ export function BodyReferenceFineTuneEditor({
     [detectedVisualContour],
   );
   const draftPath = React.useMemo(
+    () => buildPrimaryVisualPath(draftVisualContour),
+    [draftVisualContour],
+  );
+  const controlOutlinePath = React.useMemo(
     () => buildOutlinePath(outline),
     [outline],
+  );
+  const draftMatchesApproved = React.useMemo(
+    () => (
+      Boolean(outline && approvedOutline) &&
+      buildOutlineGeometrySignature(outline) === buildOutlineGeometrySignature(approvedOutline)
+    ),
+    [approvedOutline, outline],
+  );
+  const shouldShowDraftPath = Boolean(
+    overlayState.draftContour &&
+    draftPath &&
+    (interactive || !approvedPath || !draftMatchesApproved),
   );
   const sortedPoints = React.useMemo(
     () => sortEditableOutlinePoints(outline?.points ?? []),
@@ -666,7 +687,7 @@ export function BodyReferenceFineTuneEditor({
             className={styles.statusValue}
             data-testid="body-reference-primary-outline-source"
           >
-            {approvedVisualContour?.source ?? "unavailable"}
+            {activeVisualContour?.source ?? "unavailable"}
           </span>
         </div>
         <div className={styles.statusCard}>
@@ -853,11 +874,22 @@ export function BodyReferenceFineTuneEditor({
         {overlayState.detectedContour && detectedPath && (
           <path d={detectedPath} className={styles.detectedPath} />
         )}
-        {overlayState.draftContour && draftPath && (
+        {overlayState.approvedContour && approvedPath && (
           <path
-            d={draftPath}
+            d={approvedPath}
+            className={styles.approvedPath}
+            data-testid="body-reference-approved-primary-outline"
+            data-outline-source={approvedVisualContour?.source ?? "unknown"}
+            data-top-guide-y={approvedVisualContour?.topGuideY ?? ""}
+          />
+        )}
+        {shouldShowDraftPath && (
+          <path
+            d={draftPath!}
             className={styles.draftPath}
-            data-testid="body-reference-secondary-control-outline"
+            data-testid="body-reference-draft-svg-cutout-outline"
+            data-outline-source={draftVisualContour?.source ?? "unknown"}
+            data-top-guide-y={draftVisualContour?.topGuideY ?? ""}
           />
         )}
 
@@ -883,13 +915,12 @@ export function BodyReferenceFineTuneEditor({
           />
         ))}
 
-        {overlayState.approvedContour && approvedPath && (
+        {overlayState.points && controlOutlinePath && (
           <path
-            d={approvedPath}
-            className={styles.approvedPath}
-            data-testid="body-reference-approved-primary-outline"
-            data-outline-source={approvedVisualContour?.source ?? "unknown"}
-            data-top-guide-y={approvedVisualContour?.topGuideY ?? ""}
+            d={controlOutlinePath}
+            className={styles.controlPath}
+            data-testid="body-reference-secondary-control-outline"
+            aria-hidden="true"
           />
         )}
 

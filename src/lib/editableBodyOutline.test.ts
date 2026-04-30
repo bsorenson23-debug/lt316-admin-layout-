@@ -456,17 +456,17 @@ test("body-only direct contour keeps angled lower taper and bevel segments", () 
   const contour = resolveAuthoritativeEditableBodyOutlineContour(makeBowlDirectContourOutline());
 
   assert.ok(contour);
-  const straightShellX = rightXAtY(contour, 155);
-  const lowerTaperX = rightXAtY(contour, 180);
-  const bevelX = rightXAtY(contour, 188);
+  const straightShellX = rightXAtY(contour, 130);
+  const shoulderX = rightXAtY(contour, 155);
+  const lowerSideX = rightXAtY(contour, 180);
   const baseX = rightXAtY(contour, 193.6);
   assert.equal(straightShellX, 50);
-  assert.ok(lowerTaperX != null);
-  assert.ok(bevelX != null);
+  assert.ok(shoulderX != null);
+  assert.ok(lowerSideX != null);
   assert.ok(baseX != null);
-  assert.ok(straightShellX - lowerTaperX > 6);
-  assert.ok(lowerTaperX > bevelX);
-  assert.ok(baseX >= bevelX);
+  assert.ok(straightShellX - shoulderX > 3);
+  assert.ok(shoulderX - lowerSideX > 3);
+  assert.ok(Math.abs(lowerSideX - baseX) <= 0.2);
   assert.ok(baseX >= 30);
 });
 

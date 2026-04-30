@@ -227,6 +227,7 @@ export function rebuildAcceptedBodyReferenceSnapshot(
 }
 
 export type BodyReferenceVisualContourSource =
+  | "svg-cutout"
   | "direct-contour"
   | "control-points"
   | "source-contour";
@@ -263,9 +264,11 @@ export function resolvePrimaryBodyReferenceVisualContour(
       return {
         points: authoritativeContour.map((point) => ({ x: point.x, y: point.y })),
         source:
-          outline.directContour && outline.directContour.length >= 3
-            ? "direct-contour"
-            : "control-points",
+          outline.sourceContourMode === "body-only"
+            ? "svg-cutout"
+            : outline.directContour && outline.directContour.length >= 3
+              ? "direct-contour"
+              : "control-points",
         bounds,
         topGuideY: bounds.minY,
       };

@@ -894,6 +894,44 @@ function regularizeBodyOnlyDirectContourLowerShape(args: {
     outHandle: null,
   };
 
+  const effectiveBodyHeight = Math.max(minSpacingMm * 6, raisedBaselineY - bounds.minY);
+  const transitionStartY = round1(clamp(
+    bounds.minY + (effectiveBodyHeight * 0.72),
+    bounds.minY + minSpacingMm,
+    raisedBaselineY - (minSpacingMm * 4),
+  ));
+  const lowerSideStartY = round1(clamp(
+    bounds.minY + (effectiveBodyHeight * 0.86),
+    transitionStartY + (minSpacingMm * 2),
+    raisedBaselineY - (minSpacingMm * 2),
+  ));
+  const bevelY = round1(clamp(
+    raisedBaselineY - minSpacingMm,
+    lowerSideStartY + minSpacingMm,
+    raisedBaselineY - minSpacingMm,
+  ));
+  for (const point of adjusted) {
+    if (point.role === "upperTaper") {
+      point.x = upperBodyHalfWidth;
+      point.y = transitionStartY;
+      point.pointType = "corner";
+      point.inHandle = null;
+      point.outHandle = null;
+    } else if (point.role === "lowerTaper") {
+      point.x = baseHalfWidth;
+      point.y = lowerSideStartY;
+      point.pointType = "corner";
+      point.inHandle = null;
+      point.outHandle = null;
+    } else if (point.role === "bevel") {
+      point.x = baseHalfWidth;
+      point.y = bevelY;
+      point.pointType = "corner";
+      point.inHandle = null;
+      point.outHandle = null;
+    }
+  }
+
   for (let index = baseIndex - 1; index >= 0; index -= 1) {
     const current = adjusted[index]!;
     const next = adjusted[index + 1]!;
