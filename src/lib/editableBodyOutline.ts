@@ -804,7 +804,7 @@ function getContourSegmentsAtY(
 }
 
 function resolveRoundedBaseSafeInsetMmFromBounds(bounds: EditableBodyOutlineContourBounds): number {
-  return round1(clamp(bounds.height * 0.05, 6, 14));
+  return round1(clamp(bounds.height * 0.12, 16, 28));
 }
 
 function regularizeBodyOnlyDirectContourLowerShape(args: {
@@ -841,7 +841,7 @@ function regularizeBodyOnlyDirectContourLowerShape(args: {
   if (!basePoint) return null;
 
   const safeInsetMm = resolveRoundedBaseSafeInsetMmFromBounds(bounds);
-  const minSpacingMm = round1(clamp(bounds.height * 0.03, 4, 8));
+  const minSpacingMm = round1(clamp(bounds.height * 0.025, 4, 7));
   const rawBottomY = round1(bounds.maxY);
   const raisedBaselineY = round1(clamp(
     rawBottomY - safeInsetMm,
@@ -874,11 +874,9 @@ function regularizeBodyOnlyDirectContourLowerShape(args: {
     const current = adjusted[index]!;
     const next = adjusted[index + 1]!;
     if (current.y <= next.y - minSpacingMm) continue;
-    const previousY = adjusted[index - 1]?.y ?? (bounds.minY - minSpacingMm);
-    const nextY = round1(Math.max(previousY + minSpacingMm, next.y - minSpacingMm));
     adjusted[index] = {
       ...current,
-      y: round1(Math.min(current.y, nextY)),
+      y: round1(Math.max(bounds.minY, next.y - minSpacingMm)),
     };
   }
 

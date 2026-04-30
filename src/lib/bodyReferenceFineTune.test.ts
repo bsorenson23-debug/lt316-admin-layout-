@@ -180,8 +180,8 @@ test("primary review outline uses regularized body-only direct contour", () => {
 
   assert.ok(visual);
   assert.equal(visual!.source, "direct-contour");
-  assert.equal(visual!.bounds.maxY, 209);
-  assert.ok(visual!.points.every((point) => point.y <= 209));
+  assert.equal(visual!.bounds.maxY, 193.6);
+  assert.ok(visual!.points.every((point) => point.y <= 193.601));
   assert.notDeepEqual(visual!.points, outline.directContour);
 });
 

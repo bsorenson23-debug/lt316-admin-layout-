@@ -574,9 +574,9 @@ test("outline helper uses the regularized approved direct contour used by review
     minX: -50,
     minY: 0,
     maxX: 50,
-    maxY: 209,
+    maxY: 193.6,
     width: 100,
-    height: 209,
+    height: 193.6,
   });
 });
 

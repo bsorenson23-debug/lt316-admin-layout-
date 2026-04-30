@@ -132,10 +132,10 @@ test("fit-debug body contour top bridge aligns to seam body-top guide without re
   assert.equal(bounds?.minY, expectedBodyTopGuideY);
   assert.equal(outline.sourceContourBounds?.minY, fitDebug.rimBottomPx);
   assert.equal(outline.contourFrame?.acceptedPreviewBounds?.minY, expectedBodyTopGuideY);
-  assert.ok((bounds?.maxY ?? 0) > 231 && (bounds?.maxY ?? 0) < 238);
-  assert.ok((bounds?.height ?? 0) > 214);
+  assert.ok((bounds?.maxY ?? 0) > 214 && (bounds?.maxY ?? 0) < 220);
+  assert.ok((bounds?.height ?? 0) > 199);
   assert.equal(outline.contourFrame?.lowerBowlBaselineRaised, true);
-  assert.ok((outline.contourFrame?.lowerBowlSafeInsetMm ?? 0) >= 6);
+  assert.ok((outline.contourFrame?.lowerBowlSafeInsetMm ?? 0) >= 16);
   assert.ok((bounds?.minY ?? 0) > mappedRimTopY, "rim/top-band pixels above the green guide remain excluded");
   assert.equal(quality.status, "pass");
   assert.equal(quality.expectedBridgeSegmentCount, 2);
@@ -444,8 +444,8 @@ test("body-only direct contour raises a bowl-shaped lower baseline", () => {
   assert.ok(contour);
   assert.ok(bounds);
   assert.equal(rawBounds?.maxY, 220);
-  assert.equal(bounds?.maxY, 209);
-  assert.ok(contour!.every((point) => point.y <= 209.001));
+  assert.equal(bounds?.maxY, 193.6);
+  assert.ok(contour!.every((point) => point.y <= 193.601));
   assert.ok(widthAtY(contour ?? [], bounds!.maxY) >= 60);
   const bottomPoints = contour!.filter((point) => Math.abs(point.y - bounds!.maxY) < 0.001);
   assert.ok(bottomPoints.length >= 2);
@@ -456,14 +456,14 @@ test("body-only direct contour keeps angled lower taper and bevel segments", () 
   const contour = resolveAuthoritativeEditableBodyOutlineContour(makeBowlDirectContourOutline());
 
   assert.ok(contour);
-  const lowerTaperX = rightXAtY(contour, 190);
-  const bevelX = rightXAtY(contour, 204);
-  const baseX = rightXAtY(contour, 209);
+  const lowerTaperX = rightXAtY(contour, 180);
+  const bevelX = rightXAtY(contour, 188);
+  const baseX = rightXAtY(contour, 193.6);
   assert.ok(lowerTaperX != null);
   assert.ok(bevelX != null);
   assert.ok(baseX != null);
   assert.ok(lowerTaperX > bevelX);
-  assert.ok(bevelX >= baseX);
+  assert.ok(baseX >= bevelX);
   assert.ok(baseX >= 30);
 });
 
@@ -480,7 +480,7 @@ test("body-only direct contour regularization preserves left-right symmetry", ()
   const contour = resolveAuthoritativeEditableBodyOutlineContour(makeBowlDirectContourOutline());
 
   assert.ok(contour);
-  for (const y of [160, 190, 204, 209]) {
+  for (const y of [160, 180, 188, 193.6]) {
     const left = leftXAtY(contour, y);
     const right = rightXAtY(contour, y);
     assert.ok(left != null, `expected left side at ${y}`);
@@ -502,11 +502,11 @@ test("body-only direct contour regularization is generic across tapered and stra
 
   assert.ok(tapered);
   assert.ok(straight);
-  assert.equal(taperedBounds?.maxY, 209);
-  assert.equal(straightBounds?.maxY, 209);
+  assert.equal(taperedBounds?.maxY, 193.6);
+  assert.equal(straightBounds?.maxY, 193.6);
   assert.ok((taperedBounds?.width ?? 0) <= 100);
   assert.ok((straightBounds?.width ?? 0) <= 104);
-  assert.ok(widthAtY(straight ?? [], 209) >= 80);
+  assert.ok(widthAtY(straight ?? [], 193.6) >= 90);
 });
 
 test("body-only imported outline preserves full source frame instead of masquerading as body-band fit", () => {

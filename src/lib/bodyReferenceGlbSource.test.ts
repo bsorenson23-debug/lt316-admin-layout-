@@ -127,6 +127,9 @@ function signature(overrides: Partial<Parameters<typeof buildBodyReferenceGlbSou
 test("BODY REFERENCE GLB source signature changes when approved contour geometry changes", () => {
   const changedOutline: EditableBodyOutline = {
     ...baseOutline,
+    points: baseOutline.points.map((point) => (
+      point.role === "base" ? { ...point, x: 36.5 } : point
+    )),
     directContour: [
       ...(baseOutline.directContour ?? []),
       { x: 36.5, y: 172.72 },
