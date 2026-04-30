@@ -66,6 +66,8 @@ export interface EditableBodyOutlineContourFrame {
   croppedAwayBottomMm?: number;
   sourceDiameterUnits?: number;
   mmPerSourceUnit?: number;
+  lowerBowlBaselineRaised?: boolean;
+  lowerBowlSafeInsetMm?: number;
 }
 
 export interface EditableBodyOutline {

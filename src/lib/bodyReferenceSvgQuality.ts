@@ -1239,7 +1239,6 @@ export function buildBodyReferenceSvgQualityReportFromOutline(args: {
   const authoritativeContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
   const usesAuthoritativeOutlinePoints =
     outline.sourceContourMode === "body-only" &&
-    (!outline.sourceContour || outline.sourceContour.length < 3) &&
     Boolean(outline.directContour && outline.directContour.length >= 3) &&
     authoritativeContour != null &&
     authoritativeContour !== outline.directContour;
@@ -1330,7 +1329,6 @@ export function buildBodyReferenceSvgQualityVisualizationFromOutline(args: {
   const authoritativeContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
   const usesAuthoritativeOutlinePoints =
     outline.sourceContourMode === "body-only" &&
-    (!outline.sourceContour || outline.sourceContour.length < 3) &&
     Boolean(outline.directContour && outline.directContour.length >= 3) &&
     authoritativeContour != null &&
     authoritativeContour !== outline.directContour;

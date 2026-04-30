@@ -648,6 +648,14 @@ export function resolveEditableBodyOutlineDirectContour(
     return buildSmoothedContourFromProfile(outline.points);
   }
   if (outline.directContour && outline.directContour.length >= 3) {
+    const regularized = regularizeBodyOnlyDirectContourLowerShape({
+      points: outline.points,
+      directContour: outline.directContour,
+      sourceContourMode: outline.sourceContourMode,
+      sourceContour: outline.sourceContour,
+      contourFrame: outline.contourFrame,
+    });
+    if (regularized) return regularized.directContour;
     return outline.directContour;
   }
   if (outline.points.length >= 2) {
@@ -680,6 +688,20 @@ export function resolveAuthoritativeEditableBodyOutlineContour(
     directContour.length >= 3
   ) {
     return directContour;
+  }
+  if (
+    outline.sourceContourMode === "body-only" &&
+    directContour &&
+    directContour.length >= 3
+  ) {
+    const regularized = regularizeBodyOnlyDirectContourLowerShape({
+      points: outline.points,
+      directContour,
+      sourceContourMode: outline.sourceContourMode,
+      sourceContour: outline.sourceContour,
+      contourFrame: outline.contourFrame,
+    });
+    if (regularized) return regularized.directContour;
   }
   return resolveEditableBodyOutlineDirectContour(outline);
 }
@@ -748,6 +770,14 @@ type DiameterScaledContour = {
   mmPerSourceUnit: number;
 };
 
+type RegularizedBodyOnlyDirectContour = {
+  points: EditableBodyOutlinePoint[];
+  directContour: EditableBodyOutlineContourPoint[];
+  bounds: EditableBodyOutlineContourBounds;
+  safeInsetMm: number;
+  baselineRaised: boolean;
+};
+
 function getContourSegmentsAtY(
   contour: EditableBodyOutlineContourPoint[],
   y: number,
@@ -771,6 +801,97 @@ function getContourSegmentsAtY(
   }
 
   return segments;
+}
+
+function resolveRoundedBaseSafeInsetMmFromBounds(bounds: EditableBodyOutlineContourBounds): number {
+  return round1(clamp(bounds.height * 0.05, 6, 14));
+}
+
+function regularizeBodyOnlyDirectContourLowerShape(args: {
+  points: EditableBodyOutlinePoint[];
+  directContour?: EditableBodyOutlineContourPoint[] | null;
+  sourceContourMode?: EditableBodyOutline["sourceContourMode"];
+  sourceContour?: EditableBodyOutlineContourPoint[] | null;
+  contourFrame?: EditableBodyOutlineContourFrame | null;
+}): RegularizedBodyOnlyDirectContour | null {
+  const directContour = args.directContour ?? null;
+  if (
+    args.sourceContourMode !== "body-only" ||
+    args.contourFrame?.lowerBowlBaselineRaised === true ||
+    !directContour ||
+    directContour.length < 3 ||
+    !args.sourceContour ||
+    args.sourceContour.length < 3 ||
+    args.points.length < 2
+  ) {
+    return null;
+  }
+
+  const bounds = getBounds(directContour);
+  if (!bounds || !(bounds.height > 0)) return null;
+
+  const sorted = sortEditableOutlinePoints(args.points);
+  const baseIndex = (() => {
+    for (let index = sorted.length - 1; index >= 0; index -= 1) {
+      if (sorted[index]?.role === "base") return index;
+    }
+    return sorted.length - 1;
+  })();
+  const basePoint = sorted[baseIndex];
+  if (!basePoint) return null;
+
+  const safeInsetMm = resolveRoundedBaseSafeInsetMmFromBounds(bounds);
+  const minSpacingMm = round1(clamp(bounds.height * 0.03, 4, 8));
+  const rawBottomY = round1(bounds.maxY);
+  const raisedBaselineY = round1(clamp(
+    rawBottomY - safeInsetMm,
+    bounds.minY + minSpacingMm,
+    rawBottomY,
+  ));
+  if (raisedBaselineY >= rawBottomY - 0.05) return null;
+
+  const adjusted = sorted.map((point) => ({ ...point }));
+  const maxHalfWidth = Math.max(0.5, Math.abs(bounds.minX), Math.abs(bounds.maxX));
+  const previousPoint = adjusted[baseIndex - 1] ?? null;
+  const baselineHalfWidth = nearestHalfWidthAtY(directContour, raisedBaselineY);
+  const supportHalfWidth = previousPoint ? Math.abs(previousPoint.x) * 0.88 : 0;
+  const baseHalfWidth = round1(clamp(
+    Math.max(Math.abs(basePoint.x), baselineHalfWidth, supportHalfWidth),
+    0.5,
+    maxHalfWidth,
+  ));
+
+  adjusted[baseIndex] = {
+    ...basePoint,
+    x: baseHalfWidth,
+    y: raisedBaselineY,
+    pointType: "corner",
+    inHandle: null,
+    outHandle: null,
+  };
+
+  for (let index = baseIndex - 1; index >= 0; index -= 1) {
+    const current = adjusted[index]!;
+    const next = adjusted[index + 1]!;
+    if (current.y <= next.y - minSpacingMm) continue;
+    const previousY = adjusted[index - 1]?.y ?? (bounds.minY - minSpacingMm);
+    const nextY = round1(Math.max(previousY + minSpacingMm, next.y - minSpacingMm));
+    adjusted[index] = {
+      ...current,
+      y: round1(Math.min(current.y, nextY)),
+    };
+  }
+
+  const adjustedDirectContour = buildSmoothedContourFromProfile(adjusted);
+  const directContourBounds = getBounds(adjustedDirectContour);
+  if (!directContourBounds) return null;
+  return {
+    points: adjusted,
+    directContour: adjustedDirectContour,
+    bounds: directContourBounds,
+    safeInsetMm,
+    baselineRaised: true,
+  };
 }
 
 function sampleHalfWidthFromContour(
@@ -1025,6 +1146,8 @@ function buildContourFrameDiagnostics(args: {
   authoritativeForPrintableBand: boolean;
   sourceDiameterUnits?: number | null;
   mmPerSourceUnit?: number | null;
+  lowerBowlBaselineRaised?: boolean;
+  lowerBowlSafeInsetMm?: number | null;
 }): EditableBodyOutlineContourFrame {
   const before = cloneContourBounds(args.boundsBeforeBandCrop);
   const after = cloneContourBounds(args.boundsAfterBandCrop);
@@ -1056,6 +1179,11 @@ function buildContourFrameDiagnostics(args: {
         ? round1(args.sourceDiameterUnits)
         : undefined,
     mmPerSourceUnit: scale ? round4(scale) : undefined,
+    lowerBowlBaselineRaised: args.lowerBowlBaselineRaised === true ? true : undefined,
+    lowerBowlSafeInsetMm:
+      args.lowerBowlSafeInsetMm && args.lowerBowlSafeInsetMm > 0
+        ? round1(args.lowerBowlSafeInsetMm)
+        : undefined,
   };
 }
 
@@ -2106,12 +2234,21 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
         taperLowerDiameterMm: args.taperLowerDiameterMm ?? null,
         bevelDiameterMm: args.bevelDiameterMm ?? null,
       });
+      const regularized = regularizeBodyOnlyDirectContourLowerShape({
+        points,
+        directContour: scaledBodyContour.contour,
+        sourceContourMode: "body-only",
+        sourceContour: scaledBodyContour.sourceContour,
+      });
+      const acceptedPoints = regularized?.points ?? points;
+      const acceptedDirectContour = regularized?.directContour ?? scaledBodyContour.contour;
+      const acceptedContourBounds = regularized?.bounds ?? scaledBodyContour.contourBounds;
 
       return {
         closed: true,
         version: 1,
-        points,
-        directContour: scaledBodyContour.contour,
+        points: acceptedPoints,
+        directContour: acceptedDirectContour,
         sourceContour: scaledBodyContour.sourceContour,
         sourceContourBounds: scaledBodyContour.sourceBounds,
         sourceContourMode: "body-only",
@@ -2126,9 +2263,9 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
           sourceCoordinateSpace: "raw-image-px",
           boundsBeforeBandCrop: scaledBodyContour.sourceBounds,
           boundsAfterBandCrop: null,
-          acceptedPreviewBounds: scaledBodyContour.contourBounds,
-          glbInputBounds: scaledBodyContour.contourBounds,
-          canonicalInputBounds: scaledBodyContour.contourBounds,
+          acceptedPreviewBounds: acceptedContourBounds,
+          glbInputBounds: acceptedContourBounds,
+          canonicalInputBounds: acceptedContourBounds,
           bandCropApplied: false,
           bandCropReason: "fit-debug source contour is already body-only; printable band is metadata only",
           bodyOnlyReCropSkipped: true,
@@ -2136,6 +2273,8 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
           authoritativeForPrintableBand: false,
           sourceDiameterUnits: scaledBodyContour.sourceDiameterUnits,
           mmPerSourceUnit: scaledBodyContour.mmPerSourceUnit,
+          lowerBowlBaselineRaised: regularized?.baselineRaised,
+          lowerBowlSafeInsetMm: regularized?.safeInsetMm,
         }),
       };
     }
@@ -2256,12 +2395,21 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
       taperLowerDiameterMm: null,
       bevelDiameterMm: null,
     });
+    const regularized = regularizeBodyOnlyDirectContourLowerShape({
+      points,
+      directContour: scaledFullBodyContour.contour,
+      sourceContourMode: "body-only",
+      sourceContour: fullBodySourceContour,
+    });
+    const acceptedPoints = regularized?.points ?? points;
+    const acceptedDirectContour = regularized?.directContour ?? scaledFullBodyContour.contour;
+    const acceptedContourBounds = regularized?.bounds ?? scaledFullBodyContour.contourBounds;
 
     return {
       closed: true,
       version: 1,
-      points,
-      directContour: scaledFullBodyContour.contour,
+      points: acceptedPoints,
+      directContour: acceptedDirectContour,
       sourceContour: fullBodySourceContour.map((point) => ({ ...point })),
       sourceContourBounds: scaledFullBodyContour.sourceBounds,
       printableBandContour: printableBandContour?.map((point) => ({ ...point })),
@@ -2278,9 +2426,9 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
         sourceCoordinateSpace: "raw-image-px",
         boundsBeforeBandCrop: rawBounds,
         boundsAfterBandCrop: printableBandContourBounds,
-        acceptedPreviewBounds: scaledFullBodyContour.contourBounds,
-        glbInputBounds: scaledFullBodyContour.contourBounds,
-        canonicalInputBounds: scaledFullBodyContour.contourBounds,
+        acceptedPreviewBounds: acceptedContourBounds,
+        glbInputBounds: acceptedContourBounds,
+        canonicalInputBounds: acceptedContourBounds,
         bandCropApplied: false,
         bandCropReason: "trace body-only contour preserves the accepted body shell; printable band is stored separately",
         bodyOnlyReCropSkipped: true,
@@ -2288,6 +2436,8 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
         authoritativeForPrintableBand: false,
         sourceDiameterUnits: scaledFullBodyContour.sourceDiameterUnits,
         mmPerSourceUnit: scaledFullBodyContour.mmPerSourceUnit,
+        lowerBowlBaselineRaised: regularized?.baselineRaised,
+        lowerBowlSafeInsetMm: regularized?.safeInsetMm,
       }),
     };
   }
@@ -2428,12 +2578,21 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
         taperLowerDiameterMm: args.taperLowerDiameterMm ?? null,
         bevelDiameterMm: args.bevelDiameterMm ?? null,
       });
+      const regularized = regularizeBodyOnlyDirectContourLowerShape({
+        points,
+        directContour: scaledFullBodyContour.contour,
+        sourceContourMode: "body-only",
+        sourceContour: fullBodySourceContour,
+      });
+      const acceptedPoints = regularized?.points ?? points;
+      const acceptedDirectContour = regularized?.directContour ?? scaledFullBodyContour.contour;
+      const acceptedContourBounds = regularized?.bounds ?? scaledFullBodyContour.contourBounds;
 
       return {
         closed: true,
         version: 1,
-        points,
-        directContour: scaledFullBodyContour.contour,
+        points: acceptedPoints,
+        directContour: acceptedDirectContour,
         sourceContour: fullBodySourceContour.map((point) => ({ ...point })),
         sourceContourBounds: scaledFullBodyContour.sourceBounds,
         printableBandContour: printableBandContour?.map((point) => ({ ...point })),
@@ -2445,9 +2604,9 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
           sourceCoordinateSpace: "svg-px",
           boundsBeforeBandCrop: source.bounds,
           boundsAfterBandCrop: printableBandContourBounds,
-          acceptedPreviewBounds: scaledFullBodyContour.contourBounds,
-          glbInputBounds: scaledFullBodyContour.contourBounds,
-          canonicalInputBounds: scaledFullBodyContour.contourBounds,
+          acceptedPreviewBounds: acceptedContourBounds,
+          glbInputBounds: acceptedContourBounds,
+          canonicalInputBounds: acceptedContourBounds,
           bandCropApplied: false,
           bandCropReason: "imported body-only contour preserves full accepted shell; printable band is stored separately",
           bodyOnlyReCropSkipped: true,
@@ -2455,6 +2614,8 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
           authoritativeForPrintableBand: false,
           sourceDiameterUnits: scaledFullBodyContour.sourceDiameterUnits,
           mmPerSourceUnit: scaledFullBodyContour.mmPerSourceUnit,
+          lowerBowlBaselineRaised: regularized?.baselineRaised,
+          lowerBowlSafeInsetMm: regularized?.safeInsetMm,
         }),
       };
     }
@@ -2547,22 +2708,48 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
     taperLowerDiameterMm: args.taperLowerDiameterMm ?? null,
     bevelDiameterMm: args.bevelDiameterMm ?? null,
   });
+  const rawDirectContour =
+    seamAnchoredBodyOnlyOutline?.directContour
+    ?? (
+      sourceMode === "body-only" && contour.length >= 8
+        ? contour.map((point) => ({ ...point }))
+        : buildSmoothedContourFromProfile(points)
+    );
+  const rawPoints = seamAnchoredBodyOnlyOutline?.points ?? points;
+  const regularized = regularizeBodyOnlyDirectContourLowerShape({
+    points: rawPoints,
+    directContour: rawDirectContour,
+    sourceContourMode: "body-only",
+    sourceContour: previewSourceContour,
+  });
 
   return {
     closed: true,
     version: 1,
-    points: seamAnchoredBodyOnlyOutline?.points ?? points,
-    directContour:
-      seamAnchoredBodyOnlyOutline?.directContour
-      ?? (
-        sourceMode === "body-only" && contour.length >= 8
-          ? contour.map((point) => ({ ...point }))
-          : buildSmoothedContourFromProfile(points)
-      ),
+    points: regularized?.points ?? rawPoints,
+    directContour: regularized?.directContour ?? rawDirectContour,
     sourceContour: previewSourceContour.map((point) => ({ ...point })),
     sourceContourBounds: previewBounds,
     sourceContourMode: "body-only",
     sourceContourViewport: source.viewport,
+    contourFrame: regularized
+      ? buildContourFrameDiagnostics({
+          kind: "full-body-only-source",
+          sourceCoordinateSpace: "svg-px",
+          boundsBeforeBandCrop: source.bounds,
+          boundsAfterBandCrop: null,
+          acceptedPreviewBounds: regularized.bounds,
+          glbInputBounds: regularized.bounds,
+          canonicalInputBounds: regularized.bounds,
+          bandCropApplied: false,
+          bandCropReason: "imported body-only contour preserves full accepted shell; printable band is stored separately",
+          bodyOnlyReCropSkipped: true,
+          authoritativeForBodyCutoutQa: true,
+          authoritativeForPrintableBand: false,
+          lowerBowlBaselineRaised: regularized.baselineRaised,
+          lowerBowlSafeInsetMm: regularized.safeInsetMm,
+        })
+      : undefined,
   };
 }
 

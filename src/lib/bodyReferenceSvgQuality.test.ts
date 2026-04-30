@@ -535,7 +535,7 @@ test("unsupported path-only inputs report quality as unavailable instead of inve
   assert.match(report.warnings.join(" "), /sampled contour points were not provided/i);
 });
 
-test("outline helper prefers the approved direct contour used by reviewed GLB generation", () => {
+test("outline helper uses the regularized approved direct contour used by reviewed GLB generation", () => {
   const report = buildBodyReferenceSvgQualityReportFromOutline({
     outline: {
       closed: true,
@@ -574,9 +574,9 @@ test("outline helper prefers the approved direct contour used by reviewed GLB ge
     minX: -50,
     minY: 0,
     maxX: 50,
-    maxY: 220,
+    maxY: 209,
     width: 100,
-    height: 220,
+    height: 209,
   });
 });
 

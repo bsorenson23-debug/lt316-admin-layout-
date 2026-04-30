@@ -262,7 +262,10 @@ export function resolvePrimaryBodyReferenceVisualContour(
     if (bounds) {
       return {
         points: authoritativeContour.map((point) => ({ x: point.x, y: point.y })),
-        source: authoritativeContour === outline.directContour ? "direct-contour" : "control-points",
+        source:
+          outline.directContour && outline.directContour.length >= 3
+            ? "direct-contour"
+            : "control-points",
         bounds,
         topGuideY: bounds.minY,
       };

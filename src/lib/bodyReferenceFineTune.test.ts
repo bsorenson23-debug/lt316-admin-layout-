@@ -44,6 +44,16 @@ function makeOutline(): EditableBodyOutline {
       { x: 100, y: 200 },
       { x: 100, y: 20 },
     ],
+    contourFrame: {
+      kind: "full-body-only-source",
+      authoritativeForBodyCutoutQa: true,
+      authoritativeForPrintableBand: false,
+      sourceCoordinateSpace: "raw-image-px",
+      bandCropApplied: false,
+      bodyOnlyReCropSkipped: true,
+      lowerBowlBaselineRaised: true,
+      lowerBowlSafeInsetMm: 6,
+    },
   };
 }
 
@@ -137,6 +147,42 @@ test("primary review outline prefers approved direct contour over sparse edit co
   assert.equal(visual!.topGuideY, 25);
   assert.equal(visual!.bounds.height, 199.8);
   assert.equal(visual!.points.length, outline.directContour.length);
+});
+
+test("primary review outline uses regularized body-only direct contour", () => {
+  const outline = makeOutline();
+  outline.contourFrame = undefined;
+  outline.points = [
+    { id: "top", x: 45, y: 0, role: "topOuter", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "body", x: 45, y: 80, role: "body", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "shoulder", x: 43, y: 155, role: "shoulder", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "lowerTaper", x: 35, y: 190, role: "lowerTaper", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "bevel", x: 18, y: 214, role: "bevel", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "base", x: 8, y: 220, role: "base", pointType: "corner", inHandle: null, outHandle: null },
+  ];
+  outline.directContour = [
+    { x: 45, y: 0 },
+    { x: 45, y: 80 },
+    { x: 43, y: 155 },
+    { x: 35, y: 190 },
+    { x: 18, y: 214 },
+    { x: 8, y: 220 },
+    { x: -8, y: 220 },
+    { x: -18, y: 214 },
+    { x: -35, y: 190 },
+    { x: -43, y: 155 },
+    { x: -45, y: 80 },
+    { x: -45, y: 0 },
+  ];
+  outline.sourceContour = outline.directContour.map((point) => ({ ...point }));
+
+  const visual = resolvePrimaryBodyReferenceVisualContour(outline);
+
+  assert.ok(visual);
+  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.bounds.maxY, 209);
+  assert.ok(visual!.points.every((point) => point.y <= 209));
+  assert.notDeepEqual(visual!.points, outline.directContour);
 });
 
 test("printable band metadata cannot replace approved SVG visual authority", () => {
