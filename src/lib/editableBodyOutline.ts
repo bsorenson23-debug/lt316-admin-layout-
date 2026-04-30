@@ -852,6 +852,30 @@ function regularizeBodyOnlyDirectContourLowerShape(args: {
 
   const adjusted = sorted.map((point) => ({ ...point }));
   const maxHalfWidth = Math.max(0.5, Math.abs(bounds.minX), Math.abs(bounds.maxX));
+  const upperBodyHalfWidth = round1(clamp(
+    Math.max(
+      ...adjusted
+        .filter((point) => (
+          point.role === "topOuter" ||
+          point.role === "body" ||
+          point.role === "shoulder"
+        ))
+        .map((point) => Math.abs(point.x)),
+      0,
+    ),
+    0.5,
+    maxHalfWidth,
+  ));
+  for (const point of adjusted) {
+    if (
+      point.role === "topOuter" ||
+      point.role === "body" ||
+      point.role === "shoulder" ||
+      point.role === "upperTaper"
+    ) {
+      point.x = upperBodyHalfWidth;
+    }
+  }
   const previousPoint = adjusted[baseIndex - 1] ?? null;
   const baselineHalfWidth = nearestHalfWidthAtY(directContour, raisedBaselineY);
   const supportHalfWidth = previousPoint ? Math.abs(previousPoint.x) * 0.88 : 0;
