@@ -148,6 +148,65 @@ test("BODY REFERENCE GLB source signature changes when approved contour geometry
   );
 });
 
+test("BODY REFERENCE GLB source payload uses clipped accepted contour instead of raw rounded base", () => {
+  const roundedBaseOutline: EditableBodyOutline = {
+    closed: true,
+    version: 1,
+    sourceContourMode: "body-only",
+    points: [
+      { id: "top", x: 45, y: 0, role: "topOuter", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "body", x: 45, y: 80, role: "body", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "shoulder", x: 43, y: 155, role: "shoulder", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "lowerTaper", x: 35, y: 190, role: "lowerTaper", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "bevel", x: 18, y: 214, role: "bevel", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "base", x: 8, y: 220, role: "base", pointType: "corner", inHandle: null, outHandle: null },
+    ],
+    directContour: [
+      { x: 45, y: 0 },
+      { x: 45, y: 80 },
+      { x: 43, y: 155 },
+      { x: 35, y: 190 },
+      { x: 18, y: 214 },
+      { x: 8, y: 220 },
+      { x: -8, y: 220 },
+      { x: -18, y: 214 },
+      { x: -35, y: 190 },
+      { x: -43, y: 155 },
+      { x: -45, y: 80 },
+      { x: -45, y: 0 },
+    ],
+    sourceContour: [
+      { x: 45, y: 0 },
+      { x: 45, y: 80 },
+      { x: 43, y: 155 },
+      { x: 35, y: 190 },
+      { x: 18, y: 214 },
+      { x: 8, y: 220 },
+      { x: -8, y: 220 },
+      { x: -18, y: 214 },
+      { x: -35, y: 190 },
+      { x: -43, y: 155 },
+      { x: -45, y: 80 },
+      { x: -45, y: 0 },
+    ],
+  };
+
+  const payload = buildBodyReferenceGlbSourcePayload({
+    renderMode: "body-cutout-qa",
+    bodyOutline: roundedBaseOutline,
+    canonicalBodyProfile: baseProfile,
+    canonicalDimensionCalibration: baseCalibration,
+  });
+  const authoritativeContour = payload.bodyOutline?.authoritativeContour ?? [];
+
+  assert.equal(authoritativeContour.some((point) => point.y > 209), false);
+  assert.equal(authoritativeContour.some((point) => point.x === 8 && point.y === 220), false);
+  assert.deepEqual(
+    authoritativeContour.filter((point) => point.y === 209).map((point) => point.x),
+    [21.5, -21.5],
+  );
+});
+
 test("BODY REFERENCE GLB source signature resolves stale cached manual contours from points", () => {
   const manualOutlineWithStaleContour: EditableBodyOutline = {
     closed: true,

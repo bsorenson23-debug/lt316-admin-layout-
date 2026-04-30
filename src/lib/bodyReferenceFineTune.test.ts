@@ -180,9 +180,69 @@ test("primary review outline uses regularized body-only direct contour", () => {
 
   assert.ok(visual);
   assert.equal(visual!.source, "svg-cutout");
-  assert.equal(visual!.bounds.maxY, 193.6);
-  assert.ok(visual!.points.every((point) => point.y <= 193.601));
+  assert.equal(visual!.bounds.maxY, 209);
+  assert.ok(visual!.points.every((point) => point.y <= 209.001));
+  assert.equal(visual!.points.some((point) => point.y > 209), false);
   assert.notDeepEqual(visual!.points, outline.directContour);
+});
+
+test("accepted corrected clipped contour updates source hash", () => {
+  const roundedBaseOutline = makeOutline();
+  roundedBaseOutline.contourFrame = undefined;
+  roundedBaseOutline.points = [
+    { id: "top", x: 45, y: 0, role: "topOuter", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "body", x: 45, y: 80, role: "body", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "shoulder", x: 43, y: 155, role: "shoulder", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "lowerTaper", x: 35, y: 190, role: "lowerTaper", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "bevel", x: 18, y: 214, role: "bevel", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "base", x: 8, y: 220, role: "base", pointType: "corner", inHandle: null, outHandle: null },
+  ];
+  roundedBaseOutline.directContour = [
+    { x: 45, y: 0 },
+    { x: 45, y: 80 },
+    { x: 43, y: 155 },
+    { x: 35, y: 190 },
+    { x: 18, y: 214 },
+    { x: 8, y: 220 },
+    { x: -8, y: 220 },
+    { x: -18, y: 214 },
+    { x: -35, y: 190 },
+    { x: -43, y: 155 },
+    { x: -45, y: 80 },
+    { x: -45, y: 0 },
+  ];
+  roundedBaseOutline.sourceContour = roundedBaseOutline.directContour.map((point) => ({ ...point }));
+  const rawSignature = buildOutlineGeometrySignature({
+    ...roundedBaseOutline,
+    contourFrame: {
+      kind: "full-body-only-source",
+      authoritativeForBodyCutoutQa: true,
+      authoritativeForPrintableBand: false,
+      sourceCoordinateSpace: "raw-image-px",
+      bandCropApplied: false,
+      bodyOnlyReCropSkipped: true,
+      lowerBowlBaselineRaised: true,
+      lowerBowlSafeInsetMm: 0,
+    },
+  });
+
+  const rebuilt = rebuildAcceptedBodyReferenceSnapshot({
+    acceptedOutline: roundedBaseOutline,
+    overallHeightMm: 240,
+    topMarginMm: 0,
+    bottomMarginMm: 20,
+    diameterMm: 90,
+    baseDiameterMm: 70,
+    fitDebug: makeFitDebug(),
+  });
+
+  assert.ok(rebuilt);
+  const acceptedSignature = buildOutlineGeometrySignature(rebuilt!.approvedBodyOutline);
+  const visual = resolvePrimaryBodyReferenceVisualContour(rebuilt!.approvedBodyOutline);
+  assert.notEqual(acceptedSignature, rawSignature);
+  assert.equal(visual?.bounds.maxY, 209);
+  assert.equal(visual?.points.some((point) => point.y > 209), false);
+  assert.equal(rebuilt!.readyForReviewedGeneration, true);
 });
 
 test("printable band metadata cannot replace approved SVG visual authority", () => {

@@ -254,6 +254,10 @@ function round1(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
+function round1Symmetric(value: number): number {
+  return value < 0 ? -round1(Math.abs(value)) : round1(value);
+}
+
 function round4(value: number): number {
   return Math.round(value * 10000) / 10000;
 }
@@ -749,7 +753,7 @@ function getContourIntersectionsAtY(
     }
     const t = (y - current.y) / (next.y - current.y);
     if (t < 0 || t > 1) continue;
-    xs.push(round1(current.x + ((next.x - current.x) * t)));
+    xs.push(round1Symmetric(current.x + ((next.x - current.x) * t)));
   }
   return xs;
 }
@@ -778,6 +782,15 @@ type RegularizedBodyOnlyDirectContour = {
   baselineRaised: boolean;
 };
 
+export type FlatBottomBodyCutoutContour = {
+  directContour: EditableBodyOutlineContourPoint[];
+  bounds: EditableBodyOutlineContourBounds;
+  cutoffY: number;
+  leftCutoffX: number;
+  rightCutoffX: number;
+  safeInsetMm: number;
+};
+
 function getContourSegmentsAtY(
   contour: EditableBodyOutlineContourPoint[],
   y: number,
@@ -804,7 +817,190 @@ function getContourSegmentsAtY(
 }
 
 function resolveRoundedBaseSafeInsetMmFromBounds(bounds: EditableBodyOutlineContourBounds): number {
-  return round1(clamp(bounds.height * 0.12, 16, 28));
+  return round1(clamp(bounds.height * 0.05, 6, 14));
+}
+
+function contourIntersectionPointAtY(
+  start: EditableBodyOutlineContourPoint,
+  end: EditableBodyOutlineContourPoint,
+  y: number,
+): EditableBodyOutlineContourPoint {
+  if (Math.abs(end.y - start.y) < 0.0001) {
+    return { x: round1(start.x), y: round1(y) };
+  }
+  const t = clamp((y - start.y) / (end.y - start.y), 0, 1);
+  return {
+    x: round1Symmetric(start.x + ((end.x - start.x) * t)),
+    y: round1(y),
+  };
+}
+
+function dedupeAdjacentContourPoints(
+  points: EditableBodyOutlineContourPoint[],
+): EditableBodyOutlineContourPoint[] {
+  const deduped: EditableBodyOutlineContourPoint[] = [];
+  for (const point of points) {
+    const previous = deduped[deduped.length - 1];
+    if (
+      previous &&
+      Math.abs(previous.x - point.x) < 0.001 &&
+      Math.abs(previous.y - point.y) < 0.001
+    ) {
+      continue;
+    }
+    deduped.push(point);
+  }
+  const first = deduped[0];
+  const last = deduped[deduped.length - 1];
+  if (
+    first &&
+    last &&
+    deduped.length > 1 &&
+    Math.abs(first.x - last.x) < 0.001 &&
+    Math.abs(first.y - last.y) < 0.001
+  ) {
+    deduped.pop();
+  }
+  return deduped;
+}
+
+function clipContourAtMaxY(
+  contour: EditableBodyOutlineContourPoint[],
+  cutoffY: number,
+): EditableBodyOutlineContourPoint[] {
+  if (contour.length < 3) return [];
+  const clipped: EditableBodyOutlineContourPoint[] = [];
+  for (let index = 0; index < contour.length; index += 1) {
+    const current = contour[index]!;
+    const previous = contour[(index + contour.length - 1) % contour.length]!;
+    const currentInside = current.y <= cutoffY + 0.0001;
+    const previousInside = previous.y <= cutoffY + 0.0001;
+
+    if (currentInside) {
+      if (!previousInside) {
+        clipped.push(contourIntersectionPointAtY(previous, current, cutoffY));
+      }
+      clipped.push({ x: round1(current.x), y: round1(current.y) });
+    } else if (previousInside) {
+      clipped.push(contourIntersectionPointAtY(previous, current, cutoffY));
+    }
+  }
+  return dedupeAdjacentContourPoints(clipped);
+}
+
+function bottomPointWidthAtY(
+  contour: EditableBodyOutlineContourPoint[],
+  y: number,
+): number {
+  const bottomPoints = contour.filter((point) => Math.abs(point.y - y) < 0.05);
+  if (bottomPoints.length < 2) return 0;
+  const xs = bottomPoints.map((point) => point.x);
+  return round1(Math.max(...xs) - Math.min(...xs));
+}
+
+export function clipBodyOnlyContourAtRoundedBaseCutoff(args: {
+  directContour?: EditableBodyOutlineContourPoint[] | null;
+  sourceContourMode?: EditableBodyOutline["sourceContourMode"];
+  lowerShoulderY?: number | null;
+}): FlatBottomBodyCutoutContour | null {
+  const directContour = args.directContour ?? null;
+  if (args.sourceContourMode !== "body-only" || !directContour || directContour.length < 3) {
+    return null;
+  }
+
+  const bounds = getBounds(directContour);
+  if (!bounds || !(bounds.height > 0)) return null;
+
+  const rawBottomY = round1(bounds.maxY);
+  const safeInsetMm = resolveRoundedBaseSafeInsetMmFromBounds(bounds);
+  const minSpacingMm = round1(clamp(bounds.height * 0.015, 2, 5));
+  const lowerShoulderY =
+    typeof args.lowerShoulderY === "number" && Number.isFinite(args.lowerShoulderY)
+      ? args.lowerShoulderY
+      : null;
+  const minCutoffY = round1(Math.max(
+    bounds.minY + minSpacingMm,
+    lowerShoulderY != null && lowerShoulderY < rawBottomY - minSpacingMm
+      ? lowerShoulderY + minSpacingMm
+      : bounds.minY + minSpacingMm,
+  ));
+  const maxCutoffY = round1(rawBottomY - 0.5);
+  const cutoffY = round1(clamp(rawBottomY - safeInsetMm, minCutoffY, maxCutoffY));
+  if (cutoffY >= rawBottomY - 0.05) return null;
+
+  const segments = getContourSegmentsAtY(directContour, cutoffY);
+  if (segments.length === 0) return null;
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const segment = segments.reduce((best, candidate) => {
+    const bestDistance = Math.abs(best.centerX - centerX);
+    const candidateDistance = Math.abs(candidate.centerX - centerX);
+    if (candidateDistance < bestDistance - 0.05) return candidate;
+    if (bestDistance < candidateDistance - 0.05) return best;
+    return candidate.width > best.width ? candidate : best;
+  });
+  if (segment.width <= 0.1) return null;
+
+  const rawBottomWidth = bottomPointWidthAtY(directContour, rawBottomY);
+  if (rawBottomWidth >= segment.width * 0.94) {
+    return null;
+  }
+
+  const clipped = clipContourAtMaxY(directContour, cutoffY);
+  const clippedBounds = getBounds(clipped);
+  if (!clippedBounds || clipped.length < 3) return null;
+  return {
+    directContour: clipped,
+    bounds: clippedBounds,
+    cutoffY,
+    leftCutoffX: segment.leftX,
+    rightCutoffX: segment.rightX,
+    safeInsetMm,
+  };
+}
+
+function adjustBodyOnlyPointsForFlatCutoff(args: {
+  points: EditableBodyOutlinePoint[];
+  rawContour: EditableBodyOutlineContourPoint[];
+  cutoff: FlatBottomBodyCutoutContour;
+}): EditableBodyOutlinePoint[] {
+  const adjusted = sortEditableOutlinePoints(args.points).map((point) => ({ ...point }));
+  if (adjusted.length === 0) return adjusted;
+  const baseIndex = (() => {
+    for (let index = adjusted.length - 1; index >= 0; index -= 1) {
+      if (adjusted[index]?.role === "base") return index;
+    }
+    return adjusted.length - 1;
+  })();
+  const basePoint = adjusted[baseIndex];
+  if (!basePoint) return adjusted;
+
+  const minSpacingMm = round1(clamp(args.cutoff.bounds.height * 0.015, 2, 5));
+  const cutoffHalfWidth = round1(Math.max(Math.abs(args.cutoff.leftCutoffX), Math.abs(args.cutoff.rightCutoffX), 0.5));
+  adjusted[baseIndex] = {
+    ...basePoint,
+    x: cutoffHalfWidth,
+    y: args.cutoff.cutoffY,
+    pointType: "corner",
+    inHandle: null,
+    outHandle: null,
+  };
+
+  for (let index = baseIndex - 1; index >= 0; index -= 1) {
+    const current = adjusted[index]!;
+    const next = adjusted[index + 1]!;
+    if (current.y <= next.y - minSpacingMm) continue;
+    const nextY = round1(Math.max(args.cutoff.bounds.minY, next.y - minSpacingMm));
+    adjusted[index] = {
+      ...current,
+      x: round1(Math.max(0.5, nearestHalfWidthAtY(args.rawContour, nextY))),
+      y: nextY,
+      pointType: current.role === "body" || current.role === "shoulder" ? current.pointType : "corner",
+      inHandle: null,
+      outHandle: null,
+    };
+  }
+
+  return adjusted;
 }
 
 function regularizeBodyOnlyDirectContourLowerShape(args: {
@@ -831,126 +1027,73 @@ function regularizeBodyOnlyDirectContourLowerShape(args: {
   if (!bounds || !(bounds.height > 0)) return null;
 
   const sorted = sortEditableOutlinePoints(args.points);
-  const baseIndex = (() => {
-    for (let index = sorted.length - 1; index >= 0; index -= 1) {
-      if (sorted[index]?.role === "base") return index;
-    }
-    return sorted.length - 1;
-  })();
-  const basePoint = sorted[baseIndex];
-  if (!basePoint) return null;
-
-  const safeInsetMm = resolveRoundedBaseSafeInsetMmFromBounds(bounds);
-  const minSpacingMm = round1(clamp(bounds.height * 0.025, 4, 7));
-  const rawBottomY = round1(bounds.maxY);
-  const raisedBaselineY = round1(clamp(
-    rawBottomY - safeInsetMm,
-    bounds.minY + minSpacingMm,
-    rawBottomY,
-  ));
-  if (raisedBaselineY >= rawBottomY - 0.05) return null;
-
-  const adjusted = sorted.map((point) => ({ ...point }));
-  const maxHalfWidth = Math.max(0.5, Math.abs(bounds.minX), Math.abs(bounds.maxX));
-  const upperBodyHalfWidth = round1(clamp(
-    Math.max(
-      ...adjusted
-        .filter((point) => (
-          point.role === "topOuter" ||
-          point.role === "body" ||
-          point.role === "shoulder"
-        ))
-        .map((point) => Math.abs(point.x)),
-      0,
-    ),
-    0.5,
-    maxHalfWidth,
-  ));
-  for (const point of adjusted) {
-    if (
-      point.role === "topOuter" ||
-      point.role === "body" ||
-      point.role === "shoulder" ||
-      point.role === "upperTaper"
-    ) {
-      point.x = upperBodyHalfWidth;
-    }
-  }
-  const previousPoint = adjusted[baseIndex - 1] ?? null;
-  const baselineHalfWidth = nearestHalfWidthAtY(directContour, raisedBaselineY);
-  const supportHalfWidth = previousPoint ? Math.abs(previousPoint.x) * 0.88 : 0;
-  const baseHalfWidth = round1(clamp(
-    Math.max(Math.abs(basePoint.x), baselineHalfWidth, supportHalfWidth),
-    0.5,
-    maxHalfWidth,
-  ));
-
-  adjusted[baseIndex] = {
-    ...basePoint,
-    x: baseHalfWidth,
-    y: raisedBaselineY,
-    pointType: "corner",
-    inHandle: null,
-    outHandle: null,
-  };
-
-  const effectiveBodyHeight = Math.max(minSpacingMm * 6, raisedBaselineY - bounds.minY);
-  const transitionStartY = round1(clamp(
-    bounds.minY + (effectiveBodyHeight * 0.72),
-    bounds.minY + minSpacingMm,
-    raisedBaselineY - (minSpacingMm * 4),
-  ));
-  const lowerSideStartY = round1(clamp(
-    bounds.minY + (effectiveBodyHeight * 0.86),
-    transitionStartY + (minSpacingMm * 2),
-    raisedBaselineY - (minSpacingMm * 2),
-  ));
-  const bevelY = round1(clamp(
-    raisedBaselineY - minSpacingMm,
-    lowerSideStartY + minSpacingMm,
-    raisedBaselineY - minSpacingMm,
-  ));
-  for (const point of adjusted) {
-    if (point.role === "upperTaper") {
-      point.x = upperBodyHalfWidth;
-      point.y = transitionStartY;
-      point.pointType = "corner";
-      point.inHandle = null;
-      point.outHandle = null;
-    } else if (point.role === "lowerTaper") {
-      point.x = baseHalfWidth;
-      point.y = lowerSideStartY;
-      point.pointType = "corner";
-      point.inHandle = null;
-      point.outHandle = null;
-    } else if (point.role === "bevel") {
-      point.x = baseHalfWidth;
-      point.y = bevelY;
-      point.pointType = "corner";
-      point.inHandle = null;
-      point.outHandle = null;
-    }
-  }
-
-  for (let index = baseIndex - 1; index >= 0; index -= 1) {
-    const current = adjusted[index]!;
-    const next = adjusted[index + 1]!;
-    if (current.y <= next.y - minSpacingMm) continue;
-    adjusted[index] = {
-      ...current,
-      y: round1(Math.max(bounds.minY, next.y - minSpacingMm)),
-    };
-  }
-
-  const adjustedDirectContour = buildSmoothedContourFromProfile(adjusted);
-  const directContourBounds = getBounds(adjustedDirectContour);
-  if (!directContourBounds) return null;
+  const lowerShoulder =
+    [...sorted]
+      .reverse()
+      .find((point) => point.role === "lowerTaper" || point.role === "shoulder")
+    ?? null;
+  const cutoff = clipBodyOnlyContourAtRoundedBaseCutoff({
+    directContour,
+    sourceContourMode: args.sourceContourMode,
+    lowerShoulderY: lowerShoulder?.y ?? null,
+  });
+  if (!cutoff) return null;
+  const adjusted = adjustBodyOnlyPointsForFlatCutoff({
+    points: sorted,
+    rawContour: directContour,
+    cutoff,
+  });
   return {
     points: adjusted,
-    directContour: adjustedDirectContour,
-    bounds: directContourBounds,
-    safeInsetMm,
+    directContour: cutoff.directContour,
+    bounds: cutoff.bounds,
+    safeInsetMm: cutoff.safeInsetMm,
     baselineRaised: true,
+  };
+}
+
+export function normalizeEditableBodyOutlineForBodyCutoutAuthority(
+  outline: EditableBodyOutline,
+): EditableBodyOutline {
+  const regularized = regularizeBodyOnlyDirectContourLowerShape({
+    points: outline.points,
+    directContour: outline.directContour,
+    sourceContourMode: outline.sourceContourMode,
+    sourceContour: outline.sourceContour,
+    contourFrame: outline.contourFrame,
+  });
+  if (!regularized) {
+    return outline;
+  }
+
+  const contourFrame: EditableBodyOutlineContourFrame = outline.contourFrame
+    ? {
+        ...outline.contourFrame,
+        acceptedPreviewBounds: regularized.bounds,
+        glbInputBounds: regularized.bounds,
+        canonicalInputBounds: regularized.bounds,
+        lowerBowlBaselineRaised: true,
+        lowerBowlSafeInsetMm: regularized.safeInsetMm,
+      }
+    : {
+        kind: "full-body-only-source",
+        sourceCoordinateSpace: "unknown",
+        authoritativeForBodyCutoutQa: true,
+        authoritativeForPrintableBand: false,
+        bandCropApplied: false,
+        bodyOnlyReCropSkipped: true,
+        acceptedPreviewBounds: regularized.bounds,
+        glbInputBounds: regularized.bounds,
+        canonicalInputBounds: regularized.bounds,
+        lowerBowlBaselineRaised: true,
+        lowerBowlSafeInsetMm: regularized.safeInsetMm,
+      };
+
+  return {
+    ...outline,
+    points: regularized.points,
+    directContour: regularized.directContour,
+    contourFrame,
   };
 }
 

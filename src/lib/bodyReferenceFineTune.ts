@@ -11,6 +11,7 @@ import { deriveBodyReferencePipeline } from "./bodyReferencePipeline.ts";
 import {
   deriveDimensionsFromEditableBodyOutline,
   insertEditableOutlinePoint,
+  normalizeEditableBodyOutlineForBodyCutoutAuthority,
   rebuildEditableBodyOutline,
   removeEditableOutlinePoint,
   resolveAuthoritativeEditableBodyOutlineContour,
@@ -155,10 +156,11 @@ const ACCEPTED_BODY_REFERENCE_REBUILD_WARNING =
 export function rebuildAcceptedBodyReferenceSnapshot(
   args: RebuildAcceptedBodyReferenceSnapshotArgs,
 ): RebuildAcceptedBodyReferenceSnapshotResult | null {
-  const approvedBodyOutline = cloneOutline(args.acceptedOutline);
-  if (!approvedBodyOutline) {
+  const acceptedOutline = cloneOutline(args.acceptedOutline);
+  if (!acceptedOutline) {
     return null;
   }
+  const approvedBodyOutline = normalizeEditableBodyOutlineForBodyCutoutAuthority(acceptedOutline);
 
   const derived = deriveDimensionsFromEditableBodyOutline(approvedBodyOutline);
   const nextTopMarginMm =

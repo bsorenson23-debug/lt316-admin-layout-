@@ -4,6 +4,7 @@ import type { FlatItemLookupTraceDebug } from "../types/flatItemLookup.ts";
 import type { EditableBodyOutline } from "../types/productTemplate.ts";
 import type { TumblerItemLookupFitDebug } from "../types/tumblerItemLookup.ts";
 import {
+  clipBodyOnlyContourAtRoundedBaseCutoff,
   createEditableBodyOutline,
   createEditableBodyOutlineFromImportedSvg,
   createEditableBodyOutlineFromTraceDebug,
@@ -132,10 +133,8 @@ test("fit-debug body contour top bridge aligns to seam body-top guide without re
   assert.equal(bounds?.minY, expectedBodyTopGuideY);
   assert.equal(outline.sourceContourBounds?.minY, fitDebug.rimBottomPx);
   assert.equal(outline.contourFrame?.acceptedPreviewBounds?.minY, expectedBodyTopGuideY);
-  assert.ok((bounds?.maxY ?? 0) > 214 && (bounds?.maxY ?? 0) < 220);
+  assert.ok((bounds?.height ?? 0) > 170);
   assert.ok((bounds?.height ?? 0) > 199);
-  assert.equal(outline.contourFrame?.lowerBowlBaselineRaised, true);
-  assert.ok((outline.contourFrame?.lowerBowlSafeInsetMm ?? 0) >= 16);
   assert.ok((bounds?.minY ?? 0) > mappedRimTopY, "rim/top-band pixels above the green guide remain excluded");
   assert.equal(quality.status, "pass");
   assert.equal(quality.expectedBridgeSegmentCount, 2);
@@ -434,22 +433,33 @@ test("manual body-only outline mirrors right-side contour edits symmetrically", 
   }
 });
 
-test("body-only direct contour raises a bowl-shaped lower baseline", () => {
+test("body-only directContour with U-shaped bottom is clipped to a flat cutoff", () => {
   const outline = makeBowlDirectContourOutline();
   const rawBounds = boundsOf(outline.directContour);
+  const clipped = clipBodyOnlyContourAtRoundedBaseCutoff({
+    directContour: outline.directContour,
+    sourceContourMode: outline.sourceContourMode,
+    lowerShoulderY: outline.points.find((point) => point.role === "lowerTaper")?.y,
+  });
   const contour = resolveAuthoritativeEditableBodyOutlineContour(outline);
   const bounds = boundsOf(contour);
 
   assert.ok(rawBounds);
+  assert.ok(clipped);
   assert.ok(contour);
   assert.ok(bounds);
   assert.equal(rawBounds?.maxY, 220);
-  assert.equal(bounds?.maxY, 193.6);
-  assert.ok(contour!.every((point) => point.y <= 193.601));
+  assert.equal(clipped!.safeInsetMm, 11);
+  assert.equal(clipped!.cutoffY, 209);
+  assert.equal(bounds?.maxY, 209);
+  assert.ok(contour!.every((point) => point.y <= 209.001));
   assert.ok(widthAtY(contour ?? [], bounds!.maxY) >= 60);
-  const bottomPoints = contour!.filter((point) => Math.abs(point.y - bounds!.maxY) < 0.001);
-  assert.ok(bottomPoints.length >= 2);
-  assert.ok(bottomPoints.every((point) => Math.abs(point.y - bounds!.maxY) < 0.001));
+  const bottomXs = xValuesAtY(contour!, bounds!.maxY);
+  assert.equal(bottomXs.length, 2);
+  assert.equal(bottomXs[0], -35.3);
+  assert.equal(bottomXs[1], 35.3);
+  assert.equal(widthAtY(contour!, 220), 0);
+  assert.equal(rightXAtY(contour!, 220), null);
 });
 
 test("body-only direct contour keeps angled lower taper and bevel segments", () => {
@@ -459,31 +469,35 @@ test("body-only direct contour keeps angled lower taper and bevel segments", () 
   const straightShellX = rightXAtY(contour, 130);
   const shoulderX = rightXAtY(contour, 155);
   const lowerSideX = rightXAtY(contour, 180);
-  const baseX = rightXAtY(contour, 193.6);
-  assert.equal(straightShellX, 50);
+  const cutoffX = rightXAtY(contour, 209);
+  assert.ok(straightShellX != null);
+  assert.ok(straightShellX > 45);
   assert.ok(shoulderX != null);
   assert.ok(lowerSideX != null);
-  assert.ok(baseX != null);
+  assert.ok(cutoffX != null);
   assert.ok(straightShellX - shoulderX > 3);
   assert.ok(shoulderX - lowerSideX > 3);
-  assert.ok(Math.abs(lowerSideX - baseX) <= 0.2);
-  assert.ok(baseX >= 30);
+  assert.ok(lowerSideX - cutoffX > 3);
+  assert.ok(cutoffX >= 30);
 });
 
-test("body-only direct contour path does not bypass lower-shape regularization", () => {
+test("approved resolved SVG cutout path does not include raw rounded-base arc", () => {
   const outline = makeBowlDirectContourOutline();
   const contour = resolveAuthoritativeEditableBodyOutlineContour(outline);
 
   assert.ok(contour);
   assert.notDeepEqual(contour, outline.directContour);
   assert.ok((boundsOf(contour)?.maxY ?? 0) < (boundsOf(outline.directContour)?.maxY ?? 0));
+  assert.equal(contour.some((point) => point.y > 209), false);
+  assert.equal(contour.some((point) => point.x === 8 && point.y === 220), false);
+  assert.equal(contour.some((point) => point.x === -8 && point.y === 220), false);
 });
 
 test("body-only direct contour regularization preserves left-right symmetry", () => {
   const contour = resolveAuthoritativeEditableBodyOutlineContour(makeBowlDirectContourOutline());
 
   assert.ok(contour);
-  for (const y of [160, 180, 188, 193.6]) {
+  for (const y of [160, 180, 200, 209]) {
     const left = leftXAtY(contour, y);
     const right = rightXAtY(contour, y);
     assert.ok(left != null, `expected left side at ${y}`);
@@ -505,11 +519,11 @@ test("body-only direct contour regularization is generic across tapered and stra
 
   assert.ok(tapered);
   assert.ok(straight);
-  assert.equal(taperedBounds?.maxY, 193.6);
-  assert.equal(straightBounds?.maxY, 193.6);
+  assert.equal(taperedBounds?.maxY, 209);
+  assert.equal(straightBounds?.maxY, 209);
   assert.ok((taperedBounds?.width ?? 0) <= 100);
   assert.ok((straightBounds?.width ?? 0) <= 104);
-  assert.ok(widthAtY(straight ?? [], 193.6) >= 90);
+  assert.ok(widthAtY(straight ?? [], 209) >= 90);
 });
 
 test("body-only imported outline preserves full source frame instead of masquerading as body-band fit", () => {

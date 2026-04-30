@@ -541,14 +541,26 @@ test("outline helper uses the regularized approved direct contour used by review
       closed: true,
       version: 1,
       points: [
-        { id: "p1", x: 40, y: 0, pointType: "corner", role: "topOuter" },
-        { id: "p2", x: 50, y: 220, pointType: "corner", role: "base" },
+        { id: "top", x: 45, y: 0, pointType: "corner", role: "topOuter" },
+        { id: "body", x: 45, y: 80, pointType: "corner", role: "body" },
+        { id: "shoulder", x: 43, y: 155, pointType: "corner", role: "shoulder" },
+        { id: "lowerTaper", x: 35, y: 190, pointType: "corner", role: "lowerTaper" },
+        { id: "bevel", x: 18, y: 214, pointType: "corner", role: "bevel" },
+        { id: "base", x: 8, y: 220, pointType: "corner", role: "base" },
       ],
       directContour: [
-        { x: -40, y: 0 },
-        { x: 40, y: 0 },
-        { x: 50, y: 220 },
-        { x: -50, y: 220 },
+        { x: 45, y: 0 },
+        { x: 45, y: 80 },
+        { x: 43, y: 155 },
+        { x: 35, y: 190 },
+        { x: 18, y: 214 },
+        { x: 8, y: 220 },
+        { x: -8, y: 220 },
+        { x: -18, y: 214 },
+        { x: -35, y: 190 },
+        { x: -43, y: 155 },
+        { x: -45, y: 80 },
+        { x: -45, y: 0 },
       ],
       sourceContour: [
         { x: 100, y: 10 },
@@ -571,12 +583,12 @@ test("outline helper uses the regularized approved direct contour used by review
   assert.equal(report.boundsUnits, "mm");
   assert.equal(report.sourceHash, "sha256:approved");
   assert.deepEqual(report.bounds, {
-    minX: -50,
+    minX: -45,
     minY: 0,
-    maxX: 50,
-    maxY: 193.6,
-    width: 100,
-    height: 193.6,
+    maxX: 45,
+    maxY: 209,
+    width: 90,
+    height: 209,
   });
 });
 
