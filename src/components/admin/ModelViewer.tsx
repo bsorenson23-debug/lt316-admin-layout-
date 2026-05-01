@@ -60,6 +60,10 @@ import type { BodyGeometryAuditArtifactLike } from "@/lib/bodyGeometryDebugRepor
 import { hashArrayBufferSha256, hashFileSha256, hashJsonSha256 } from "@/lib/hashSha256";
 import type { LoadedGltfSceneInspection, LoadedSceneBoundsUnits } from "@/lib/inspectLoadedGltfScene";
 import { inspectLoadedGltfScene } from "@/lib/inspectLoadedGltfScene";
+import {
+  resolveGenericTopFinishBandOverlay,
+  type GenericPreviewHeightAxis,
+} from "@/lib/genericAppearanceReferenceOverlay";
 import { BodyCutoutQaGuardBanner } from "./BodyCutoutQaGuardBanner";
 import { BodyContractInspectorPanel } from "./BodyContractInspectorPanel";
 import { BodyGeometryStatusBadge } from "./BodyGeometryStatusBadge";
@@ -336,6 +340,7 @@ function WebGlUnavailablePanel({
 interface ModelTransform {
   scale: number;
   rotation: [number, number, number];
+  heightAxis: GenericPreviewHeightAxis;
 }
 
 /**
@@ -362,26 +367,29 @@ function computeModelTransform(
       ? scaleTargetHeightMm
       : dims?.overallHeightMm;
   if (!targetHeightMm || targetHeightMm <= 0) {
-    return { scale: 1, rotation: [0, 0, 0] };
+    return { scale: 1, rotation: [0, 0, 0], heightAxis: "y" };
   }
 
   let rotation: [number, number, number] = [0, 0, 0];
   let heightInNativeUnits = rawSize.y;
+  let heightAxis: GenericPreviewHeightAxis = "y";
 
   // Auto-orient: if the longest axis is not Y, rotate to make it Y
   if (rawSize.z > rawSize.y * 1.15 && rawSize.z > rawSize.x) {
     rotation = [-Math.PI / 2, 0, 0]; // Z-up → tilt forward
     heightInNativeUnits = rawSize.z;
+    heightAxis = "z";
   } else if (rawSize.x > rawSize.y * 1.15 && rawSize.x > rawSize.z) {
     rotation = [0, 0, Math.PI / 2]; // X-up → rotate sideways
     heightInNativeUnits = rawSize.x;
+    heightAxis = "x";
   }
 
   const scale = heightInNativeUnits > 0
     ? targetHeightMm / heightInNativeUnits
     : 1;
 
-  return { scale, rotation };
+  return { scale, rotation, heightAxis };
 }
 
 // ---------------------------------------------------------------------------
@@ -557,7 +565,7 @@ function ObjMesh({
 
 
 function GltfMesh({
-  url, dims, scaleTargetHeightMm, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, rimTintColor, onReady,
+  url, dims, scaleTargetHeightMm, placedItems, itemTextures, bedWidthMm, bedHeightMm, tumblerMapping, bodyTintColor, rimTintColor, appearanceReferenceLayers, showTemplateSurfaceZones, onReady,
 }: {
   url: string;
   dims?: TumblerDimensions | null;
@@ -569,6 +577,8 @@ function GltfMesh({
   tumblerMapping?: import("@/types/productTemplate").TumblerMapping;
   bodyTintColor?: string;
   rimTintColor?: string;
+  appearanceReferenceLayers?: ProductAppearanceReferenceLayer[] | null;
+  showTemplateSurfaceZones?: boolean;
   onReady?: OnReady;
 }) {
   const gltf = useLoader(GLTFLoader, url);
@@ -599,14 +609,17 @@ function GltfMesh({
     return { geometry: foundGeometry, material: foundMaterial, bodyMesh: foundMesh, otherObjects };
   }, [gltf.scene]);
 
-  // ── Scale to physical mm ──
-  const transform = useMemo(() => {
+  const nativeBounds = useMemo(() => {
     const scaleReference = bodyMeshData.bodyMesh ?? gltf.scene;
     scaleReference.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(scaleReference);
-    const rawSize = box.getSize(new THREE.Vector3());
+    return new THREE.Box3().setFromObject(scaleReference);
+  }, [bodyMeshData.bodyMesh, gltf.scene]);
+
+  // ── Scale to physical mm ──
+  const transform = useMemo(() => {
+    const rawSize = nativeBounds.getSize(new THREE.Vector3());
     return computeModelTransform(rawSize, dims, scaleTargetHeightMm);
-  }, [bodyMeshData.bodyMesh, gltf.scene, dims, scaleTargetHeightMm]);
+  }, [nativeBounds, dims, scaleTargetHeightMm]);
 
   // ── Per-item Three.js textures (keyed by item ID) ──
   const threeTextures = useMemo(() => {
@@ -668,6 +681,29 @@ function GltfMesh({
       });
   }, [dims, placedItems, bedWidthMm, bedHeightMm, tumblerMapping?.frontFaceRotation, tumblerMapping?.handleArcDeg, transform.scale]);
 
+  const topFinishBandOverlay = useMemo(() => resolveGenericTopFinishBandOverlay({
+    appearanceReferenceLayers,
+    showTemplateSurfaceZones,
+    overallHeightMm: dims?.overallHeightMm,
+    modelScale: transform.scale,
+    nativeBounds: {
+      minX: nativeBounds.min.x,
+      minY: nativeBounds.min.y,
+      minZ: nativeBounds.min.z,
+      maxX: nativeBounds.max.x,
+      maxY: nativeBounds.max.y,
+      maxZ: nativeBounds.max.z,
+    },
+    heightAxis: transform.heightAxis,
+  }), [
+    appearanceReferenceLayers,
+    dims?.overallHeightMm,
+    nativeBounds,
+    showTemplateSurfaceZones,
+    transform.heightAxis,
+    transform.scale,
+  ]);
+
   const ref = useRef<THREE.Group>(null);
   useEffect(() => {
     if (ref.current) onReady?.(ref.current);
@@ -716,6 +752,35 @@ function GltfMesh({
       {bodyMeshData.otherObjects.map((obj, i) => (
         <primitive key={i} object={obj} />
       ))}
+      {topFinishBandOverlay && (
+        <mesh
+          name="upstream_silver_ring_reference"
+          position={topFinishBandOverlay.position}
+          rotation={topFinishBandOverlay.rotation}
+          renderOrder={5}
+          userData={topFinishBandOverlay.userData}
+        >
+          <cylinderGeometry
+            args={[
+              topFinishBandOverlay.radius,
+              topFinishBandOverlay.radius,
+              topFinishBandOverlay.height,
+              96,
+              1,
+              true,
+            ]}
+          />
+          <meshBasicMaterial
+            color="#d7dde6"
+            transparent
+            opacity={0.42}
+            side={THREE.DoubleSide}
+            depthWrite={false}
+            polygonOffset
+            polygonOffsetFactor={-6}
+          />
+        </mesh>
+      )}
     </group>
   );
 }
@@ -804,6 +869,8 @@ function ModelByExtension({
           tumblerMapping={tumblerMapping}
           bodyTintColor={bodyTintColor}
           rimTintColor={rimTintColor}
+          appearanceReferenceLayers={appearanceReferenceLayers}
+          showTemplateSurfaceZones={!!showTemplateSurfaceZones}
           onReady={onReady} />
       </Suspense>
     );

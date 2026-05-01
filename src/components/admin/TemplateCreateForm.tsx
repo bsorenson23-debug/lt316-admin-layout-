@@ -21,6 +21,7 @@ import type {
 } from "@/types/tumblerItemLookup";
 import {
   deriveTumblerPreviewModelState,
+  resolveTumblerPreviewModelSource,
   type PreviewModelMode,
 } from "@/lib/tumblerPreviewModelState";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
@@ -73,7 +74,12 @@ import {
   resolveOutlinePointCount,
 } from "@/lib/bodyReferenceFineTune";
 import { summarizeBodyReferenceFineTuneLifecycle } from "@/lib/bodyReferenceFineTuneLifecycle";
-import { buildBodyReferenceSvgQualityReportFromOutline } from "@/lib/bodyReferenceSvgQuality";
+import {
+  buildBodyReferenceSvgQualityReportFromOutline,
+  summarizeBodyReferenceSvgCutoutLineage,
+  summarizeBodyReferenceSvgCutoutLineageForOperator,
+  summarizeBodyReferenceSvgQualityForOperator,
+} from "@/lib/bodyReferenceSvgQuality";
 import {
   getBodyReferencePreviewModeHint,
   getBodyReferencePreviewModeLabel,
@@ -1035,6 +1041,68 @@ export function TemplateCreateForm({
     reviewedGeneratedModelState?.sourceLabel,
   ]);
 
+  const previewOriginalModelPath = React.useMemo(() => {
+    const lookupModelPath = lookupResult?.glbPath?.trim();
+    if (lookupModelPath) return lookupModelPath;
+    const editingModelPath = editingTemplate?.glbPath?.trim();
+    if (editingModelPath && editingTemplate?.glbStatus !== "generated-reviewed-model") {
+      return editingModelPath;
+    }
+    return "";
+  }, [
+    editingTemplate?.glbPath,
+    editingTemplate?.glbStatus,
+    lookupResult?.glbPath,
+  ]);
+  const previewOriginalModelStatus = lookupResult?.modelStatus
+    ?? (editingTemplate?.glbStatus !== "generated-reviewed-model" ? editingTemplate?.glbStatus : null)
+    ?? null;
+  const previewOriginalModelSourceLabel = lookupResult?.modelSourceLabel
+    ?? (editingTemplate?.glbStatus !== "generated-reviewed-model" ? editingTemplate?.glbSourceLabel : null)
+    ?? null;
+  const selectedPreviewModelSource = React.useMemo(
+    () => resolveTumblerPreviewModelSource({
+      requestedMode: previewModelMode,
+      currentModelPath: glbPath,
+      currentModelStatus: activeDrinkwareGlbStatus,
+      currentModelSourceLabel: activeDrinkwareGlbSourceLabel,
+      originalModelPath: previewOriginalModelPath,
+      originalModelStatus: previewOriginalModelStatus,
+      originalModelSourceLabel: previewOriginalModelSourceLabel,
+    }),
+    [
+      activeDrinkwareGlbSourceLabel,
+      activeDrinkwareGlbStatus,
+      glbPath,
+      previewModelMode,
+      previewOriginalModelPath,
+      previewOriginalModelSourceLabel,
+      previewOriginalModelStatus,
+    ],
+  );
+  const fullModelPreviewSource = React.useMemo(
+    () => resolveTumblerPreviewModelSource({
+      requestedMode: "full-model",
+      currentModelPath: glbPath,
+      currentModelStatus: activeDrinkwareGlbStatus,
+      currentModelSourceLabel: activeDrinkwareGlbSourceLabel,
+      originalModelPath: previewOriginalModelPath,
+      originalModelStatus: previewOriginalModelStatus,
+      originalModelSourceLabel: previewOriginalModelSourceLabel,
+    }),
+    [
+      activeDrinkwareGlbSourceLabel,
+      activeDrinkwareGlbStatus,
+      glbPath,
+      previewOriginalModelPath,
+      previewOriginalModelSourceLabel,
+      previewOriginalModelStatus,
+    ],
+  );
+  const activePreviewGlbPath = selectedPreviewModelSource.modelPath ?? "";
+  const activePreviewGlbStatus = selectedPreviewModelSource.modelStatus;
+  const activePreviewGlbSourceLabel = selectedPreviewModelSource.modelSourceLabel;
+
   const resolvedMatchedProfileId = React.useMemo(() => {
     if (lookupResult?.matchedProfileId) return lookupResult.matchedProfileId;
     const suggestion = detectResult?.response.suggestion;
@@ -1547,22 +1615,25 @@ export function TemplateCreateForm({
       ? deriveTumblerPreviewModelState({
           requestedMode: previewModelMode,
           hasCanonicalAlignmentModel: Boolean(previewTumblerDims),
-          hasSourceModel: Boolean(glbPath.trim()),
-          sourceModelPath: glbPath.trim() || null,
-          sourceModelStatus: activeDrinkwareGlbStatus,
+          hasSourceModel: Boolean(activePreviewGlbPath.trim()),
+          sourceModelPath: activePreviewGlbPath.trim() || null,
+          sourceModelStatus: activePreviewGlbStatus,
           sourceBounds: null,
           canonicalBounds: previewCanonicalBounds,
         })
       : null
   ), [
-    activeDrinkwareGlbStatus,
-    glbPath,
+    activePreviewGlbPath,
+    activePreviewGlbStatus,
     previewCanonicalBounds,
     previewModelMode,
     previewTumblerDims,
     productType,
   ]);
   const effectivePreviewModelMode = previewModelState?.effectiveMode ?? previewModelMode;
+  React.useEffect(() => {
+    setLoadedBodyGeometryContract(null);
+  }, [activePreviewGlbPath, activePreviewGlbStatus, previewModelMode]);
   const wrapExportContract =
     loadedBodyGeometryContract ?? generatedReviewedBodyGeometryContract;
   const wrapExportPreviewState = React.useMemo(
@@ -1888,17 +1959,17 @@ export function TemplateCreateForm({
     () => getBodyReferencePreviewModeLabel({
       productType,
       mode: previewModelMode,
-      glbStatus: activeDrinkwareGlbStatus,
+      glbStatus: activePreviewGlbStatus,
     }),
-    [activeDrinkwareGlbStatus, previewModelMode, productType],
+    [activePreviewGlbStatus, previewModelMode, productType],
   );
   const effectivePreviewModeLabel = React.useMemo(
     () => getBodyReferencePreviewModeLabel({
       productType,
       mode: effectivePreviewModelMode,
-      glbStatus: activeDrinkwareGlbStatus,
+      glbStatus: activePreviewGlbStatus,
     }),
-    [activeDrinkwareGlbStatus, effectivePreviewModelMode, productType],
+    [activePreviewGlbStatus, effectivePreviewModelMode, productType],
   );
   const effectivePreviewModeHint = React.useMemo(
     () => getBodyReferencePreviewModeHint({
@@ -1910,8 +1981,26 @@ export function TemplateCreateForm({
   const previewModeDowngradeActive =
     previewModelState != null &&
     previewModelState.requestedMode !== previewModelState.effectiveMode;
+  const previewModeSourceHandoffNote = React.useMemo(() => {
+    if (!selectedPreviewModelSource.reviewedBodyCutoutQaAvailableButInactive) return null;
+    if (previewModelMode === "body-cutout-qa") return null;
+    if (selectedPreviewModelSource.originalModelPreferred) {
+      return "Alignment/full-model preview is using the original source model. Reviewed BODY CUTOUT QA GLB is available; click BODY CUTOUT QA to inspect body-only QA.";
+    }
+    if (previewModelMode === "full-model") {
+      return "Full product model is unavailable. Reviewed BODY CUTOUT QA GLB is available; click BODY CUTOUT QA to inspect body-only QA.";
+    }
+    if (previewModelMode === "alignment-model") {
+      return "Alignment review is visual reference only. Reviewed BODY CUTOUT QA GLB is available; click BODY CUTOUT QA to inspect body-only QA.";
+    }
+    return "Reviewed BODY CUTOUT QA GLB is available; click BODY CUTOUT QA to inspect body-only QA.";
+  }, [
+    previewModelMode,
+    selectedPreviewModelSource.originalModelPreferred,
+    selectedPreviewModelSource.reviewedBodyCutoutQaAvailableButInactive,
+  ]);
   const hasReviewedBodyCutoutQaGlb = activeDrinkwareGlbStatus === "generated-reviewed-model";
-  const hasSourceModelForPreview = Boolean(glbPath.trim());
+  const hasSourceModelForPreview = Boolean(activePreviewGlbPath.trim() || glbPath.trim());
 
   const workflowInput = React.useMemo(
     () => ({
@@ -2574,7 +2663,7 @@ export function TemplateCreateForm({
         label: "Full model",
         reason: getTemplateCreatePreviewActionReason({
           action: "full-model",
-          hasSourceModel: hasSourceModelForPreview,
+          hasSourceModel: Boolean(fullModelPreviewSource.modelPath),
           hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
         }),
       },
@@ -2587,7 +2676,7 @@ export function TemplateCreateForm({
         }),
       },
     ]),
-    [activeDrinkwareGlbStatus, hasSourceModelForPreview],
+    [activeDrinkwareGlbStatus, fullModelPreviewSource.modelPath, hasSourceModelForPreview],
   );
   const bodyReferenceV2DisabledActionReasonGroups = React.useMemo(
     () => groupTemplateCreateDisabledActionReasons([
@@ -2850,12 +2939,56 @@ export function TemplateCreateForm({
     ],
   );
   const bodyReferenceFineTuneStatusLabel = bodyReferenceFineTuneLifecycle.label;
+  const activeBodyReferenceSvgQualityOperatorSummary = React.useMemo(
+    () => summarizeBodyReferenceSvgQualityForOperator(activeBodyReferenceSvgQuality, {
+      hasAcceptedCutout: hasAcceptedBodyReferenceReview && Boolean(approvedBodyOutline),
+    }),
+    [activeBodyReferenceSvgQuality, approvedBodyOutline, hasAcceptedBodyReferenceReview],
+  );
+  const bodyReferenceSvgCutoutLineage = React.useMemo(
+    () => summarizeBodyReferenceSvgCutoutLineage({
+      hasAcceptedCutout: hasAcceptedBodyReferenceReview && Boolean(approvedBodyOutline),
+      hasReviewedGlb: reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
+      acceptedSourceHash: currentReviewedBodyReferenceSourceHash,
+      correctedDraftSourceHash: bodyReferenceFineTuneDraftPendingAcceptance
+        ? activeBodyReferenceDraftSourceSignature
+        : null,
+      reviewedGlbSourceHash: reviewedBodyReferenceGlbSourceHash,
+      svgQualityStatus: activeBodyReferenceSvgQuality.status,
+    }),
+    [
+      activeBodyReferenceDraftSourceSignature,
+      activeBodyReferenceSvgQuality.status,
+      approvedBodyOutline,
+      bodyReferenceFineTuneDraftPendingAcceptance,
+      currentReviewedBodyReferenceSourceHash,
+      hasAcceptedBodyReferenceReview,
+      reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
+      reviewedBodyReferenceGlbSourceHash,
+    ],
+  );
+  const bodyReferenceSvgCutoutLineageOperatorSummary = React.useMemo(
+    () => summarizeBodyReferenceSvgCutoutLineageForOperator(bodyReferenceSvgCutoutLineage),
+    [bodyReferenceSvgCutoutLineage],
+  );
   const bodyReferenceFineTuneVisualWarnings = React.useMemo(() => {
     const warnings: Array<{ level: "warn" | "error"; message: string }> = [];
-    if (activeBodyReferenceSvgQuality.status === "fail") {
+    if (hasAcceptedBodyReferenceReview && activeBodyReferenceSvgQuality.status === "fail") {
       warnings.push({
         level: "error",
-        message: "Draft contour fails SVG quality and should be corrected before regeneration.",
+        message:
+          activeBodyReferenceSvgQualityOperatorSummary.generationBlockedReason ??
+          "Draft contour fails SVG quality and should be corrected before regeneration.",
+      });
+    }
+    if (
+      hasAcceptedBodyReferenceReview &&
+      activeBodyReferenceSvgQualityOperatorSummary.generationBlocked &&
+      activeBodyReferenceSvgQualityOperatorSummary.operatorFixHint
+    ) {
+      warnings.push({
+        level: "error",
+        message: activeBodyReferenceSvgQualityOperatorSummary.operatorFixHint,
       });
     }
     if (draftBodyReferencePointCount < 3) {
@@ -2904,10 +3037,12 @@ export function TemplateCreateForm({
   }, [
     activeBodyReferenceDraftSourceSignature,
     activeBodyReferenceSvgQuality,
+    activeBodyReferenceSvgQualityOperatorSummary,
     bodyReferenceFineTuneDraftPendingAcceptance,
     currentReviewedBodyReferenceSourceSignature,
     draftBodyReferenceOutlineBounds,
     draftBodyReferencePointCount,
+    hasAcceptedBodyReferenceReview,
     reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
     reviewedBodyReferenceGlbFreshness.status,
   ]);
@@ -2954,16 +3089,22 @@ export function TemplateCreateForm({
       acceptedBodyReferenceLabel: hasAcceptedBodyReferenceReview ? "accepted" : "pending",
       approvedSvgShortHash: formatShortHash(currentReviewedBodyReferenceSourceHash),
       sourceProvenanceLabel: formatBodyReferenceOutlineSourceLabel(approvedBodyOutline),
+      svgQualityLabel: activeBodyReferenceSvgQualityOperatorSummary.statusLabel,
+      bodyOnlyConfidenceLabel: activeBodyReferenceSvgQualityOperatorSummary.bodyOnlyConfidenceLabel,
+      correctedDraftLabel: bodyReferenceSvgCutoutLineageOperatorSummary.correctedDraftLabel,
       reviewedGlbFreshnessLabel: bodyCutoutQaGlbLifecycle.label.replace(/^BODY CUTOUT QA GLB:\s*/, ""),
       runtimeQaLabel,
       authoritativeStageLabel,
       staleReasons,
     };
   }, [
+    activeBodyReferenceSvgQualityOperatorSummary.bodyOnlyConfidenceLabel,
+    activeBodyReferenceSvgQualityOperatorSummary.statusLabel,
     approvedBodyOutline,
     approvedBodyReferenceWarnings,
     bodyCutoutQaGlbLifecycle.label,
     bodyReferenceFineTuneDraftPendingAcceptance,
+    bodyReferenceSvgCutoutLineageOperatorSummary.correctedDraftLabel,
     currentReviewedBodyReferenceSourceHash,
     generatedReviewedBodyGeometryContract,
     hasAcceptedBodyReferenceReview,
@@ -3483,6 +3624,18 @@ export function TemplateCreateForm({
             <div className={styles.sourceTruthMetric}>
               <span>Contour source</span>
               <strong>{sourceTruthSummary.sourceProvenanceLabel}</strong>
+            </div>
+            <div className={styles.sourceTruthMetric}>
+              <span>SVG cutout quality</span>
+              <strong>{sourceTruthSummary.svgQualityLabel}</strong>
+            </div>
+            <div className={styles.sourceTruthMetric}>
+              <span>Body-only confidence</span>
+              <strong>{sourceTruthSummary.bodyOnlyConfidenceLabel}</strong>
+            </div>
+            <div className={styles.sourceTruthMetric}>
+              <span>Corrected draft</span>
+              <strong>{sourceTruthSummary.correctedDraftLabel}</strong>
             </div>
             <div className={styles.sourceTruthMetric}>
               <span>Reviewed GLB freshness</span>
@@ -4112,6 +4265,12 @@ export function TemplateCreateForm({
                   Accept corrected cutout before generating BODY CUTOUT QA GLB.
                 </div>
               )}
+              {activeBodyReferenceSvgQualityOperatorSummary.generationBlocked && (
+                <div className={styles.actionDisabledReason}>
+                  {activeBodyReferenceSvgQualityOperatorSummary.generationBlockedReason}{" "}
+                  {activeBodyReferenceSvgQualityOperatorSummary.operatorFixHint}
+                </div>
+              )}
               {saveGateReason && (
                 <div className={styles.reviewScaffoldNote}>
                   Save remains blocked: {saveGateReason}
@@ -4142,11 +4301,11 @@ export function TemplateCreateForm({
                         </span>
                       </div>
                     )}
-                    {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
+                    {getDrinkwareGlbStatusLabel(activePreviewGlbStatus) && (
                       <div className={styles.reviewScaffoldInlineMeta}>
-                        <span>{getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)}</span>
-                        {activeDrinkwareGlbSourceLabel && (
-                          <span>{activeDrinkwareGlbSourceLabel}</span>
+                        <span>{getDrinkwareGlbStatusLabel(activePreviewGlbStatus)}</span>
+                        {activePreviewGlbSourceLabel && (
+                          <span>{activePreviewGlbSourceLabel}</span>
                         )}
                       </div>
                     )}
@@ -4172,9 +4331,9 @@ export function TemplateCreateForm({
                     Select the viewer mode here. BODY CUTOUT QA validates reviewed body-only geometry; WRAP / EXPORT stays separate and reports printable-surface readiness.
                   </div>
                 </div>
-                {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
+                {getDrinkwareGlbStatusLabel(activePreviewGlbStatus) && (
                   <span className={styles.previewScaffoldBadge}>
-                    {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)}
+                    {getDrinkwareGlbStatusLabel(activePreviewGlbStatus)}
                   </span>
                 )}
               </div>
@@ -4197,6 +4356,14 @@ export function TemplateCreateForm({
               {previewModelState?.message && (
                 <div className={styles.previewPlaceholderNote}>
                   {previewModelState.message}
+                </div>
+              )}
+              {previewModeSourceHandoffNote && (
+                <div
+                  className={styles.previewPlaceholderNote}
+                  data-testid="preview-mode-source-handoff-note"
+                >
+                  {previewModeSourceHandoffNote}
                 </div>
               )}
 
@@ -4242,10 +4409,10 @@ export function TemplateCreateForm({
                 <button
                   type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "full-model" ? styles.detectBtnActive : ""}`}
-                  disabled={!glbPath.trim()}
+                  disabled={!fullModelPreviewSource.modelPath}
                   title={getTemplateCreatePreviewActionReason({
                     action: "full-model",
-                    hasSourceModel: hasSourceModelForPreview,
+                    hasSourceModel: Boolean(fullModelPreviewSource.modelPath),
                     hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
                   }) ?? undefined}
                   aria-pressed={previewModelMode === "full-model"}
@@ -4547,11 +4714,11 @@ export function TemplateCreateForm({
               )}
 
               <div className={styles.previewSurface}>
-                {glbPath.trim() && previewTumblerDims ? (
+                {activePreviewGlbPath.trim() && previewTumblerDims ? (
                   <div className={styles.previewViewerWrap}>
                     <ModelViewer
-                      modelUrl={glbPath}
-                      glbPath={glbPath}
+                      modelUrl={activePreviewGlbPath}
+                      glbPath={activePreviewGlbPath}
                       placedItems={engravingOverlayPreviewState.enabled ? overlayPreviewPlacedItems : undefined}
                       itemTextures={engravingOverlayPreviewState.enabled ? overlayPreviewTextures : undefined}
                       bedWidthMm={templateWidthMm > 0 ? templateWidthMm : undefined}
@@ -4564,15 +4731,20 @@ export function TemplateCreateForm({
                       appearanceReferenceLayers={templateAppearanceReferenceLayers}
                       showTemplateSurfaceZones={
                         effectivePreviewModelMode === "alignment-model" ||
+                        effectivePreviewModelMode === "full-model" ||
                         effectivePreviewModelMode === "wrap-export"
                       }
                       previewModelMode={previewModelMode}
-                      sourceModelStatus={activeDrinkwareGlbStatus}
-                      sourceModelLabel={activeDrinkwareGlbSourceLabel}
+                      sourceModelStatus={activePreviewGlbStatus}
+                      sourceModelLabel={activePreviewGlbSourceLabel}
                       approvedBodyOutline={approvedBodyOutline}
                       canonicalBodyProfile={approvedCanonicalBodyProfile}
                       canonicalDimensionCalibration={approvedCanonicalDimensionCalibration}
-                      bodyGeometryContractSeed={generatedReviewedBodyGeometryContract}
+                      bodyGeometryContractSeed={
+                        selectedPreviewModelSource.reviewedBodyCutoutQaActive
+                          ? generatedReviewedBodyGeometryContract
+                          : null
+                      }
                       wrapExportProductionReadiness={wrapExportProductionReadiness}
                       showModelDebug={templateCreateDiagnosticsVisible}
                       onBodyGeometryContractChange={setLoadedBodyGeometryContract}
@@ -4592,7 +4764,7 @@ export function TemplateCreateForm({
                   <div>
                     <div className={styles.reviewScaffoldTitle}>BODY REFERENCE Cutout Fine-Tune</div>
                     <div className={styles.reviewScaffoldHint}>
-                      Draft edits stay non-authoritative until you accept the corrected cutout.
+                      Draft edits stay non-authoritative until you accept the corrected cutout. Use lower anchors for the shoulder angle and keep the bottom edge above the rounded base.
                     </div>
                   </div>
                   <span
@@ -4698,9 +4870,21 @@ export function TemplateCreateForm({
                   </div>
                   <div className={styles.fineTuneLifecycleGrid}>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>GLB freshness</span>
+                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB freshness</span>
                       <span className={styles.cutoutFitMetricValue}>
-                        {bodyReferenceFineTuneLifecycle.glbFreshnessLabel}
+                        {bodyReferenceFineTuneLifecycle.label}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Source hash</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {bodyReferenceFineTuneLifecycle.acceptedSourceHashLabel}
+                      </span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>GLB source hash</span>
+                      <span className={styles.cutoutFitMetricValue}>
+                        {bodyReferenceFineTuneLifecycle.reviewedGlbSourceHashLabel}
                       </span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
@@ -4722,6 +4906,8 @@ export function TemplateCreateForm({
                 </div>
 
                 <div className={styles.fineTuneActionConsequences}>
+                  <span>Accepted cutout: authoritative BODY CUTOUT QA source.</span>
+                  <span>Corrected draft: pending only until accepted.</span>
                   <span>Accept corrected cutout: Replace accepted cutout and mark reviewed GLB stale.</span>
                   <span>Reset draft: Reset draft to accepted cutout.</span>
                   <span>Cancel draft: Discard draft edits and keep the accepted cutout.</span>
@@ -4730,30 +4916,44 @@ export function TemplateCreateForm({
                 <div className={styles.cutoutFitSummary}>
                   <div className={styles.cutoutFitSummaryHeader}>
                     <div>
-                      <div className={styles.cutoutFitSummaryTitle}>Cutout Fit Summary</div>
+                      <div className={styles.cutoutFitSummaryTitle}>SVG Cutout Quality</div>
                       <div className={styles.cutoutFitSummaryHint}>
-                        Visual-fit controls update the draft only. BODY CUTOUT QA authority still follows accept then regenerate.
+                        {activeBodyReferenceSvgQualityOperatorSummary.bodyOnlySummary} BODY CUTOUT QA authority still follows accept then regenerate.
                       </div>
                     </div>
                     <span
                       className={
-                        reviewedBodyReferenceGlbFreshness.status === "stale" || bodyReferenceFineTuneDraftPendingAcceptance
-                          ? styles.reviewStatusPending
-                          : styles.reviewStatusReady
+                        activeBodyReferenceSvgQualityOperatorSummary.statusTone === "pass"
+                          ? styles.reviewStatusReady
+                          : activeBodyReferenceSvgQualityOperatorSummary.statusTone === "fail"
+                            ? styles.reviewStatusFail
+                            : styles.reviewStatusPending
                       }
                     >
-                      {bodyReferenceFineTuneStatusLabel}
+                      {activeBodyReferenceSvgQualityOperatorSummary.statusLabel}
                     </span>
                   </div>
 
                   <div className={styles.cutoutFitSummaryGrid}>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB freshness</span>
-                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceFineTuneStatusLabel}</span>
+                      <span className={styles.cutoutFitMetricLabel}>Accepted source</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceSvgCutoutLineageOperatorSummary.acceptedSourceLabel}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
-                      <span className={styles.cutoutFitMetricLabel}>SVG quality status</span>
-                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.status}</span>
+                      <span className={styles.cutoutFitMetricLabel}>Corrected draft</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceSvgCutoutLineageOperatorSummary.correctedDraftLabel}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Reviewed GLB</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceSvgCutoutLineageOperatorSummary.reviewedGlbLabel}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Next action</span>
+                      <span className={styles.cutoutFitMetricValue}>{bodyReferenceSvgCutoutLineageOperatorSummary.nextActionLabel}</span>
+                    </div>
+                    <div className={styles.cutoutFitMetric}>
+                      <span className={styles.cutoutFitMetricLabel}>Body-only confidence</span>
+                      <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQualityOperatorSummary.bodyOnlyConfidenceLabel}</span>
                     </div>
                     <div className={styles.cutoutFitMetric}>
                       <span className={styles.cutoutFitMetricLabel}>Suspicious jumps</span>
@@ -4764,6 +4964,14 @@ export function TemplateCreateForm({
                       <span className={styles.cutoutFitMetricValue}>{activeBodyReferenceSvgQuality.expectedBridgeSegmentCount}</span>
                     </div>
                   </div>
+
+                  {activeBodyReferenceSvgQualityOperatorSummary.reasonLabels.length > 0 && (
+                    <div className={styles.cutoutFitReasonList}>
+                      {activeBodyReferenceSvgQualityOperatorSummary.reasonLabels.slice(0, 6).map((reason) => (
+                        <span key={reason}>{reason}</span>
+                      ))}
+                    </div>
+                  )}
 
                   {templateCreateDiagnosticsVisible && (
                     <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
@@ -4781,11 +4989,11 @@ export function TemplateCreateForm({
                           <span className={styles.cutoutFitMetricValue}>{draftBodyReferencePointCount}</span>
                         </div>
                         <div className={styles.cutoutFitMetric}>
-                          <span className={styles.cutoutFitMetricLabel}>Approved bounds</span>
+                          <span className={styles.cutoutFitMetricLabel}>Approved SVG cutout bounds</span>
                           <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(approvedBodyReferenceOutlineBounds)}</span>
                         </div>
                         <div className={styles.cutoutFitMetric}>
-                          <span className={styles.cutoutFitMetricLabel}>Draft bounds</span>
+                          <span className={styles.cutoutFitMetricLabel}>Draft SVG cutout bounds</span>
                           <span className={styles.cutoutFitMetricValue}>{formatBoundsLabel(draftBodyReferenceOutlineBounds)}</span>
                         </div>
                         <div className={styles.cutoutFitMetric}>
@@ -4851,6 +5059,7 @@ export function TemplateCreateForm({
                   fitDebug={lookupResult?.fitDebug ?? null}
                   svgQualityReport={activeBodyReferenceSvgQuality}
                   interactive={bodyReferenceFineTuneModeEnabled}
+                  debugMode={templateCreateDiagnosticsVisible}
                   canUndo={bodyReferenceFineTuneUndoStack.length > 0}
                   onUndo={handleUndoBodyReferenceFineTuneEdit}
                   onEditAction={handleBodyReferenceFineTuneEditStart}

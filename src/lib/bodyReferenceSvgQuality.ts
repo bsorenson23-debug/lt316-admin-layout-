@@ -109,6 +109,26 @@ export interface BodyReferenceSvgQualityVisualization {
   suspiciousJumpSegments: BodyReferenceSvgQualitySegmentAnnotation[];
 }
 
+export interface BodyReferenceSvgQualityOperatorSummary {
+  statusLabel: "PASS" | "WARN" | "FAIL" | "UNKNOWN" | "Waiting for BODY REFERENCE";
+  statusTone: "pass" | "warn" | "fail" | "unknown";
+  bodyOnlyConfidenceLabel: string;
+  bodyOnlySummary: string;
+  reasonLabels: string[];
+  generationBlocked: boolean;
+  generationBlockedReason?: string;
+  operatorFixHint?: string;
+}
+
+export interface BodyReferenceSvgCutoutLineageOperatorSummary {
+  stateLabel: string;
+  acceptedSourceLabel: string;
+  correctedDraftLabel: string;
+  reviewedGlbLabel: string;
+  nextActionLabel: string;
+  callToActionTone: "neutral" | "warn" | "fail";
+}
+
 export const BODY_REFERENCE_SVG_QUALITY_THRESHOLDS = {
   exactDuplicateDistance: 0.000001,
   nearDuplicateDistanceRatio: 0.0005,
@@ -149,6 +169,108 @@ function normalizeStringArray(values: readonly string[]): string[] {
 function normalizeOptionalHash(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+export function getBodyReferenceSvgQualityStatusLabel(
+  status: BodyReferenceSvgQualityReport["status"] | null | undefined,
+): BodyReferenceSvgQualityOperatorSummary["statusLabel"] {
+  if (status === "pass") return "PASS";
+  if (status === "warn") return "WARN";
+  if (status === "fail") return "FAIL";
+  return "UNKNOWN";
+}
+
+export function formatBodyReferenceSvgQualityReasonCode(code: string): string {
+  switch (code) {
+    case "quality-failed":
+      return "SVG quality checks are failing.";
+    case "contour-unavailable":
+      return "No usable body contour is available.";
+    case "too-few-points":
+      return "Contour has fewer than 3 usable points.";
+    case "invalid-bounds":
+      return "Contour bounds are missing or invalid.";
+    case "open-contour":
+      return "Contour is open and cannot close cleanly.";
+    case "open-closeable-contour":
+      return "Contour is open but closeable; close it before final review.";
+    case "suspicious-jump":
+      return "Contour has a suspicious jump segment.";
+    case "suspicious-spike":
+      return "Contour has a suspicious spike point.";
+    case "extreme-aspect-ratio":
+      return "Contour aspect ratio does not look like a tumbler body.";
+    case "duplicate-points":
+      return "Contour includes duplicate adjacent points.";
+    case "near-duplicate-points":
+      return "Contour includes near-duplicate adjacent points.";
+    case "tiny-segments":
+      return "Contour includes tiny segments that may chatter during generation.";
+    default:
+      return code.replace(/-/g, " ");
+  }
+}
+
+export function summarizeBodyReferenceSvgQualityForOperator(
+  report: BodyReferenceSvgQualityReport | null | undefined,
+  options: {
+    hasAcceptedCutout?: boolean;
+  } = {},
+): BodyReferenceSvgQualityOperatorSummary {
+  if (options.hasAcceptedCutout === false) {
+    return {
+      statusLabel: "Waiting for BODY REFERENCE",
+      statusTone: "unknown",
+      bodyOnlyConfidenceLabel: "not assessed",
+      bodyOnlySummary: "Upload/detect and accept BODY REFERENCE before SVG cutout quality is assessed.",
+      reasonLabels: ["Upload/detect and accept BODY REFERENCE before SVG cutout quality is assessed."],
+      generationBlocked: false,
+      generationBlockedReason: undefined,
+      operatorFixHint: "Accept BODY REFERENCE to assess cutout quality.",
+    };
+  }
+
+  if (!report) {
+    return {
+      statusLabel: "UNKNOWN",
+      statusTone: "unknown",
+      bodyOnlyConfidenceLabel: "unknown",
+      bodyOnlySummary: "Body-only confidence is unavailable until a cutout is staged.",
+      reasonLabels: ["No SVG quality report is available."],
+      generationBlocked: true,
+      generationBlockedReason: "Generation is blocked because SVG quality is unavailable.",
+      operatorFixHint: "Run detection or accept a BODY REFERENCE cutout before generating BODY CUTOUT QA.",
+    };
+  }
+
+  const statusLabel = getBodyReferenceSvgQualityStatusLabel(report.status);
+  const reasonLabels = normalizeStringArray([
+    ...(report.bodyOnlyReasonCodes ?? []).map(formatBodyReferenceSvgQualityReasonCode),
+    ...report.errors,
+    ...report.warnings,
+  ]);
+  const confidence = report.bodyOnlyConfidence ?? "unknown";
+  const bodyOnlySummary = report.appearsBodyOnly
+    ? `Looks body-only with ${confidence} confidence.`
+    : `Does not yet look body-only; confidence is ${confidence}.`;
+  const generationBlocked = report.status === "fail" || !report.appearsBodyOnly;
+
+  return {
+    statusLabel,
+    statusTone: report.status,
+    bodyOnlyConfidenceLabel: confidence,
+    bodyOnlySummary,
+    reasonLabels,
+    generationBlocked,
+    generationBlockedReason: generationBlocked
+      ? "Generation is blocked until the accepted cutout is body-only and SVG quality is not FAIL."
+      : undefined,
+    operatorFixHint: generationBlocked
+      ? "Fix the listed contour issues in cutout fine-tune, accept the corrected cutout, then regenerate BODY CUTOUT QA."
+      : report.status === "warn"
+        ? "Review the warnings before regenerating; BODY CUTOUT QA can continue when the operator accepts the risk."
+        : "No SVG cutout fix is required.",
+  };
 }
 
 function parseLinearContourPathPoints(path: string | null): {
@@ -906,6 +1028,76 @@ export function summarizeBodyReferenceSvgCutoutLineage(
   };
 }
 
+export function summarizeBodyReferenceSvgCutoutLineageForOperator(
+  lineage: BodyReferenceSvgCutoutLineageReport,
+): BodyReferenceSvgCutoutLineageOperatorSummary {
+  switch (lineage.status) {
+    case "missing-accepted-cutout":
+      return {
+        stateLabel: "Accepted cutout missing",
+        acceptedSourceLabel: "No accepted BODY REFERENCE cutout yet.",
+        correctedDraftLabel: "No corrected draft is authoritative.",
+        reviewedGlbLabel: "Reviewed BODY CUTOUT QA GLB cannot be generated yet.",
+        nextActionLabel: "Accept a BODY REFERENCE cutout first.",
+        callToActionTone: "fail",
+      };
+    case "quality-failed":
+      return {
+        stateLabel: "SVG quality failed",
+        acceptedSourceLabel: "Accepted source exists, but it is not safe for BODY CUTOUT QA generation.",
+        correctedDraftLabel: "Corrected draft stays pending until accepted.",
+        reviewedGlbLabel: "Reviewed BODY CUTOUT QA GLB generation is blocked.",
+        nextActionLabel: "Fix SVG quality, accept the corrected cutout, then regenerate.",
+        callToActionTone: "fail",
+      };
+    case "draft-pending":
+      return {
+        stateLabel: "Corrected draft pending",
+        acceptedSourceLabel: "Accepted source remains authoritative.",
+        correctedDraftLabel: "Corrected draft is pending and is not authoritative.",
+        reviewedGlbLabel: "Reviewed GLB still follows the last accepted source.",
+        nextActionLabel: "Accept corrected cutout before regenerating BODY CUTOUT QA.",
+        callToActionTone: "warn",
+      };
+    case "reviewed-glb-missing":
+      return {
+        stateLabel: "Reviewed GLB missing",
+        acceptedSourceLabel: "Accepted cutout is authoritative.",
+        correctedDraftLabel: "No authoritative corrected draft is active.",
+        reviewedGlbLabel: "No reviewed BODY CUTOUT QA GLB has been generated.",
+        nextActionLabel: "Generate BODY CUTOUT QA GLB.",
+        callToActionTone: "warn",
+      };
+    case "reviewed-glb-unknown":
+      return {
+        stateLabel: "Reviewed GLB freshness unknown",
+        acceptedSourceLabel: "Accepted cutout is authoritative.",
+        correctedDraftLabel: "No authoritative corrected draft is active.",
+        reviewedGlbLabel: "Reviewed GLB source hash is unavailable.",
+        nextActionLabel: "Regenerate BODY CUTOUT QA GLB so freshness can be trusted.",
+        callToActionTone: "warn",
+      };
+    case "reviewed-glb-stale":
+      return {
+        stateLabel: "Reviewed GLB stale",
+        acceptedSourceLabel: "Accepted cutout is authoritative and newer than the reviewed GLB.",
+        correctedDraftLabel: "No pending draft is authoritative.",
+        reviewedGlbLabel: "Reviewed BODY CUTOUT QA GLB is stale.",
+        nextActionLabel: "Regenerate BODY CUTOUT QA GLB from the accepted cutout.",
+        callToActionTone: "warn",
+      };
+    case "reviewed-glb-current":
+      return {
+        stateLabel: "Reviewed GLB current",
+        acceptedSourceLabel: "Accepted cutout is authoritative.",
+        correctedDraftLabel: "No pending draft is authoritative.",
+        reviewedGlbLabel: "Reviewed BODY CUTOUT QA GLB matches the accepted source.",
+        nextActionLabel: "No regeneration required.",
+        callToActionTone: "neutral",
+      };
+  }
+}
+
 export function buildBodyReferenceSvgQualityVisualization(
   input: BodyReferenceSvgQualityInput,
 ): BodyReferenceSvgQualityVisualization {
@@ -1047,7 +1239,6 @@ export function buildBodyReferenceSvgQualityReportFromOutline(args: {
   const authoritativeContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
   const usesAuthoritativeOutlinePoints =
     outline.sourceContourMode === "body-only" &&
-    (!outline.sourceContour || outline.sourceContour.length < 3) &&
     Boolean(outline.directContour && outline.directContour.length >= 3) &&
     authoritativeContour != null &&
     authoritativeContour !== outline.directContour;
@@ -1138,7 +1329,6 @@ export function buildBodyReferenceSvgQualityVisualizationFromOutline(args: {
   const authoritativeContour = resolveAuthoritativeEditableBodyOutlineContour(outline);
   const usesAuthoritativeOutlinePoints =
     outline.sourceContourMode === "body-only" &&
-    (!outline.sourceContour || outline.sourceContour.length < 3) &&
     Boolean(outline.directContour && outline.directContour.length >= 3) &&
     authoritativeContour != null &&
     authoritativeContour !== outline.directContour;

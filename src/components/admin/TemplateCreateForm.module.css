@@ -1246,6 +1246,22 @@
   gap: 8px;
 }
 
+.cutoutFitReasonList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cutoutFitReasonList span {
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .optionalPanel {
   gap: 0;
 }

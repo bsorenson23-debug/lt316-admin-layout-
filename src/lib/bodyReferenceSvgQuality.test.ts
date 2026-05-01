@@ -6,6 +6,8 @@ import {
   buildBodyReferenceSvgQualityReport,
   buildBodyReferenceSvgQualityReportFromOutline,
   buildBodyReferenceSvgQualityVisualization,
+  summarizeBodyReferenceSvgCutoutLineageForOperator,
+  summarizeBodyReferenceSvgQualityForOperator,
   summarizeBodyReferenceSvgCutoutLineage,
 } from "./bodyReferenceSvgQuality.ts";
 import {
@@ -533,20 +535,32 @@ test("unsupported path-only inputs report quality as unavailable instead of inve
   assert.match(report.warnings.join(" "), /sampled contour points were not provided/i);
 });
 
-test("outline helper prefers the approved direct contour used by reviewed GLB generation", () => {
+test("outline helper uses the regularized approved direct contour used by reviewed GLB generation", () => {
   const report = buildBodyReferenceSvgQualityReportFromOutline({
     outline: {
       closed: true,
       version: 1,
       points: [
-        { id: "p1", x: 40, y: 0, pointType: "corner", role: "topOuter" },
-        { id: "p2", x: 50, y: 220, pointType: "corner", role: "base" },
+        { id: "top", x: 45, y: 0, pointType: "corner", role: "topOuter" },
+        { id: "body", x: 45, y: 80, pointType: "corner", role: "body" },
+        { id: "shoulder", x: 43, y: 155, pointType: "corner", role: "shoulder" },
+        { id: "lowerTaper", x: 35, y: 190, pointType: "corner", role: "lowerTaper" },
+        { id: "bevel", x: 18, y: 214, pointType: "corner", role: "bevel" },
+        { id: "base", x: 8, y: 220, pointType: "corner", role: "base" },
       ],
       directContour: [
-        { x: -40, y: 0 },
-        { x: 40, y: 0 },
-        { x: 50, y: 220 },
-        { x: -50, y: 220 },
+        { x: 45, y: 0 },
+        { x: 45, y: 80 },
+        { x: 43, y: 155 },
+        { x: 35, y: 190 },
+        { x: 18, y: 214 },
+        { x: 8, y: 220 },
+        { x: -8, y: 220 },
+        { x: -18, y: 214 },
+        { x: -35, y: 190 },
+        { x: -43, y: 155 },
+        { x: -45, y: 80 },
+        { x: -45, y: 0 },
       ],
       sourceContour: [
         { x: 100, y: 10 },
@@ -569,12 +583,12 @@ test("outline helper prefers the approved direct contour used by reviewed GLB ge
   assert.equal(report.boundsUnits, "mm");
   assert.equal(report.sourceHash, "sha256:approved");
   assert.deepEqual(report.bounds, {
-    minX: -50,
+    minX: -45,
     minY: 0,
-    maxX: 50,
-    maxY: 220,
-    width: 100,
-    height: 220,
+    maxX: 45,
+    maxY: 218,
+    width: 90,
+    height: 218,
   });
 });
 
@@ -624,6 +638,27 @@ test("cutout lineage keeps corrected drafts non-authoritative until accepted", (
   assert.equal(lineage.requiresReviewedGlbRegeneration, false);
   assert.equal(lineage.blocksReviewedGlbGeneration, true);
   assert.match(lineage.warnings.join(" "), /pending acceptance/i);
+
+  const operatorSummary = summarizeBodyReferenceSvgCutoutLineageForOperator(lineage);
+  assert.equal(operatorSummary.stateLabel, "Corrected draft pending");
+  assert.match(operatorSummary.acceptedSourceLabel, /Accepted source remains authoritative/i);
+  assert.match(operatorSummary.correctedDraftLabel, /not authoritative/i);
+  assert.match(operatorSummary.nextActionLabel, /Accept corrected cutout/i);
+});
+
+test("operator summary waits for BODY REFERENCE before assessing missing cutout quality", () => {
+  const missingReport = buildBodyReferenceSvgQualityReport({});
+  const operatorSummary = summarizeBodyReferenceSvgQualityForOperator(missingReport, {
+    hasAcceptedCutout: false,
+  });
+
+  assert.equal(missingReport.status, "fail");
+  assert.equal(operatorSummary.statusLabel, "Waiting for BODY REFERENCE");
+  assert.equal(operatorSummary.statusTone, "unknown");
+  assert.equal(operatorSummary.bodyOnlyConfidenceLabel, "not assessed");
+  assert.equal(operatorSummary.generationBlocked, false);
+  assert.doesNotMatch(operatorSummary.operatorFixHint ?? "", /fine-tune/i);
+  assert.match(operatorSummary.bodyOnlySummary, /accept BODY REFERENCE before SVG cutout quality is assessed/i);
 });
 
 test("cutout lineage requires regeneration after accepted source hash changes", () => {
@@ -641,6 +676,11 @@ test("cutout lineage requires regeneration after accepted source hash changes", 
   assert.equal(lineage.requiresReviewedGlbRegeneration, true);
   assert.equal(lineage.blocksReviewedGlbGeneration, false);
   assert.match(lineage.warnings.join(" "), /newer than the reviewed BODY CUTOUT QA GLB/i);
+
+  const operatorSummary = summarizeBodyReferenceSvgCutoutLineageForOperator(lineage);
+  assert.equal(operatorSummary.stateLabel, "Reviewed GLB stale");
+  assert.match(operatorSummary.reviewedGlbLabel, /stale/i);
+  assert.match(operatorSummary.nextActionLabel, /Regenerate BODY CUTOUT QA GLB/i);
 });
 
 test("cutout lineage blocks generation when accepted SVG quality fails", () => {
@@ -655,6 +695,56 @@ test("cutout lineage blocks generation when accepted SVG quality fails", () => {
   assert.equal(lineage.requiresReviewedGlbRegeneration, false);
   assert.equal(lineage.blocksReviewedGlbGeneration, true);
   assert.match(lineage.errors.join(" "), /quality is failing/i);
+
+  const operatorSummary = summarizeBodyReferenceSvgQualityForOperator(
+    buildBodyReferenceSvgQualityReport({
+      points: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+      ],
+      closed: false,
+    }),
+  );
+  assert.equal(operatorSummary.statusLabel, "FAIL");
+  assert.equal(operatorSummary.generationBlocked, true);
+  assert.match(operatorSummary.generationBlockedReason ?? "", /blocked/i);
+  assert.match(operatorSummary.operatorFixHint ?? "", /fine-tune/i);
+  assert.ok(operatorSummary.reasonLabels.some((label) => /fewer than 3 usable points/i.test(label)));
+});
+
+test("operator summary preserves pass and warn labels after cutout acceptance", () => {
+  const passSummary = summarizeBodyReferenceSvgQualityForOperator(
+    buildBodyReferenceSvgQualityReport({
+      points: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 220 },
+        { x: 0, y: 220 },
+      ],
+      closed: true,
+    }),
+    { hasAcceptedCutout: true },
+  );
+
+  const warnSummary = summarizeBodyReferenceSvgQualityForOperator(
+    buildBodyReferenceSvgQualityReport({
+      points: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 110 },
+        { x: 100.01, y: 110.01 },
+        { x: 100, y: 220 },
+        { x: 0, y: 220 },
+      ],
+      closed: true,
+    }),
+    { hasAcceptedCutout: true },
+  );
+
+  assert.equal(passSummary.statusLabel, "PASS");
+  assert.equal(passSummary.generationBlocked, false);
+  assert.equal(warnSummary.statusLabel, "WARN");
+  assert.equal(warnSummary.statusTone, "warn");
 });
 
 test("cutout lineage reports fresh reviewed GLB when accepted source hash matches", () => {

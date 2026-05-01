@@ -66,6 +66,8 @@ export interface EditableBodyOutlineContourFrame {
   croppedAwayBottomMm?: number;
   sourceDiameterUnits?: number;
   mmPerSourceUnit?: number;
+  lowerBowlBaselineRaised?: boolean;
+  lowerBowlSafeInsetMm?: number;
 }
 
 export interface EditableBodyOutline {
@@ -78,6 +80,8 @@ export interface EditableBodyOutline {
   printableBandContour?: EditableBodyOutlineContourPoint[];
   printableBandContourBounds?: EditableBodyOutlineContourBounds;
   contourFrame?: EditableBodyOutlineContourFrame;
+  lowerCutoffInsetMm?: number;
+  lowerCutoffSource?: "auto" | "manual";
   sourceContourMode?: "full-image" | "body-only";
   sourceContourViewport?: {
     minX: number;

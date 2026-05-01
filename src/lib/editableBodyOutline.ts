@@ -254,6 +254,10 @@ function round1(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
+function round1Symmetric(value: number): number {
+  return value < 0 ? -round1(Math.abs(value)) : round1(value);
+}
+
 function round4(value: number): number {
   return Math.round(value * 10000) / 10000;
 }
@@ -596,10 +600,11 @@ function buildSmoothedContourFromProfile(
     const current = sorted[index]!;
     const next = sorted[index + 1]!;
     const count = Math.max(2, samplesPerSegment);
+    const useAngularTransition = shouldUseAngularBodyReferenceSegment(current, next);
     for (let sampleIndex = 0; sampleIndex < count; sampleIndex += 1) {
       if (index > 0 && sampleIndex === 0) continue;
       const t = sampleIndex / count;
-      const eased = smoothstep(t);
+      const eased = useAngularTransition ? t : smoothstep(t);
       rightSide.push({
         x: round1(current.x + ((next.x - current.x) * eased)),
         y: round1(current.y + ((next.y - current.y) * t)),
@@ -615,6 +620,29 @@ function buildSmoothedContourFromProfile(
   return [...rightSide, ...leftSide];
 }
 
+function shouldUseAngularBodyReferenceSegment(
+  current: EditableBodyOutlinePoint,
+  next: EditableBodyOutlinePoint,
+): boolean {
+  const angularStartRoles: Array<EditableBodyOutlinePoint["role"]> = [
+    "shoulder",
+    "upperTaper",
+    "lowerTaper",
+    "bevel",
+    "base",
+  ];
+  const angularEndRoles: Array<EditableBodyOutlinePoint["role"]> = [
+    "upperTaper",
+    "lowerTaper",
+    "bevel",
+    "base",
+  ];
+  return (
+    angularStartRoles.includes(current.role) ||
+    angularEndRoles.includes(next.role)
+  );
+}
+
 export function resolveEditableBodyOutlineDirectContour(
   outline: EditableBodyOutline | null | undefined,
 ): EditableBodyOutlineContourPoint[] | null {
@@ -624,6 +652,16 @@ export function resolveEditableBodyOutlineDirectContour(
     return buildSmoothedContourFromProfile(outline.points);
   }
   if (outline.directContour && outline.directContour.length >= 3) {
+    const regularized = regularizeBodyOnlyDirectContourLowerShape({
+      points: outline.points,
+      directContour: outline.directContour,
+      sourceContourMode: outline.sourceContourMode,
+      sourceContour: outline.sourceContour,
+      contourFrame: outline.contourFrame,
+      lowerCutoffInsetMm: outline.lowerCutoffInsetMm,
+      lowerCutoffSource: outline.lowerCutoffSource,
+    });
+    if (regularized) return regularized.directContour;
     return outline.directContour;
   }
   if (outline.points.length >= 2) {
@@ -656,6 +694,22 @@ export function resolveAuthoritativeEditableBodyOutlineContour(
     directContour.length >= 3
   ) {
     return directContour;
+  }
+  if (
+    outline.sourceContourMode === "body-only" &&
+    directContour &&
+    directContour.length >= 3
+  ) {
+    const regularized = regularizeBodyOnlyDirectContourLowerShape({
+      points: outline.points,
+      directContour,
+      sourceContourMode: outline.sourceContourMode,
+      sourceContour: outline.sourceContour,
+      contourFrame: outline.contourFrame,
+      lowerCutoffInsetMm: outline.lowerCutoffInsetMm,
+      lowerCutoffSource: outline.lowerCutoffSource,
+    });
+    if (regularized) return regularized.directContour;
   }
   return resolveEditableBodyOutlineDirectContour(outline);
 }
@@ -703,7 +757,7 @@ function getContourIntersectionsAtY(
     }
     const t = (y - current.y) / (next.y - current.y);
     if (t < 0 || t > 1) continue;
-    xs.push(round1(current.x + ((next.x - current.x) * t)));
+    xs.push(round1Symmetric(current.x + ((next.x - current.x) * t)));
   }
   return xs;
 }
@@ -722,6 +776,45 @@ type DiameterScaledContour = {
   contourBounds: EditableBodyOutlineContourBounds;
   sourceDiameterUnits: number;
   mmPerSourceUnit: number;
+};
+
+type RegularizedBodyOnlyDirectContour = {
+  points: EditableBodyOutlinePoint[];
+  directContour: EditableBodyOutlineContourPoint[];
+  bounds: EditableBodyOutlineContourBounds;
+  safeInsetMm: number;
+  autoInsetMm: number;
+  minInsetMm: number;
+  maxInsetMm: number;
+  cutoffY: number;
+  lowerCutoffSource: NonNullable<EditableBodyOutline["lowerCutoffSource"]>;
+  baselineRaised: boolean;
+};
+
+export type FlatBottomBodyCutoutContour = {
+  directContour: EditableBodyOutlineContourPoint[];
+  bounds: EditableBodyOutlineContourBounds;
+  cutoffY: number;
+  leftCutoffX: number;
+  rightCutoffX: number;
+  safeInsetMm: number;
+  autoInsetMm: number;
+  minInsetMm: number;
+  maxInsetMm: number;
+  rawBottomY: number;
+  lowerCutoffSource: NonNullable<EditableBodyOutline["lowerCutoffSource"]>;
+};
+
+export type BodyOnlyFlatBottomCutoffControl = {
+  source: NonNullable<EditableBodyOutline["lowerCutoffSource"]>;
+  insetMm: number;
+  autoInsetMm: number;
+  minInsetMm: number;
+  maxInsetMm: number;
+  cutoffY: number;
+  rawBottomY: number;
+  leftCutoffX: number;
+  rightCutoffX: number;
 };
 
 function getContourSegmentsAtY(
@@ -747,6 +840,495 @@ function getContourSegmentsAtY(
   }
 
   return segments;
+}
+
+function resolveRoundedBaseAutoInsetMmFromBounds(_bounds: EditableBodyOutlineContourBounds): number {
+  return 2;
+}
+
+function resolveRoundedBaseMinInsetMmFromBounds(bounds: EditableBodyOutlineContourBounds): number {
+  return round1(clamp(bounds.height * 0.006, 2, 3));
+}
+
+function resolveRoundedBaseCutoffInset(args: {
+  bounds: EditableBodyOutlineContourBounds;
+  lowerShoulderY?: number | null;
+  lowerCutoffInsetMm?: number | null;
+  lowerCutoffSource?: EditableBodyOutline["lowerCutoffSource"] | null;
+}) {
+  const autoInsetMm = resolveRoundedBaseAutoInsetMmFromBounds(args.bounds);
+  const minInsetMm = resolveRoundedBaseMinInsetMmFromBounds(args.bounds);
+  const minSpacingMm = round1(clamp(args.bounds.height * 0.015, 2, 5));
+  const rawBottomY = round1(args.bounds.maxY);
+  const lowerShoulderY =
+    typeof args.lowerShoulderY === "number" && Number.isFinite(args.lowerShoulderY)
+      ? args.lowerShoulderY
+      : null;
+  const minCutoffY = round1(Math.max(
+    args.bounds.minY + minSpacingMm,
+    lowerShoulderY != null && lowerShoulderY < rawBottomY - minSpacingMm
+      ? lowerShoulderY + minSpacingMm
+      : args.bounds.minY + minSpacingMm,
+  ));
+  const maxInsetMm = round1(Math.max(minInsetMm, rawBottomY - minCutoffY));
+  const requestedInsetMm =
+    args.lowerCutoffSource === "manual" &&
+    typeof args.lowerCutoffInsetMm === "number" &&
+    Number.isFinite(args.lowerCutoffInsetMm)
+      ? args.lowerCutoffInsetMm
+      : autoInsetMm;
+  const safeInsetMm = round1(clamp(requestedInsetMm, minInsetMm, maxInsetMm));
+  const cutoffY = round1(clamp(rawBottomY - safeInsetMm, minCutoffY, rawBottomY - minInsetMm));
+  return {
+    autoInsetMm,
+    minInsetMm,
+    maxInsetMm,
+    safeInsetMm: round1(rawBottomY - cutoffY),
+    cutoffY,
+    rawBottomY,
+    lowerCutoffSource: args.lowerCutoffSource === "manual" ? "manual" as const : "auto" as const,
+  };
+}
+
+function contourIntersectionPointAtY(
+  start: EditableBodyOutlineContourPoint,
+  end: EditableBodyOutlineContourPoint,
+  y: number,
+): EditableBodyOutlineContourPoint {
+  if (Math.abs(end.y - start.y) < 0.0001) {
+    return { x: round1(start.x), y: round1(y) };
+  }
+  const t = clamp((y - start.y) / (end.y - start.y), 0, 1);
+  return {
+    x: round1Symmetric(start.x + ((end.x - start.x) * t)),
+    y: round1(y),
+  };
+}
+
+function dedupeAdjacentContourPoints(
+  points: EditableBodyOutlineContourPoint[],
+): EditableBodyOutlineContourPoint[] {
+  const deduped: EditableBodyOutlineContourPoint[] = [];
+  for (const point of points) {
+    const previous = deduped[deduped.length - 1];
+    if (
+      previous &&
+      Math.abs(previous.x - point.x) < 0.001 &&
+      Math.abs(previous.y - point.y) < 0.001
+    ) {
+      continue;
+    }
+    deduped.push(point);
+  }
+  const first = deduped[0];
+  const last = deduped[deduped.length - 1];
+  if (
+    first &&
+    last &&
+    deduped.length > 1 &&
+    Math.abs(first.x - last.x) < 0.001 &&
+    Math.abs(first.y - last.y) < 0.001
+  ) {
+    deduped.pop();
+  }
+  return deduped;
+}
+
+function clipContourAtMaxY(
+  contour: EditableBodyOutlineContourPoint[],
+  cutoffY: number,
+): EditableBodyOutlineContourPoint[] {
+  if (contour.length < 3) return [];
+  const clipped: EditableBodyOutlineContourPoint[] = [];
+  for (let index = 0; index < contour.length; index += 1) {
+    const current = contour[index]!;
+    const previous = contour[(index + contour.length - 1) % contour.length]!;
+    const currentInside = current.y <= cutoffY + 0.0001;
+    const previousInside = previous.y <= cutoffY + 0.0001;
+
+    if (currentInside) {
+      if (!previousInside) {
+        clipped.push(contourIntersectionPointAtY(previous, current, cutoffY));
+      }
+      clipped.push({ x: round1(current.x), y: round1(current.y) });
+    } else if (previousInside) {
+      clipped.push(contourIntersectionPointAtY(previous, current, cutoffY));
+    }
+  }
+  return dedupeAdjacentContourPoints(clipped);
+}
+
+function bottomPointWidthAtY(
+  contour: EditableBodyOutlineContourPoint[],
+  y: number,
+): number {
+  const bottomPoints = contour.filter((point) => Math.abs(point.y - y) < 0.05);
+  if (bottomPoints.length < 2) return 0;
+  const xs = bottomPoints.map((point) => point.x);
+  return round1(Math.max(...xs) - Math.min(...xs));
+}
+
+export function clipBodyOnlyContourAtRoundedBaseCutoff(args: {
+  directContour?: EditableBodyOutlineContourPoint[] | null;
+  sourceContourMode?: EditableBodyOutline["sourceContourMode"];
+  lowerShoulderY?: number | null;
+  lowerCutoffInsetMm?: number | null;
+  lowerCutoffSource?: EditableBodyOutline["lowerCutoffSource"] | null;
+}): FlatBottomBodyCutoutContour | null {
+  const directContour = args.directContour ?? null;
+  if (args.sourceContourMode !== "body-only" || !directContour || directContour.length < 3) {
+    return null;
+  }
+
+  const bounds = getBounds(directContour);
+  if (!bounds || !(bounds.height > 0)) return null;
+
+  const rawBottomY = round1(bounds.maxY);
+  const cutoffResolution = resolveRoundedBaseCutoffInset({
+    bounds,
+    lowerShoulderY: args.lowerShoulderY,
+    lowerCutoffInsetMm: args.lowerCutoffInsetMm,
+    lowerCutoffSource: args.lowerCutoffSource,
+  });
+  const safeInsetMm = cutoffResolution.safeInsetMm;
+  const cutoffY = cutoffResolution.cutoffY;
+  if (cutoffY >= rawBottomY - 0.05) return null;
+
+  const segments = getContourSegmentsAtY(directContour, cutoffY);
+  if (segments.length === 0) return null;
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const segment = segments.reduce((best, candidate) => {
+    const bestDistance = Math.abs(best.centerX - centerX);
+    const candidateDistance = Math.abs(candidate.centerX - centerX);
+    if (candidateDistance < bestDistance - 0.05) return candidate;
+    if (bestDistance < candidateDistance - 0.05) return best;
+    return candidate.width > best.width ? candidate : best;
+  });
+  if (segment.width <= 0.1) return null;
+
+  const rawBottomWidth = bottomPointWidthAtY(directContour, rawBottomY);
+  if (rawBottomWidth >= segment.width * 0.94) {
+    return null;
+  }
+
+  const clipped = clipContourAtMaxY(directContour, cutoffY);
+  const clippedBounds = getBounds(clipped);
+  if (!clippedBounds || clipped.length < 3) return null;
+  return {
+    directContour: clipped,
+    bounds: clippedBounds,
+    cutoffY,
+    leftCutoffX: segment.leftX,
+    rightCutoffX: segment.rightX,
+    safeInsetMm,
+    autoInsetMm: cutoffResolution.autoInsetMm,
+    minInsetMm: cutoffResolution.minInsetMm,
+    maxInsetMm: cutoffResolution.maxInsetMm,
+    rawBottomY: cutoffResolution.rawBottomY,
+    lowerCutoffSource: cutoffResolution.lowerCutoffSource,
+  };
+}
+
+function adjustBodyOnlyPointsForFlatCutoff(args: {
+  points: EditableBodyOutlinePoint[];
+  rawContour: EditableBodyOutlineContourPoint[];
+  cutoff: FlatBottomBodyCutoutContour;
+}): EditableBodyOutlinePoint[] {
+  const adjusted = sortEditableOutlinePoints(args.points).map((point) => ({ ...point }));
+  if (adjusted.length === 0) return adjusted;
+  const baseIndex = (() => {
+    for (let index = adjusted.length - 1; index >= 0; index -= 1) {
+      if (adjusted[index]?.role === "base") return index;
+    }
+    return adjusted.length - 1;
+  })();
+  const basePoint = adjusted[baseIndex];
+  if (!basePoint) return adjusted;
+
+  const minSpacingMm = round1(clamp(args.cutoff.bounds.height * 0.015, 2, 5));
+  const cutoffHalfWidth = round1(Math.max(Math.abs(args.cutoff.leftCutoffX), Math.abs(args.cutoff.rightCutoffX), 0.5));
+  adjusted[baseIndex] = {
+    ...basePoint,
+    x: cutoffHalfWidth,
+    y: args.cutoff.cutoffY,
+    pointType: "corner",
+    inHandle: null,
+    outHandle: null,
+  };
+
+  for (let index = baseIndex - 1; index >= 0; index -= 1) {
+    const current = adjusted[index]!;
+    const next = adjusted[index + 1]!;
+    if (current.y <= next.y - minSpacingMm) continue;
+    const nextY = round1(Math.max(args.cutoff.bounds.minY, next.y - minSpacingMm));
+    adjusted[index] = {
+      ...current,
+      x: round1(Math.max(0.5, nearestHalfWidthAtY(args.rawContour, nextY))),
+      y: nextY,
+      pointType: current.role === "body" || current.role === "shoulder" ? current.pointType : "corner",
+      inHandle: null,
+      outHandle: null,
+    };
+  }
+
+  return adjusted;
+}
+
+function regularizeBodyOnlyDirectContourLowerShape(args: {
+  points: EditableBodyOutlinePoint[];
+  directContour?: EditableBodyOutlineContourPoint[] | null;
+  sourceContourMode?: EditableBodyOutline["sourceContourMode"];
+  sourceContour?: EditableBodyOutlineContourPoint[] | null;
+  contourFrame?: EditableBodyOutlineContourFrame | null;
+  lowerCutoffInsetMm?: number | null;
+  lowerCutoffSource?: EditableBodyOutline["lowerCutoffSource"] | null;
+  forceReclip?: boolean;
+}): RegularizedBodyOnlyDirectContour | null {
+  const directContour = args.directContour ?? null;
+  if (
+    args.sourceContourMode !== "body-only" ||
+    (args.contourFrame?.lowerBowlBaselineRaised === true && args.forceReclip !== true) ||
+    !directContour ||
+    directContour.length < 3 ||
+    !args.sourceContour ||
+    args.sourceContour.length < 3 ||
+    args.points.length < 2
+  ) {
+    return null;
+  }
+
+  const bounds = getBounds(directContour);
+  if (!bounds || !(bounds.height > 0)) return null;
+
+  const sorted = sortEditableOutlinePoints(args.points);
+  const lowerShoulder =
+    [...sorted]
+      .reverse()
+      .find((point) => point.role === "lowerTaper" || point.role === "shoulder")
+    ?? null;
+  const cutoff = clipBodyOnlyContourAtRoundedBaseCutoff({
+    directContour,
+    sourceContourMode: args.sourceContourMode,
+    lowerShoulderY: lowerShoulder?.y ?? null,
+    lowerCutoffInsetMm: args.lowerCutoffInsetMm,
+    lowerCutoffSource: args.lowerCutoffSource,
+  });
+  if (!cutoff) return null;
+  const adjusted = adjustBodyOnlyPointsForFlatCutoff({
+    points: sorted,
+    rawContour: directContour,
+    cutoff,
+  });
+  return {
+    points: adjusted,
+    directContour: cutoff.directContour,
+    bounds: cutoff.bounds,
+    safeInsetMm: cutoff.safeInsetMm,
+    autoInsetMm: cutoff.autoInsetMm,
+    minInsetMm: cutoff.minInsetMm,
+    maxInsetMm: cutoff.maxInsetMm,
+    cutoffY: cutoff.cutoffY,
+    lowerCutoffSource: cutoff.lowerCutoffSource,
+    baselineRaised: true,
+  };
+}
+
+export function normalizeEditableBodyOutlineForBodyCutoutAuthority(
+  outline: EditableBodyOutline,
+): EditableBodyOutline {
+  const regularized = regularizeBodyOnlyDirectContourLowerShape({
+    points: outline.points,
+    directContour: outline.directContour,
+    sourceContourMode: outline.sourceContourMode,
+    sourceContour: outline.sourceContour,
+    contourFrame: outline.contourFrame,
+    lowerCutoffInsetMm: outline.lowerCutoffInsetMm,
+    lowerCutoffSource: outline.lowerCutoffSource,
+  });
+  if (!regularized) {
+    return outline;
+  }
+
+  const contourFrame: EditableBodyOutlineContourFrame = outline.contourFrame
+    ? {
+        ...outline.contourFrame,
+        acceptedPreviewBounds: regularized.bounds,
+        glbInputBounds: regularized.bounds,
+        canonicalInputBounds: regularized.bounds,
+        lowerBowlBaselineRaised: true,
+        lowerBowlSafeInsetMm: regularized.safeInsetMm,
+      }
+    : {
+        kind: "full-body-only-source",
+        sourceCoordinateSpace: "unknown",
+        authoritativeForBodyCutoutQa: true,
+        authoritativeForPrintableBand: false,
+        bandCropApplied: false,
+        bodyOnlyReCropSkipped: true,
+        acceptedPreviewBounds: regularized.bounds,
+        glbInputBounds: regularized.bounds,
+        canonicalInputBounds: regularized.bounds,
+        lowerBowlBaselineRaised: true,
+        lowerBowlSafeInsetMm: regularized.safeInsetMm,
+      };
+
+  return {
+    ...outline,
+    points: regularized.points,
+    directContour: regularized.directContour,
+    lowerCutoffInsetMm: regularized.safeInsetMm,
+    lowerCutoffSource: regularized.lowerCutoffSource,
+    contourFrame,
+  };
+}
+
+function mapSourceContourToBodyOnlyMmFrame(
+  outline: EditableBodyOutline,
+): EditableBodyOutlineContourPoint[] | null {
+  const sourceContour = outline.sourceContour ?? null;
+  if (!sourceContour || sourceContour.length < 3) return null;
+  const sourceBounds = getBounds(sourceContour);
+  if (!sourceBounds || !(sourceBounds.height > 0)) return null;
+
+  const frame = outline.contourFrame;
+  const scale = frame?.mmPerSourceUnit;
+  const acceptedBounds =
+    frame?.acceptedPreviewBounds ??
+    frame?.glbInputBounds ??
+    frame?.canonicalInputBounds ??
+    getBounds(outline.directContour ?? []);
+  if (
+    typeof scale === "number" &&
+    Number.isFinite(scale) &&
+    scale > 0 &&
+    acceptedBounds
+  ) {
+    const centerX = estimateBodyCenterX(sourceContour);
+    const mapped = dedupeContourPoints(sourceContour.map((point) => ({
+      x: round1Symmetric((point.x - centerX) * scale),
+      y: round1(acceptedBounds.minY + ((point.y - sourceBounds.minY) * scale)),
+    })));
+    return mapped.length >= 3 ? mapped : null;
+  }
+
+  const directBounds = getBounds(outline.directContour ?? []);
+  if (
+    directBounds &&
+    sourceBounds.height <= directBounds.height * 1.6 &&
+    sourceBounds.width <= Math.max(1, directBounds.width * 1.6)
+  ) {
+    return sourceContour.map((point) => ({ ...point }));
+  }
+
+  return null;
+}
+
+export function resolveBodyOnlyRawDetectedTraceContour(
+  outline: EditableBodyOutline | null | undefined,
+): EditableBodyOutlineContourPoint[] | null {
+  if (!outline || outline.sourceContourMode !== "body-only") return null;
+  return mapSourceContourToBodyOnlyMmFrame(outline);
+}
+
+function resolveBodyOnlyRoundedBaseSourceContour(
+  outline: EditableBodyOutline,
+): EditableBodyOutlineContourPoint[] | null {
+  const fromSource = mapSourceContourToBodyOnlyMmFrame(outline);
+  if (fromSource && fromSource.length >= 3) return fromSource;
+  return outline.directContour && outline.directContour.length >= 3
+    ? outline.directContour.map((point) => ({ ...point }))
+    : null;
+}
+
+function resolveLowerShoulderY(points: EditableBodyOutlinePoint[]): number | null {
+  const lowerShoulder =
+    [...sortEditableOutlinePoints(points)]
+      .reverse()
+      .find((point) => point.role === "lowerTaper" || point.role === "shoulder")
+    ?? null;
+  return lowerShoulder?.y ?? null;
+}
+
+export function resolveBodyOnlyFlatBottomCutoffControl(
+  outline: EditableBodyOutline | null | undefined,
+): BodyOnlyFlatBottomCutoffControl | null {
+  if (!outline || outline.sourceContourMode !== "body-only") return null;
+  const rawContour = resolveBodyOnlyRoundedBaseSourceContour(outline);
+  if (!rawContour) return null;
+  const cutoff = clipBodyOnlyContourAtRoundedBaseCutoff({
+    directContour: rawContour,
+    sourceContourMode: outline.sourceContourMode,
+    lowerShoulderY: resolveLowerShoulderY(outline.points),
+    lowerCutoffInsetMm: outline.lowerCutoffInsetMm,
+    lowerCutoffSource: outline.lowerCutoffSource,
+  });
+  if (!cutoff) return null;
+  return {
+    source: cutoff.lowerCutoffSource,
+    insetMm: cutoff.safeInsetMm,
+    autoInsetMm: cutoff.autoInsetMm,
+    minInsetMm: cutoff.minInsetMm,
+    maxInsetMm: cutoff.maxInsetMm,
+    cutoffY: cutoff.cutoffY,
+    rawBottomY: cutoff.rawBottomY,
+    leftCutoffX: cutoff.leftCutoffX,
+    rightCutoffX: cutoff.rightCutoffX,
+  };
+}
+
+export function updateBodyOnlyFlatBottomCutoff(args: {
+  outline: EditableBodyOutline | null | undefined;
+  lowerCutoffInsetMm?: number | null;
+  lowerCutoffSource: NonNullable<EditableBodyOutline["lowerCutoffSource"]>;
+}): EditableBodyOutline | null {
+  const outline = args.outline;
+  if (!outline || outline.sourceContourMode !== "body-only") return outline ?? null;
+  const rawContour = resolveBodyOnlyRoundedBaseSourceContour(outline);
+  if (!rawContour) return outline;
+
+  const regularized = regularizeBodyOnlyDirectContourLowerShape({
+    points: outline.points,
+    directContour: rawContour,
+    sourceContourMode: outline.sourceContourMode,
+    sourceContour: outline.sourceContour ?? rawContour,
+    contourFrame: outline.contourFrame,
+    lowerCutoffInsetMm: args.lowerCutoffInsetMm,
+    lowerCutoffSource: args.lowerCutoffSource,
+    forceReclip: true,
+  });
+  if (!regularized) return outline;
+
+  const contourFrame: EditableBodyOutlineContourFrame = outline.contourFrame
+    ? {
+        ...outline.contourFrame,
+        acceptedPreviewBounds: regularized.bounds,
+        glbInputBounds: regularized.bounds,
+        canonicalInputBounds: regularized.bounds,
+        lowerBowlBaselineRaised: true,
+        lowerBowlSafeInsetMm: regularized.safeInsetMm,
+      }
+    : {
+        kind: "full-body-only-source",
+        sourceCoordinateSpace: "unknown",
+        authoritativeForBodyCutoutQa: true,
+        authoritativeForPrintableBand: false,
+        bandCropApplied: false,
+        bodyOnlyReCropSkipped: true,
+        acceptedPreviewBounds: regularized.bounds,
+        glbInputBounds: regularized.bounds,
+        canonicalInputBounds: regularized.bounds,
+        lowerBowlBaselineRaised: true,
+        lowerBowlSafeInsetMm: regularized.safeInsetMm,
+      };
+
+  return {
+    ...outline,
+    points: regularized.points,
+    directContour: regularized.directContour,
+    lowerCutoffInsetMm: regularized.safeInsetMm,
+    lowerCutoffSource: regularized.lowerCutoffSource,
+    contourFrame,
+  };
 }
 
 function sampleHalfWidthFromContour(
@@ -1001,6 +1583,8 @@ function buildContourFrameDiagnostics(args: {
   authoritativeForPrintableBand: boolean;
   sourceDiameterUnits?: number | null;
   mmPerSourceUnit?: number | null;
+  lowerBowlBaselineRaised?: boolean;
+  lowerBowlSafeInsetMm?: number | null;
 }): EditableBodyOutlineContourFrame {
   const before = cloneContourBounds(args.boundsBeforeBandCrop);
   const after = cloneContourBounds(args.boundsAfterBandCrop);
@@ -1032,6 +1616,11 @@ function buildContourFrameDiagnostics(args: {
         ? round1(args.sourceDiameterUnits)
         : undefined,
     mmPerSourceUnit: scale ? round4(scale) : undefined,
+    lowerBowlBaselineRaised: args.lowerBowlBaselineRaised === true ? true : undefined,
+    lowerBowlSafeInsetMm:
+      args.lowerBowlSafeInsetMm && args.lowerBowlSafeInsetMm > 0
+        ? round1(args.lowerBowlSafeInsetMm)
+        : undefined,
   };
 }
 
@@ -2082,12 +2671,23 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
         taperLowerDiameterMm: args.taperLowerDiameterMm ?? null,
         bevelDiameterMm: args.bevelDiameterMm ?? null,
       });
+      const regularized = regularizeBodyOnlyDirectContourLowerShape({
+        points,
+        directContour: scaledBodyContour.contour,
+        sourceContourMode: "body-only",
+        sourceContour: scaledBodyContour.sourceContour,
+      });
+      const acceptedPoints = regularized?.points ?? points;
+      const acceptedDirectContour = regularized?.directContour ?? scaledBodyContour.contour;
+      const acceptedContourBounds = regularized?.bounds ?? scaledBodyContour.contourBounds;
 
       return {
         closed: true,
         version: 1,
-        points,
-        directContour: scaledBodyContour.contour,
+        points: acceptedPoints,
+        directContour: acceptedDirectContour,
+        lowerCutoffInsetMm: regularized?.safeInsetMm,
+        lowerCutoffSource: regularized?.lowerCutoffSource,
         sourceContour: scaledBodyContour.sourceContour,
         sourceContourBounds: scaledBodyContour.sourceBounds,
         sourceContourMode: "body-only",
@@ -2102,9 +2702,9 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
           sourceCoordinateSpace: "raw-image-px",
           boundsBeforeBandCrop: scaledBodyContour.sourceBounds,
           boundsAfterBandCrop: null,
-          acceptedPreviewBounds: scaledBodyContour.contourBounds,
-          glbInputBounds: scaledBodyContour.contourBounds,
-          canonicalInputBounds: scaledBodyContour.contourBounds,
+          acceptedPreviewBounds: acceptedContourBounds,
+          glbInputBounds: acceptedContourBounds,
+          canonicalInputBounds: acceptedContourBounds,
           bandCropApplied: false,
           bandCropReason: "fit-debug source contour is already body-only; printable band is metadata only",
           bodyOnlyReCropSkipped: true,
@@ -2112,6 +2712,8 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
           authoritativeForPrintableBand: false,
           sourceDiameterUnits: scaledBodyContour.sourceDiameterUnits,
           mmPerSourceUnit: scaledBodyContour.mmPerSourceUnit,
+          lowerBowlBaselineRaised: regularized?.baselineRaised,
+          lowerBowlSafeInsetMm: regularized?.safeInsetMm,
         }),
       };
     }
@@ -2232,12 +2834,23 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
       taperLowerDiameterMm: null,
       bevelDiameterMm: null,
     });
+    const regularized = regularizeBodyOnlyDirectContourLowerShape({
+      points,
+      directContour: scaledFullBodyContour.contour,
+      sourceContourMode: "body-only",
+      sourceContour: fullBodySourceContour,
+    });
+    const acceptedPoints = regularized?.points ?? points;
+    const acceptedDirectContour = regularized?.directContour ?? scaledFullBodyContour.contour;
+    const acceptedContourBounds = regularized?.bounds ?? scaledFullBodyContour.contourBounds;
 
     return {
       closed: true,
       version: 1,
-      points,
-      directContour: scaledFullBodyContour.contour,
+      points: acceptedPoints,
+      directContour: acceptedDirectContour,
+      lowerCutoffInsetMm: regularized?.safeInsetMm,
+      lowerCutoffSource: regularized?.lowerCutoffSource,
       sourceContour: fullBodySourceContour.map((point) => ({ ...point })),
       sourceContourBounds: scaledFullBodyContour.sourceBounds,
       printableBandContour: printableBandContour?.map((point) => ({ ...point })),
@@ -2254,9 +2867,9 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
         sourceCoordinateSpace: "raw-image-px",
         boundsBeforeBandCrop: rawBounds,
         boundsAfterBandCrop: printableBandContourBounds,
-        acceptedPreviewBounds: scaledFullBodyContour.contourBounds,
-        glbInputBounds: scaledFullBodyContour.contourBounds,
-        canonicalInputBounds: scaledFullBodyContour.contourBounds,
+        acceptedPreviewBounds: acceptedContourBounds,
+        glbInputBounds: acceptedContourBounds,
+        canonicalInputBounds: acceptedContourBounds,
         bandCropApplied: false,
         bandCropReason: "trace body-only contour preserves the accepted body shell; printable band is stored separately",
         bodyOnlyReCropSkipped: true,
@@ -2264,6 +2877,8 @@ export function createEditableBodyOutlineFromTraceDebug(args: TraceImportArgs): 
         authoritativeForPrintableBand: false,
         sourceDiameterUnits: scaledFullBodyContour.sourceDiameterUnits,
         mmPerSourceUnit: scaledFullBodyContour.mmPerSourceUnit,
+        lowerBowlBaselineRaised: regularized?.baselineRaised,
+        lowerBowlSafeInsetMm: regularized?.safeInsetMm,
       }),
     };
   }
@@ -2404,12 +3019,23 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
         taperLowerDiameterMm: args.taperLowerDiameterMm ?? null,
         bevelDiameterMm: args.bevelDiameterMm ?? null,
       });
+      const regularized = regularizeBodyOnlyDirectContourLowerShape({
+        points,
+        directContour: scaledFullBodyContour.contour,
+        sourceContourMode: "body-only",
+        sourceContour: fullBodySourceContour,
+      });
+      const acceptedPoints = regularized?.points ?? points;
+      const acceptedDirectContour = regularized?.directContour ?? scaledFullBodyContour.contour;
+      const acceptedContourBounds = regularized?.bounds ?? scaledFullBodyContour.contourBounds;
 
       return {
         closed: true,
         version: 1,
-        points,
-        directContour: scaledFullBodyContour.contour,
+        points: acceptedPoints,
+        directContour: acceptedDirectContour,
+        lowerCutoffInsetMm: regularized?.safeInsetMm,
+        lowerCutoffSource: regularized?.lowerCutoffSource,
         sourceContour: fullBodySourceContour.map((point) => ({ ...point })),
         sourceContourBounds: scaledFullBodyContour.sourceBounds,
         printableBandContour: printableBandContour?.map((point) => ({ ...point })),
@@ -2421,9 +3047,9 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
           sourceCoordinateSpace: "svg-px",
           boundsBeforeBandCrop: source.bounds,
           boundsAfterBandCrop: printableBandContourBounds,
-          acceptedPreviewBounds: scaledFullBodyContour.contourBounds,
-          glbInputBounds: scaledFullBodyContour.contourBounds,
-          canonicalInputBounds: scaledFullBodyContour.contourBounds,
+          acceptedPreviewBounds: acceptedContourBounds,
+          glbInputBounds: acceptedContourBounds,
+          canonicalInputBounds: acceptedContourBounds,
           bandCropApplied: false,
           bandCropReason: "imported body-only contour preserves full accepted shell; printable band is stored separately",
           bodyOnlyReCropSkipped: true,
@@ -2431,6 +3057,8 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
           authoritativeForPrintableBand: false,
           sourceDiameterUnits: scaledFullBodyContour.sourceDiameterUnits,
           mmPerSourceUnit: scaledFullBodyContour.mmPerSourceUnit,
+          lowerBowlBaselineRaised: regularized?.baselineRaised,
+          lowerBowlSafeInsetMm: regularized?.safeInsetMm,
         }),
       };
     }
@@ -2523,22 +3151,50 @@ export function createEditableBodyOutlineFromImportedSvg(args: ImportOutlineArgs
     taperLowerDiameterMm: args.taperLowerDiameterMm ?? null,
     bevelDiameterMm: args.bevelDiameterMm ?? null,
   });
+  const rawDirectContour =
+    seamAnchoredBodyOnlyOutline?.directContour
+    ?? (
+      sourceMode === "body-only" && contour.length >= 8
+        ? contour.map((point) => ({ ...point }))
+        : buildSmoothedContourFromProfile(points)
+    );
+  const rawPoints = seamAnchoredBodyOnlyOutline?.points ?? points;
+  const regularized = regularizeBodyOnlyDirectContourLowerShape({
+    points: rawPoints,
+    directContour: rawDirectContour,
+    sourceContourMode: "body-only",
+    sourceContour: previewSourceContour,
+  });
 
   return {
     closed: true,
     version: 1,
-    points: seamAnchoredBodyOnlyOutline?.points ?? points,
-    directContour:
-      seamAnchoredBodyOnlyOutline?.directContour
-      ?? (
-        sourceMode === "body-only" && contour.length >= 8
-          ? contour.map((point) => ({ ...point }))
-          : buildSmoothedContourFromProfile(points)
-      ),
+    points: regularized?.points ?? rawPoints,
+    directContour: regularized?.directContour ?? rawDirectContour,
+    lowerCutoffInsetMm: regularized?.safeInsetMm,
+    lowerCutoffSource: regularized?.lowerCutoffSource,
     sourceContour: previewSourceContour.map((point) => ({ ...point })),
     sourceContourBounds: previewBounds,
     sourceContourMode: "body-only",
     sourceContourViewport: source.viewport,
+    contourFrame: regularized
+      ? buildContourFrameDiagnostics({
+          kind: "full-body-only-source",
+          sourceCoordinateSpace: "svg-px",
+          boundsBeforeBandCrop: source.bounds,
+          boundsAfterBandCrop: null,
+          acceptedPreviewBounds: regularized.bounds,
+          glbInputBounds: regularized.bounds,
+          canonicalInputBounds: regularized.bounds,
+          bandCropApplied: false,
+          bandCropReason: "imported body-only contour preserves full accepted shell; printable band is stored separately",
+          bodyOnlyReCropSkipped: true,
+          authoritativeForBodyCutoutQa: true,
+          authoritativeForPrintableBand: false,
+          lowerBowlBaselineRaised: regularized.baselineRaised,
+          lowerBowlSafeInsetMm: regularized.safeInsetMm,
+        })
+      : undefined,
   };
 }
 

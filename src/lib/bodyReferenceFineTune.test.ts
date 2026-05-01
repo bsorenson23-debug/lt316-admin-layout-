@@ -18,6 +18,7 @@ import {
   resolvePrimaryBodyReferenceVisualContour,
   resolveUiOnlyRimReferenceGuide,
 } from "./bodyReferenceFineTune.ts";
+import { updateBodyOnlyFlatBottomCutoff } from "./editableBodyOutline.ts";
 
 function makeOutline(): EditableBodyOutline {
   return {
@@ -44,6 +45,16 @@ function makeOutline(): EditableBodyOutline {
       { x: 100, y: 200 },
       { x: 100, y: 20 },
     ],
+    contourFrame: {
+      kind: "full-body-only-source",
+      authoritativeForBodyCutoutQa: true,
+      authoritativeForPrintableBand: false,
+      sourceCoordinateSpace: "raw-image-px",
+      bandCropApplied: false,
+      bodyOnlyReCropSkipped: true,
+      lowerBowlBaselineRaised: true,
+      lowerBowlSafeInsetMm: 6,
+    },
   };
 }
 
@@ -68,6 +79,38 @@ function makeManualOutlineWithStaleContour(): EditableBodyOutline {
       { x: -50, y: 80 },
       { x: -50, y: 30 },
     ],
+  };
+}
+
+function makeRoundedBaseOutline(): EditableBodyOutline {
+  const directContour = [
+    { x: 45, y: 0 },
+    { x: 45, y: 80 },
+    { x: 43, y: 155 },
+    { x: 35, y: 190 },
+    { x: 18, y: 214 },
+    { x: 8, y: 220 },
+    { x: -8, y: 220 },
+    { x: -18, y: 214 },
+    { x: -35, y: 190 },
+    { x: -43, y: 155 },
+    { x: -45, y: 80 },
+    { x: -45, y: 0 },
+  ];
+  return {
+    closed: true,
+    version: 1,
+    sourceContourMode: "body-only",
+    points: [
+      { id: "top", x: 45, y: 0, role: "topOuter", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "body", x: 45, y: 80, role: "body", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "shoulder", x: 43, y: 155, role: "shoulder", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "lowerTaper", x: 35, y: 190, role: "lowerTaper", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "bevel", x: 18, y: 214, role: "bevel", pointType: "corner", inHandle: null, outHandle: null },
+      { id: "base", x: 8, y: 220, role: "base", pointType: "corner", inHandle: null, outHandle: null },
+    ],
+    directContour,
+    sourceContour: directContour.map((point) => ({ ...point })),
   };
 }
 
@@ -133,10 +176,164 @@ test("primary review outline prefers approved direct contour over sparse edit co
   const visual = resolvePrimaryBodyReferenceVisualContour(outline);
 
   assert.ok(visual);
-  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.source, "svg-cutout");
   assert.equal(visual!.topGuideY, 25);
   assert.equal(visual!.bounds.height, 199.8);
   assert.equal(visual!.points.length, outline.directContour.length);
+});
+
+test("primary review outline uses regularized body-only direct contour", () => {
+  const outline = makeOutline();
+  outline.contourFrame = undefined;
+  outline.points = [
+    { id: "top", x: 45, y: 0, role: "topOuter", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "body", x: 45, y: 80, role: "body", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "shoulder", x: 43, y: 155, role: "shoulder", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "lowerTaper", x: 35, y: 190, role: "lowerTaper", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "bevel", x: 18, y: 214, role: "bevel", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "base", x: 8, y: 220, role: "base", pointType: "corner", inHandle: null, outHandle: null },
+  ];
+  outline.directContour = [
+    { x: 45, y: 0 },
+    { x: 45, y: 80 },
+    { x: 43, y: 155 },
+    { x: 35, y: 190 },
+    { x: 18, y: 214 },
+    { x: 8, y: 220 },
+    { x: -8, y: 220 },
+    { x: -18, y: 214 },
+    { x: -35, y: 190 },
+    { x: -43, y: 155 },
+    { x: -45, y: 80 },
+    { x: -45, y: 0 },
+  ];
+  outline.sourceContour = outline.directContour.map((point) => ({ ...point }));
+
+  const visual = resolvePrimaryBodyReferenceVisualContour(outline);
+
+  assert.ok(visual);
+  assert.equal(visual!.source, "svg-cutout");
+  assert.equal(visual!.bounds.maxY, 218);
+  assert.ok(visual!.points.every((point) => point.y <= 218.001));
+  assert.equal(visual!.points.some((point) => point.y > 218), false);
+  assert.notDeepEqual(visual!.points, outline.directContour);
+});
+
+test("accepted corrected clipped contour updates source hash", () => {
+  const roundedBaseOutline = makeOutline();
+  roundedBaseOutline.contourFrame = undefined;
+  roundedBaseOutline.points = [
+    { id: "top", x: 45, y: 0, role: "topOuter", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "body", x: 45, y: 80, role: "body", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "shoulder", x: 43, y: 155, role: "shoulder", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "lowerTaper", x: 35, y: 190, role: "lowerTaper", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "bevel", x: 18, y: 214, role: "bevel", pointType: "corner", inHandle: null, outHandle: null },
+    { id: "base", x: 8, y: 220, role: "base", pointType: "corner", inHandle: null, outHandle: null },
+  ];
+  roundedBaseOutline.directContour = [
+    { x: 45, y: 0 },
+    { x: 45, y: 80 },
+    { x: 43, y: 155 },
+    { x: 35, y: 190 },
+    { x: 18, y: 214 },
+    { x: 8, y: 220 },
+    { x: -8, y: 220 },
+    { x: -18, y: 214 },
+    { x: -35, y: 190 },
+    { x: -43, y: 155 },
+    { x: -45, y: 80 },
+    { x: -45, y: 0 },
+  ];
+  roundedBaseOutline.sourceContour = roundedBaseOutline.directContour.map((point) => ({ ...point }));
+  const rawSignature = buildOutlineGeometrySignature({
+    ...roundedBaseOutline,
+    contourFrame: {
+      kind: "full-body-only-source",
+      authoritativeForBodyCutoutQa: true,
+      authoritativeForPrintableBand: false,
+      sourceCoordinateSpace: "raw-image-px",
+      bandCropApplied: false,
+      bodyOnlyReCropSkipped: true,
+      lowerBowlBaselineRaised: true,
+      lowerBowlSafeInsetMm: 0,
+    },
+  });
+
+  const rebuilt = rebuildAcceptedBodyReferenceSnapshot({
+    acceptedOutline: roundedBaseOutline,
+    overallHeightMm: 240,
+    topMarginMm: 0,
+    bottomMarginMm: 20,
+    diameterMm: 90,
+    baseDiameterMm: 70,
+    fitDebug: makeFitDebug(),
+  });
+
+  assert.ok(rebuilt);
+  const acceptedSignature = buildOutlineGeometrySignature(rebuilt!.approvedBodyOutline);
+  const visual = resolvePrimaryBodyReferenceVisualContour(rebuilt!.approvedBodyOutline);
+  assert.notEqual(acceptedSignature, rawSignature);
+  assert.equal(visual?.bounds.maxY, 218);
+  assert.equal(visual?.points.some((point) => point.y > 218), false);
+  assert.equal(rebuilt!.nextPrintHeightMm, 220);
+  assert.equal(rebuilt!.bodyBottomFromOverallMm, 220);
+  assert.equal(rebuilt!.readyForReviewedGeneration, true);
+});
+
+test("manual cutoff changes remain draft-only until accepted and then stale reviewed GLB", () => {
+  const approved = rebuildAcceptedBodyReferenceSnapshot({
+    acceptedOutline: makeRoundedBaseOutline(),
+    overallHeightMm: 240,
+    topMarginMm: 0,
+    bottomMarginMm: 20,
+    diameterMm: 90,
+    baseDiameterMm: 70,
+    fitDebug: makeFitDebug(),
+  });
+  const draft = updateBodyOnlyFlatBottomCutoff({
+    outline: approved?.approvedBodyOutline,
+    lowerCutoffSource: "manual",
+    lowerCutoffInsetMm: 3,
+  });
+
+  assert.ok(approved);
+  assert.ok(draft);
+  assert.equal(hasFineTuneDraftChanges({ approved: approved!.approvedBodyOutline, draft }), true);
+  assert.notEqual(
+    buildOutlineGeometrySignature(approved!.approvedBodyOutline),
+    buildOutlineGeometrySignature(draft),
+  );
+
+  const reviewBeforeAccept = resolveFineTuneGlbReviewState({
+    canGenerate: true,
+    hasGeneratedArtifact: true,
+    currentSourceSignature: buildOutlineGeometrySignature(approved!.approvedBodyOutline),
+    generatedSourceSignature: buildOutlineGeometrySignature(approved!.approvedBodyOutline),
+    hasPendingSourceDraft: true,
+  });
+  assert.equal(reviewBeforeAccept.status, "draft-pending");
+
+  const accepted = rebuildAcceptedBodyReferenceSnapshot({
+    acceptedOutline: draft,
+    overallHeightMm: 240,
+    topMarginMm: approved!.nextTopMarginMm,
+    bottomMarginMm: approved!.nextBottomMarginMm,
+    diameterMm: 90,
+    baseDiameterMm: 70,
+    fitDebug: makeFitDebug(),
+  });
+  assert.ok(accepted);
+  assert.equal(accepted!.approvedBodyOutline.lowerCutoffSource, "manual");
+  assert.equal(accepted!.approvedBodyOutline.lowerCutoffInsetMm, 3);
+  assert.equal(accepted!.nextPrintHeightMm, 220);
+  const reviewAfterAccept = resolveFineTuneGlbReviewState({
+    canGenerate: true,
+    hasGeneratedArtifact: true,
+    currentSourceSignature: buildOutlineGeometrySignature(accepted!.approvedBodyOutline),
+    generatedSourceSignature: buildOutlineGeometrySignature(approved!.approvedBodyOutline),
+    hasPendingSourceDraft: false,
+  });
+  assert.equal(reviewAfterAccept.status, "stale");
 });
 
 test("printable band metadata cannot replace approved SVG visual authority", () => {
@@ -165,7 +362,7 @@ test("printable band metadata cannot replace approved SVG visual authority", () 
   const visual = resolvePrimaryBodyReferenceVisualContour(outline);
 
   assert.ok(visual);
-  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.source, "svg-cutout");
   assert.equal(visual!.topGuideY, 25);
   assert.equal(visual!.bounds.minY, 25);
   assert.equal(visual!.bounds.maxY, 224.8);
@@ -242,7 +439,7 @@ test("printable top cannot create the rim reference guide or top-band body geome
 
   assert.equal(guide, null);
   assert.ok(visual);
-  assert.equal(visual!.source, "direct-contour");
+  assert.equal(visual!.source, "svg-cutout");
   assert.equal(visual!.bounds.minY, 25);
   assert.equal(visual!.bounds.maxY, 243.29);
 });

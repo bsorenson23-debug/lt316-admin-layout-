@@ -11,6 +11,7 @@ import { deriveBodyReferencePipeline } from "./bodyReferencePipeline.ts";
 import {
   deriveDimensionsFromEditableBodyOutline,
   insertEditableOutlinePoint,
+  normalizeEditableBodyOutlineForBodyCutoutAuthority,
   rebuildEditableBodyOutline,
   removeEditableOutlinePoint,
   resolveAuthoritativeEditableBodyOutlineContour,
@@ -80,6 +81,11 @@ export function buildOutlineGeometrySignature(outline: EditableBodyOutline | nul
     closed: outline.closed,
     version: outline.version ?? 1,
     sourceContourMode: outline.sourceContourMode ?? null,
+    lowerCutoffInsetMm:
+      typeof outline.lowerCutoffInsetMm === "number" && Number.isFinite(outline.lowerCutoffInsetMm)
+        ? round2(outline.lowerCutoffInsetMm)
+        : null,
+    lowerCutoffSource: outline.lowerCutoffSource ?? null,
     points: outline.points.map((point) => ({
       x: round2(point.x),
       y: round2(point.y),
@@ -155,12 +161,19 @@ const ACCEPTED_BODY_REFERENCE_REBUILD_WARNING =
 export function rebuildAcceptedBodyReferenceSnapshot(
   args: RebuildAcceptedBodyReferenceSnapshotArgs,
 ): RebuildAcceptedBodyReferenceSnapshotResult | null {
-  const approvedBodyOutline = cloneOutline(args.acceptedOutline);
-  if (!approvedBodyOutline) {
+  const acceptedOutline = cloneOutline(args.acceptedOutline);
+  if (!acceptedOutline) {
     return null;
   }
+  const approvedBodyOutline = normalizeEditableBodyOutlineForBodyCutoutAuthority(acceptedOutline);
 
-  const derived = deriveDimensionsFromEditableBodyOutline(approvedBodyOutline);
+  const preservedBodyBottomFromOverallMm =
+    approvedBodyOutline.sourceContourMode === "body-only" && args.overallHeightMm > 0
+      ? round2(Math.max(args.topMarginMm + 1, args.overallHeightMm - Math.max(0, args.bottomMarginMm)))
+      : null;
+  const derived = deriveDimensionsFromEditableBodyOutline(approvedBodyOutline, {
+    preserveBodyBottomFromOverallMm: preservedBodyBottomFromOverallMm,
+  });
   const nextTopMarginMm =
     typeof derived.bodyTopFromOverallMm === "number"
       ? round2(Math.max(0, derived.bodyTopFromOverallMm))
@@ -227,6 +240,7 @@ export function rebuildAcceptedBodyReferenceSnapshot(
 }
 
 export type BodyReferenceVisualContourSource =
+  | "svg-cutout"
   | "direct-contour"
   | "control-points"
   | "source-contour";
@@ -262,7 +276,12 @@ export function resolvePrimaryBodyReferenceVisualContour(
     if (bounds) {
       return {
         points: authoritativeContour.map((point) => ({ x: point.x, y: point.y })),
-        source: authoritativeContour === outline.directContour ? "direct-contour" : "control-points",
+        source:
+          outline.sourceContourMode === "body-only"
+            ? "svg-cutout"
+            : outline.directContour && outline.directContour.length >= 3
+              ? "direct-contour"
+              : "control-points",
         bounds,
         topGuideY: bounds.minY,
       };

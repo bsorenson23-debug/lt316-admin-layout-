@@ -1,5 +1,9 @@
 import type { ProductTemplate } from "@/types/productTemplate";
-import { isGeneratedModelUrl, isLegacyGeneratedModelPath } from "./generatedModelUrl.ts";
+import {
+  inferGeneratedModelStatusFromSource,
+  isGeneratedModelUrl,
+  isLegacyGeneratedModelPath,
+} from "./generatedModelUrl.ts";
 
 export type PreviewModelMode =
   | "alignment-model"
@@ -36,6 +40,27 @@ export interface TumblerPreviewModelState {
   message: string | null;
 }
 
+export interface TumblerPreviewModelSourceSelection {
+  modelPath: string | null;
+  modelStatus: ProductTemplate["glbStatus"] | null;
+  modelSourceLabel: string | null;
+  reviewedBodyCutoutQaAvailable: boolean;
+  reviewedBodyCutoutQaActive: boolean;
+  reviewedBodyCutoutQaAvailableButInactive: boolean;
+  hasOriginalModel: boolean;
+  originalModelPreferred: boolean;
+}
+
+export interface ResolveTumblerPreviewModelSourceArgs {
+  requestedMode: PreviewModelMode;
+  currentModelPath?: string | null;
+  currentModelStatus?: ProductTemplate["glbStatus"] | null;
+  currentModelSourceLabel?: string | null;
+  originalModelPath?: string | null;
+  originalModelStatus?: ProductTemplate["glbStatus"] | null;
+  originalModelSourceLabel?: string | null;
+}
+
 export function getTumblerPreviewModelStateSignature(state: TumblerPreviewModelState | null): string {
   if (!state) return "null";
   return [
@@ -68,6 +93,106 @@ function getExpectedDiameterMm(bounds?: TumblerPreviewBoundsSnapshot | null): nu
   return isFinitePositive(diameter) ? diameter : null;
 }
 
+function normalizePath(value: string | null | undefined): string {
+  return value?.trim() ?? "";
+}
+
+function resolveStatusFromPath(args: {
+  modelPath: string | null;
+  modelStatus?: ProductTemplate["glbStatus"] | null;
+  modelSourceLabel?: string | null;
+}): ProductTemplate["glbStatus"] | null {
+  if (args.modelStatus) return args.modelStatus;
+  return inferGeneratedModelStatusFromSource({
+    modelUrl: args.modelPath,
+    sourceModelLabel: args.modelSourceLabel,
+  });
+}
+
+export function resolveTumblerPreviewModelSource(
+  args: ResolveTumblerPreviewModelSourceArgs,
+): TumblerPreviewModelSourceSelection {
+  const currentModelPath = normalizePath(args.currentModelPath);
+  const originalModelPath = normalizePath(args.originalModelPath);
+  const currentModelStatus = resolveStatusFromPath({
+    modelPath: currentModelPath || null,
+    modelStatus: args.currentModelStatus,
+    modelSourceLabel: args.currentModelSourceLabel,
+  });
+  const originalModelStatus = resolveStatusFromPath({
+    modelPath: originalModelPath || null,
+    modelStatus: args.originalModelStatus,
+    modelSourceLabel: args.originalModelSourceLabel,
+  });
+  const currentIsReviewedBodyCutoutQa = currentModelStatus === "generated-reviewed-model";
+  const originalIsDistinct = Boolean(
+    originalModelPath &&
+    originalModelPath !== currentModelPath &&
+    originalModelStatus !== "generated-reviewed-model",
+  );
+  const reviewedBodyCutoutQaAvailable = Boolean(currentModelPath && currentIsReviewedBodyCutoutQa);
+  const wantsReviewedBodyCutoutQa =
+    args.requestedMode === "body-cutout-qa" ||
+    args.requestedMode === "wrap-export";
+  const originalModelPreferred =
+    originalIsDistinct &&
+    (
+      args.requestedMode === "alignment-model" ||
+      args.requestedMode === "full-model" ||
+      args.requestedMode === "source-traced"
+    );
+
+  if (wantsReviewedBodyCutoutQa && currentModelPath) {
+    return {
+      modelPath: currentModelPath,
+      modelStatus: currentModelStatus,
+      modelSourceLabel: args.currentModelSourceLabel ?? null,
+      reviewedBodyCutoutQaAvailable,
+      reviewedBodyCutoutQaActive: reviewedBodyCutoutQaAvailable,
+      reviewedBodyCutoutQaAvailableButInactive: false,
+      hasOriginalModel: originalIsDistinct,
+      originalModelPreferred: false,
+    };
+  }
+
+  if (originalModelPreferred) {
+    return {
+      modelPath: originalModelPath,
+      modelStatus: originalModelStatus ?? "verified-product-model",
+      modelSourceLabel: args.originalModelSourceLabel ?? null,
+      reviewedBodyCutoutQaAvailable,
+      reviewedBodyCutoutQaActive: false,
+      reviewedBodyCutoutQaAvailableButInactive: reviewedBodyCutoutQaAvailable,
+      hasOriginalModel: true,
+      originalModelPreferred: true,
+    };
+  }
+
+  if (args.requestedMode === "full-model" && reviewedBodyCutoutQaAvailable) {
+    return {
+      modelPath: null,
+      modelStatus: null,
+      modelSourceLabel: null,
+      reviewedBodyCutoutQaAvailable,
+      reviewedBodyCutoutQaActive: false,
+      reviewedBodyCutoutQaAvailableButInactive: true,
+      hasOriginalModel: false,
+      originalModelPreferred: false,
+    };
+  }
+
+  return {
+    modelPath: currentModelPath || null,
+    modelStatus: currentModelStatus,
+    modelSourceLabel: args.currentModelSourceLabel ?? null,
+    reviewedBodyCutoutQaAvailable,
+    reviewedBodyCutoutQaActive: reviewedBodyCutoutQaAvailable && args.requestedMode === "body-cutout-qa",
+    reviewedBodyCutoutQaAvailableButInactive: reviewedBodyCutoutQaAvailable && args.requestedMode !== "body-cutout-qa",
+    hasOriginalModel: originalIsDistinct,
+    originalModelPreferred: false,
+  };
+}
+
 function isGeneratedTracePath(path?: string | null): boolean {
   if (!path) return false;
   const normalized = path.toLowerCase();
@@ -77,9 +202,7 @@ function isGeneratedTracePath(path?: string | null): boolean {
 export function deriveTumblerPreviewModelState(
   args: DeriveTumblerPreviewModelStateArgs,
 ): TumblerPreviewModelState {
-  const wantsBodyCutoutQa =
-    args.requestedMode === "body-cutout-qa" ||
-    (args.requestedMode === "full-model" && args.sourceModelStatus === "generated-reviewed-model");
+  const wantsBodyCutoutQa = args.requestedMode === "body-cutout-qa";
   if (
     args.requestedMode !== "full-model" &&
     args.requestedMode !== "wrap-export" &&
@@ -239,6 +362,16 @@ export function deriveTumblerPreviewModelState(
   }
 
   if (args.sourceModelStatus === "generated-reviewed-model") {
+    if (args.requestedMode === "full-model") {
+      return {
+        requestedMode: args.requestedMode,
+        effectiveMode: "full-model",
+        glbPreviewStatus: "unavailable",
+        sourceModelPath: args.sourceModelPath ?? null,
+        reason: "reviewed-generated-model",
+        message: "Full product model is unavailable in this preview. The reviewed body-only GLB is ready; click BODY CUTOUT QA to inspect body contour QA.",
+      };
+    }
     if (!args.sourceBounds) {
       return {
         requestedMode: args.requestedMode,

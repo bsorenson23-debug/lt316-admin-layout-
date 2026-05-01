@@ -25,7 +25,10 @@ import {
 } from "@/lib/bodyReferenceFineTune";
 import {
   buildContourSvgPath,
+  resolveBodyOnlyFlatBottomCutoffControl,
+  resolveBodyOnlyRawDetectedTraceContour,
   sortEditableOutlinePoints,
+  updateBodyOnlyFlatBottomCutoff,
 } from "@/lib/editableBodyOutline";
 import styles from "./BodyReferenceFineTuneEditor.module.css";
 
@@ -45,6 +48,7 @@ type Props = {
   detectedOutline?: EditableBodyOutline | null;
   overallHeightMm?: number | null;
   interactive?: boolean;
+  debugMode?: boolean;
   sourceImageUrl?: string | null;
   fitDebug?: TumblerItemLookupFitDebug | null;
   svgQualityReport?: BodyReferenceSvgQualityReport | null;
@@ -136,6 +140,7 @@ function buildViewBox(args: {
   outline: EditableBodyOutline | null | undefined;
   approvedOutline: EditableBodyOutline | null | undefined;
   detectedOutline: EditableBodyOutline | null | undefined;
+  rawReferencePoints?: Array<{ x: number; y: number }> | null;
   sourceImagePlacement: ImagePlacement | null;
   uiOnlyRimReferenceGuideY?: number | null;
 }): ViewBox {
@@ -146,6 +151,7 @@ function buildViewBox(args: {
     ...buildPrimaryVisualPoints(args.outline),
     ...buildPrimaryVisualPoints(args.approvedOutline),
     ...buildPrimaryVisualPoints(args.detectedOutline),
+    ...(args.rawReferencePoints ?? []),
   ];
   const xs = points.map((point) => point.x);
   const ys = points.map((point) => point.y);
@@ -217,6 +223,11 @@ function formatBounds(bounds: ReturnType<typeof resolveOutlineBounds>): string {
   return `${bounds.width} x ${bounds.height} contour units`;
 }
 
+function formatMm(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
+  return `${round1(value)} mm`;
+}
+
 function formatQualityStatus(status: BodyReferenceSvgQualityReport["status"] | undefined): string {
   if (status === "pass") return "SVG quality: pass";
   if (status === "warn") return "SVG quality: warn";
@@ -286,6 +297,7 @@ export function BodyReferenceFineTuneEditor({
   detectedOutline = null,
   overallHeightMm = null,
   interactive = false,
+  debugMode = false,
   sourceImageUrl = null,
   fitDebug = null,
   svgQualityReport = null,
@@ -310,7 +322,13 @@ export function BodyReferenceFineTuneEditor({
     bridgeGuides: true,
     qualityWarnings: true,
   });
-  const [guideOverlayVisible, setGuideOverlayVisible] = React.useState(true);
+  const [guideOverlayVisible, setGuideOverlayVisible] = React.useState(() => debugMode);
+
+  React.useEffect(() => {
+    if (debugMode) {
+      setGuideOverlayVisible(true);
+    }
+  }, [debugMode]);
 
   const sourceImagePlacement = React.useMemo(
     () => buildSourceImagePlacement(outline),
@@ -323,31 +341,48 @@ export function BodyReferenceFineTuneEditor({
     }),
     [fitDebug, outline],
   );
+  const rawDetectedTraceContour = React.useMemo(
+    () => resolveBodyOnlyRawDetectedTraceContour(outline),
+    [outline],
+  );
   const viewBox = React.useMemo(
     () => buildViewBox({
       outline,
       approvedOutline,
       detectedOutline,
+      rawReferencePoints: rawDetectedTraceContour,
       sourceImagePlacement,
       uiOnlyRimReferenceGuideY: uiOnlyRimReferenceGuide?.y ?? null,
     }),
-    [approvedOutline, detectedOutline, outline, sourceImagePlacement, uiOnlyRimReferenceGuide?.y],
+    [approvedOutline, detectedOutline, outline, rawDetectedTraceContour, sourceImagePlacement, uiOnlyRimReferenceGuide?.y],
   );
   const approvedVisualContour = React.useMemo(
     () => resolvePrimaryBodyReferenceVisualContour(approvedOutline),
     [approvedOutline],
+  );
+  const primaryDisplayVisualContour = React.useMemo(
+    () => (
+      interactive
+        ? resolvePrimaryBodyReferenceVisualContour(outline)
+        : approvedVisualContour
+    ),
+    [approvedVisualContour, interactive, outline],
   );
   const detectedVisualContour = React.useMemo(
     () => resolvePrimaryBodyReferenceVisualContour(detectedOutline),
     [detectedOutline],
   );
   const approvedPath = React.useMemo(
-    () => buildPrimaryVisualPath(approvedVisualContour),
-    [approvedVisualContour],
+    () => buildPrimaryVisualPath(primaryDisplayVisualContour),
+    [primaryDisplayVisualContour],
   );
   const detectedPath = React.useMemo(
     () => buildPrimaryVisualPath(detectedVisualContour),
     [detectedVisualContour],
+  );
+  const rawDetectedTracePath = React.useMemo(
+    () => rawDetectedTraceContour ? buildContourSvgPath(rawDetectedTraceContour) : null,
+    [rawDetectedTraceContour],
   );
   const draftPath = React.useMemo(
     () => buildOutlinePath(outline),
@@ -373,6 +408,10 @@ export function BodyReferenceFineTuneEditor({
   }, [selectedSegmentIndex, sortedPoints]);
   const outlineBounds = React.useMemo(
     () => resolveOutlineBounds(outline),
+    [outline],
+  );
+  const cutoffControl = React.useMemo(
+    () => resolveBodyOnlyFlatBottomCutoffControl(outline),
     [outline],
   );
   const qualityVisualization = React.useMemo(
@@ -403,6 +442,17 @@ export function BodyReferenceFineTuneEditor({
     )).length,
     [guideCandidateReport.candidates],
   );
+  const showUiOnlyGuides = guideOverlayVisible;
+  const showSourceImage = overlayState.sourceImage && Boolean(sourceImageUrl && sourceImagePlacement);
+  const showBodyBounds = showUiOnlyGuides && overlayState.bodyBounds && Boolean(outlineBounds);
+  const showRimReferenceGuide = showUiOnlyGuides && Boolean(uiOnlyRimReferenceGuide && outlineBounds);
+  const showGuideCandidateOverlay = showUiOnlyGuides && guideCandidateReport.candidates.length > 0;
+  const showDetectedContour = showUiOnlyGuides && overlayState.detectedContour && Boolean(detectedPath);
+  const showRawDetectedTrace = Boolean(rawDetectedTracePath) && (interactive || showUiOnlyGuides);
+  const showDraftContour = showUiOnlyGuides && overlayState.draftContour && Boolean(draftPath);
+  const showBridgeGuides = showUiOnlyGuides && overlayState.bridgeGuides;
+  const showQualityWarnings = showUiOnlyGuides && overlayState.qualityWarnings;
+  const showEditablePoints = interactive && overlayState.points;
 
   React.useEffect(() => {
     if (!sourceImageUrl || !sourceImagePlacement) {
@@ -521,6 +571,29 @@ export function BodyReferenceFineTuneEditor({
     });
     applyOutlineChange(nextOutline);
   }, [applyOutlineChange, interactive, outline, recordEditStart, selectedSegmentIndex]);
+
+  const handleCutoffInsetChange = React.useCallback((nextInsetMm: number) => {
+    if (!interactive || !outline || !cutoffControl) return;
+    recordEditStart();
+    const nextOutline = updateBodyOnlyFlatBottomCutoff({
+      outline,
+      lowerCutoffInsetMm: nextInsetMm,
+      lowerCutoffSource: "manual",
+    });
+    applyOutlineChange(nextOutline);
+  }, [applyOutlineChange, cutoffControl, interactive, outline, recordEditStart]);
+
+  const handleResetCutoffToAuto = React.useCallback(() => {
+    if (!interactive || !outline) return;
+    recordEditStart();
+    const nextOutline = updateBodyOnlyFlatBottomCutoff({
+      outline,
+      lowerCutoffInsetMm: null,
+      lowerCutoffSource: "auto",
+    });
+    applyOutlineChange(nextOutline);
+    endEditGesture();
+  }, [applyOutlineChange, endEditGesture, interactive, outline, recordEditStart]);
 
   const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!interactive || !selectedPointId || !outline) return;
@@ -657,7 +730,11 @@ export function BodyReferenceFineTuneEditor({
 
       <div className={styles.statusGrid}>
         <div className={styles.statusCard}>
-          <span className={styles.statusLabel}>Draft bounds</span>
+          <span className={styles.statusLabel}>Product total height</span>
+          <span className={styles.statusValue}>{formatMm(overallHeightMm)}</span>
+        </div>
+        <div className={styles.statusCard}>
+          <span className={styles.statusLabel}>SVG cutout bounds</span>
           <span className={styles.statusValue}>{formatBounds(outlineBounds)}</span>
         </div>
         <div className={styles.statusCard}>
@@ -666,7 +743,7 @@ export function BodyReferenceFineTuneEditor({
             className={styles.statusValue}
             data-testid="body-reference-primary-outline-source"
           >
-            {approvedVisualContour?.source ?? "unavailable"}
+            {primaryDisplayVisualContour?.source ?? "unavailable"}
           </span>
         </div>
         <div className={styles.statusCard}>
@@ -682,6 +759,72 @@ export function BodyReferenceFineTuneEditor({
           <span className={styles.statusValue}>{qualityVisualization.expectedBridgeSegments.length}</span>
         </div>
       </div>
+
+      {cutoffControl && (
+        <div className={styles.cutoffPanel} data-testid="body-reference-flat-bottom-cutoff-control">
+          <div className={styles.cutoffHeader}>
+            <div>
+              <div className={styles.cutoffEyebrow}>Flat bottom cutoff</div>
+              <div className={styles.cutoffTitle}>
+                Cutoff: {formatMm(cutoffControl.insetMm)} above rounded base
+              </div>
+            </div>
+            <span className={styles.cutoffBadge}>
+              {cutoffControl.source === "manual" ? "Manual" : "Auto"}
+            </span>
+          </div>
+          <div className={styles.cutoffControls}>
+            <input
+              type="range"
+              min={cutoffControl.minInsetMm}
+              max={cutoffControl.maxInsetMm}
+              step={0.5}
+              value={cutoffControl.insetMm}
+              disabled={!interactive}
+              aria-label="Flat bottom cutoff inset"
+              data-testid="body-reference-flat-bottom-cutoff-slider"
+              onInput={(event) => handleCutoffInsetChange(Number(event.currentTarget.value))}
+              onChange={(event) => handleCutoffInsetChange(Number(event.currentTarget.value))}
+            />
+            <input
+              type="number"
+              min={cutoffControl.minInsetMm}
+              max={cutoffControl.maxInsetMm}
+              step={0.5}
+              value={cutoffControl.insetMm}
+              disabled={!interactive}
+              aria-label="Flat bottom cutoff inset millimeters"
+              className={styles.cutoffNumber}
+              data-testid="body-reference-flat-bottom-cutoff-input"
+              onInput={(event) => handleCutoffInsetChange(Number(event.currentTarget.value))}
+              onChange={(event) => handleCutoffInsetChange(Number(event.currentTarget.value))}
+            />
+            <button
+              type="button"
+              className={styles.actionButton}
+              disabled={!interactive || cutoffControl.source === "auto"}
+              onClick={handleResetCutoffToAuto}
+              data-testid="body-reference-flat-bottom-cutoff-reset"
+            >
+              Reset cutoff to auto
+            </button>
+          </div>
+          <div className={styles.cutoffRange}>
+            <span>Min {formatMm(cutoffControl.minInsetMm)}</span>
+            <span>Auto {formatMm(cutoffControl.autoInsetMm)}</span>
+            <span>Max {formatMm(cutoffControl.maxInsetMm)}</span>
+          </div>
+          <div className={styles.cutoffNote}>
+            Raise to remove more rounded base. Lower to keep more body height. Use the slider or numeric input to move the cutoff line. Accept corrected cutout before regenerating BODY CUTOUT QA GLB.
+          </div>
+          <div
+            className={styles.cutoffReferenceNote}
+            data-testid="body-reference-raw-detected-trace-note"
+          >
+            Raw detected trace - reference only. The approved SVG/GLB source stays clipped at the flat cutoff.
+          </div>
+        </div>
+      )}
 
       <div
         className={styles.guidesPanel}
@@ -723,7 +866,7 @@ export function BodyReferenceFineTuneEditor({
             className={styles.guidesNote}
             data-testid="body-reference-guides-ui-only-note"
           >
-            UI-only guide overlay. Does not affect approved SVG or BODY CUTOUT QA GLB.
+            UI-only guides are hidden by default. They help debug bridge segments and symmetry, but they are not exported, not saved as the approved cutout, and not used for BODY CUTOUT QA GLB generation.
           </span>
         </div>
         <div
@@ -743,7 +886,7 @@ export function BodyReferenceFineTuneEditor({
         )}
       </div>
 
-      {overlayState.qualityWarnings && qualityMessages.length > 0 && (
+      {showQualityWarnings && qualityMessages.length > 0 && (
         <div className={styles.warningList}>
           {qualityMessages.map((warning) => (
             <div
@@ -770,7 +913,7 @@ export function BodyReferenceFineTuneEditor({
           focusEditor();
         }}
       >
-        {overlayState.sourceImage && sourceImageUrl && sourceImagePlacement && (
+        {showSourceImage && sourceImageUrl && sourceImagePlacement && (
           <image
             href={sourceImageUrl}
             x={sourceImagePlacement.x}
@@ -782,7 +925,7 @@ export function BodyReferenceFineTuneEditor({
           />
         )}
 
-        {overlayState.bodyBounds && outlineBounds && (
+        {showBodyBounds && outlineBounds && (
           <>
             <rect
               x={outlineBounds.minX}
@@ -812,15 +955,39 @@ export function BodyReferenceFineTuneEditor({
           </>
         )}
 
-        <line
-          x1={0}
-          y1={viewBox.minY}
-          x2={0}
-          y2={viewBox.minY + viewBox.height}
-          className={styles.centerLine}
-        />
+        {interactive && cutoffControl && (
+          <g
+            className={styles.cutoffGuide}
+            data-testid="body-reference-flat-bottom-cutoff-line"
+            data-cutoff-source={cutoffControl.source}
+            data-cutoff-inset-mm={cutoffControl.insetMm}
+            data-coordinate-space="body-reference-contour-mm"
+          >
+            <line
+              x1={cutoffControl.leftCutoffX}
+              y1={cutoffControl.cutoffY}
+              x2={cutoffControl.rightCutoffX}
+              y2={cutoffControl.cutoffY}
+            />
+            <circle
+              cx={cutoffControl.rightCutoffX}
+              cy={cutoffControl.cutoffY}
+              r={3}
+            />
+          </g>
+        )}
 
-        {uiOnlyRimReferenceGuide && outlineBounds && (
+        {showUiOnlyGuides && (
+          <line
+            x1={0}
+            y1={viewBox.minY}
+            x2={0}
+            y2={viewBox.minY + viewBox.height}
+            className={styles.centerLine}
+          />
+        )}
+
+        {showRimReferenceGuide && uiOnlyRimReferenceGuide && outlineBounds && (
           <line
             x1={outlineBounds.minX}
             y1={uiOnlyRimReferenceGuide.y}
@@ -840,7 +1007,7 @@ export function BodyReferenceFineTuneEditor({
           />
         )}
 
-        {guideOverlayVisible && guideCandidateReport.candidates.length > 0 && (
+        {showGuideCandidateOverlay && (
           <g
             className={styles.guideOverlay}
             data-testid="body-reference-guide-overlay"
@@ -850,10 +1017,23 @@ export function BodyReferenceFineTuneEditor({
           </g>
         )}
 
-        {overlayState.detectedContour && detectedPath && (
+        {showDetectedContour && detectedPath && (
           <path d={detectedPath} className={styles.detectedPath} />
         )}
-        {overlayState.draftContour && draftPath && (
+        {showRawDetectedTrace && rawDetectedTracePath && (
+          <path
+            d={rawDetectedTracePath}
+            className={styles.rawTracePath}
+            data-testid="body-reference-raw-detected-trace"
+            data-guide-authority="reference-only"
+            data-affects-source-hash="false"
+            data-affects-svg-cutout="false"
+            data-affects-glb-input="false"
+          >
+            <title>Raw detected trace - reference only</title>
+          </path>
+        )}
+        {showDraftContour && draftPath && (
           <path
             d={draftPath}
             className={styles.draftPath}
@@ -861,7 +1041,7 @@ export function BodyReferenceFineTuneEditor({
           />
         )}
 
-        {overlayState.bridgeGuides && qualityVisualization.expectedBridgeSegments.map((segment) => (
+        {showBridgeGuides && qualityVisualization.expectedBridgeSegments.map((segment) => (
           <line
             key={`bridge:${segment.segmentIndex}`}
             x1={segment.from.x}
@@ -872,7 +1052,7 @@ export function BodyReferenceFineTuneEditor({
           />
         ))}
 
-        {overlayState.qualityWarnings && qualityVisualization.suspiciousJumpSegments.map((segment) => (
+        {showQualityWarnings && qualityVisualization.suspiciousJumpSegments.map((segment) => (
           <line
             key={`warning:${segment.segmentIndex}`}
             x1={segment.from.x}
@@ -888,12 +1068,13 @@ export function BodyReferenceFineTuneEditor({
             d={approvedPath}
             className={styles.approvedPath}
             data-testid="body-reference-approved-primary-outline"
-            data-outline-source={approvedVisualContour?.source ?? "unknown"}
-            data-top-guide-y={approvedVisualContour?.topGuideY ?? ""}
+            data-outline-source={primaryDisplayVisualContour?.source ?? "unknown"}
+            data-outline-state={interactive ? "corrected-draft-preview" : "approved-source"}
+            data-top-guide-y={primaryDisplayVisualContour?.topGuideY ?? ""}
           />
         )}
 
-        {overlayState.points && sortedPoints.slice(0, -1).map((point, index) => {
+        {showEditablePoints && sortedPoints.slice(0, -1).map((point, index) => {
           const nextPoint = sortedPoints[index + 1];
           if (!nextPoint) return null;
           const isSelected = selectedSegmentIndex === index;
@@ -915,7 +1096,7 @@ export function BodyReferenceFineTuneEditor({
           );
         })}
 
-        {overlayState.points && sortedPoints.map((point) => (
+        {showEditablePoints && sortedPoints.map((point) => (
           <circle
             key={`mirror:${point.id}`}
             cx={-point.x}
@@ -925,7 +1106,7 @@ export function BodyReferenceFineTuneEditor({
           />
         ))}
 
-        {overlayState.points && sortedPoints.map((point, index) => {
+        {showEditablePoints && sortedPoints.map((point, index) => {
           const isSelected = point.id === selectedPointId;
           return (
             <circle
