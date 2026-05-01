@@ -24,6 +24,7 @@ import {
   resolveTumblerPreviewModelSource,
   type PreviewModelMode,
 } from "@/lib/tumblerPreviewModelState";
+import { resolveProductTemplateModelLanes } from "@/lib/productTemplateModelLanes";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
 import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
@@ -702,6 +703,10 @@ export function TemplateCreateForm({
     () => (editingTemplate ? getEngravableDimensions(editingTemplate) : null),
     [editingTemplate],
   );
+  const editingTemplateModelLanes = React.useMemo(
+    () => resolveProductTemplateModelLanes(editingTemplate),
+    [editingTemplate],
+  );
   const editingHasExplicitMargins =
     editingTemplate?.dimensions.topMarginMm != null ||
     editingTemplate?.dimensions.bottomMarginMm != null;
@@ -721,7 +726,7 @@ export function TemplateCreateForm({
   const [thumbDataUrl, setThumbDataUrl] = React.useState(
     editingTemplate?.thumbnailDataUrl ?? DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL,
   );
-  const [glbPath, setGlbPath] = React.useState(editingTemplate?.glbPath ?? "");
+  const [glbPath, setGlbPath] = React.useState(editingTemplateModelLanes.sourceModelPath ?? "");
   const [glbFileName, setGlbFileName] = React.useState<string | null>(null);
   const [glbUploading, setGlbUploading] = React.useState(false);
   const [glbUploadError, setGlbUploadError] = React.useState<string | null>(null);
@@ -877,14 +882,15 @@ export function TemplateCreateForm({
   }, [clearMissingGlbPath, glbPath, validateGlbPath]);
 
   React.useEffect(() => {
-    if (!editingTemplate?.glbPath) return;
+    const editingSourcePath = editingTemplateModelLanes.sourceModelPath;
+    if (!editingSourcePath) return;
     let cancelled = false;
     setCheckingGlbPath(true);
-    validateGlbPath(editingTemplate.glbPath)
+    validateGlbPath(editingSourcePath)
       .then((ok) => {
         if (cancelled) return;
-        if (!ok && glbPath.trim() === editingTemplate.glbPath.trim()) {
-          clearMissingGlbPath(editingTemplate.glbPath);
+        if (!ok && glbPath.trim() === editingSourcePath) {
+          clearMissingGlbPath(editingSourcePath);
         }
       })
       .finally(() => {
@@ -893,7 +899,7 @@ export function TemplateCreateForm({
     return () => {
       cancelled = true;
     };
-  }, [clearMissingGlbPath, editingTemplate?.glbPath, glbPath, validateGlbPath]);
+  }, [clearMissingGlbPath, editingTemplateModelLanes.sourceModelPath, glbPath, validateGlbPath]);
 
   // ── Front / Back face photos ──────────────────────────────────
   const [frontPhotoDataUrl, setFrontPhotoDataUrl] = React.useState(editingTemplate?.frontPhotoDataUrl ?? "");
@@ -944,20 +950,36 @@ export function TemplateCreateForm({
   const [bodyReferenceFineTuneDraftOutline, setBodyReferenceFineTuneDraftOutline] = React.useState<EditableBodyOutline | null>(null);
   const [bodyReferenceFineTuneDetectedBaselineOutline, setBodyReferenceFineTuneDetectedBaselineOutline] = React.useState<EditableBodyOutline | null>(null);
   const [bodyReferenceFineTuneUndoStack, setBodyReferenceFineTuneUndoStack] = React.useState<EditableBodyOutline[]>([]);
-  const [reviewedBodyCutoutQaGeneratedSourceSignature, setReviewedBodyCutoutQaGeneratedSourceSignature] = React.useState<string | null>(null);
-  const [generatedReviewedBodyGeometryContract, setGeneratedReviewedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
+  const [reviewedBodyCutoutQaGeneratedSourceSignature, setReviewedBodyCutoutQaGeneratedSourceSignature] = React.useState<string | null>(
+    editingTemplateModelLanes.reviewedBodyCutoutQaSourceSignature,
+  );
+  const [generatedReviewedBodyGeometryContract, setGeneratedReviewedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(
+    editingTemplateModelLanes.reviewedBodyCutoutQaBodyGeometryContract as BodyGeometryContract | null,
+  );
   const [loadedBodyGeometryContract, setLoadedBodyGeometryContract] = React.useState<BodyGeometryContract | null>(null);
   const [currentReviewedBodyReferenceSourceHash, setCurrentReviewedBodyReferenceSourceHash] = React.useState<string | null>(null);
   const [reviewedGeneratedModelState, setReviewedGeneratedModelState] = React.useState<{
     glbPath: string;
     status: "generated-reviewed-model";
     sourceLabel: string | null;
+    auditJsonPath?: string | null;
+    sourceHash?: string | null;
+    sourceSignature?: string | null;
+    glbHash?: string | null;
+    glbSourceHash?: string | null;
+    generatedAt?: string | null;
   } | null>(() => (
-    editingTemplate?.glbStatus === "generated-reviewed-model" && editingTemplate.glbPath.trim()
+    editingTemplateModelLanes.reviewedBodyCutoutQaGlbPath
       ? {
-          glbPath: editingTemplate.glbPath.trim(),
+          glbPath: editingTemplateModelLanes.reviewedBodyCutoutQaGlbPath,
           status: "generated-reviewed-model",
-          sourceLabel: editingTemplate.glbSourceLabel ?? null,
+          sourceLabel: editingTemplateModelLanes.reviewedBodyCutoutQaModelSourceLabel,
+          auditJsonPath: editingTemplateModelLanes.reviewedBodyCutoutQaAuditJsonPath,
+          sourceHash: editingTemplateModelLanes.reviewedBodyCutoutQaSourceHash,
+          sourceSignature: editingTemplateModelLanes.reviewedBodyCutoutQaSourceSignature,
+          glbHash: editingTemplateModelLanes.reviewedBodyCutoutQaGlbHash,
+          glbSourceHash: editingTemplateModelLanes.reviewedBodyCutoutQaGlbSourceHash,
+          generatedAt: editingTemplateModelLanes.reviewedBodyCutoutQaGeneratedAt,
         }
       : null
   ));
@@ -969,11 +991,15 @@ export function TemplateCreateForm({
     ),
   );
   const [previewModelMode, setPreviewModelMode] = React.useState<PreviewModelMode>(
-    () => resolveDefaultPreviewModelMode({
-      glbPath: editingTemplate?.glbPath ?? "",
-      glbStatus: editingTemplate?.glbStatus,
-      glbSourceLabel: editingTemplate?.glbSourceLabel,
-    }),
+    () => (
+      editingTemplateModelLanes.reviewedBodyCutoutQaGlbPath && !editingTemplateModelLanes.sourceModelPath
+        ? "body-cutout-qa"
+        : resolveDefaultPreviewModelMode({
+            glbPath: editingTemplateModelLanes.sourceModelPath ?? "",
+            glbStatus: editingTemplateModelLanes.sourceModelStatus ?? undefined,
+            glbSourceLabel: editingTemplateModelLanes.sourceModelLabel ?? undefined,
+          })
+    ),
   );
 
   const resetBodyReferenceFineTuneState = React.useCallback(() => {
@@ -996,107 +1022,91 @@ export function TemplateCreateForm({
     return () => { cancelled = true; };
   }, [mirrorForBack, frontPhotoDataUrl]);
 
-  const activeDrinkwareGlbStatus = React.useMemo<ProductTemplate["glbStatus"] | null>(() => {
-    if (
-      reviewedGeneratedModelState?.glbPath &&
-      reviewedGeneratedModelState.glbPath.trim() === glbPath.trim()
-    ) {
-      return reviewedGeneratedModelState.status;
-    }
+  const sourceDrinkwareGlbStatus = React.useMemo<ProductTemplate["glbStatus"] | null>(() => {
     if (lookupResult?.modelStatus) return lookupResult.modelStatus;
-    if (editingTemplate?.glbPath?.trim() === glbPath.trim() && editingTemplate.glbStatus) {
-      return editingTemplate.glbStatus;
+    if (
+      editingTemplateModelLanes.sourceModelPath === glbPath.trim() &&
+      editingTemplateModelLanes.sourceModelStatus
+    ) {
+      return editingTemplateModelLanes.sourceModelStatus;
     }
     const inferredStatus = inferGeneratedModelStatusFromSource({
       modelUrl: glbPath,
-      sourceModelLabel: lookupResult?.modelSourceLabel ?? editingTemplate?.glbSourceLabel ?? null,
+      sourceModelLabel: lookupResult?.modelSourceLabel ?? editingTemplateModelLanes.sourceModelLabel ?? null,
     });
-    if (inferredStatus) return inferredStatus;
+    if (inferredStatus && inferredStatus !== "generated-reviewed-model") return inferredStatus;
     if (!glbPath.trim()) return "missing-model";
     return "verified-product-model";
   }, [
-    editingTemplate?.glbPath,
-    editingTemplate?.glbSourceLabel,
-    editingTemplate?.glbStatus,
+    editingTemplateModelLanes.sourceModelLabel,
+    editingTemplateModelLanes.sourceModelPath,
+    editingTemplateModelLanes.sourceModelStatus,
     glbPath,
     lookupResult?.modelSourceLabel,
     lookupResult?.modelStatus,
-    reviewedGeneratedModelState?.glbPath,
-    reviewedGeneratedModelState?.status,
   ]);
 
-  const activeDrinkwareGlbSourceLabel = React.useMemo(() => {
-    if (
-      reviewedGeneratedModelState?.glbPath &&
-      reviewedGeneratedModelState.glbPath.trim() === glbPath.trim()
-    ) {
-      return reviewedGeneratedModelState.sourceLabel;
-    }
-    return lookupResult?.modelSourceLabel ?? editingTemplate?.glbSourceLabel ?? null;
+  const sourceDrinkwareGlbSourceLabel = React.useMemo(() => {
+    return lookupResult?.modelSourceLabel ?? editingTemplateModelLanes.sourceModelLabel ?? null;
   }, [
-    editingTemplate?.glbSourceLabel,
-    glbPath,
+    editingTemplateModelLanes.sourceModelLabel,
     lookupResult?.modelSourceLabel,
-    reviewedGeneratedModelState?.glbPath,
-    reviewedGeneratedModelState?.sourceLabel,
   ]);
 
   const previewOriginalModelPath = React.useMemo(() => {
     const lookupModelPath = lookupResult?.glbPath?.trim();
     if (lookupModelPath) return lookupModelPath;
-    const editingModelPath = editingTemplate?.glbPath?.trim();
-    if (editingModelPath && editingTemplate?.glbStatus !== "generated-reviewed-model") {
-      return editingModelPath;
-    }
-    return "";
+    return glbPath.trim();
   }, [
-    editingTemplate?.glbPath,
-    editingTemplate?.glbStatus,
+    glbPath,
     lookupResult?.glbPath,
   ]);
-  const previewOriginalModelStatus = lookupResult?.modelStatus
-    ?? (editingTemplate?.glbStatus !== "generated-reviewed-model" ? editingTemplate?.glbStatus : null)
-    ?? null;
+  const previewOriginalModelStatus = lookupResult?.modelStatus ?? sourceDrinkwareGlbStatus ?? null;
   const previewOriginalModelSourceLabel = lookupResult?.modelSourceLabel
-    ?? (editingTemplate?.glbStatus !== "generated-reviewed-model" ? editingTemplate?.glbSourceLabel : null)
+    ?? sourceDrinkwareGlbSourceLabel
     ?? null;
+  const reviewedBodyCutoutQaGlbPath = reviewedGeneratedModelState?.glbPath?.trim() ?? "";
+  const reviewedBodyCutoutQaGlbStatus: ProductTemplate["glbStatus"] | null =
+    reviewedBodyCutoutQaGlbPath ? "generated-reviewed-model" : null;
+  const reviewedBodyCutoutQaSourceLabel =
+    reviewedGeneratedModelState?.sourceLabel ?? "Reviewed BODY CUTOUT QA GLB";
   const selectedPreviewModelSource = React.useMemo(
     () => resolveTumblerPreviewModelSource({
       requestedMode: previewModelMode,
-      currentModelPath: glbPath,
-      currentModelStatus: activeDrinkwareGlbStatus,
-      currentModelSourceLabel: activeDrinkwareGlbSourceLabel,
+      currentModelPath: reviewedBodyCutoutQaGlbPath,
+      currentModelStatus: reviewedBodyCutoutQaGlbStatus,
+      currentModelSourceLabel: reviewedBodyCutoutQaSourceLabel,
       originalModelPath: previewOriginalModelPath,
       originalModelStatus: previewOriginalModelStatus,
       originalModelSourceLabel: previewOriginalModelSourceLabel,
     }),
     [
-      activeDrinkwareGlbSourceLabel,
-      activeDrinkwareGlbStatus,
-      glbPath,
       previewModelMode,
       previewOriginalModelPath,
       previewOriginalModelSourceLabel,
       previewOriginalModelStatus,
+      reviewedBodyCutoutQaGlbPath,
+      reviewedBodyCutoutQaGlbStatus,
+      reviewedBodyCutoutQaSourceLabel,
     ],
   );
   const fullModelPreviewSource = React.useMemo(
     () => resolveTumblerPreviewModelSource({
       requestedMode: "full-model",
-      currentModelPath: glbPath,
-      currentModelStatus: activeDrinkwareGlbStatus,
-      currentModelSourceLabel: activeDrinkwareGlbSourceLabel,
+      currentModelPath: reviewedBodyCutoutQaGlbPath,
+      currentModelStatus: reviewedBodyCutoutQaGlbStatus,
+      currentModelSourceLabel: reviewedBodyCutoutQaSourceLabel,
       originalModelPath: previewOriginalModelPath,
       originalModelStatus: previewOriginalModelStatus,
       originalModelSourceLabel: previewOriginalModelSourceLabel,
     }),
     [
-      activeDrinkwareGlbSourceLabel,
-      activeDrinkwareGlbStatus,
-      glbPath,
       previewOriginalModelPath,
       previewOriginalModelSourceLabel,
       previewOriginalModelStatus,
+      reviewedBodyCutoutQaGlbPath,
+      reviewedBodyCutoutQaGlbStatus,
+      reviewedBodyCutoutQaSourceLabel,
     ],
   );
   const activePreviewGlbPath = selectedPreviewModelSource.modelPath ?? "";
@@ -1999,7 +2009,7 @@ export function TemplateCreateForm({
     selectedPreviewModelSource.originalModelPreferred,
     selectedPreviewModelSource.reviewedBodyCutoutQaAvailableButInactive,
   ]);
-  const hasReviewedBodyCutoutQaGlb = activeDrinkwareGlbStatus === "generated-reviewed-model";
+  const hasReviewedBodyCutoutQaGlb = Boolean(reviewedBodyCutoutQaGlbPath);
   const hasSourceModelForPreview = Boolean(activePreviewGlbPath.trim() || glbPath.trim());
 
   const workflowInput = React.useMemo(
@@ -2112,13 +2122,13 @@ export function TemplateCreateForm({
 
   React.useEffect(() => {
     if (previewModelMode !== "body-cutout-qa") return;
-    if (!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)) {
+    if (!isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus)) {
       setPreviewModelMode(resolveDefaultPreviewModelMode({
         glbPath,
-        glbStatus: activeDrinkwareGlbStatus,
+        glbStatus: sourceDrinkwareGlbStatus,
       }));
     }
-  }, [activeDrinkwareGlbStatus, glbPath, previewModelMode]);
+  }, [glbPath, previewModelMode, reviewedBodyCutoutQaGlbStatus, sourceDrinkwareGlbStatus]);
 
   // ── Validation ───────────────────────────────────────────────────
   const [errors, setErrors] = React.useState<string[]>([]);
@@ -2139,9 +2149,9 @@ export function TemplateCreateForm({
     setReviewedGeneratedModelState(null);
     setPreviewModelMode(resolveDefaultPreviewModelMode({
       glbPath,
-      glbStatus: activeDrinkwareGlbStatus,
+      glbStatus: sourceDrinkwareGlbStatus,
     }));
-  }, [activeDrinkwareGlbStatus, glbPath, resetBodyReferenceFineTuneState]);
+  }, [glbPath, resetBodyReferenceFineTuneState, sourceDrinkwareGlbStatus]);
 
   /** Handle product image selection — store file for auto-detect, generate thumbnail + full-res */
   const handleProductImage = async (file: File) => {
@@ -2428,6 +2438,7 @@ export function TemplateCreateForm({
     setReviewedGeneratedModelState(null);
     setGeneratedReviewedBodyGeometryContract(null);
     setLoadedBodyGeometryContract(null);
+    setReviewedBodyCutoutQaGeneratedSourceSignature(null);
     setGlbFileName(file.name);
     setGlbUploading(true);
     setGlbUploadError(null);
@@ -2648,7 +2659,7 @@ export function TemplateCreateForm({
         reason: getTemplateCreatePreviewActionReason({
           action: "body-cutout-qa",
           hasSourceModel: hasSourceModelForPreview,
-          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus),
         }),
       },
       {
@@ -2656,7 +2667,7 @@ export function TemplateCreateForm({
         reason: getTemplateCreatePreviewActionReason({
           action: "wrap-export",
           hasSourceModel: hasSourceModelForPreview,
-          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus),
         }),
       },
       {
@@ -2664,7 +2675,7 @@ export function TemplateCreateForm({
         reason: getTemplateCreatePreviewActionReason({
           action: "full-model",
           hasSourceModel: Boolean(fullModelPreviewSource.modelPath),
-          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus),
         }),
       },
       {
@@ -2672,11 +2683,11 @@ export function TemplateCreateForm({
         reason: getTemplateCreatePreviewActionReason({
           action: "source-compare",
           hasSourceModel: hasSourceModelForPreview,
-          hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+          hasQaPreview: isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus),
         }),
       },
     ]),
-    [activeDrinkwareGlbStatus, fullModelPreviewSource.modelPath, hasSourceModelForPreview],
+    [fullModelPreviewSource.modelPath, hasSourceModelForPreview, reviewedBodyCutoutQaGlbStatus],
   );
   const bodyReferenceV2DisabledActionReasonGroups = React.useMemo(
     () => groupTemplateCreateDisabledActionReasons([
@@ -2855,6 +2866,7 @@ export function TemplateCreateForm({
   const reviewedBodyReferenceGlbSourceHash =
     loadedBodyGeometryContract?.glb.sourceHash
     ?? generatedReviewedBodyGeometryContract?.glb.sourceHash
+    ?? reviewedGeneratedModelState?.glbSourceHash
     ?? null;
   const bodyReferenceGuideFrame = React.useMemo(
     () => resolveBodyReferenceGuideFrame({
@@ -2873,16 +2885,16 @@ export function TemplateCreateForm({
   const reviewedBodyReferenceGlbFreshness = React.useMemo(
     () => resolveFineTuneGlbReviewState({
       canGenerate: canGenerateReviewedBodyReferenceGlb,
-      hasGeneratedArtifact: activeDrinkwareGlbStatus === "generated-reviewed-model",
+      hasGeneratedArtifact: hasReviewedBodyCutoutQaGlb,
       currentSourceSignature: currentReviewedBodyReferenceSourceSignature,
       generatedSourceSignature: reviewedBodyCutoutQaGeneratedSourceSignature,
       hasPendingSourceDraft: bodyReferenceFineTuneDraftPendingAcceptance,
     }),
     [
-      activeDrinkwareGlbStatus,
       bodyReferenceFineTuneDraftPendingAcceptance,
       canGenerateReviewedBodyReferenceGlb,
       currentReviewedBodyReferenceSourceSignature,
+      hasReviewedBodyCutoutQaGlb,
       reviewedBodyCutoutQaGeneratedSourceSignature,
     ],
   );
@@ -3218,7 +3230,9 @@ export function TemplateCreateForm({
     setBottomMarginMm(rebuiltSnapshot.nextBottomMarginMm);
     setPrintHeightMm(rebuiltSnapshot.nextPrintHeightMm);
     setDiameterMm(rebuiltSnapshot.nextDiameterMm);
-    clearReviewedBodyReferenceGeneratedState();
+    // Keep the reviewed QA artifact as stale lineage after accepting a corrected
+    // cutout. Regeneration should update this lane; acceptance should not erase it.
+    setLoadedBodyGeometryContract(null);
     setPrintableTopOverrideMm(null);
     setPrintableBottomOverrideMm(null);
     setPreviewModelMode("alignment-model");
@@ -3228,7 +3242,6 @@ export function TemplateCreateForm({
     activeBodyReferenceFineTuneOutline,
     bodyReferenceFineTuneDraftHasChanges,
     bottomMarginMm,
-    clearReviewedBodyReferenceGeneratedState,
     diameterMm,
     handleArcDeg,
     lookupResult?.dimensions?.fullProductHeightMm,
@@ -3345,8 +3358,6 @@ export function TemplateCreateForm({
         throw new Error("Reviewed BODY REFERENCE GLB response could not be parsed.");
       }
 
-      setGlbPath(generated.glbPath);
-      setGlbFileName(generated.glbPath.split("/").pop() ?? null);
       setPreviewModelMode("body-cutout-qa");
       setGeneratedReviewedBodyGeometryContract(generated.bodyGeometryContract ?? null);
       setLoadedBodyGeometryContract(null);
@@ -3359,6 +3370,12 @@ export function TemplateCreateForm({
           ?? (requestingV2
             ? "Generated from BODY REFERENCE v2 mirrored profile"
             : "Generated from accepted BODY REFERENCE cutout"),
+        auditJsonPath: generated.auditJsonPath ?? null,
+        sourceHash: currentReviewedBodyReferenceSourceHash,
+        sourceSignature: generated.generatedSourceSignature ?? null,
+        glbHash: generated.bodyGeometryContract?.glb.hash ?? null,
+        glbSourceHash: generated.bodyGeometryContract?.glb.sourceHash ?? null,
+        generatedAt: generated.bodyGeometryContract?.glb.generatedAt ?? null,
       });
     } catch (error) {
       setGlbUploadError(
@@ -3377,6 +3394,7 @@ export function TemplateCreateForm({
     bodyColorHex,
     bodyHeightAuthorityInput,
     bodyReferenceV2CaptureReadiness.generationReady,
+    currentReviewedBodyReferenceSourceHash,
     name,
     productType,
     resolvedMatchedProfileId,
@@ -3430,6 +3448,33 @@ export function TemplateCreateForm({
           (productAppearanceSurfaceAuthority.silverBandLayer.heightMm ?? 0),
         )
       : detectedLowerSilverSeamMm;
+    const sourceModelPathForSave = glbPath.trim();
+    const reviewedBodyCutoutQaContractForSave =
+      loadedBodyGeometryContract ??
+      generatedReviewedBodyGeometryContract ??
+      null;
+    const reviewedBodyCutoutQaGlbPathForSave = reviewedBodyCutoutQaGlbPath.trim();
+    const acceptedBodyReferenceSourceHashForSave =
+      currentReviewedBodyReferenceSourceHash ??
+      reviewedBodyCutoutQaContractForSave?.source.hash ??
+      reviewedGeneratedModelState?.sourceHash ??
+      null;
+    const acceptedBodyReferenceSourceSignatureForSave =
+      currentReviewedBodyReferenceSourceSignature ??
+      reviewedGeneratedModelState?.sourceSignature ??
+      reviewedBodyCutoutQaGeneratedSourceSignature ??
+      null;
+    const reviewedBodyCutoutQaGeneratedSourceHashForSave =
+      reviewedGeneratedModelState?.sourceHash ??
+      reviewedBodyCutoutQaContractForSave?.glb.sourceHash ??
+      reviewedBodyReferenceGlbSourceHash ??
+      null;
+    const reviewedBodyCutoutQaGlbSourceHashForSave =
+      reviewedGeneratedModelState?.glbSourceHash ??
+      reviewedBodyCutoutQaContractForSave?.glb.sourceHash ??
+      reviewedBodyReferenceGlbSourceHash ??
+      reviewedBodyCutoutQaGeneratedSourceHashForSave ??
+      null;
     const template: ProductTemplate = {
       id: editingTemplate?.id ?? crypto.randomUUID(),
       name: name.trim(),
@@ -3439,9 +3484,51 @@ export function TemplateCreateForm({
       productType,
       thumbnailDataUrl: thumbDataUrl || DEFAULT_TEMPLATE_THUMBNAIL_DATA_URL,
       productPhotoFullUrl: productPhotoFullUrl || undefined,
-      glbPath,
-      glbStatus: activeDrinkwareGlbStatus ?? undefined,
-      glbSourceLabel: activeDrinkwareGlbSourceLabel ?? undefined,
+      glbPath: sourceModelPathForSave,
+      glbStatus: sourceModelPathForSave ? sourceDrinkwareGlbStatus ?? undefined : undefined,
+      glbSourceLabel: sourceModelPathForSave ? sourceDrinkwareGlbSourceLabel ?? undefined : undefined,
+      sourceModelPath: sourceModelPathForSave || undefined,
+      sourceModelStatus: sourceModelPathForSave
+        ? sourceDrinkwareGlbStatus === "generated-reviewed-model"
+          ? undefined
+          : sourceDrinkwareGlbStatus ?? undefined
+        : undefined,
+      sourceModelLabel: sourceModelPathForSave ? sourceDrinkwareGlbSourceLabel ?? undefined : undefined,
+      reviewedBodyCutoutQaGlbPath: reviewedBodyCutoutQaGlbPathForSave || undefined,
+      reviewedBodyCutoutQaModelSourceLabel:
+        reviewedBodyCutoutQaGlbPathForSave
+          ? reviewedBodyCutoutQaSourceLabel ?? undefined
+          : undefined,
+      reviewedBodyCutoutQaAuditJsonPath:
+        reviewedBodyCutoutQaGlbPathForSave
+          ? reviewedGeneratedModelState?.auditJsonPath ?? undefined
+          : undefined,
+      reviewedBodyCutoutQaSourceHash:
+        reviewedBodyCutoutQaGlbPathForSave
+          ? reviewedBodyCutoutQaGeneratedSourceHashForSave ?? undefined
+          : undefined,
+      reviewedBodyCutoutQaSourceSignature:
+        reviewedBodyCutoutQaGlbPathForSave
+          ? reviewedBodyCutoutQaGeneratedSourceSignature ?? undefined
+          : undefined,
+      reviewedBodyCutoutQaGlbHash:
+        reviewedBodyCutoutQaGlbPathForSave
+          ? reviewedBodyCutoutQaContractForSave?.glb.hash ?? reviewedGeneratedModelState?.glbHash ?? undefined
+          : undefined,
+      reviewedBodyCutoutQaGlbSourceHash:
+        reviewedBodyCutoutQaGlbPathForSave
+          ? reviewedBodyCutoutQaGlbSourceHashForSave ?? undefined
+          : undefined,
+      reviewedBodyCutoutQaGeneratedAt:
+        reviewedBodyCutoutQaGlbPathForSave
+          ? reviewedBodyCutoutQaContractForSave?.glb.generatedAt ?? reviewedGeneratedModelState?.generatedAt ?? undefined
+          : undefined,
+      reviewedBodyCutoutQaBodyGeometryContract:
+        reviewedBodyCutoutQaGlbPathForSave
+          ? reviewedBodyCutoutQaContractForSave ?? undefined
+          : undefined,
+      acceptedBodyReferenceSourceHash: acceptedBodyReferenceSourceHashForSave ?? undefined,
+      acceptedBodyReferenceSourceSignature: acceptedBodyReferenceSourceSignatureForSave ?? undefined,
       dimensions: {
         diameterMm,
         printHeightMm: effectivePrintHeightMm,
@@ -4276,7 +4363,7 @@ export function TemplateCreateForm({
                   Save remains blocked: {saveGateReason}
                 </div>
               )}
-              {templateCreateDiagnosticsVisible && (approvedBodyReferenceQa || loadedBodyGeometryContract || getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)) && (
+              {templateCreateDiagnosticsVisible && (approvedBodyReferenceQa || loadedBodyGeometryContract || getDrinkwareGlbStatusLabel(activePreviewGlbStatus ?? sourceDrinkwareGlbStatus)) && (
                 <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
                   <summary className={styles.compactDetailsSummary}>
                     Review diagnostics and runtime detail
@@ -4371,11 +4458,11 @@ export function TemplateCreateForm({
                 <button
                   type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "body-cutout-qa" ? styles.detectBtnActive : ""}`}
-                  disabled={!isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus)}
+                  disabled={!isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus)}
                   title={getTemplateCreatePreviewActionReason({
                     action: "body-cutout-qa",
                     hasSourceModel: hasSourceModelForPreview,
-                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus),
                   }) ?? undefined}
                   aria-pressed={previewModelMode === "body-cutout-qa"}
                   onClick={() => setPreviewModelMode("body-cutout-qa")}
@@ -4390,7 +4477,7 @@ export function TemplateCreateForm({
                   title={getTemplateCreatePreviewActionReason({
                     action: "wrap-export",
                     hasSourceModel: hasSourceModelForPreview,
-                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus),
                   }) ?? undefined}
                   aria-pressed={previewModelMode === "wrap-export"}
                   onClick={() => setPreviewModelMode("wrap-export")}
@@ -4413,7 +4500,7 @@ export function TemplateCreateForm({
                   title={getTemplateCreatePreviewActionReason({
                     action: "full-model",
                     hasSourceModel: Boolean(fullModelPreviewSource.modelPath),
-                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus),
                   }) ?? undefined}
                   aria-pressed={previewModelMode === "full-model"}
                   onClick={() => setPreviewModelMode("full-model")}
@@ -4427,7 +4514,7 @@ export function TemplateCreateForm({
                   title={getTemplateCreatePreviewActionReason({
                     action: "source-compare",
                     hasSourceModel: hasSourceModelForPreview,
-                    hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
+                    hasQaPreview: isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus),
                   }) ?? undefined}
                   aria-pressed={previewModelMode === "source-traced"}
                   onClick={() => setPreviewModelMode("source-traced")}

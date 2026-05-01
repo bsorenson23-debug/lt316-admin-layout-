@@ -1091,6 +1091,11 @@ export default function ModelViewer({
           null
         )
       : null;
+  const appearanceReferenceLayersForViewer =
+    effectivePreviewMode === "body-cutout-qa" ? null : appearanceReferenceLayers;
+  const showTemplateSurfaceZonesForViewer = Boolean(
+    showTemplateSurfaceZones && effectivePreviewMode !== "body-cutout-qa",
+  );
   const showScaffoldOverlay = Boolean(
     previewModeLabel ||
     statusLabel ||
@@ -1772,8 +1777,8 @@ export default function ModelViewer({
                   tumblerMapping={tumblerMapping}
                   bodyTintColor={bodyTintColor}
                   rimTintColor={rimTintColor}
-                  appearanceReferenceLayers={appearanceReferenceLayers}
-                  showTemplateSurfaceZones={showTemplateSurfaceZones}
+                  appearanceReferenceLayers={appearanceReferenceLayersForViewer}
+                  showTemplateSurfaceZones={showTemplateSurfaceZonesForViewer}
                   onReady={handleModelReady}
                 />
               </Suspense>
@@ -1968,6 +1973,11 @@ function LegacyScaffoldModelViewer({
     previewModelMode === "body-cutout-qa"
       ? (tumblerDims?.bodyHeightMm ?? tumblerDims?.printableHeightMm ?? null)
       : null;
+  const appearanceReferenceLayersForViewer =
+    previewModelMode === "body-cutout-qa" ? null : appearanceReferenceLayers;
+  const showTemplateSurfaceZonesForViewer = Boolean(
+    showTemplateSurfaceZones && previewModelMode !== "body-cutout-qa",
+  );
   const showScaffoldOverlay = Boolean(previewModeLabel || statusLabel || qaReservedNote);
 
   // ── Adaptive scene scale based on physical dimensions ──────────────────────
@@ -2078,8 +2088,8 @@ function LegacyScaffoldModelViewer({
                   tumblerMapping={tumblerMapping}
                   bodyTintColor={bodyTintColor}
                   rimTintColor={rimTintColor}
-                  appearanceReferenceLayers={appearanceReferenceLayers}
-                  showTemplateSurfaceZones={showTemplateSurfaceZones}
+                  appearanceReferenceLayers={appearanceReferenceLayersForViewer}
+                  showTemplateSurfaceZones={showTemplateSurfaceZonesForViewer}
                   onReady={handleModelReady}
                 />
               </Suspense>

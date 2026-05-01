@@ -676,7 +676,8 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     ];
     const wrapMetricsBeforeRegenerate = await readMetricMap(page.locator("body"), wrapLabels);
     expect(Number.parseInt(wrapMetricsBeforeRegenerate["Saved artwork placements"] ?? "0", 10)).toBeGreaterThanOrEqual(1);
-    expect(wrapMetricsBeforeRegenerate["Overlay enabled"]).toBe("no");
+    expect(wrapMetricsBeforeRegenerate["Overlay enabled"]).toBe("yes");
+    expect(wrapMetricsBeforeRegenerate["Overlay material"]).toBe("engraving-preview-silver");
 
     const reopenedFineTuneMetrics = await readMetricMap(fineTunePanel, fineTuneMetricLabels);
     expect(reopenedFineTuneMetrics["Reviewed GLB freshness"]).toContain("stale");

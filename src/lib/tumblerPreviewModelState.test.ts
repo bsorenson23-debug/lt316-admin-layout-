@@ -188,6 +188,25 @@ test("resolveTumblerPreviewModelSource prefers original model for alignment whil
   assert.equal(source.originalModelPreferred, true);
 });
 
+test("resolveTumblerPreviewModelSource prefers original source model for full preview while keeping reviewed QA available", () => {
+  const source = resolveTumblerPreviewModelSource({
+    requestedMode: "full-model",
+    currentModelPath: "/api/admin/models/generated/stanley-cutout.glb",
+    currentModelStatus: "generated-reviewed-model",
+    currentModelSourceLabel: "Reviewed BODY CUTOUT QA GLB",
+    originalModelPath: "/models/templates/stanley-source.glb",
+    originalModelStatus: "verified-product-model",
+    originalModelSourceLabel: "Original product model",
+  });
+
+  assert.equal(source.modelPath, "/models/templates/stanley-source.glb");
+  assert.equal(source.modelStatus, "verified-product-model");
+  assert.equal(source.reviewedBodyCutoutQaAvailable, true);
+  assert.equal(source.reviewedBodyCutoutQaActive, false);
+  assert.equal(source.reviewedBodyCutoutQaAvailableButInactive, true);
+  assert.equal(source.originalModelPreferred, true);
+});
+
 test("resolveTumblerPreviewModelSource does not present a reviewed body-only GLB as the full product model", () => {
   const source = resolveTumblerPreviewModelSource({
     requestedMode: "full-model",
