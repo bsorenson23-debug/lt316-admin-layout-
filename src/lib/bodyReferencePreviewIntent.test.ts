@@ -54,6 +54,20 @@ test("preview scaffold still exposes source compare and full-model labels", () =
   assert.match(
     getBodyReferencePreviewModeHint({
       productType: "tumbler",
+      mode: "alignment-model",
+    }) ?? "",
+    /visual reference only/i,
+  );
+  assert.match(
+    getBodyReferencePreviewModeHint({
+      productType: "tumbler",
+      mode: "full-model",
+    }) ?? "",
+    /not BODY CUTOUT QA proof/i,
+  );
+  assert.match(
+    getBodyReferencePreviewModeHint({
+      productType: "tumbler",
       mode: "wrap-export",
     }) ?? "",
     /without claiming body cutout qa proof/i,

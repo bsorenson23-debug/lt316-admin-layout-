@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   deriveTumblerPreviewModelState,
   getTumblerPreviewModelStateSignature,
+  resolveTumblerPreviewModelSource,
   type TumblerPreviewBoundsSnapshot,
 } from "./tumblerPreviewModelState.ts";
 
@@ -129,7 +130,7 @@ test("deriveTumblerPreviewModelState degrades flat profile bounds even without a
   assert.equal(state.reason, "flat-profile-bounds");
 });
 
-test("deriveTumblerPreviewModelState remaps reviewed generated models to BODY CUTOUT QA", () => {
+test("deriveTumblerPreviewModelState keeps full-model unavailable when only a reviewed body-only GLB is available", () => {
   const state = deriveTumblerPreviewModelState({
     requestedMode: "full-model",
     hasCanonicalAlignmentModel: true,
@@ -144,11 +145,63 @@ test("deriveTumblerPreviewModelState remaps reviewed generated models to BODY CU
     canonicalBounds,
   });
 
-  assert.equal(state.effectiveMode, "body-cutout-qa");
-  assert.equal(state.glbPreviewStatus, "ready");
-  assert.equal(state.reason, "body-cutout-qa-ready");
-  assert.match(state.message ?? "", /body cutout qa/i);
+  assert.equal(state.effectiveMode, "full-model");
+  assert.equal(state.glbPreviewStatus, "unavailable");
+  assert.equal(state.reason, "reviewed-generated-model");
+  assert.match(state.message ?? "", /click BODY CUTOUT QA/i);
   assert.doesNotMatch(state.message ?? "", /preview-only fallback silhouette/i);
+});
+
+test("resolveTumblerPreviewModelSource uses the reviewed GLB for BODY CUTOUT QA mode", () => {
+  const source = resolveTumblerPreviewModelSource({
+    requestedMode: "body-cutout-qa",
+    currentModelPath: "/api/admin/models/generated/stanley-cutout.glb",
+    currentModelStatus: "generated-reviewed-model",
+    currentModelSourceLabel: "Reviewed BODY CUTOUT QA GLB",
+    originalModelPath: "/models/templates/stanley-source.glb",
+    originalModelStatus: "verified-product-model",
+    originalModelSourceLabel: "Original product model",
+  });
+
+  assert.equal(source.modelPath, "/api/admin/models/generated/stanley-cutout.glb");
+  assert.equal(source.modelStatus, "generated-reviewed-model");
+  assert.equal(source.reviewedBodyCutoutQaAvailable, true);
+  assert.equal(source.reviewedBodyCutoutQaActive, true);
+  assert.equal(source.reviewedBodyCutoutQaAvailableButInactive, false);
+});
+
+test("resolveTumblerPreviewModelSource prefers original model for alignment while keeping reviewed QA available", () => {
+  const source = resolveTumblerPreviewModelSource({
+    requestedMode: "alignment-model",
+    currentModelPath: "/api/admin/models/generated/stanley-cutout.glb",
+    currentModelStatus: "generated-reviewed-model",
+    currentModelSourceLabel: "Reviewed BODY CUTOUT QA GLB",
+    originalModelPath: "/models/templates/stanley-source.glb",
+    originalModelStatus: "verified-product-model",
+    originalModelSourceLabel: "Original product model",
+  });
+
+  assert.equal(source.modelPath, "/models/templates/stanley-source.glb");
+  assert.equal(source.modelStatus, "verified-product-model");
+  assert.equal(source.reviewedBodyCutoutQaActive, false);
+  assert.equal(source.reviewedBodyCutoutQaAvailableButInactive, true);
+  assert.equal(source.originalModelPreferred, true);
+});
+
+test("resolveTumblerPreviewModelSource does not present a reviewed body-only GLB as the full product model", () => {
+  const source = resolveTumblerPreviewModelSource({
+    requestedMode: "full-model",
+    currentModelPath: "/api/admin/models/generated/stanley-cutout.glb",
+    currentModelStatus: "generated-reviewed-model",
+    currentModelSourceLabel: "Reviewed BODY CUTOUT QA GLB",
+    originalModelPath: null,
+  });
+
+  assert.equal(source.modelPath, null);
+  assert.equal(source.modelStatus, null);
+  assert.equal(source.reviewedBodyCutoutQaAvailable, true);
+  assert.equal(source.reviewedBodyCutoutQaActive, false);
+  assert.equal(source.reviewedBodyCutoutQaAvailableButInactive, true);
 });
 
 test("deriveTumblerPreviewModelState keeps WRAP / EXPORT distinct from BODY CUTOUT QA for reviewed GLBs", () => {

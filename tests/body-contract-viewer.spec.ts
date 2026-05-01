@@ -147,11 +147,11 @@ test("BODY CUTOUT QA fails when lineage marks the GLB as stale", async ({ page }
   );
 });
 
-test("full-model preview is clearly not valid for body contour QA", async ({ page }, testInfo) => {
+test("full-model preview is clearly labeled as reference-only for body contour QA", async ({ page }, testInfo) => {
   await openHarnessScenario(page, testInfo, "full-model-accessory");
 
   await expect(page.getByTestId("body-geometry-status-badge-title")).toHaveText("FULL MODEL PREVIEW");
-  await expect(page.getByTestId("body-geometry-status-badge-note")).toContainText("Not valid for body contour QA");
+  await expect(page.getByTestId("body-geometry-status-badge-note")).toContainText("Full model reference only");
   await expect(page.getByTestId("body-geometry-status-badge-geometry")).toContainText("Body + extras");
   await expect(page.getByTestId("body-cutout-qa-guard-banner")).toHaveCount(0);
 

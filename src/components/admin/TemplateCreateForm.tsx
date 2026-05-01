@@ -21,6 +21,7 @@ import type {
 } from "@/types/tumblerItemLookup";
 import {
   deriveTumblerPreviewModelState,
+  resolveTumblerPreviewModelSource,
   type PreviewModelMode,
 } from "@/lib/tumblerPreviewModelState";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
@@ -1040,6 +1041,68 @@ export function TemplateCreateForm({
     reviewedGeneratedModelState?.sourceLabel,
   ]);
 
+  const previewOriginalModelPath = React.useMemo(() => {
+    const lookupModelPath = lookupResult?.glbPath?.trim();
+    if (lookupModelPath) return lookupModelPath;
+    const editingModelPath = editingTemplate?.glbPath?.trim();
+    if (editingModelPath && editingTemplate?.glbStatus !== "generated-reviewed-model") {
+      return editingModelPath;
+    }
+    return "";
+  }, [
+    editingTemplate?.glbPath,
+    editingTemplate?.glbStatus,
+    lookupResult?.glbPath,
+  ]);
+  const previewOriginalModelStatus = lookupResult?.modelStatus
+    ?? (editingTemplate?.glbStatus !== "generated-reviewed-model" ? editingTemplate?.glbStatus : null)
+    ?? null;
+  const previewOriginalModelSourceLabel = lookupResult?.modelSourceLabel
+    ?? (editingTemplate?.glbStatus !== "generated-reviewed-model" ? editingTemplate?.glbSourceLabel : null)
+    ?? null;
+  const selectedPreviewModelSource = React.useMemo(
+    () => resolveTumblerPreviewModelSource({
+      requestedMode: previewModelMode,
+      currentModelPath: glbPath,
+      currentModelStatus: activeDrinkwareGlbStatus,
+      currentModelSourceLabel: activeDrinkwareGlbSourceLabel,
+      originalModelPath: previewOriginalModelPath,
+      originalModelStatus: previewOriginalModelStatus,
+      originalModelSourceLabel: previewOriginalModelSourceLabel,
+    }),
+    [
+      activeDrinkwareGlbSourceLabel,
+      activeDrinkwareGlbStatus,
+      glbPath,
+      previewModelMode,
+      previewOriginalModelPath,
+      previewOriginalModelSourceLabel,
+      previewOriginalModelStatus,
+    ],
+  );
+  const fullModelPreviewSource = React.useMemo(
+    () => resolveTumblerPreviewModelSource({
+      requestedMode: "full-model",
+      currentModelPath: glbPath,
+      currentModelStatus: activeDrinkwareGlbStatus,
+      currentModelSourceLabel: activeDrinkwareGlbSourceLabel,
+      originalModelPath: previewOriginalModelPath,
+      originalModelStatus: previewOriginalModelStatus,
+      originalModelSourceLabel: previewOriginalModelSourceLabel,
+    }),
+    [
+      activeDrinkwareGlbSourceLabel,
+      activeDrinkwareGlbStatus,
+      glbPath,
+      previewOriginalModelPath,
+      previewOriginalModelSourceLabel,
+      previewOriginalModelStatus,
+    ],
+  );
+  const activePreviewGlbPath = selectedPreviewModelSource.modelPath ?? "";
+  const activePreviewGlbStatus = selectedPreviewModelSource.modelStatus;
+  const activePreviewGlbSourceLabel = selectedPreviewModelSource.modelSourceLabel;
+
   const resolvedMatchedProfileId = React.useMemo(() => {
     if (lookupResult?.matchedProfileId) return lookupResult.matchedProfileId;
     const suggestion = detectResult?.response.suggestion;
@@ -1552,22 +1615,25 @@ export function TemplateCreateForm({
       ? deriveTumblerPreviewModelState({
           requestedMode: previewModelMode,
           hasCanonicalAlignmentModel: Boolean(previewTumblerDims),
-          hasSourceModel: Boolean(glbPath.trim()),
-          sourceModelPath: glbPath.trim() || null,
-          sourceModelStatus: activeDrinkwareGlbStatus,
+          hasSourceModel: Boolean(activePreviewGlbPath.trim()),
+          sourceModelPath: activePreviewGlbPath.trim() || null,
+          sourceModelStatus: activePreviewGlbStatus,
           sourceBounds: null,
           canonicalBounds: previewCanonicalBounds,
         })
       : null
   ), [
-    activeDrinkwareGlbStatus,
-    glbPath,
+    activePreviewGlbPath,
+    activePreviewGlbStatus,
     previewCanonicalBounds,
     previewModelMode,
     previewTumblerDims,
     productType,
   ]);
   const effectivePreviewModelMode = previewModelState?.effectiveMode ?? previewModelMode;
+  React.useEffect(() => {
+    setLoadedBodyGeometryContract(null);
+  }, [activePreviewGlbPath, activePreviewGlbStatus, previewModelMode]);
   const wrapExportContract =
     loadedBodyGeometryContract ?? generatedReviewedBodyGeometryContract;
   const wrapExportPreviewState = React.useMemo(
@@ -1893,17 +1959,17 @@ export function TemplateCreateForm({
     () => getBodyReferencePreviewModeLabel({
       productType,
       mode: previewModelMode,
-      glbStatus: activeDrinkwareGlbStatus,
+      glbStatus: activePreviewGlbStatus,
     }),
-    [activeDrinkwareGlbStatus, previewModelMode, productType],
+    [activePreviewGlbStatus, previewModelMode, productType],
   );
   const effectivePreviewModeLabel = React.useMemo(
     () => getBodyReferencePreviewModeLabel({
       productType,
       mode: effectivePreviewModelMode,
-      glbStatus: activeDrinkwareGlbStatus,
+      glbStatus: activePreviewGlbStatus,
     }),
-    [activeDrinkwareGlbStatus, effectivePreviewModelMode, productType],
+    [activePreviewGlbStatus, effectivePreviewModelMode, productType],
   );
   const effectivePreviewModeHint = React.useMemo(
     () => getBodyReferencePreviewModeHint({
@@ -1915,8 +1981,26 @@ export function TemplateCreateForm({
   const previewModeDowngradeActive =
     previewModelState != null &&
     previewModelState.requestedMode !== previewModelState.effectiveMode;
+  const previewModeSourceHandoffNote = React.useMemo(() => {
+    if (!selectedPreviewModelSource.reviewedBodyCutoutQaAvailableButInactive) return null;
+    if (previewModelMode === "body-cutout-qa") return null;
+    if (selectedPreviewModelSource.originalModelPreferred) {
+      return "Alignment/full-model preview is using the original source model. Reviewed BODY CUTOUT QA GLB is available; click BODY CUTOUT QA to inspect body-only QA.";
+    }
+    if (previewModelMode === "full-model") {
+      return "Full product model is unavailable. Reviewed BODY CUTOUT QA GLB is available; click BODY CUTOUT QA to inspect body-only QA.";
+    }
+    if (previewModelMode === "alignment-model") {
+      return "Alignment review is visual reference only. Reviewed BODY CUTOUT QA GLB is available; click BODY CUTOUT QA to inspect body-only QA.";
+    }
+    return "Reviewed BODY CUTOUT QA GLB is available; click BODY CUTOUT QA to inspect body-only QA.";
+  }, [
+    previewModelMode,
+    selectedPreviewModelSource.originalModelPreferred,
+    selectedPreviewModelSource.reviewedBodyCutoutQaAvailableButInactive,
+  ]);
   const hasReviewedBodyCutoutQaGlb = activeDrinkwareGlbStatus === "generated-reviewed-model";
-  const hasSourceModelForPreview = Boolean(glbPath.trim());
+  const hasSourceModelForPreview = Boolean(activePreviewGlbPath.trim() || glbPath.trim());
 
   const workflowInput = React.useMemo(
     () => ({
@@ -2579,7 +2663,7 @@ export function TemplateCreateForm({
         label: "Full model",
         reason: getTemplateCreatePreviewActionReason({
           action: "full-model",
-          hasSourceModel: hasSourceModelForPreview,
+          hasSourceModel: Boolean(fullModelPreviewSource.modelPath),
           hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
         }),
       },
@@ -2592,7 +2676,7 @@ export function TemplateCreateForm({
         }),
       },
     ]),
-    [activeDrinkwareGlbStatus, hasSourceModelForPreview],
+    [activeDrinkwareGlbStatus, fullModelPreviewSource.modelPath, hasSourceModelForPreview],
   );
   const bodyReferenceV2DisabledActionReasonGroups = React.useMemo(
     () => groupTemplateCreateDisabledActionReasons([
@@ -4217,11 +4301,11 @@ export function TemplateCreateForm({
                         </span>
                       </div>
                     )}
-                    {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
+                    {getDrinkwareGlbStatusLabel(activePreviewGlbStatus) && (
                       <div className={styles.reviewScaffoldInlineMeta}>
-                        <span>{getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)}</span>
-                        {activeDrinkwareGlbSourceLabel && (
-                          <span>{activeDrinkwareGlbSourceLabel}</span>
+                        <span>{getDrinkwareGlbStatusLabel(activePreviewGlbStatus)}</span>
+                        {activePreviewGlbSourceLabel && (
+                          <span>{activePreviewGlbSourceLabel}</span>
                         )}
                       </div>
                     )}
@@ -4247,9 +4331,9 @@ export function TemplateCreateForm({
                     Select the viewer mode here. BODY CUTOUT QA validates reviewed body-only geometry; WRAP / EXPORT stays separate and reports printable-surface readiness.
                   </div>
                 </div>
-                {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus) && (
+                {getDrinkwareGlbStatusLabel(activePreviewGlbStatus) && (
                   <span className={styles.previewScaffoldBadge}>
-                    {getDrinkwareGlbStatusLabel(activeDrinkwareGlbStatus)}
+                    {getDrinkwareGlbStatusLabel(activePreviewGlbStatus)}
                   </span>
                 )}
               </div>
@@ -4272,6 +4356,14 @@ export function TemplateCreateForm({
               {previewModelState?.message && (
                 <div className={styles.previewPlaceholderNote}>
                   {previewModelState.message}
+                </div>
+              )}
+              {previewModeSourceHandoffNote && (
+                <div
+                  className={styles.previewPlaceholderNote}
+                  data-testid="preview-mode-source-handoff-note"
+                >
+                  {previewModeSourceHandoffNote}
                 </div>
               )}
 
@@ -4317,10 +4409,10 @@ export function TemplateCreateForm({
                 <button
                   type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "full-model" ? styles.detectBtnActive : ""}`}
-                  disabled={!glbPath.trim()}
+                  disabled={!fullModelPreviewSource.modelPath}
                   title={getTemplateCreatePreviewActionReason({
                     action: "full-model",
-                    hasSourceModel: hasSourceModelForPreview,
+                    hasSourceModel: Boolean(fullModelPreviewSource.modelPath),
                     hasQaPreview: isBodyCutoutQaPreviewAvailable(activeDrinkwareGlbStatus),
                   }) ?? undefined}
                   aria-pressed={previewModelMode === "full-model"}
@@ -4622,11 +4714,11 @@ export function TemplateCreateForm({
               )}
 
               <div className={styles.previewSurface}>
-                {glbPath.trim() && previewTumblerDims ? (
+                {activePreviewGlbPath.trim() && previewTumblerDims ? (
                   <div className={styles.previewViewerWrap}>
                     <ModelViewer
-                      modelUrl={glbPath}
-                      glbPath={glbPath}
+                      modelUrl={activePreviewGlbPath}
+                      glbPath={activePreviewGlbPath}
                       placedItems={engravingOverlayPreviewState.enabled ? overlayPreviewPlacedItems : undefined}
                       itemTextures={engravingOverlayPreviewState.enabled ? overlayPreviewTextures : undefined}
                       bedWidthMm={templateWidthMm > 0 ? templateWidthMm : undefined}
@@ -4642,12 +4734,16 @@ export function TemplateCreateForm({
                         effectivePreviewModelMode === "wrap-export"
                       }
                       previewModelMode={previewModelMode}
-                      sourceModelStatus={activeDrinkwareGlbStatus}
-                      sourceModelLabel={activeDrinkwareGlbSourceLabel}
+                      sourceModelStatus={activePreviewGlbStatus}
+                      sourceModelLabel={activePreviewGlbSourceLabel}
                       approvedBodyOutline={approvedBodyOutline}
                       canonicalBodyProfile={approvedCanonicalBodyProfile}
                       canonicalDimensionCalibration={approvedCanonicalDimensionCalibration}
-                      bodyGeometryContractSeed={generatedReviewedBodyGeometryContract}
+                      bodyGeometryContractSeed={
+                        selectedPreviewModelSource.reviewedBodyCutoutQaActive
+                          ? generatedReviewedBodyGeometryContract
+                          : null
+                      }
                       wrapExportProductionReadiness={wrapExportProductionReadiness}
                       showModelDebug={templateCreateDiagnosticsVisible}
                       onBodyGeometryContractChange={setLoadedBodyGeometryContract}

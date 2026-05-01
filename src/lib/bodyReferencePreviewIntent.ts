@@ -55,7 +55,7 @@ export function getBodyReferencePreviewModeHint(args: {
     return null;
   }
   if (args.mode === "alignment-model") {
-    return "Alignment keeps the source-model review visible while BODY REFERENCE approval and BODY CUTOUT QA stay separate.";
+    return "Alignment review is visual reference only. It is not BODY CUTOUT QA proof; use BODY CUTOUT QA to inspect the reviewed body-only GLB.";
   }
   if (args.mode === "wrap-export") {
     return "Wrap / export shows printable-surface dimensions, freshness, and placement readiness without claiming BODY CUTOUT QA proof.";
@@ -64,7 +64,7 @@ export function getBodyReferencePreviewModeHint(args: {
     return "BODY CUTOUT QA renders the reviewed body-only GLB and validates the loaded geometry against audit/runtime truth.";
   }
   if (args.mode === "full-model") {
-    return "Full model keeps the product preview available alongside BODY CUTOUT QA without treating it as body-only proof.";
+    return "Full model is visual geometry reference only. It is not BODY CUTOUT QA proof; use BODY CUTOUT QA for reviewed body-only validation.";
   }
   return "Source compare keeps the reviewed model flow anchored to the current product source.";
 }

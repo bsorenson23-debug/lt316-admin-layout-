@@ -46,7 +46,7 @@ test("body-cutout QA badge passes for clean body-only contract", () => {
   assert.equal(state.validForBodyQa, true);
 });
 
-test("non-QA badge reports full model preview as not valid for body QA", () => {
+test("non-QA badge reports full model preview as visual reference only", () => {
   const contract = updateContractValidation({
     ...createEmptyBodyGeometryContract(),
     mode: "full-model",
@@ -69,7 +69,7 @@ test("non-QA badge reports full model preview as not valid for body QA", () => {
 
   assert.equal(state.title, "FULL MODEL PREVIEW");
   assert.equal(state.geometryLabel, "Body + extras");
-  assert.equal(state.qaLabel, "Not valid for body contour QA");
+  assert.equal(state.qaLabel, "Full model reference only - BODY CUTOUT QA not active");
   assert.equal(state.validForBodyQa, false);
 });
 
@@ -101,7 +101,7 @@ test("alignment preview badge stays non-QA even when the loaded geometry is only
   assert.equal(state.title, "ALIGNMENT PREVIEW");
   assert.equal(state.status, "warn");
   assert.equal(state.geometryLabel, "Body + extras");
-  assert.equal(state.qaLabel, "Not valid for body contour QA");
+  assert.equal(state.qaLabel, "Alignment reference only - BODY CUTOUT QA not active");
   assert.equal(state.validForBodyQa, false);
 });
 

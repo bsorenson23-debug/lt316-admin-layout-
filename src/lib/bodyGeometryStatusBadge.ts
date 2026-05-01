@@ -94,7 +94,11 @@ export function buildBodyGeometryStatusBadgeState(args: {
   const fallbackLabel = fallbackLabelForContract(contract);
   const glbLabel = glbLabelForContract(contract);
   const isBodyCutoutQa = mode === "body-cutout-qa";
-  let qaLabel = "Not valid for body contour QA";
+  let qaLabel = mode === "alignment-model"
+    ? "Alignment reference only - BODY CUTOUT QA not active"
+    : mode === "full-model"
+      ? "Full model reference only - BODY CUTOUT QA not active"
+      : "Not valid for body contour QA";
   let validForBodyQa: boolean | null = false;
 
   if (isBodyCutoutQa) {
