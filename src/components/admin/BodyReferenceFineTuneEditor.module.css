@@ -191,6 +191,12 @@
   line-height: 1.4;
 }
 
+.cutoffReferenceNote {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .guidesPanel {
   display: grid;
   gap: 8px;
@@ -414,6 +420,17 @@
   stroke-width: 0.9;
   stroke-dasharray: 6 4;
   opacity: 0.48;
+}
+
+.rawTracePath {
+  fill: none;
+  stroke: color-mix(in srgb, var(--text-secondary) 58%, transparent);
+  stroke-width: 0.85;
+  stroke-dasharray: 2 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.48;
+  pointer-events: none;
 }
 
 .approvedPath {

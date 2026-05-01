@@ -213,9 +213,9 @@ test("primary review outline uses regularized body-only direct contour", () => {
 
   assert.ok(visual);
   assert.equal(visual!.source, "svg-cutout");
-  assert.equal(visual!.bounds.maxY, 212.3);
-  assert.ok(visual!.points.every((point) => point.y <= 212.301));
-  assert.equal(visual!.points.some((point) => point.y > 212.3), false);
+  assert.equal(visual!.bounds.maxY, 218);
+  assert.ok(visual!.points.every((point) => point.y <= 218.001));
+  assert.equal(visual!.points.some((point) => point.y > 218), false);
   assert.notDeepEqual(visual!.points, outline.directContour);
 });
 
@@ -273,8 +273,8 @@ test("accepted corrected clipped contour updates source hash", () => {
   const acceptedSignature = buildOutlineGeometrySignature(rebuilt!.approvedBodyOutline);
   const visual = resolvePrimaryBodyReferenceVisualContour(rebuilt!.approvedBodyOutline);
   assert.notEqual(acceptedSignature, rawSignature);
-  assert.equal(visual?.bounds.maxY, 212.3);
-  assert.equal(visual?.points.some((point) => point.y > 212.3), false);
+  assert.equal(visual?.bounds.maxY, 218);
+  assert.equal(visual?.points.some((point) => point.y > 218), false);
   assert.equal(rebuilt!.nextPrintHeightMm, 220);
   assert.equal(rebuilt!.bodyBottomFromOverallMm, 220);
   assert.equal(rebuilt!.readyForReviewedGeneration, true);

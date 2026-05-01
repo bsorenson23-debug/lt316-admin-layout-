@@ -842,12 +842,12 @@ function getContourSegmentsAtY(
   return segments;
 }
 
-function resolveRoundedBaseAutoInsetMmFromBounds(bounds: EditableBodyOutlineContourBounds): number {
-  return round1(clamp(bounds.height * 0.035, 4, 10));
+function resolveRoundedBaseAutoInsetMmFromBounds(_bounds: EditableBodyOutlineContourBounds): number {
+  return 2;
 }
 
 function resolveRoundedBaseMinInsetMmFromBounds(bounds: EditableBodyOutlineContourBounds): number {
-  return round1(clamp(bounds.height * 0.012, 2, 4));
+  return round1(clamp(bounds.height * 0.006, 2, 3));
 }
 
 function resolveRoundedBaseCutoffInset(args: {
@@ -1221,6 +1221,13 @@ function mapSourceContourToBodyOnlyMmFrame(
   }
 
   return null;
+}
+
+export function resolveBodyOnlyRawDetectedTraceContour(
+  outline: EditableBodyOutline | null | undefined,
+): EditableBodyOutlineContourPoint[] | null {
+  if (!outline || outline.sourceContourMode !== "body-only") return null;
+  return mapSourceContourToBodyOnlyMmFrame(outline);
 }
 
 function resolveBodyOnlyRoundedBaseSourceContour(

@@ -200,11 +200,12 @@ test("BODY REFERENCE GLB source payload uses clipped accepted contour instead of
   });
   const authoritativeContour = payload.bodyOutline?.authoritativeContour ?? [];
 
-  assert.equal(authoritativeContour.some((point) => point.y > 212.3), false);
+  assert.equal(authoritativeContour.some((point) => point.y > 218), false);
   assert.equal(authoritativeContour.some((point) => point.x === 8 && point.y === 220), false);
+  assert.equal("sourceContour" in (payload.bodyOutline as Record<string, unknown>), false);
   assert.deepEqual(
-    authoritativeContour.filter((point) => point.y === 212.3).map((point) => point.x),
-    [19.2, -19.2],
+    authoritativeContour.filter((point) => point.y === 218).map((point) => point.x),
+    [11.3, -11.3],
   );
 });
 
