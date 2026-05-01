@@ -4731,6 +4731,7 @@ export function TemplateCreateForm({
                       appearanceReferenceLayers={templateAppearanceReferenceLayers}
                       showTemplateSurfaceZones={
                         effectivePreviewModelMode === "alignment-model" ||
+                        effectivePreviewModelMode === "full-model" ||
                         effectivePreviewModelMode === "wrap-export"
                       }
                       previewModelMode={previewModelMode}
