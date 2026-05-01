@@ -1,5 +1,6 @@
 import type { ProductTemplate, ProductTemplateStore } from "../types/productTemplate.ts";
 import { BUILT_IN_TEMPLATES } from "../data/builtInTemplates.ts";
+import { normalizeProductTemplateModelTruth } from "./productTemplateModelLanes.ts";
 
 const STORAGE_KEY = "lt316_product_templates";
 const REMOVED_GLB_PATHS = new Set([
@@ -35,11 +36,11 @@ function normalizeStore(store: Partial<InternalTemplateStore>): InternalTemplate
     .map((template) => {
       const removedGlbPath = template.glbPath && REMOVED_GLB_PATHS.has(template.glbPath);
       if (removedGlbPath) sanitizedRemovedGlbPath = true;
-      return {
+      return normalizeProductTemplateModelTruth({
         ...template,
         builtIn: false,
         glbPath: removedGlbPath ? "" : template.glbPath,
-      };
+      });
     });
 
   return {
@@ -60,7 +61,7 @@ function mergeBuiltInTemplate(
   source: ProductTemplate,
   override: ProductTemplate,
 ): ProductTemplate {
-  return {
+  return normalizeProductTemplateModelTruth({
     ...source,
     ...override,
     dimensions: {
@@ -72,7 +73,7 @@ function mergeBuiltInTemplate(
       ...override.laserSettings,
     },
     builtIn: true,
-  };
+  });
 }
 
 function readStore(): InternalTemplateStore {
@@ -127,7 +128,7 @@ export function loadTemplates(): ProductTemplate[] {
     .filter((template) => !deletedBuiltInIds.has(template.id))
     .map((template) => {
       const override = storedById.get(template.id);
-      return override ? mergeBuiltInTemplate(template, override) : { ...template };
+      return override ? mergeBuiltInTemplate(template, override) : normalizeProductTemplateModelTruth({ ...template });
     });
 
   const customTemplates = store.templates.filter((template) => !BUILT_IN_IDS.has(template.id));
@@ -148,7 +149,7 @@ export function saveTemplate(template: ProductTemplate): void {
   const nextTemplates = store.templates.filter((existing) => existing.id !== template.id);
 
   nextTemplates.push({
-    ...template,
+    ...normalizeProductTemplateModelTruth(template),
     builtIn: false,
   });
 

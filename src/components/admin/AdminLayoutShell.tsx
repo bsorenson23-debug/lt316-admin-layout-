@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -60,6 +60,7 @@ import { TemplateModeSurface } from "./TemplateModeSurface";
 import type { ProductTemplate } from "@/types/productTemplate";
 import type { LaserBedArtworkPlacement } from "@/lib/laserBedSurfaceMapping";
 import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
+import { resolveProductTemplateModelLanes } from "@/lib/productTemplateModelLanes";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import { getTumblerWrapLayout, getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
 import {
@@ -249,6 +250,10 @@ export function AdminLayoutShell() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [, setTemplateRefreshNonce] = useState(0);
   const [didRestorePersistedState, setDidRestorePersistedState] = useState(false);
+  const selectedTemplateModelLanes = useMemo(
+    () => resolveProductTemplateModelLanes(selectedTemplate),
+    [selectedTemplate],
+  );
 
   const handleUpdateLayer = useCallback((layer: LaserLayer) => {
     setLaserLayers(prev => prev.map(l => l.id === layer.id ? layer : l));
@@ -1520,7 +1525,18 @@ export function AdminLayoutShell() {
               workspaceMode={bedConfig.workspaceMode}
               tumblerDims={tumblerDims}
                 handleArcDeg={activeHandleArcDeg}
-              modelPathOverride={selectedTemplate?.glbPath ?? null}
+              modelPathOverride={selectedTemplateModelLanes.sourceModelPath}
+              sourceModelStatus={selectedTemplateModelLanes.sourceModelStatus}
+              sourceModelLabel={
+                selectedTemplateModelLanes.sourceModelLabel ??
+                (
+                  selectedTemplateModelLanes.reviewedBodyCutoutQaGlbPath &&
+                  !selectedTemplateModelLanes.sourceModelPath
+                    ? "Source model unavailable"
+                    : null
+                )
+              }
+              appearanceReferenceLayers={selectedTemplate?.appearanceReferenceLayers ?? null}
               tumblerMapping={selectedTemplate?.tumblerMapping}
               onUpdateCalibration={handleUpdateCalibration}
               bodyTintColor={bodyTintColor}

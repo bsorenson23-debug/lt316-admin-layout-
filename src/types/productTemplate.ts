@@ -5,6 +5,7 @@ import type {
   TemplateEngravingPreviewState,
 } from "@/lib/laserBedSurfaceMapping";
 import type { BodyReferenceV2Draft } from "@/lib/bodyReferenceV2Layers";
+import type { BodyGeometryContractSeed } from "@/lib/bodyGeometryContract";
 import type { ProductAppearanceReferenceLayer } from "@/lib/productAppearanceReferenceLayers";
 
 export type EditableOutlinePointType = "corner" | "smooth";
@@ -322,9 +323,30 @@ export interface ProductTemplate {
   thumbnailDataUrl: string; // base64 120x120 PNG
   /** Full-resolution product photo (max 1024px, JPEG base64) for grid overlay */
   productPhotoFullUrl?: string;
+  /** Legacy source/full/alignment model path. Reviewed body-only QA GLBs must not be stored here. */
   glbPath: string; // path in /public/models/
   glbStatus?: "verified-product-model" | "generated-reviewed-model" | "placeholder-model" | "missing-model";
   glbSourceLabel?: string;
+  /** Original/full/alignment product model path used by normal saved-template preview. */
+  sourceModelPath?: string;
+  /** Back-compat alias for sourceModelPath during handoff migrations. */
+  sourceGlbPath?: string;
+  sourceModelStatus?: "verified-product-model" | "placeholder-model" | "missing-model";
+  sourceModelLabel?: string;
+  /** Generated body-only GLB used only by BODY CUTOUT QA. */
+  reviewedBodyCutoutQaGlbPath?: string;
+  reviewedBodyCutoutQaModelSourceLabel?: string;
+  reviewedBodyCutoutQaAuditJsonPath?: string | null;
+  /** Accepted BODY REFERENCE source hash at the time this reviewed QA GLB was saved. */
+  reviewedBodyCutoutQaSourceHash?: string;
+  /** Stable source signature returned by the reviewed QA GLB generator. */
+  reviewedBodyCutoutQaSourceSignature?: string;
+  reviewedBodyCutoutQaGlbHash?: string;
+  reviewedBodyCutoutQaGlbSourceHash?: string;
+  reviewedBodyCutoutQaGeneratedAt?: string;
+  reviewedBodyCutoutQaBodyGeometryContract?: BodyGeometryContractSeed;
+  acceptedBodyReferenceSourceHash?: string;
+  acceptedBodyReferenceSourceSignature?: string;
   dimensions: ProductTemplateDimensions;
   laserSettings: ProductTemplateLaserSettings;
   createdAt: string; // ISO string

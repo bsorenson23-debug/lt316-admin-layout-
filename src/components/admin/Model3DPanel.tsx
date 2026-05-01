@@ -4,6 +4,8 @@ import React from "react";
 import dynamic from "next/dynamic";
 import type { ModelViewerProps, TumblerDimensions } from "./ModelViewer";
 import type { PlacedItem } from "@/types/admin";
+import type { ProductTemplate, TumblerMapping } from "@/types/productTemplate";
+import type { ProductAppearanceReferenceLayer } from "@/lib/productAppearanceReferenceLayers";
 import { GLB_TEMPLATES } from "@/data/glbTemplates";
 import type { GlbTemplate } from "@/data/glbTemplates";
 import {
@@ -71,8 +73,11 @@ export interface Model3DPanelProps {
   tumblerDims?: TumblerDimensions | null;
   handleArcDeg?: number;
   modelPathOverride?: string | null;
+  sourceModelStatus?: ProductTemplate["sourceModelStatus"] | null;
+  sourceModelLabel?: string | null;
+  appearanceReferenceLayers?: ProductAppearanceReferenceLayer[] | null;
   /** Tumbler mapping from the wizard — orients the front face */
-  tumblerMapping?: import("@/types/productTemplate").TumblerMapping;
+  tumblerMapping?: TumblerMapping;
   /** Lifted model file — parent tracks it for center 3D view */
   onModelFileChange?: (file: File | null) => void;
   /** Callback to save calibration offsets to the template's tumblerMapping */
@@ -93,6 +98,9 @@ export function Model3DPanel({
   tumblerDims,
   handleArcDeg,
   modelPathOverride,
+  sourceModelStatus,
+  sourceModelLabel,
+  appearanceReferenceLayers,
   tumblerMapping,
   onModelFileChange,
   onUpdateCalibration,
@@ -101,6 +109,7 @@ export function Model3DPanel({
   artworkTintColor,
 }: Model3DPanelProps) {
   const [modelFile, setModelFileLocal] = React.useState<File | null>(null);
+  const [modelUrl, setModelUrl] = React.useState<string | null>(null);
 
   // Sync with parent
   const setModelFile = React.useCallback((file: File | null) => {
@@ -119,6 +128,7 @@ export function Model3DPanel({
   const [calY, setCalY] = React.useState(tumblerMapping?.calibrationOffsetY ?? 0);
   const [calRot, setCalRot] = React.useState(tumblerMapping?.calibrationRotation ?? 0);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const appliedModelPathOverrideRef = React.useRef<string | null>(null);
   const calXLimit = React.useMemo(
     () => Math.max(15, Math.min(45, Math.round(bedWidthMm * 0.12))),
     [bedWidthMm],
@@ -151,7 +161,19 @@ export function Model3DPanel({
     [filteredTemplates],
   );
 
-  const modelExt = modelFile?.name.split(".").pop()?.toLowerCase() ?? "";
+  const modelSourceName = React.useMemo(() => {
+    if (modelFile?.name) return modelFile.name;
+    if (!modelUrl) return "";
+    try {
+      const parsed = new URL(modelUrl, window.location.origin);
+      return parsed.pathname.split("/").pop() ?? "";
+    } catch {
+      const [pathPart] = modelUrl.split("?");
+      return pathPart.split("/").pop() ?? "";
+    }
+  }, [modelFile?.name, modelUrl]);
+  const modelExt = modelSourceName.split(".").pop()?.toLowerCase() ?? "";
+  const hasModel = Boolean(modelFile || modelUrl);
   const viewable = VIEWABLE_EXTS.has(modelExt);
   const hasItems = placedItems.length > 0;
 
@@ -197,12 +219,14 @@ export function Model3DPanel({
     }
     setSizeError(null);
     setTemplateError(null);
+    setModelUrl(null);
     setModelFile(file);
     setViewerOpen(false);
   }, [setModelFile]);
 
   const clear = () => {
     setModelFile(null);
+    setModelUrl(null);
     setViewerOpen(false);
     setSizeError(null);
   };
@@ -228,33 +252,23 @@ export function Model3DPanel({
     }
   }, [accept]);
 
-  // Auto-load GLB when a product template is selected
+  // Keep saved template paths as URLs so generated-audit/source truth is not lost.
   React.useEffect(() => {
-    if (!modelPathOverride) return;
-    // Skip if the currently loaded model already matches this path
-    const expectedName = modelPathOverride.split("/").pop() ?? "";
-    if (modelFile?.name === expectedName) return;
+    const nextUrl = modelPathOverride?.trim() ?? "";
+    if (!nextUrl) {
+      appliedModelPathOverrideRef.current = null;
+      setModelUrl(null);
+      setViewerOpen(false);
+      return;
+    }
+    if (appliedModelPathOverrideRef.current === nextUrl) return;
+    appliedModelPathOverrideRef.current = nextUrl;
     setTemplateError(null);
-
-    fetch(modelPathOverride)
-      .then((r) => {
-        if (!r.ok) throw new Error(`404: ${modelPathOverride}`);
-        return r.blob();
-      })
-      .then((blob) => {
-        const filename = modelPathOverride.split("/").pop() ?? "model.glb";
-        const file = new File([blob], filename, { type: "model/gltf-binary" });
-        accept(file);
-        setViewerOpen(true);
-      })
-      .catch((err) => {
-        console.warn("[Model3DPanel] auto-load failed:", err);
-        const msg = err instanceof Error ? err.message : "Unknown error";
-        setModelFile(null);
-        setViewerOpen(false);
-        setTemplateError(`Auto-load failed for ${modelPathOverride}: ${msg}`);
-      });
-  }, [modelPathOverride, accept]); // eslint-disable-line react-hooks/exhaustive-deps
+    setSizeError(null);
+    setModelFile(null);
+    setModelUrl(nextUrl);
+    setViewerOpen(true);
+  }, [modelPathOverride, setModelFile]);
 
   // Serialized key so the effect re-fires when items move/resize, not just on reference changes
   const itemPositionKey = React.useMemo(
@@ -312,7 +326,7 @@ export function Model3DPanel({
     <section className={styles.panel}>
       <div className={styles.header}>
         <span className={styles.title}>3D Model Preview</span>
-        {modelFile && (
+        {hasModel && (
           <button className={styles.clearBtn} onClick={clear}>Clear</button>
         )}
       </div>
@@ -332,7 +346,7 @@ export function Model3DPanel({
 
         {/* Drop zone */}
         <div
-          className={`${styles.dropZone} ${dragOver ? styles.dropZoneActive : ""} ${modelFile ? styles.dropZoneLoaded : ""}`}
+          className={`${styles.dropZone} ${dragOver ? styles.dropZoneActive : ""} ${hasModel ? styles.dropZoneLoaded : ""}`}
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => {
@@ -347,10 +361,10 @@ export function Model3DPanel({
           onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
           aria-label="Drop 3D model file here"
         >
-          {modelFile ? (
+          {hasModel ? (
             <>
               <span className={styles.dropIcon}>◈</span>
-              <span className={styles.dropName}>{modelFile.name}</span>
+              <span className={styles.dropName}>{modelSourceName}</span>
               <span className={styles.dropExt}>{modelExt.toUpperCase()}</span>
             </>
           ) : (
@@ -364,7 +378,13 @@ export function Model3DPanel({
 
         {sizeError && <div className={styles.error}>{sizeError}</div>}
 
-        {modelFile && viewable && (
+        {!modelPathOverride && sourceModelLabel === "Source model unavailable" && (
+          <div className={styles.templateError}>
+            Source model unavailable. Reviewed BODY CUTOUT QA GLB is reserved for BODY CUTOUT QA.
+          </div>
+        )}
+
+        {hasModel && viewable && (
           <button
             className={`${styles.toggleBtn} ${viewerOpen ? styles.toggleBtnActive : ""}`}
             onClick={() => setViewerOpen((o) => !o)}
@@ -373,27 +393,32 @@ export function Model3DPanel({
           </button>
         )}
 
-        {modelFile && !viewable && (
+        {hasModel && !viewable && (
           <div className={styles.unsupported}>
             .{modelExt.toUpperCase()} — live preview not supported
           </div>
         )}
 
-        {modelFile && viewable && viewerOpen && (
+        {hasModel && viewable && viewerOpen && (
           <>
             <div className={styles.viewerWrap}>
               <ModelViewer
                 file={modelFile}
+                modelUrl={modelUrl}
                 placedItems={placedItems}
                 itemTextures={itemTextures}
                 bedWidthMm={bedWidthMm}
                 bedHeightMm={bedHeightMm}
                 tumblerDims={tumblerDims}
                 handleArcDeg={handleArcDeg}
-                glbPath={modelPathOverride}
+                glbPath={modelUrl ?? modelPathOverride}
                 bodyTintColor={bodyTintColor}
                 rimTintColor={rimTintColor}
+                appearanceReferenceLayers={appearanceReferenceLayers}
                 tumblerMapping={effectiveMapping}
+                previewModelMode="full-model"
+                sourceModelStatus={sourceModelStatus}
+                sourceModelLabel={sourceModelLabel}
                 showTemplateSurfaceZones={workspaceMode === "tumbler-wrap"}
               />
             </div>
@@ -513,7 +538,7 @@ export function Model3DPanel({
             )}
             <div className={styles.templateGrid}>
               {filteredTemplates.map((tpl) => {
-                const isActive = modelFile?.name === tpl.glbPath.split("/").pop();
+                const isActive = modelSourceName === tpl.glbPath.split("/").pop();
                 const isLoading = templateLoading === tpl.id;
                 const isAvailable = templateAvailability[tpl.id] ?? seededTemplateAvailability[tpl.id] ?? true;
                 return (

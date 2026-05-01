@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ProductTemplate } from "@/types/productTemplate";
+import type { BodyGeometryContractSeed } from "./bodyGeometryContract.ts";
 import {
   createBrandLogoReference,
   createFinishBandReference,
 } from "./productAppearanceReferenceLayers.ts";
+import { resolveProductTemplateModelLanes } from "./productTemplateModelLanes.ts";
 import {
   getTemplate,
   loadTemplates,
@@ -383,4 +385,145 @@ test("saveTemplate preserves accepted BODY REFERENCE v2 draft metadata exactly",
   assert.equal(saved.acceptedBodyReferenceV2Draft?.centerline?.source, "operator");
   assert.equal(saved.acceptedBodyReferenceV2Draft?.layers[0]?.kind, "body-left");
   assert.equal(saved.acceptedBodyReferenceV2Draft?.scaleCalibration.lookupDiameterMm, 88);
+});
+
+test("saveTemplate keeps source model and reviewed BODY CUTOUT QA GLB in separate persisted lanes", () => {
+  const sourceModelPath = "/models/templates/stanley-iceflow-source.glb";
+  const reviewedQaPath = "/api/admin/models/generated/stanley-iceflow-body-cutout-qa.glb";
+  const bodyContract: BodyGeometryContractSeed = {
+    mode: "body-cutout-qa",
+    source: {
+      hash: "accepted-source-hash-v1",
+    },
+    glb: {
+      hash: "reviewed-glb-hash-v1",
+      sourceHash: "accepted-source-hash-v1",
+      generatedAt: "2026-04-30T14:00:00.000Z",
+    },
+    meshes: {
+      names: ["body_mesh"],
+      bodyMeshNames: ["body_mesh"],
+      accessoryMeshNames: [],
+    },
+  };
+  const appearanceReferenceLayers = [
+    createFinishBandReference({
+      id: "stanley-silver-ring",
+      kind: "top-finish-band",
+      heightMm: 9,
+      source: "lookup",
+    }),
+    createBrandLogoReference({
+      id: "stanley-front-logo",
+      kind: "front-brand-logo",
+      widthMm: 24,
+      heightMm: 10,
+      source: "lookup",
+    }),
+  ];
+  const template = createTemplate({
+    id: "template-reviewed-glb-lanes",
+    glbPath: sourceModelPath,
+    glbStatus: "verified-product-model",
+    glbSourceLabel: "Original full product model",
+    sourceModelPath,
+    sourceModelStatus: "verified-product-model",
+    sourceModelLabel: "Original full product model",
+    reviewedBodyCutoutQaGlbPath: reviewedQaPath,
+    reviewedBodyCutoutQaModelSourceLabel: "Reviewed BODY CUTOUT QA GLB",
+    reviewedBodyCutoutQaAuditJsonPath: "/api/admin/models/generated/stanley-iceflow-body-cutout-qa.audit.json",
+    reviewedBodyCutoutQaSourceHash: "accepted-source-hash-v1",
+    reviewedBodyCutoutQaSourceSignature: "json:accepted-source-signature-v1",
+    reviewedBodyCutoutQaGlbHash: "reviewed-glb-hash-v1",
+    reviewedBodyCutoutQaGlbSourceHash: "accepted-source-hash-v1",
+    reviewedBodyCutoutQaGeneratedAt: "2026-04-30T14:00:00.000Z",
+    reviewedBodyCutoutQaBodyGeometryContract: bodyContract,
+    acceptedBodyReferenceSourceHash: "accepted-source-hash-v1",
+    acceptedBodyReferenceSourceSignature: "json:accepted-source-signature-v1",
+    appearanceReferenceLayers,
+  });
+
+  saveTemplate(template);
+  const saved = getTemplate(template.id);
+
+  assert.ok(saved);
+  assert.equal(saved.glbPath, sourceModelPath);
+  assert.equal(saved.sourceModelPath, sourceModelPath);
+  assert.equal(saved.sourceModelStatus, "verified-product-model");
+  assert.equal(saved.reviewedBodyCutoutQaGlbPath, reviewedQaPath);
+  assert.equal(saved.reviewedBodyCutoutQaSourceHash, "accepted-source-hash-v1");
+  assert.equal(saved.reviewedBodyCutoutQaSourceSignature, "json:accepted-source-signature-v1");
+  assert.equal(saved.reviewedBodyCutoutQaGlbHash, "reviewed-glb-hash-v1");
+  assert.equal(saved.reviewedBodyCutoutQaGlbSourceHash, "accepted-source-hash-v1");
+  assert.equal(saved.reviewedBodyCutoutQaGeneratedAt, "2026-04-30T14:00:00.000Z");
+  assert.deepEqual(saved.reviewedBodyCutoutQaBodyGeometryContract, bodyContract);
+  assert.deepEqual(saved.appearanceReferenceLayers, appearanceReferenceLayers);
+
+  const lanes = resolveProductTemplateModelLanes(saved);
+  assert.equal(lanes.sourceModelPath, sourceModelPath);
+  assert.equal(lanes.reviewedBodyCutoutQaGlbPath, reviewedQaPath);
+  assert.equal(lanes.reviewedBodyCutoutQaStatus, "generated-reviewed-model");
+  assert.equal(lanes.acceptedBodyReferenceSourceHash, "accepted-source-hash-v1");
+  assert.equal(lanes.reviewedBodyCutoutQaGlbSourceHash, "accepted-source-hash-v1");
+  assert.equal(lanes.legacyGlbPathWasReviewedQa, false);
+});
+
+test("legacy reviewed BODY CUTOUT QA glbPath does not load as the source model after reload", () => {
+  const reviewedQaPath = "/api/admin/models/generated/stanley-body-only-cutout.glb";
+
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      templates: [
+        createTemplate({
+          id: "template-legacy-reviewed-glb-path",
+          glbPath: reviewedQaPath,
+          glbStatus: "generated-reviewed-model",
+          glbSourceLabel: "Reviewed BODY CUTOUT QA GLB",
+          reviewedBodyCutoutQaSourceHash: "accepted-source-hash-v1",
+          reviewedBodyCutoutQaGlbSourceHash: "accepted-source-hash-v1",
+        }),
+      ],
+      lastUpdated: NOW,
+    }),
+  );
+
+  const saved = getTemplate("template-legacy-reviewed-glb-path");
+
+  assert.ok(saved);
+  assert.equal(saved.glbPath, "");
+  assert.equal(saved.sourceModelPath, undefined);
+  assert.equal(saved.glbStatus, undefined);
+  assert.equal(saved.reviewedBodyCutoutQaGlbPath, reviewedQaPath);
+  assert.equal(saved.reviewedBodyCutoutQaSourceHash, "accepted-source-hash-v1");
+  assert.equal(saved.reviewedBodyCutoutQaGlbSourceHash, "accepted-source-hash-v1");
+
+  const lanes = resolveProductTemplateModelLanes(saved);
+  assert.equal(lanes.sourceModelPath, null);
+  assert.equal(lanes.reviewedBodyCutoutQaGlbPath, reviewedQaPath);
+  assert.equal(lanes.legacyGlbPathWasReviewedQa, false);
+});
+
+test("saveTemplate can preserve stale reviewed GLB lineage when accepted BODY REFERENCE source changes", () => {
+  const template = createTemplate({
+    id: "template-reviewed-glb-stale-lineage",
+    glbPath: "/models/templates/stanley-source.glb",
+    sourceModelPath: "/models/templates/stanley-source.glb",
+    reviewedBodyCutoutQaGlbPath: "/api/admin/models/generated/stanley-old-body-cutout.glb",
+    reviewedBodyCutoutQaSourceHash: "old-accepted-source-hash",
+    reviewedBodyCutoutQaSourceSignature: "json:old-accepted-source",
+    reviewedBodyCutoutQaGlbSourceHash: "old-accepted-source-hash",
+    acceptedBodyReferenceSourceHash: "new-accepted-source-hash",
+    acceptedBodyReferenceSourceSignature: "json:new-accepted-source",
+  });
+
+  saveTemplate(template);
+  const saved = getTemplate(template.id);
+
+  assert.ok(saved);
+  const lanes = resolveProductTemplateModelLanes(saved);
+  assert.equal(lanes.acceptedBodyReferenceSourceHash, "new-accepted-source-hash");
+  assert.equal(lanes.acceptedBodyReferenceSourceSignature, "json:new-accepted-source");
+  assert.equal(lanes.reviewedBodyCutoutQaSourceHash, "old-accepted-source-hash");
+  assert.equal(lanes.reviewedBodyCutoutQaGlbSourceHash, "old-accepted-source-hash");
 });
