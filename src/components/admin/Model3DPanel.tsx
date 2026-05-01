@@ -75,6 +75,8 @@ export interface Model3DPanelProps {
   modelPathOverride?: string | null;
   sourceModelStatus?: ProductTemplate["sourceModelStatus"] | null;
   sourceModelLabel?: string | null;
+  profileAuthorityLabel?: string | null;
+  sourceModelAvailabilityLabel?: string | null;
   appearanceReferenceLayers?: ProductAppearanceReferenceLayer[] | null;
   /** Tumbler mapping from the wizard — orients the front face */
   tumblerMapping?: TumblerMapping;
@@ -100,6 +102,8 @@ export function Model3DPanel({
   modelPathOverride,
   sourceModelStatus,
   sourceModelLabel,
+  profileAuthorityLabel,
+  sourceModelAvailabilityLabel,
   appearanceReferenceLayers,
   tumblerMapping,
   onModelFileChange,
@@ -377,6 +381,17 @@ export function Model3DPanel({
         </div>
 
         {sizeError && <div className={styles.error}>{sizeError}</div>}
+
+        {(profileAuthorityLabel || sourceModelAvailabilityLabel) && (
+          <div className={styles.authorityRow}>
+            {profileAuthorityLabel && (
+              <span className={styles.authorityBadge}>{profileAuthorityLabel}</span>
+            )}
+            {sourceModelAvailabilityLabel && (
+              <span className={styles.authorityBadgeMuted}>{sourceModelAvailabilityLabel}</span>
+            )}
+          </div>
+        )}
 
         {!modelPathOverride && sourceModelLabel === "Source model unavailable" && (
           <div className={styles.templateError}>

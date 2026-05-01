@@ -1,5 +1,9 @@
 import type { AxialSurfaceBand, PrintableSurfaceContract } from "./printableSurface";
-import type { TumblerItemLookupDimensions } from "./tumblerItemLookup";
+import type {
+  TumblerItemLookupDimensions,
+  TumblerProfileAuthority,
+  TumblerSourceModelAvailability,
+} from "./tumblerItemLookup";
 import type {
   LaserBedArtworkPlacement,
   TemplateEngravingPreviewState,
@@ -357,6 +361,14 @@ export interface ProductTemplate {
   artworkPlacements?: LaserBedArtworkPlacement[];
   engravingPreviewState?: TemplateEngravingPreviewState;
   lookupDimensions?: TumblerItemLookupDimensions;
+  matchedProfileId?: string;
+  profileAuthority?: TumblerProfileAuthority;
+  profileConfidence?: number;
+  profileAuthorityReason?: string;
+  sourceModelAvailability?: TumblerSourceModelAvailability;
+  lookupSelectedSizeOz?: number;
+  lookupSelectedColorOrFinish?: string;
+  lookupVariantLabel?: string;
   acceptedBodyReferenceV2Draft?: BodyReferenceV2Draft;
   /** Straight-on photo of the front face — base64 data URL */
   frontPhotoDataUrl?: string;

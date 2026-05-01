@@ -1074,14 +1074,22 @@ export async function ensureGeneratedTumblerGlb(
   const { getTumblerProfileById } = await import("../../data/tumblerProfiles.ts");
   const profile = getTumblerProfileById(profileId);
   if (!profile) return { glbPath: "", fitDebug: null };
-  const generatedModelPolicy = profile.generatedModelPolicy ?? null;
+  const primaryImageUrl = options?.imageUrl ?? null;
+  const hasCandidateImage = Boolean(
+    primaryImageUrl ||
+    (options?.imageUrls ?? []).some((value) => Boolean(value)),
+  );
+  const generatedModelPolicy = profile.generatedModelPolicy ?? (
+    profile.shapeType === "straight" && hasCandidateImage
+      ? { strategy: "body-band-lathe" as const }
+      : null
+  );
   if (generatedModelPolicy?.strategy !== "body-band-lathe") {
     return { glbPath: "", fitDebug: null };
   }
 
   let fit: ProfileSilhouetteFit = buildFallbackBodyProfile(profile);
 
-  const primaryImageUrl = options?.imageUrl ?? null;
   const candidateImageUrls = [
     ...(options?.imageUrls ?? []),
   ].filter((value, index, array): value is string => Boolean(value) && value !== primaryImageUrl && array.indexOf(value) === index);

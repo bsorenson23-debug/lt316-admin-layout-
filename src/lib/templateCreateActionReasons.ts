@@ -49,8 +49,12 @@ export function getTemplateCreatePreviewActionReason(args: {
   action: TemplateCreatePreviewAction;
   hasSourceModel: boolean;
   hasQaPreview: boolean;
+  hasAcceptedBodyReference?: boolean;
 }): string | null {
   if (args.action === "body-cutout-qa") {
+    if (!args.hasAcceptedBodyReference) {
+      return "Accept BODY REFERENCE first.";
+    }
     return args.hasQaPreview
       ? null
       : "Generate reviewed GLB first.";

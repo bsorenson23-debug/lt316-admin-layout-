@@ -1,6 +1,6 @@
-import type { TumblerGuideBand } from "../types/admin";
-import type { BedConfig } from "../types/admin";
-import { normalizeBedConfig } from "../types/admin";
+import type { TumblerGuideBand } from "../types/admin.ts";
+import type { BedConfig } from "../types/admin.ts";
+import { normalizeBedConfig } from "../types/admin.ts";
 
 // ---------------------------------------------------------------------------
 // Profile interface
@@ -288,17 +288,26 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     brand: "RTIC",
     model: "20oz Tumbler",
     capacityOz: 20,
+    lookupAliases: [
+      "essential tumbler",
+      "essential",
+      "ceramic lined",
+      "ceramic-lined",
+      "navy",
+      "rtic tumbler",
+    ],
+    officialDomains: ["rticoutdoors.com"],
     shapeType: "straight",
-    outsideDiameterMm: 87,          // 3.43"
-    overallHeightMm: 200,           // 7.87"
-    usableHeightMm: 155,            // ~6.1"
+    outsideDiameterMm: 93,          // 3.66"
+    overallHeightMm: 190,           // 7.48"
+    usableHeightMm: 148,            // conservative 78% body band
     hasHandle: false,
     chuckRecommended: false,
     guideBand: {
       id: "rtic-20-band",
       label: "Safe Print Zone",
       upperGrooveYmm: 20,
-      lowerGrooveYmm: 138,
+      lowerGrooveYmm: 148,
     },
   },
 
@@ -308,6 +317,15 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     brand: "RTIC",
     model: "30oz Tumbler",
     capacityOz: 30,
+    lookupAliases: [
+      "essential tumbler",
+      "essential",
+      "ceramic lined",
+      "ceramic-lined",
+      "rtic tumbler",
+      "30oz",
+    ],
+    officialDomains: ["rticoutdoors.com"],
     shapeType: "straight",
     outsideDiameterMm: 90,          // 3.54"
     overallHeightMm: 226,           // 8.90"
@@ -328,6 +346,15 @@ export const KNOWN_TUMBLER_PROFILES: TumblerProfile[] = [
     brand: "RTIC",
     model: "40oz Tumbler",
     capacityOz: 40,
+    lookupAliases: [
+      "essential tumbler",
+      "essential",
+      "ceramic lined",
+      "ceramic-lined",
+      "rtic tumbler",
+      "40oz",
+    ],
+    officialDomains: ["rticoutdoors.com"],
     shapeType: "straight",
     outsideDiameterMm: 90,          // same body as 30oz, just taller
     overallHeightMm: 290,           // 11.42"

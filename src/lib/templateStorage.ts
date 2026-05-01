@@ -1,6 +1,7 @@
 import type { ProductTemplate, ProductTemplateStore } from "../types/productTemplate.ts";
 import { BUILT_IN_TEMPLATES } from "../data/builtInTemplates.ts";
 import { normalizeProductTemplateModelTruth } from "./productTemplateModelLanes.ts";
+import { normalizeProductTemplateProfileAuthority } from "./profileAuthorityBadge.ts";
 
 const STORAGE_KEY = "lt316_product_templates";
 const REMOVED_GLB_PATHS = new Set([
@@ -28,6 +29,12 @@ function dedupeTemplates(templates: ProductTemplate[]): ProductTemplate[] {
   return [...byId.values()];
 }
 
+function normalizeProductTemplate(template: ProductTemplate): ProductTemplate {
+  return normalizeProductTemplateProfileAuthority(
+    normalizeProductTemplateModelTruth(template),
+  );
+}
+
 function normalizeStore(store: Partial<InternalTemplateStore>): InternalTemplateStore {
   const rawTemplates = Array.isArray(store.templates) ? dedupeTemplates(store.templates) : [];
   let sanitizedRemovedGlbPath = false;
@@ -36,7 +43,7 @@ function normalizeStore(store: Partial<InternalTemplateStore>): InternalTemplate
     .map((template) => {
       const removedGlbPath = template.glbPath && REMOVED_GLB_PATHS.has(template.glbPath);
       if (removedGlbPath) sanitizedRemovedGlbPath = true;
-      return normalizeProductTemplateModelTruth({
+      return normalizeProductTemplate({
         ...template,
         builtIn: false,
         glbPath: removedGlbPath ? "" : template.glbPath,
@@ -61,7 +68,7 @@ function mergeBuiltInTemplate(
   source: ProductTemplate,
   override: ProductTemplate,
 ): ProductTemplate {
-  return normalizeProductTemplateModelTruth({
+  return normalizeProductTemplate({
     ...source,
     ...override,
     dimensions: {
@@ -128,7 +135,7 @@ export function loadTemplates(): ProductTemplate[] {
     .filter((template) => !deletedBuiltInIds.has(template.id))
     .map((template) => {
       const override = storedById.get(template.id);
-      return override ? mergeBuiltInTemplate(template, override) : normalizeProductTemplateModelTruth({ ...template });
+      return override ? mergeBuiltInTemplate(template, override) : normalizeProductTemplate({ ...template });
     });
 
   const customTemplates = store.templates.filter((template) => !BUILT_IN_IDS.has(template.id));
@@ -149,7 +156,7 @@ export function saveTemplate(template: ProductTemplate): void {
   const nextTemplates = store.templates.filter((existing) => existing.id !== template.id);
 
   nextTemplates.push({
-    ...normalizeProductTemplateModelTruth(template),
+    ...normalizeProductTemplate(template),
     builtIn: false,
   });
 

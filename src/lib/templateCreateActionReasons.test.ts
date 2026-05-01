@@ -51,8 +51,27 @@ test("preview action reasons stay specific to the blocked control", () => {
       action: "body-cutout-qa",
       hasSourceModel: false,
       hasQaPreview: false,
+      hasAcceptedBodyReference: false,
+    }),
+    "Accept BODY REFERENCE first.",
+  );
+  assert.equal(
+    getTemplateCreatePreviewActionReason({
+      action: "body-cutout-qa",
+      hasSourceModel: false,
+      hasQaPreview: false,
+      hasAcceptedBodyReference: true,
     }),
     "Generate reviewed GLB first.",
+  );
+  assert.equal(
+    getTemplateCreatePreviewActionReason({
+      action: "body-cutout-qa",
+      hasSourceModel: false,
+      hasQaPreview: true,
+      hasAcceptedBodyReference: true,
+    }),
+    null,
   );
   assert.equal(
     getTemplateCreatePreviewActionReason({
