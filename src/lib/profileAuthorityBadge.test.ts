@@ -11,9 +11,11 @@ import {
 test("profile authority labels stay operator-safe and distinct from source type", () => {
   assert.equal(getProfileAuthorityLabel("exact-internal-profile"), "Exact profile");
   assert.equal(getProfileAuthorityLabel("official-dimensions-over-profile"), "Official dimensions");
+  assert.equal(getProfileAuthorityLabel("dynamic-llm-extracted"), "Dynamic LLM dimensions");
   assert.equal(getProfileAuthorityLabel("inferred-profile"), "Inferred profile");
   assert.equal(getProfileAuthorityLabel("needs-body-reference"), "Needs BODY REFERENCE");
   assert.equal(getDimensionSourceLabel("official-page"), "official page");
+  assert.equal(getDimensionSourceLabel("llm-page"), "LLM extracted");
   assert.equal(getSourceModelAvailabilityLabel("missing-source-model"), "Source model unavailable");
 });
 

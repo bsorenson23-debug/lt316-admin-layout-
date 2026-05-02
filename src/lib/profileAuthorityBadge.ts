@@ -31,6 +31,8 @@ export function getProfileAuthorityLabel(authority: TumblerProfileAuthority | nu
       return "Exact profile";
     case "official-dimensions-over-profile":
       return "Official dimensions";
+    case "dynamic-llm-extracted":
+      return "Dynamic LLM dimensions";
     case "inferred-profile":
       return "Inferred profile";
     case "lookup-dimensions-only":
@@ -49,6 +51,8 @@ export function getDimensionSourceLabel(source: TumblerDimensionSourceKind | nul
       return "profile";
     case "official-page":
       return "official page";
+    case "llm-page":
+      return "LLM extracted";
     case "parsed-page":
       return "lookup parsed";
     case "operator-body-reference":
@@ -103,6 +107,7 @@ export function summarizeProfileAuthorityBadge(
     !args.hasAcceptedBodyReference &&
     (
       authority === "official-dimensions-over-profile" ||
+      authority === "dynamic-llm-extracted" ||
       authority === "inferred-profile" ||
       authority === "lookup-dimensions-only" ||
       authority === "needs-body-reference" ||
