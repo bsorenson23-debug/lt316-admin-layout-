@@ -5,6 +5,26 @@ export type TumblerItemLookupMode =
   | "parsed-page"
   | "safe-fallback";
 
+export type TumblerProfileAuthority =
+  | "exact-internal-profile"
+  | "official-dimensions-over-profile"
+  | "inferred-profile"
+  | "lookup-dimensions-only"
+  | "needs-body-reference"
+  | "unknown";
+
+export type TumblerDimensionSourceKind =
+  | "internal-profile"
+  | "official-page"
+  | "parsed-page"
+  | "operator-body-reference"
+  | "safe-fallback";
+
+export type TumblerSourceModelAvailability =
+  | "verified-source-model"
+  | "generated-source-model"
+  | "missing-source-model";
+
 export type DimensionAuthority =
   | "diameter-primary"
   | "body-diameter-primary"
@@ -30,6 +50,7 @@ export interface TumblerItemLookupDimensions {
   dimensionSourceUrl?: string | null;
   dimensionSourceText?: string | null;
   dimensionSourceSizeOz?: number | null;
+  dimensionSourceKind?: TumblerDimensionSourceKind | null;
   titleSizeOz?: number | null;
   confidence?: number | null;
   dimensionAuthority: DimensionAuthority;
@@ -119,6 +140,13 @@ export interface TumblerItemLookupResponse {
   model: string | null;
   capacityOz: number | null;
   matchedProfileId: string | null;
+  profileAuthority?: TumblerProfileAuthority;
+  profileAuthorityLabel?: string | null;
+  profileAuthorityReason?: string | null;
+  profileConfidence?: number | null;
+  sourceModelAvailability?: TumblerSourceModelAvailability;
+  sourceModelAvailabilityLabel?: string | null;
+  requiresBodyReferenceReview?: boolean;
   glbPath: string;
   modelStatus?: TumblerModelStatus;
   modelSourceLabel?: string | null;

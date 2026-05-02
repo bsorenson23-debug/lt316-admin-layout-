@@ -272,6 +272,7 @@ test("saveTemplate preserves lookup dimension authority metadata exactly", () =>
       dimensionSourceUrl: "https://example.com/products/iceflow",
       dimensionSourceText: "40 oz dimensions 4.0 x 4.0 x 11.2 in",
       dimensionSourceSizeOz: 40,
+      dimensionSourceKind: "official-page",
       titleSizeOz: 40,
       confidence: 0.92,
       dimensionAuthority: "diameter-primary",
@@ -288,6 +289,14 @@ test("saveTemplate preserves lookup dimension authority metadata exactly", () =>
       bottomDiameterMm: null,
       usableHeightMm: 236.22,
     },
+    matchedProfileId: "stanley-iceflow-40",
+    profileAuthority: "official-dimensions-over-profile",
+    profileConfidence: 0.92,
+    profileAuthorityReason: "Official page dimensions override internal profile dimensions.",
+    sourceModelAvailability: "generated-source-model",
+    lookupSelectedSizeOz: 40,
+    lookupSelectedColorOrFinish: "Stainless",
+    lookupVariantLabel: "40 oz / Stainless",
   });
 
   saveTemplate(template);
@@ -296,8 +305,17 @@ test("saveTemplate preserves lookup dimension authority metadata exactly", () =>
   assert.ok(saved);
   assert.deepEqual(saved.lookupDimensions, template.lookupDimensions);
   assert.equal(saved.lookupDimensions?.dimensionAuthority, "diameter-primary");
+  assert.equal(saved.lookupDimensions?.dimensionSourceKind, "official-page");
   assert.equal(saved.lookupDimensions?.selectedVariantLabel, "40 oz / Stainless");
   assert.equal(saved.lookupDimensions?.wrapWidthMm, 319.19);
+  assert.equal(saved.matchedProfileId, "stanley-iceflow-40");
+  assert.equal(saved.profileAuthority, "official-dimensions-over-profile");
+  assert.equal(saved.profileConfidence, 0.92);
+  assert.equal(saved.profileAuthorityReason, "Official page dimensions override internal profile dimensions.");
+  assert.equal(saved.sourceModelAvailability, "generated-source-model");
+  assert.equal(saved.lookupSelectedSizeOz, 40);
+  assert.equal(saved.lookupSelectedColorOrFinish, "Stainless");
+  assert.equal(saved.lookupVariantLabel, "40 oz / Stainless");
 });
 
 test("saveTemplate preserves engravable seam guide and manual printable overrides exactly", () => {

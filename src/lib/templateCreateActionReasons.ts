@@ -49,8 +49,12 @@ export function getTemplateCreatePreviewActionReason(args: {
   action: TemplateCreatePreviewAction;
   hasSourceModel: boolean;
   hasQaPreview: boolean;
+  hasAcceptedBodyReference?: boolean;
 }): string | null {
   if (args.action === "body-cutout-qa") {
+    if (!args.hasAcceptedBodyReference) {
+      return "Accept BODY REFERENCE first.";
+    }
     return args.hasQaPreview
       ? null
       : "Generate reviewed GLB first.";
@@ -78,6 +82,14 @@ export function getTemplateCreateV2SeedActionReason(args: {
   return args.hasApprovedBodyOutline
     ? null
     : "Accept BODY REFERENCE (v1) first.";
+}
+
+export function getTemplateCreateBodyCutoutQualityGateReason(args: {
+  hasAcceptedReview: boolean;
+  generationBlocked: boolean;
+}): string | null {
+  if (!args.hasAcceptedReview || !args.generationBlocked) return null;
+  return "BODY CUTOUT QA generation blocked: review/fix BODY REFERENCE contour first.";
 }
 
 export function groupTemplateCreateDisabledActionReasons(

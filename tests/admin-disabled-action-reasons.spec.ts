@@ -50,7 +50,7 @@ test("disabled actions explain exactly why they are blocked during template crea
     "Enter a product URL or exact tumbler name first.",
   );
   await expect(page.getByTestId("template-create-preview-action-reasons")).toContainText(
-    "BODY CUTOUT QA: Generate reviewed GLB first.",
+    "BODY CUTOUT QA: Accept BODY REFERENCE first.",
   );
   await expect(page.getByTestId("template-create-preview-action-reasons")).toContainText(
     "WRAP / EXPORT, Full model, and Source compare: Load or generate a model first.",
@@ -81,7 +81,8 @@ test("disabled actions explain exactly why they are blocked during template crea
   await (await waitForLocatorEnabled(page.getByTestId("template-create-run-lookup"), 30_000)).click();
 
   await expect(page.getByText("Selected size 40 oz", { exact: true })).toBeVisible({ timeout: 120_000 });
-  await expect(page.getByText("Authority Diameter primary", { exact: true })).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText("Dimension source profile", { exact: true })).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText("Diameter primary", { exact: true })).toBeVisible({ timeout: 120_000 });
 
   await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles(productImage);
   await expect(page.getByText("Source ready", { exact: true })).toBeVisible({ timeout: 60_000 });

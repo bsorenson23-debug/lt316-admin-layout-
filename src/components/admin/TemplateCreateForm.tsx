@@ -27,6 +27,7 @@ import {
 import { resolveProductTemplateModelLanes } from "@/lib/productTemplateModelLanes";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
 import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
+import { summarizeProfileAuthorityBadge } from "@/lib/profileAuthorityBadge";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
 import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "@/data/rotaryPlacementPresets";
 import { saveTemplate, updateTemplate } from "@/lib/templateStorage";
@@ -50,6 +51,7 @@ import {
 } from "@/lib/templateCreateFlow";
 import {
   formatTemplateCreateDisabledActionLabels,
+  getTemplateCreateBodyCutoutQualityGateReason,
   getTemplateCreateLookupActionReason,
   getTemplateCreatePreviewActionReason,
   getTemplateCreateReviewAcceptActionReason,
@@ -1688,6 +1690,32 @@ export function TemplateCreateForm({
       lookupResult,
     ],
   );
+  const activeProfileAuthoritySummary = React.useMemo(
+    () => summarizeProfileAuthorityBadge({
+      mode: lookupResult?.mode ?? null,
+      profileAuthority: lookupResult?.profileAuthority ?? editingTemplate?.profileAuthority ?? null,
+      dimensionSourceKind: activeLookupDimensions?.dimensionSourceKind ?? null,
+      matchedProfileId: lookupResult?.matchedProfileId ?? editingTemplate?.matchedProfileId ?? null,
+      sourceModelAvailability:
+        lookupResult?.sourceModelAvailability ??
+        editingTemplate?.sourceModelAvailability ??
+        (glbPath.trim() ? "verified-source-model" : "missing-source-model"),
+      hasAcceptedBodyReference: hasAcceptedBodyReferenceReview,
+      hasSourceModel: Boolean(glbPath.trim()),
+    }),
+    [
+      activeLookupDimensions?.dimensionSourceKind,
+      editingTemplate?.matchedProfileId,
+      editingTemplate?.profileAuthority,
+      editingTemplate?.sourceModelAvailability,
+      glbPath,
+      hasAcceptedBodyReferenceReview,
+      lookupResult?.matchedProfileId,
+      lookupResult?.mode,
+      lookupResult?.profileAuthority,
+      lookupResult?.sourceModelAvailability,
+    ],
+  );
   const bodyReferenceV2ScaleCalibration = React.useMemo<BodyReferenceV2Draft["scaleCalibration"]>(() => {
     const lookupDiameterMm = lookupDimensionAuthoritySummary.readyForLookupScale
       ? lookupDimensionAuthoritySummary.scaleDiameterMm ?? null
@@ -2660,6 +2688,7 @@ export function TemplateCreateForm({
           action: "body-cutout-qa",
           hasSourceModel: hasSourceModelForPreview,
           hasQaPreview: isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus),
+          hasAcceptedBodyReference: hasAcceptedBodyReferenceReview,
         }),
       },
       {
@@ -2687,7 +2716,12 @@ export function TemplateCreateForm({
         }),
       },
     ]),
-    [fullModelPreviewSource.modelPath, hasSourceModelForPreview, reviewedBodyCutoutQaGlbStatus],
+    [
+      fullModelPreviewSource.modelPath,
+      hasAcceptedBodyReferenceReview,
+      hasSourceModelForPreview,
+      reviewedBodyCutoutQaGlbStatus,
+    ],
   );
   const bodyReferenceV2DisabledActionReasonGroups = React.useMemo(
     () => groupTemplateCreateDisabledActionReasons([
@@ -2957,6 +2991,19 @@ export function TemplateCreateForm({
     }),
     [activeBodyReferenceSvgQuality, approvedBodyOutline, hasAcceptedBodyReferenceReview],
   );
+  const generateBodyCutoutQualityGateReason = React.useMemo(
+    () => getTemplateCreateBodyCutoutQualityGateReason({
+      hasAcceptedReview: hasAcceptedBodyReferenceReview && Boolean(approvedBodyOutline),
+      generationBlocked: activeBodyReferenceSvgQualityOperatorSummary.generationBlocked,
+    }),
+    [
+      activeBodyReferenceSvgQualityOperatorSummary.generationBlocked,
+      approvedBodyOutline,
+      hasAcceptedBodyReferenceReview,
+    ],
+  );
+  const effectiveGenerateBodyCutoutActionReason =
+    generateBodyCutoutActionReason ?? generateBodyCutoutQualityGateReason;
   const bodyReferenceSvgCutoutLineage = React.useMemo(
     () => summarizeBodyReferenceSvgCutoutLineage({
       hasAcceptedCutout: hasAcceptedBodyReferenceReview && Boolean(approvedBodyOutline),
@@ -3529,6 +3576,36 @@ export function TemplateCreateForm({
           : undefined,
       acceptedBodyReferenceSourceHash: acceptedBodyReferenceSourceHashForSave ?? undefined,
       acceptedBodyReferenceSourceSignature: acceptedBodyReferenceSourceSignatureForSave ?? undefined,
+      matchedProfileId: resolvedMatchedProfileId ?? lookupResult?.matchedProfileId ?? editingTemplate?.matchedProfileId ?? undefined,
+      profileAuthority:
+        lookupResult?.profileAuthority ??
+        editingTemplate?.profileAuthority ??
+        activeProfileAuthoritySummary.authority,
+      profileConfidence:
+        lookupResult?.profileConfidence ??
+        editingTemplate?.profileConfidence ??
+        activeLookupDimensions?.confidence ??
+        undefined,
+      profileAuthorityReason:
+        lookupResult?.profileAuthorityReason ??
+        editingTemplate?.profileAuthorityReason ??
+        undefined,
+      sourceModelAvailability:
+        lookupResult?.sourceModelAvailability ??
+        editingTemplate?.sourceModelAvailability ??
+        activeProfileAuthoritySummary.sourceModelAvailability,
+      lookupSelectedSizeOz:
+        lookupDimensionAuthoritySummary.selectedSizeOz ??
+        editingTemplate?.lookupSelectedSizeOz ??
+        undefined,
+      lookupSelectedColorOrFinish:
+        activeLookupDimensions?.selectedColorOrFinish ??
+        editingTemplate?.lookupSelectedColorOrFinish ??
+        undefined,
+      lookupVariantLabel:
+        activeLookupDimensions?.selectedVariantLabel ??
+        editingTemplate?.lookupVariantLabel ??
+        undefined,
       dimensions: {
         diameterMm,
         printHeightMm: effectivePrintHeightMm,
@@ -3900,13 +3977,19 @@ export function TemplateCreateForm({
                     {lookupResult?.title || activeLookupDimensions.selectedVariantLabel || name || "Resolved item"}
                   </div>
                   <div className={styles.lookupBadgeRow}>
-                    <span className={styles.lookupBadgePrimary}>
+                    <span className={styles.lookupBadgePrimary} data-testid="lookup-profile-authority-badge">
+                      {activeProfileAuthoritySummary.label}
+                    </span>
+                    <span className={styles.lookupBadgeMuted}>
                       {lookupResult ? getLookupModeLabel(lookupResult.mode) : "Saved lookup"}
                     </span>
                     {activeLookupSourceLabel && (
                       <span className={styles.lookupBadgeMuted}>
                         {activeLookupSourceLabel}
                       </span>
+                    )}
+                    {lookupResult?.sources[0]?.kind === "official" && (
+                      <span className={styles.lookupBadgeMuted}>Official source</span>
                     )}
                     {lookupResult?.imageUrl && productImageLabel && thumbDataUrl && (
                       <span className={styles.lookupBadgeMuted}>Photo applied</span>
@@ -3930,12 +4013,15 @@ export function TemplateCreateForm({
                   {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm) && (
                     <span>Diameter authority {formatLookupMeasurement(lookupDimensionAuthoritySummary.scaleDiameterMm)}</span>
                   )}
-                  <span>Authority {formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
+                  <span>Dimension source {activeProfileAuthoritySummary.dimensionSourceLabel}</span>
                   <span>{formatLookupAuthority(lookupDimensionAuthoritySummary.dimensionAuthority)}</span>
                   {formatLookupMeasurement(lookupDimensionAuthoritySummary.wrapWidthMm) && (
                     <span>Wrap width {formatLookupMeasurement(lookupDimensionAuthoritySummary.wrapWidthMm)} = Math.PI * diameter</span>
                   )}
-                  {(lookupResult?.glbPath || glbPath) && <span>3D ready</span>}
+                  <span>{activeProfileAuthoritySummary.sourceModelAvailabilityLabel}</span>
+                  {activeProfileAuthoritySummary.requiresBodyReferenceReview && (
+                    <span>BODY REFERENCE required</span>
+                  )}
                 </div>
                 <div className={styles.lookupMetrics}>
                   <span>Variant {activeLookupDimensions.selectedVariantLabel || "n/a"}</span>
@@ -3975,6 +4061,11 @@ export function TemplateCreateForm({
                         {warning}
                       </div>
                     ))}
+                  </div>
+                )}
+                {lookupResult?.notes.some((note) => note.includes("Official page dimensions override")) && (
+                  <div className={styles.cutoutFitWarning}>
+                    Official page dimensions override internal profile dimensions.
                   </div>
                 )}
               </div>
@@ -4291,9 +4382,10 @@ export function TemplateCreateForm({
                 disabled={
                   !canGenerateReviewedBodyReferenceGlb ||
                   generatingReviewedBodyReferenceGlb ||
-                  bodyReferenceFineTuneDraftPendingAcceptance
+                  bodyReferenceFineTuneDraftPendingAcceptance ||
+                  Boolean(effectiveGenerateBodyCutoutActionReason)
                 }
-                title={generateBodyCutoutActionReason ?? undefined}
+                title={effectiveGenerateBodyCutoutActionReason ?? undefined}
                 onClick={() => {
                   void handleGenerateReviewedBodyReferenceGlb();
                 }}
@@ -4354,6 +4446,7 @@ export function TemplateCreateForm({
               )}
               {activeBodyReferenceSvgQualityOperatorSummary.generationBlocked && (
                 <div className={styles.actionDisabledReason}>
+                  {generateBodyCutoutQualityGateReason}{" "}
                   {activeBodyReferenceSvgQualityOperatorSummary.generationBlockedReason}{" "}
                   {activeBodyReferenceSvgQualityOperatorSummary.operatorFixHint}
                 </div>
@@ -4458,11 +4551,15 @@ export function TemplateCreateForm({
                 <button
                   type="button"
                   className={`${styles.detectBtn} ${previewModelMode === "body-cutout-qa" ? styles.detectBtnActive : ""}`}
-                  disabled={!isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus)}
+                  disabled={
+                    !hasAcceptedBodyReferenceReview ||
+                    !isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus)
+                  }
                   title={getTemplateCreatePreviewActionReason({
                     action: "body-cutout-qa",
                     hasSourceModel: hasSourceModelForPreview,
                     hasQaPreview: isBodyCutoutQaPreviewAvailable(reviewedBodyCutoutQaGlbStatus),
+                    hasAcceptedBodyReference: hasAcceptedBodyReferenceReview,
                   }) ?? undefined}
                   aria-pressed={previewModelMode === "body-cutout-qa"}
                   onClick={() => setPreviewModelMode("body-cutout-qa")}

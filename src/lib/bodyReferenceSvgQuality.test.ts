@@ -199,6 +199,28 @@ test("suspicious jump warns", () => {
   assert.match(report.warnings.join(" "), /suspicious large jump/i);
 });
 
+test("operator summary blocks generation for low-confidence suspicious jumps", () => {
+  const report = buildBodyReferenceSvgQualityReport({
+    points: [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 250, y: 0 },
+      { x: 250, y: 220 },
+      { x: 0, y: 220 },
+    ],
+    closed: true,
+  });
+  const summary = summarizeBodyReferenceSvgQualityForOperator(report, {
+    hasAcceptedCutout: true,
+  });
+
+  assert.equal(report.bodyOnlyConfidence, "low");
+  assert.equal(report.appearsBodyOnly, false);
+  assert.equal(summary.generationBlocked, true);
+  assert.match(summary.generationBlockedReason ?? "", /blocked/i);
+  assert.match(summary.operatorFixHint ?? "", /accept the corrected cutout/i);
+});
+
 test("closed full-body silhouette bridges are excluded from suspicious jump warnings", () => {
   const report = buildBodyReferenceSvgQualityReport({
     points: [

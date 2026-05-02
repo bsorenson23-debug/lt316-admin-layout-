@@ -123,6 +123,33 @@
   font-size: 11px;
 }
 
+.authorityRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.authorityBadge,
+.authorityBadgeMuted {
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.authorityBadge {
+  color: var(--success);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+}
+
+.authorityBadgeMuted {
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+}
+
 /* ── Toggle button ── */
 .toggleBtn {
   width: 100%;

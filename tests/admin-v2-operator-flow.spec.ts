@@ -115,7 +115,7 @@ async function createLookupTemplateFromSource(page: Page, templateName: string):
     "Enter a product URL or exact tumbler name first.",
   );
   await expect(page.getByTestId("template-create-preview-action-reasons")).toContainText(
-    "Generate reviewed GLB first.",
+    "Accept BODY REFERENCE first.",
   );
   await expect(page.getByTestId("body-reference-v2-action-reasons")).toContainText(
     "Accept BODY REFERENCE (v1) first.",
@@ -131,7 +131,8 @@ async function createLookupTemplateFromSource(page: Page, templateName: string):
   await page.getByTestId("template-create-run-lookup").click();
 
   await expect(page.getByText("Selected size 40 oz", { exact: true })).toBeVisible({ timeout: 120_000 });
-  await expect(page.getByText("Authority Diameter primary", { exact: true })).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText("Dimension source profile", { exact: true })).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText("Diameter primary", { exact: true })).toBeVisible({ timeout: 120_000 });
   await expect(
     page.getByText(
       "Full product height is stored for context and ignored for lookup-based body contour scale.",

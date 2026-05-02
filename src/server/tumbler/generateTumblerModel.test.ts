@@ -22,6 +22,7 @@ import {
   deriveBodyTraceExtents,
   deriveEngravingStartGuidePx,
   deriveReferenceMeasurementBand,
+  evaluateGenericStraightDiameterEnvelope,
   generateBodyReferenceGlb,
   type GenerateBodyReferenceGlbInput,
 } from "./generateTumblerModel.ts";
@@ -117,6 +118,42 @@ test("lookup refinement production control flow has no branded literals", async 
       );
     }
   }
+});
+
+test("generic straight fit rejects shadow-inflated RTIC profile widths", () => {
+  const envelope = evaluateGenericStraightDiameterEnvelope({
+    trustedOutsideDiameterMm: 93,
+    bodyProfile: [
+      { radiusMm: 46.5 },
+      { radiusMm: 45.8 },
+      { radiusMm: 67.4 },
+      { radiusMm: 78.5 },
+      { radiusMm: 84.7 },
+      { radiusMm: 58.4 },
+    ],
+  });
+
+  assert.equal(envelope.exceedsEnvelope, true);
+  assert.equal(envelope.trustedRadiusMm, 46.5);
+  assert.equal(envelope.toleranceMm, 3.72);
+  assert.equal(envelope.maxAllowedRadiusMm, 50.22);
+  assert.equal(envelope.maxRadiusMm, 84.7);
+  assert.equal(Math.round(envelope.maxRadiusMm * 2), 169);
+});
+
+test("generic straight fit keeps sane widths inside trusted diameter envelope", () => {
+  const envelope = evaluateGenericStraightDiameterEnvelope({
+    trustedOutsideDiameterMm: 93,
+    bodyProfile: [
+      { radiusMm: 43.8 },
+      { radiusMm: 46.5 },
+      { radiusMm: 49.8 },
+    ],
+  });
+
+  assert.equal(envelope.exceedsEnvelope, false);
+  assert.equal(envelope.maxAllowedRadiusMm, 50.22);
+  assert.equal(envelope.maxRadiusMm, 49.8);
 });
 
 function createOutline(widthMm = 44.45): EditableBodyOutline {

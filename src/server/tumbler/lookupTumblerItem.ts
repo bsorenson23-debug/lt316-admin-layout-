@@ -3,20 +3,24 @@ import {
   getProfileHandleArcDeg,
   getTumblerProfileById,
   KNOWN_TUMBLER_PROFILES,
-} from "@/data/tumblerProfiles";
-import type { TumblerSourceLink } from "@/types/tumblerAutoSize";
+  type TumblerProfile,
+} from "../../data/tumblerProfiles.ts";
+import type { TumblerSourceLink } from "../../types/tumblerAutoSize.ts";
 import type {
   DimensionAuthority,
+  TumblerDimensionSourceKind,
   TumblerItemLookupFitDebug,
   TumblerItemLookupDimensions,
   TumblerItemLookupResponse,
-} from "@/types/tumblerItemLookup";
+  TumblerProfileAuthority,
+  TumblerSourceModelAvailability,
+} from "../../types/tumblerItemLookup.ts";
 import { access } from "node:fs/promises";
 import path from "node:path";
-import { computeWrapWidthFromDiameterMm } from "@/lib/productDimensionAuthority";
-import { generatedModelExists } from "@/server/models/generatedModelStorage";
-import { ensureGeneratedTumblerGlb } from "@/server/tumbler/generateTumblerModel";
-import { extractShopifySelectedVariant } from "@/server/tumbler/shopifyProductVariant";
+import { computeWrapWidthFromDiameterMm } from "../../lib/productDimensionAuthority.ts";
+import { generatedModelExists } from "../models/generatedModelStorage.ts";
+import { ensureGeneratedTumblerGlb } from "./generateTumblerModel.ts";
+import { extractShopifySelectedVariant } from "./shopifyProductVariant.ts";
 
 const IMAGE_META_NAMES = [
   "og:image",
@@ -156,6 +160,163 @@ function buildVariantLabel(args: {
     return parts.join(" / ");
   }
   return args.fallbackLabel?.trim() || null;
+}
+
+function titleCaseWords(value: string): string {
+  return value
+    .trim()
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\b[a-z]/g, (match) => match.toUpperCase());
+}
+
+function extractUrlVariantParams(url: string | null): {
+  selectedSizeOz: number | null;
+  selectedColorOrFinish: string | null;
+  selectedVariantLabel: string | null;
+} {
+  if (!url) {
+    return {
+      selectedSizeOz: null,
+      selectedColorOrFinish: null,
+      selectedVariantLabel: null,
+    };
+  }
+
+  try {
+    const parsed = new URL(url);
+    const sizeValue = parsed.searchParams.get("size");
+    const colorValue =
+      parsed.searchParams.get("color") ??
+      parsed.searchParams.get("colour") ??
+      parsed.searchParams.get("finish");
+    const selectedSizeOz = sizeValue ? parseCapacityOz(sizeValue) : null;
+    const selectedColorOrFinish = colorValue ? titleCaseWords(safeDecodeUri(colorValue)) : null;
+    return {
+      selectedSizeOz,
+      selectedColorOrFinish,
+      selectedVariantLabel: buildVariantLabel({
+        selectedSizeOz,
+        selectedColorOrFinish,
+      }),
+    };
+  } catch {
+    return {
+      selectedSizeOz: null,
+      selectedColorOrFinish: null,
+      selectedVariantLabel: null,
+    };
+  }
+}
+
+function getProfileAuthorityLabel(authority: TumblerProfileAuthority): string {
+  switch (authority) {
+    case "exact-internal-profile":
+      return "Exact profile";
+    case "official-dimensions-over-profile":
+      return "Official dimensions";
+    case "inferred-profile":
+      return "Inferred profile";
+    case "lookup-dimensions-only":
+      return "Lookup dimensions";
+    case "needs-body-reference":
+      return "Needs BODY REFERENCE";
+    case "unknown":
+    default:
+      return "Unknown profile";
+  }
+}
+
+function getSourceModelAvailabilityLabel(availability: TumblerSourceModelAvailability): string {
+  switch (availability) {
+    case "verified-source-model":
+      return "Source model available";
+    case "generated-source-model":
+      return "Generated source model";
+    case "missing-source-model":
+    default:
+      return "Source model unavailable";
+  }
+}
+
+function isUsableLookupDimensions(dimensions: TumblerItemLookupDimensions | null | undefined): boolean {
+  return Boolean(
+    dimensions &&
+    Number.isFinite(dimensions.diameterMm ?? dimensions.outsideDiameterMm ?? dimensions.wrapDiameterMm) &&
+    Number.isFinite(dimensions.overallHeightMm ?? dimensions.fullProductHeightMm),
+  );
+}
+
+function hasOfficialOverride(profile: TumblerProfile, dimensions: TumblerItemLookupDimensions | null): boolean {
+  if (!dimensions || dimensions.dimensionSourceKind !== "official-page") return false;
+  const profileDiameter =
+    profile.outsideDiameterMm ??
+    profile.topDiameterMm ??
+    profile.bottomDiameterMm ??
+    null;
+  const parsedDiameter =
+    dimensions.outsideDiameterMm ??
+    dimensions.diameterMm ??
+    dimensions.wrapDiameterMm ??
+    null;
+  const parsedHeight =
+    dimensions.overallHeightMm ??
+    dimensions.fullProductHeightMm ??
+    null;
+  return (
+    (profileDiameter !== null && parsedDiameter !== null && Math.abs(profileDiameter - parsedDiameter) > 1) ||
+    (parsedHeight !== null && Math.abs(profile.overallHeightMm - parsedHeight) > 1)
+  );
+}
+
+function classifyProfileAuthority(args: {
+  matchedProfile: TumblerProfile | null;
+  sourceKind: TumblerSourceLink["kind"];
+  dimensions: TumblerItemLookupDimensions | null;
+  sourceModelAvailability: TumblerSourceModelAvailability;
+  officialOverride: boolean;
+}): {
+  authority: TumblerProfileAuthority;
+  reason: string;
+  requiresBodyReferenceReview: boolean;
+} {
+  if (args.matchedProfile) {
+    if (args.officialOverride) {
+      return {
+        authority: "official-dimensions-over-profile",
+        reason: "Official page dimensions override internal profile dimensions.",
+        requiresBodyReferenceReview: true,
+      };
+    }
+    if (args.sourceModelAvailability !== "missing-source-model") {
+      return {
+        authority: "exact-internal-profile",
+        reason: "Matched a trusted internal profile with a source model lane.",
+        requiresBodyReferenceReview: false,
+      };
+    }
+    return {
+      authority: "needs-body-reference",
+      reason: "Matched profile metadata, but no source/full model is available.",
+      requiresBodyReferenceReview: true,
+    };
+  }
+
+  if (isUsableLookupDimensions(args.dimensions)) {
+    return {
+      authority: args.sourceKind === "official" ? "lookup-dimensions-only" : "needs-body-reference",
+      reason: args.sourceKind === "official"
+        ? "Parsed usable dimensions from an official page without an exact internal profile."
+        : "Parsed dimensions without enough profile authority for source model trust.",
+      requiresBodyReferenceReview: true,
+    };
+  }
+
+  return {
+    authority: "unknown",
+    reason: "No exact profile or usable lookup dimensions were found.",
+    requiresBodyReferenceReview: true,
+  };
 }
 
 interface ParsedDimensionCandidate {
@@ -347,6 +508,7 @@ function buildParsedDimensions(args: {
   selectedColorOrFinish: string | null;
   availableSizeOz: number[];
   lookupProductId: string | null;
+  dimensionSourceKind: TumblerDimensionSourceKind;
   score: number;
 }): ParsedDimensionCandidate | null {
   const values = args.values.filter(Number.isFinite);
@@ -388,6 +550,7 @@ function buildParsedDimensions(args: {
       dimensionSourceUrl: args.resolvedUrl,
       dimensionSourceText: args.context,
       dimensionSourceSizeOz,
+      dimensionSourceKind: args.dimensionSourceKind,
       titleSizeOz,
       confidence: round2(args.score),
       dimensionAuthority,
@@ -416,6 +579,7 @@ function parseTripletDimensionsMm(args: {
   selectedColorOrFinish: string | null;
   availableSizeOz: number[];
   lookupProductId: string | null;
+  sourceKind: TumblerSourceLink["kind"];
 }): TumblerItemLookupDimensions | null {
   const candidates: ParsedDimensionCandidate[] = [];
   const pattern = /(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(mm|in(?:ches)?|")/gi;
@@ -447,11 +611,110 @@ function parseTripletDimensionsMm(args: {
       selectedColorOrFinish: args.selectedColorOrFinish,
       availableSizeOz: args.availableSizeOz,
       lookupProductId: args.lookupProductId,
+      dimensionSourceKind: args.sourceKind === "official" ? "official-page" : "parsed-page",
       score,
     });
     if (candidate) {
       candidates.push(candidate);
     }
+  }
+
+  candidates.sort((left, right) => right.score - left.score);
+  return candidates[0]?.dimensions ?? null;
+}
+
+function toMm(value: number, unit: string | null | undefined): number {
+  return /^mm$/i.test(unit ?? "") ? value : value * 25.4;
+}
+
+export function parseDuetDimensionsMm(args: {
+  text: string;
+  resolvedUrl: string | null;
+  lookupInput: string;
+  title: string | null;
+  selectedSizeOz: number | null;
+  selectedColorOrFinish: string | null;
+  availableSizeOz: number[];
+  lookupProductId: string | null;
+  sourceKind: TumblerSourceLink["kind"];
+  shapeType?: TumblerProfile["shapeType"] | null;
+}): TumblerItemLookupDimensions | null {
+  if (args.shapeType === "tapered") return null;
+
+  const candidates: ParsedDimensionCandidate[] = [];
+  const pattern = /(\d+(?:\.\d+)?)\s*(mm|in(?:ches)?|")?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(mm|in(?:ches)?|")/gi;
+
+  for (const match of args.text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    const before = args.text.slice(Math.max(0, start - 12), start);
+    const after = args.text.slice(end, Math.min(args.text.length, end + 12));
+    if (/[x×]\s*$/i.test(before) || /^\s*[x×]/i.test(after)) {
+      continue;
+    }
+
+    const context = decodeHtml(args.text.slice(Math.max(0, start - 160), Math.min(args.text.length, end + 160)))
+      .replace(/\s+/g, " ")
+      .trim();
+    const contextSizeOz = parseCapacityOz(context);
+    let score = 0.5;
+
+    if (/dimension|dimensions|size|spec/i.test(context)) score += 0.12;
+    if (/diameter|height/i.test(context)) score += 0.08;
+    if (/package|shipping|box|carton/i.test(context)) score -= 0.22;
+    if (args.selectedSizeOz && contextSizeOz === args.selectedSizeOz) score += 0.2;
+    if (args.selectedSizeOz && contextSizeOz && contextSizeOz !== args.selectedSizeOz) score -= 0.35;
+    if (!args.selectedSizeOz && contextSizeOz) score += 0.04;
+    if (args.availableSizeOz.length > 1 && !contextSizeOz) score -= 0.12;
+
+    const leftMm = toMm(Number(match[1]), match[2] ?? match[4]);
+    const rightMm = toMm(Number(match[3]), match[4] ?? match[2]);
+    if (!Number.isFinite(leftMm) || !Number.isFinite(rightMm)) continue;
+    const diameterMm = round2(Math.min(leftMm, rightMm));
+    const overallHeightMm = round2(Math.max(leftMm, rightMm));
+    if (overallHeightMm <= diameterMm) continue;
+
+    const usableHeightMm = round2(overallHeightMm * 0.78);
+    const variantLabel = buildVariantLabel({
+      selectedSizeOz: args.selectedSizeOz,
+      selectedColorOrFinish: args.selectedColorOrFinish,
+      fallbackLabel: args.title,
+    });
+    const dimensionSourceSizeOz = parseCapacityOz(context);
+    const titleSizeOz = parseCapacityOz(args.title ?? args.lookupInput);
+
+    candidates.push({
+      score,
+      dimensions: {
+        lookupProductId: args.lookupProductId,
+        productUrl: args.resolvedUrl,
+        selectedVariantId: normalizeVariantId(variantLabel),
+        selectedVariantLabel: variantLabel,
+        selectedSizeOz: args.selectedSizeOz,
+        selectedColorOrFinish: args.selectedColorOrFinish,
+        availableVariantLabels: args.availableSizeOz.map((value) => `${value} oz`),
+        availableSizeOz: args.availableSizeOz,
+        dimensionSourceUrl: args.resolvedUrl,
+        dimensionSourceText: context,
+        dimensionSourceSizeOz,
+        dimensionSourceKind: args.sourceKind === "official" ? "official-page" : "parsed-page",
+        titleSizeOz,
+        confidence: round2(score),
+        dimensionAuthority: "diameter-primary",
+        diameterMm,
+        bodyDiameterMm: diameterMm,
+        wrapDiameterMm: diameterMm,
+        wrapWidthMm: computeWrapWidthFromDiameterMm(diameterMm) ?? null,
+        fullProductHeightMm: overallHeightMm,
+        bodyHeightMm: usableHeightMm,
+        heightIncludesLidOrStraw: overallHeightMm > usableHeightMm,
+        overallHeightMm,
+        outsideDiameterMm: diameterMm,
+        topDiameterMm: null,
+        bottomDiameterMm: null,
+        usableHeightMm,
+      },
+    });
   }
 
   candidates.sort((left, right) => right.score - left.score);
@@ -568,16 +831,38 @@ async function pickFallbackGlbPath(args: {
   matchedProfileId: string | null;
   imageUrl?: string | null;
   imageUrls?: string[];
-}): Promise<{ glbPath: string; fitDebug: TumblerItemLookupFitDebug | null }> {
+}): Promise<{
+  glbPath: string;
+  fitDebug: TumblerItemLookupFitDebug | null;
+  sourceModelAvailability: TumblerSourceModelAvailability;
+  generated: boolean;
+  warnings: string[];
+}> {
   const matchedProfile = args.matchedProfileId ? getTumblerProfileById(args.matchedProfileId) : null;
-  if (matchedProfile?.generatedModelPolicy?.strategy === "body-band-lathe") {
+  const hasCandidateImage = Boolean(
+    args.imageUrl ||
+    (args.imageUrls ?? []).some((value) => Boolean(value)),
+  );
+  const shouldGenerateFirst = matchedProfile?.generatedModelPolicy?.strategy === "body-band-lathe";
+  const canGenerateStraightSeed = Boolean(
+    matchedProfile &&
+    matchedProfile.shapeType === "straight" &&
+    hasCandidateImage,
+  );
+
+  if (matchedProfile && shouldGenerateFirst) {
     try {
       const generated = await ensureGeneratedTumblerGlb(matchedProfile.id, {
         imageUrl: args.imageUrl,
         imageUrls: args.imageUrls,
       });
       if (generated.glbPath && await glbAssetExists(generated.glbPath)) {
-        return generated;
+        return {
+          ...generated,
+          sourceModelAvailability: "generated-source-model",
+          generated: true,
+          warnings: generated.warnings ?? [],
+        };
       }
     } catch (error) {
       console.warn("[lookupTumblerItem] generated profile model failed:", error);
@@ -590,11 +875,42 @@ async function pickFallbackGlbPath(args: {
 
   for (const candidate of candidates) {
     if (await glbAssetExists(candidate)) {
-      return { glbPath: candidate, fitDebug: null };
+      return {
+        glbPath: candidate,
+        fitDebug: null,
+        sourceModelAvailability: "verified-source-model",
+        generated: false,
+        warnings: [],
+      };
     }
   }
 
-  return { glbPath: "", fitDebug: null };
+  if (matchedProfile && canGenerateStraightSeed) {
+    try {
+      const generated = await ensureGeneratedTumblerGlb(matchedProfile.id, {
+        imageUrl: args.imageUrl,
+        imageUrls: args.imageUrls,
+      });
+      if (generated.glbPath && await glbAssetExists(generated.glbPath)) {
+        return {
+          ...generated,
+          sourceModelAvailability: "generated-source-model",
+          generated: true,
+          warnings: generated.warnings ?? [],
+        };
+      }
+    } catch (error) {
+      console.warn("[lookupTumblerItem] generated straight profile model failed:", error);
+    }
+  }
+
+  return {
+    glbPath: "",
+    fitDebug: null,
+    sourceModelAvailability: "missing-source-model",
+    generated: false,
+    warnings: [],
+  };
 }
 
 function buildSources(url: string | null, kind: TumblerSourceLink["kind"], title: string | null): TumblerSourceLink[] {
@@ -656,6 +972,7 @@ export async function lookupTumblerItem(args: {
   let titleSizeOz = parseCapacityOz(lookupInput);
   let selectedColorOrFinish = inferColorOrFinish(lookupInput);
   let selectedVariantId: string | null = null;
+  let selectedVariantLabel: string | null = null;
   let selectedVariantImageUrl: string | null = null;
 
   if (isLikelyUrl(lookupInput)) {
@@ -664,7 +981,9 @@ export async function lookupTumblerItem(args: {
     title = extractTitle(html);
     imageUrls = extractImageUrls(html, finalUrl);
     const selectedVariant = extractShopifySelectedVariant(html, finalUrl);
-    selectedVariantId = selectedVariant?.id ?? null;
+    const urlVariant = extractUrlVariantParams(finalUrl);
+    selectedVariantLabel = selectedVariant?.title ?? urlVariant.selectedVariantLabel;
+    selectedVariantId = selectedVariant?.id ?? normalizeVariantId(selectedVariantLabel);
     selectedVariantImageUrl = selectedVariant?.imageUrl ?? null;
     if (selectedVariantImageUrl && !imageUrls.includes(selectedVariantImageUrl)) {
       imageUrls = [selectedVariantImageUrl, ...imageUrls];
@@ -676,9 +995,13 @@ export async function lookupTumblerItem(args: {
     else if (/amazon\.com|walmart\.com|dickssportinggoods\.com/i.test(finalUrl)) sourceKind = "retailer";
 
     sources = buildSources(finalUrl, sourceKind, title);
-    titleSizeOz = parseCapacityOz(title ?? lookupInput);
+    titleSizeOz =
+      parseCapacityOz(selectedVariant?.title ?? "") ??
+      urlVariant.selectedSizeOz ??
+      parseCapacityOz(title ?? lookupInput);
     selectedColorOrFinish =
       selectedVariant?.selectedColorOrFinish ??
+      urlVariant.selectedColorOrFinish ??
       inferColorOrFinish([title, lookupInput].filter(Boolean).join(" "));
     const availableSizeOz = extractAllCapacitiesOz(lookupText);
     scrapedDims = parseTripletDimensionsMm({
@@ -690,6 +1013,7 @@ export async function lookupTumblerItem(args: {
       selectedColorOrFinish,
       availableSizeOz,
       lookupProductId: finalUrl,
+      sourceKind,
     });
     selectedImageUrl = selectedVariantImageUrl ?? await selectBestProductImage({
       imageUrls,
@@ -704,7 +1028,24 @@ export async function lookupTumblerItem(args: {
   }
 
   const matchedProfile = matchProfileFromText(lookupText);
-  const capacityOz = parseCapacityOz(lookupText) ?? matchedProfile?.capacityOz ?? null;
+  if (isLikelyUrl(lookupInput) && resolvedUrl && !scrapedDims) {
+    scrapedDims = parseDuetDimensionsMm({
+      text: lookupText,
+      resolvedUrl,
+      lookupInput,
+      title,
+      selectedSizeOz: titleSizeOz,
+      selectedColorOrFinish,
+      availableSizeOz: extractAllCapacitiesOz(lookupText),
+      lookupProductId: resolvedUrl,
+      sourceKind,
+      shapeType: matchedProfile?.shapeType ?? "straight",
+    });
+    if (scrapedDims?.overallHeightMm) {
+      notes.push("Parsed diameter x height dimensions from the product page text.");
+    }
+  }
+  const capacityOz = titleSizeOz ?? parseCapacityOz(lookupText) ?? matchedProfile?.capacityOz ?? null;
   const brand = matchedProfile?.brand ?? inferBrandFromCatalogText(lookupText);
   const model = matchedProfile?.model ?? inferModelFromCatalogText(lookupText, brand, capacityOz) ?? title;
 
@@ -713,12 +1054,14 @@ export async function lookupTumblerItem(args: {
     const bottomMarginMm = round2(
       Math.max(0, matchedProfile.overallHeightMm - matchedProfile.usableHeightMm - topMarginMm)
     );
+    const officialOverride = hasOfficialOverride(matchedProfile, scrapedDims);
     notes.push(
       `Applied internal ${matchedProfile.label} profile for geometry and printable-height fallback.`
     );
     if (scrapedDims?.overallHeightMm) {
-      notes.push(
-        `Official or retailer page dimensions were found, but the internal profile remains the geometry source until a dedicated GLB generator is added.`
+      notes.push(officialOverride
+        ? "Official page dimensions override internal profile dimensions."
+        : "Official or retailer page dimensions agree with the internal profile within 1 mm."
       );
     }
 
@@ -732,10 +1075,32 @@ export async function lookupTumblerItem(args: {
       ?? matchedProfile.topDiameterMm
       ?? matchedProfile.bottomDiameterMm
       ?? null;
+    const geometryDiameterMm = officialOverride
+      ? scrapedDims?.outsideDiameterMm
+        ?? scrapedDims?.diameterMm
+        ?? scrapedDims?.wrapDiameterMm
+        ?? matchedProfileDiameterMm
+      : matchedProfileDiameterMm;
+    const geometryOverallHeightMm = officialOverride
+      ? scrapedDims?.overallHeightMm ?? scrapedDims?.fullProductHeightMm ?? matchedProfile.overallHeightMm
+      : matchedProfile.overallHeightMm;
+    const geometryUsableHeightMm = officialOverride
+      ? scrapedDims?.usableHeightMm ?? scrapedDims?.bodyHeightMm ?? round2((geometryOverallHeightMm ?? matchedProfile.overallHeightMm) * 0.78)
+      : matchedProfile.usableHeightMm;
+    const dimensionSourceKind: TumblerDimensionSourceKind = officialOverride
+      ? "official-page"
+      : "internal-profile";
     const variantLabel = buildVariantLabel({
-      selectedSizeOz: matchedProfile.capacityOz,
+      selectedSizeOz: titleSizeOz ?? matchedProfile.capacityOz,
       selectedColorOrFinish,
-      fallbackLabel: matchedProfile.label,
+      fallbackLabel: selectedVariantLabel ?? matchedProfile.label,
+    });
+    const authority = classifyProfileAuthority({
+      matchedProfile,
+      sourceKind,
+      dimensions: officialOverride ? scrapedDims : null,
+      sourceModelAvailability: fallbackAsset.sourceModelAvailability,
+      officialOverride,
     });
     return {
       lookupInput,
@@ -745,7 +1110,20 @@ export async function lookupTumblerItem(args: {
       model: matchedProfile.model,
       capacityOz: matchedProfile.capacityOz,
       matchedProfileId: matchedProfile.id,
+      profileAuthority: authority.authority,
+      profileAuthorityLabel: getProfileAuthorityLabel(authority.authority),
+      profileAuthorityReason: authority.reason,
+      profileConfidence: 1,
+      sourceModelAvailability: fallbackAsset.sourceModelAvailability,
+      sourceModelAvailabilityLabel: getSourceModelAvailabilityLabel(fallbackAsset.sourceModelAvailability),
+      requiresBodyReferenceReview: authority.requiresBodyReferenceReview,
       glbPath: fallbackAsset.glbPath,
+      modelStatus: fallbackAsset.glbPath ? "verified-product-model" : "missing-model",
+      modelSourceLabel: fallbackAsset.glbPath
+        ? fallbackAsset.generated
+          ? "Generated straight tumbler source model"
+          : "Original full product model"
+        : "Source model unavailable",
       imageUrl: selectedImageUrl,
       imageUrls,
       fitDebug: fallbackAsset.fitDebug,
@@ -754,32 +1132,40 @@ export async function lookupTumblerItem(args: {
         productUrl: resolvedUrl,
         selectedVariantId: selectedVariantId ?? normalizeVariantId(variantLabel),
         selectedVariantLabel: variantLabel,
-        selectedSizeOz: matchedProfile.capacityOz,
+        selectedSizeOz: titleSizeOz ?? matchedProfile.capacityOz,
         selectedColorOrFinish,
         availableVariantLabels: variantLabel ? [variantLabel] : [`${matchedProfile.capacityOz} oz`],
         availableSizeOz: [matchedProfile.capacityOz],
         dimensionSourceUrl: resolvedUrl,
-        dimensionSourceText: `Matched internal profile ${matchedProfile.label}`,
+        dimensionSourceText: officialOverride
+          ? scrapedDims?.dimensionSourceText ?? `Official dimensions for ${matchedProfile.label}`
+          : `Matched internal profile ${matchedProfile.label}`,
         dimensionSourceSizeOz: matchedProfile.capacityOz,
+        dimensionSourceKind,
         titleSizeOz,
         confidence: 1,
-        dimensionAuthority: matchedProfileDiameterMm ? "diameter-primary" : "unknown",
-        diameterMm: matchedProfileDiameterMm,
-        bodyDiameterMm: matchedProfileDiameterMm,
-        wrapDiameterMm: matchedProfileDiameterMm,
-        wrapWidthMm: computeWrapWidthFromDiameterMm(matchedProfileDiameterMm) ?? null,
-        fullProductHeightMm: matchedProfile.overallHeightMm,
-        bodyHeightMm: matchedProfile.usableHeightMm,
-        heightIncludesLidOrStraw: matchedProfile.overallHeightMm > matchedProfile.usableHeightMm,
-        overallHeightMm: matchedProfile.overallHeightMm,
-        outsideDiameterMm: matchedProfile.outsideDiameterMm ?? null,
-        topDiameterMm: matchedProfile.topDiameterMm ?? null,
-        bottomDiameterMm: matchedProfile.bottomDiameterMm ?? null,
-        usableHeightMm: matchedProfile.usableHeightMm,
+        dimensionAuthority: geometryDiameterMm ? "diameter-primary" : "unknown",
+        diameterMm: geometryDiameterMm ?? null,
+        bodyDiameterMm: geometryDiameterMm ?? null,
+        wrapDiameterMm: geometryDiameterMm ?? null,
+        wrapWidthMm: computeWrapWidthFromDiameterMm(geometryDiameterMm ?? null) ?? null,
+        fullProductHeightMm: geometryOverallHeightMm ?? null,
+        bodyHeightMm: geometryUsableHeightMm ?? null,
+        heightIncludesLidOrStraw:
+          geometryOverallHeightMm !== null &&
+          geometryUsableHeightMm !== null
+            ? geometryOverallHeightMm > geometryUsableHeightMm
+            : null,
+        overallHeightMm: geometryOverallHeightMm ?? null,
+        outsideDiameterMm: matchedProfile.shapeType === "straight" ? geometryDiameterMm ?? null : null,
+        topDiameterMm: matchedProfile.shapeType === "straight" ? null : matchedProfile.topDiameterMm ?? null,
+        bottomDiameterMm: matchedProfile.shapeType === "straight" ? null : matchedProfile.bottomDiameterMm ?? null,
+        usableHeightMm: geometryUsableHeightMm ?? null,
       },
       mode: "matched-profile",
       notes: [
         ...notes,
+        ...fallbackAsset.warnings,
         `Top margin fallback: ${round2(topMarginMm)} mm. Bottom margin fallback: ${round2(bottomMarginMm)} mm.`,
         `Handle arc fallback: ${getProfileHandleArcDeg(matchedProfile)}°.`,
         `GLB fallback: ${fallbackAsset.glbPath || "none available locally"}.`,
@@ -808,6 +1194,7 @@ export async function lookupTumblerItem(args: {
     dimensionSourceUrl: resolvedUrl,
     dimensionSourceText: null,
     dimensionSourceSizeOz: null,
+    dimensionSourceKind: "safe-fallback" as const,
     titleSizeOz,
     confidence: null,
     dimensionAuthority: "unknown" as const,
@@ -847,6 +1234,13 @@ export async function lookupTumblerItem(args: {
     imageUrl: selectedImageUrl,
     imageUrls,
   });
+  const authority = classifyProfileAuthority({
+    matchedProfile: null,
+    sourceKind,
+    dimensions: safeDims,
+    sourceModelAvailability: fallbackAsset.sourceModelAvailability,
+    officialOverride: false,
+  });
 
   return {
     lookupInput,
@@ -856,7 +1250,16 @@ export async function lookupTumblerItem(args: {
     model,
     capacityOz,
     matchedProfileId: null,
+    profileAuthority: authority.authority,
+    profileAuthorityLabel: getProfileAuthorityLabel(authority.authority),
+    profileAuthorityReason: authority.reason,
+    profileConfidence: safeDims.confidence ?? null,
+    sourceModelAvailability: fallbackAsset.sourceModelAvailability,
+    sourceModelAvailabilityLabel: getSourceModelAvailabilityLabel(fallbackAsset.sourceModelAvailability),
+    requiresBodyReferenceReview: authority.requiresBodyReferenceReview,
     glbPath: fallbackAsset.glbPath,
+    modelStatus: fallbackAsset.glbPath ? "verified-product-model" : "missing-model",
+    modelSourceLabel: fallbackAsset.glbPath ? "Generated straight tumbler source model" : "Source model unavailable",
     imageUrl: selectedImageUrl,
     imageUrls,
     fitDebug: fallbackAsset.fitDebug,
@@ -864,6 +1267,7 @@ export async function lookupTumblerItem(args: {
     mode: scrapedDims ? "parsed-page" : "safe-fallback",
     notes: [
       ...notes,
+      ...fallbackAsset.warnings,
       `GLB fallback: ${fallbackAsset.glbPath || "none available locally"}.`,
     ],
     sources,

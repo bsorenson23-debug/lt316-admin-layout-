@@ -61,6 +61,10 @@ import type { ProductTemplate } from "@/types/productTemplate";
 import type { LaserBedArtworkPlacement } from "@/lib/laserBedSurfaceMapping";
 import { loadTemplates, updateTemplate } from "@/lib/templateStorage";
 import { resolveProductTemplateModelLanes } from "@/lib/productTemplateModelLanes";
+import {
+  getProfileAuthorityLabel,
+  getSourceModelAvailabilityLabel,
+} from "@/lib/profileAuthorityBadge";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import { getTumblerWrapLayout, getWrapFrontCenter } from "@/utils/tumblerWrapLayout";
 import {
@@ -1536,6 +1540,17 @@ export function AdminLayoutShell() {
                     : null
                 )
               }
+              profileAuthorityLabel={
+                selectedTemplate.profileAuthority
+                  ? getProfileAuthorityLabel(selectedTemplate.profileAuthority)
+                  : null
+              }
+              sourceModelAvailabilityLabel={getSourceModelAvailabilityLabel(
+                selectedTemplate.sourceModelAvailability ??
+                (selectedTemplateModelLanes.sourceModelPath
+                  ? "verified-source-model"
+                  : "missing-source-model"),
+              )}
               appearanceReferenceLayers={selectedTemplate?.appearanceReferenceLayers ?? null}
               tumblerMapping={selectedTemplate?.tumblerMapping}
               onUpdateCalibration={handleUpdateCalibration}

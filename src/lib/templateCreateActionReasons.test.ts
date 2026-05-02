@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   formatTemplateCreateDisabledActionLabels,
+  getTemplateCreateBodyCutoutQualityGateReason,
   getTemplateCreateLookupActionReason,
   getTemplateCreatePreviewActionReason,
   getTemplateCreateReviewAcceptActionReason,
@@ -51,8 +52,27 @@ test("preview action reasons stay specific to the blocked control", () => {
       action: "body-cutout-qa",
       hasSourceModel: false,
       hasQaPreview: false,
+      hasAcceptedBodyReference: false,
+    }),
+    "Accept BODY REFERENCE first.",
+  );
+  assert.equal(
+    getTemplateCreatePreviewActionReason({
+      action: "body-cutout-qa",
+      hasSourceModel: false,
+      hasQaPreview: false,
+      hasAcceptedBodyReference: true,
     }),
     "Generate reviewed GLB first.",
+  );
+  assert.equal(
+    getTemplateCreatePreviewActionReason({
+      action: "body-cutout-qa",
+      hasSourceModel: false,
+      hasQaPreview: true,
+      hasAcceptedBodyReference: true,
+    }),
+    null,
   );
   assert.equal(
     getTemplateCreatePreviewActionReason({
@@ -113,4 +133,31 @@ test("v2 seed reason stays explicit", () => {
     "Accept BODY REFERENCE (v1) first.",
   );
   assert.equal(getTemplateCreateV2SeedActionReason({ hasApprovedBodyOutline: true }), null);
+});
+
+test("body cutout quality gate blocks QA generation after accepted review fails diagnostics", () => {
+  assert.equal(
+    getTemplateCreateBodyCutoutQualityGateReason({
+      hasAcceptedReview: true,
+      generationBlocked: true,
+    }),
+    "BODY CUTOUT QA generation blocked: review/fix BODY REFERENCE contour first.",
+  );
+});
+
+test("body cutout quality gate clears before acceptance or after passing diagnostics", () => {
+  assert.equal(
+    getTemplateCreateBodyCutoutQualityGateReason({
+      hasAcceptedReview: false,
+      generationBlocked: true,
+    }),
+    null,
+  );
+  assert.equal(
+    getTemplateCreateBodyCutoutQualityGateReason({
+      hasAcceptedReview: true,
+      generationBlocked: false,
+    }),
+    null,
+  );
 });
