@@ -51,6 +51,7 @@ import {
 } from "@/lib/templateCreateFlow";
 import {
   formatTemplateCreateDisabledActionLabels,
+  getTemplateCreateBodyCutoutQualityGateReason,
   getTemplateCreateLookupActionReason,
   getTemplateCreatePreviewActionReason,
   getTemplateCreateReviewAcceptActionReason,
@@ -2990,6 +2991,19 @@ export function TemplateCreateForm({
     }),
     [activeBodyReferenceSvgQuality, approvedBodyOutline, hasAcceptedBodyReferenceReview],
   );
+  const generateBodyCutoutQualityGateReason = React.useMemo(
+    () => getTemplateCreateBodyCutoutQualityGateReason({
+      hasAcceptedReview: hasAcceptedBodyReferenceReview && Boolean(approvedBodyOutline),
+      generationBlocked: activeBodyReferenceSvgQualityOperatorSummary.generationBlocked,
+    }),
+    [
+      activeBodyReferenceSvgQualityOperatorSummary.generationBlocked,
+      approvedBodyOutline,
+      hasAcceptedBodyReferenceReview,
+    ],
+  );
+  const effectiveGenerateBodyCutoutActionReason =
+    generateBodyCutoutActionReason ?? generateBodyCutoutQualityGateReason;
   const bodyReferenceSvgCutoutLineage = React.useMemo(
     () => summarizeBodyReferenceSvgCutoutLineage({
       hasAcceptedCutout: hasAcceptedBodyReferenceReview && Boolean(approvedBodyOutline),
@@ -4368,9 +4382,10 @@ export function TemplateCreateForm({
                 disabled={
                   !canGenerateReviewedBodyReferenceGlb ||
                   generatingReviewedBodyReferenceGlb ||
-                  bodyReferenceFineTuneDraftPendingAcceptance
+                  bodyReferenceFineTuneDraftPendingAcceptance ||
+                  Boolean(effectiveGenerateBodyCutoutActionReason)
                 }
-                title={generateBodyCutoutActionReason ?? undefined}
+                title={effectiveGenerateBodyCutoutActionReason ?? undefined}
                 onClick={() => {
                   void handleGenerateReviewedBodyReferenceGlb();
                 }}
@@ -4431,6 +4446,7 @@ export function TemplateCreateForm({
               )}
               {activeBodyReferenceSvgQualityOperatorSummary.generationBlocked && (
                 <div className={styles.actionDisabledReason}>
+                  {generateBodyCutoutQualityGateReason}{" "}
                   {activeBodyReferenceSvgQualityOperatorSummary.generationBlockedReason}{" "}
                   {activeBodyReferenceSvgQualityOperatorSummary.operatorFixHint}
                 </div>

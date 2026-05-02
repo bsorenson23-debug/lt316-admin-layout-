@@ -836,6 +836,7 @@ async function pickFallbackGlbPath(args: {
   fitDebug: TumblerItemLookupFitDebug | null;
   sourceModelAvailability: TumblerSourceModelAvailability;
   generated: boolean;
+  warnings: string[];
 }> {
   const matchedProfile = args.matchedProfileId ? getTumblerProfileById(args.matchedProfileId) : null;
   const hasCandidateImage = Boolean(
@@ -860,6 +861,7 @@ async function pickFallbackGlbPath(args: {
           ...generated,
           sourceModelAvailability: "generated-source-model",
           generated: true,
+          warnings: generated.warnings ?? [],
         };
       }
     } catch (error) {
@@ -878,6 +880,7 @@ async function pickFallbackGlbPath(args: {
         fitDebug: null,
         sourceModelAvailability: "verified-source-model",
         generated: false,
+        warnings: [],
       };
     }
   }
@@ -893,6 +896,7 @@ async function pickFallbackGlbPath(args: {
           ...generated,
           sourceModelAvailability: "generated-source-model",
           generated: true,
+          warnings: generated.warnings ?? [],
         };
       }
     } catch (error) {
@@ -905,6 +909,7 @@ async function pickFallbackGlbPath(args: {
     fitDebug: null,
     sourceModelAvailability: "missing-source-model",
     generated: false,
+    warnings: [],
   };
 }
 
@@ -1160,6 +1165,7 @@ export async function lookupTumblerItem(args: {
       mode: "matched-profile",
       notes: [
         ...notes,
+        ...fallbackAsset.warnings,
         `Top margin fallback: ${round2(topMarginMm)} mm. Bottom margin fallback: ${round2(bottomMarginMm)} mm.`,
         `Handle arc fallback: ${getProfileHandleArcDeg(matchedProfile)}°.`,
         `GLB fallback: ${fallbackAsset.glbPath || "none available locally"}.`,
@@ -1261,6 +1267,7 @@ export async function lookupTumblerItem(args: {
     mode: scrapedDims ? "parsed-page" : "safe-fallback",
     notes: [
       ...notes,
+      ...fallbackAsset.warnings,
       `GLB fallback: ${fallbackAsset.glbPath || "none available locally"}.`,
     ],
     sources,

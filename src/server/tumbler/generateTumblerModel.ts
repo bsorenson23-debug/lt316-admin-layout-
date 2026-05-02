@@ -118,6 +118,7 @@ type ProfileCandidateFit = ProfileSilhouetteFit & {
 export type GeneratedTumblerGlbResult = {
   glbPath: string;
   fitDebug: TumblerItemLookupFitDebug | null;
+  warnings?: string[];
 };
 
 class NodeFileReader implements FileReaderLike {
@@ -975,6 +976,82 @@ function buildFallbackBodyProfile(profile: TumblerProfile) {
   } satisfies ProfileSilhouetteFit;
 }
 
+export function evaluateGenericStraightDiameterEnvelope(args: {
+  trustedOutsideDiameterMm?: number | null;
+  bodyProfile: Array<{ radiusMm: number }>;
+}): {
+  trustedOutsideDiameterMm: number | null;
+  trustedRadiusMm: number | null;
+  toleranceMm: number | null;
+  maxAllowedRadiusMm: number | null;
+  maxRadiusMm: number;
+  exceedsEnvelope: boolean;
+} {
+  const trustedOutsideDiameterMm = Number.isFinite(args.trustedOutsideDiameterMm)
+    ? Number(args.trustedOutsideDiameterMm)
+    : null;
+  const radii = args.bodyProfile
+    .map((point) => point.radiusMm)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const maxRadiusMm = radii.length > 0 ? Math.max(...radii) : 0;
+
+  if (!trustedOutsideDiameterMm || trustedOutsideDiameterMm <= 0) {
+    return {
+      trustedOutsideDiameterMm: null,
+      trustedRadiusMm: null,
+      toleranceMm: null,
+      maxAllowedRadiusMm: null,
+      maxRadiusMm: round2(maxRadiusMm),
+      exceedsEnvelope: false,
+    };
+  }
+
+  const trustedRadiusMm = trustedOutsideDiameterMm / 2;
+  const toleranceMm = Math.max(3, trustedRadiusMm * 0.08);
+  const maxAllowedRadiusMm = trustedRadiusMm + toleranceMm;
+
+  return {
+    trustedOutsideDiameterMm: round2(trustedOutsideDiameterMm),
+    trustedRadiusMm: round2(trustedRadiusMm),
+    toleranceMm: round2(toleranceMm),
+    maxAllowedRadiusMm: round2(maxAllowedRadiusMm),
+    maxRadiusMm: round2(maxRadiusMm),
+    exceedsEnvelope: maxRadiusMm > maxAllowedRadiusMm,
+  };
+}
+
+function constrainGenericStraightFitToTrustedDiameter(args: {
+  profile: TumblerProfile;
+  fit: ProfileSilhouetteFit;
+  fallbackFit: ProfileSilhouetteFit;
+  enabled: boolean;
+}): { fit: ProfileSilhouetteFit; warning: string | null } {
+  if (!args.enabled) {
+    return { fit: args.fit, warning: null };
+  }
+
+  const envelope = evaluateGenericStraightDiameterEnvelope({
+    trustedOutsideDiameterMm: args.profile.outsideDiameterMm,
+    bodyProfile: args.fit.bodyProfile,
+  });
+  if (!envelope.exceedsEnvelope || !envelope.trustedOutsideDiameterMm) {
+    return { fit: args.fit, warning: null };
+  }
+
+  const fallbackFit = {
+    ...args.fallbackFit,
+    bodyColorHex: args.fit.bodyColorHex,
+    rimColorHex: args.fit.rimColorHex,
+    fitDebug: null,
+  };
+  const imageDiameterMm = round2(envelope.maxRadiusMm * 2);
+  return {
+    fit: fallbackFit,
+    warning:
+      `Image-derived straight tumbler contour exceeded trusted diameter envelope (${imageDiameterMm} mm vs ${envelope.trustedOutsideDiameterMm} mm); using trusted profile dimensions.`,
+  };
+}
+
 function createBodyMesh(fit: ProfileSilhouetteFit): THREE.Mesh {
   const orderedProfile = [...fit.bodyProfile]
     .map((point) => ({
@@ -1088,7 +1165,10 @@ export async function ensureGeneratedTumblerGlb(
     return { glbPath: "", fitDebug: null };
   }
 
-  let fit: ProfileSilhouetteFit = buildFallbackBodyProfile(profile);
+  const fallbackFit: ProfileSilhouetteFit = buildFallbackBodyProfile(profile);
+  const warnings: string[] = [];
+  const usesGenericStraightPolicy = !profile.generatedModelPolicy && profile.shapeType === "straight";
+  let fit: ProfileSilhouetteFit = fallbackFit;
 
   const candidateImageUrls = [
     ...(options?.imageUrls ?? []),
@@ -1098,7 +1178,14 @@ export async function ensureGeneratedTumblerGlb(
     try {
       const primaryFit = await fitProfileBodyBandFromImage(profile, primaryImageUrl);
       if (primaryFit) {
-        fit = primaryFit;
+        const constrained = constrainGenericStraightFitToTrustedDiameter({
+          profile,
+          fit: primaryFit,
+          fallbackFit,
+          enabled: usesGenericStraightPolicy,
+        });
+        fit = constrained.fit;
+        if (constrained.warning) warnings.push(constrained.warning);
       }
     } catch (error) {
       console.warn("[generateTumblerModel] selected variant fit failed:", primaryImageUrl, error);
@@ -1109,7 +1196,14 @@ export async function ensureGeneratedTumblerGlb(
     try {
       const silhouetteFit = await fitBestProfileBodyBandFromImages(profile, candidateImageUrls);
       if (silhouetteFit) {
-        fit = silhouetteFit;
+        const constrained = constrainGenericStraightFitToTrustedDiameter({
+          profile,
+          fit: silhouetteFit,
+          fallbackFit,
+          enabled: usesGenericStraightPolicy,
+        });
+        fit = constrained.fit;
+        if (constrained.warning) warnings.push(constrained.warning);
       }
     } catch (error) {
       console.warn("[generateTumblerModel] silhouette fit failed:", error);
@@ -1121,6 +1215,7 @@ export async function ensureGeneratedTumblerGlb(
   return {
     glbPath: await writeGeneratedGlb(fileName, buildProfileBodyBandScene(profile, fit)),
     fitDebug: fit.fitDebug ?? null,
+    warnings,
   };
 }
 

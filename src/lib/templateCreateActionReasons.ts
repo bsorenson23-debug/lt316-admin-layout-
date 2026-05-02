@@ -84,6 +84,14 @@ export function getTemplateCreateV2SeedActionReason(args: {
     : "Accept BODY REFERENCE (v1) first.";
 }
 
+export function getTemplateCreateBodyCutoutQualityGateReason(args: {
+  hasAcceptedReview: boolean;
+  generationBlocked: boolean;
+}): string | null {
+  if (!args.hasAcceptedReview || !args.generationBlocked) return null;
+  return "BODY CUTOUT QA generation blocked: review/fix BODY REFERENCE contour first.";
+}
+
 export function groupTemplateCreateDisabledActionReasons(
   entries: readonly TemplateCreateDisabledActionReason[],
 ): TemplateCreateDisabledActionReasonGroup[] {

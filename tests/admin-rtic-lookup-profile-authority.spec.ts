@@ -7,7 +7,91 @@ import { ensureWebGlSupport } from "./helpers/webglSupport";
 const RTIC_URL = "https://rticoutdoors.com/Tumblers?size=20oz&color=Navy";
 const RTIC_FIXTURE_IMAGE_URL = "https://fixture.local/rtic-essential-20oz-navy.png";
 
-function buildRticLookupFixture(lookupInput: string) {
+function buildShadowInflatedRticFitDebug() {
+  const mmPerSourceUnit = 93 / 378.36;
+  const radiiMm = [
+    46.6,
+    46.3,
+    46.1,
+    45.8,
+    45.8,
+    45.6,
+    45.3,
+    45.1,
+    44.9,
+    44.9,
+    44.6,
+    44.1,
+    43,
+    41.2,
+    39.1,
+    37.6,
+    37,
+    36.7,
+    36.5,
+    67.4,
+    78.5,
+    83.7,
+    84.7,
+    82.2,
+    76.7,
+    68.6,
+    58.4,
+    46.9,
+    28.7,
+    17.1,
+  ];
+  const profilePoints = radiiMm.map((radiusMm, index) => {
+    const yPx = 298 + ((934 - 298) * index) / Math.max(1, radiiMm.length - 1);
+    return {
+      yPx: Math.round(yPx * 100) / 100,
+      yMm: Math.round((148 - (148 * index) / Math.max(1, radiiMm.length - 1)) * 100) / 100,
+      radiusPx: Math.round((radiusMm / mmPerSourceUnit) * 100) / 100,
+      radiusMm,
+    };
+  });
+
+  return {
+    kind: "lathe-body-fit",
+    sourceImageUrl: RTIC_FIXTURE_IMAGE_URL,
+    imageWidthPx: 1000,
+    imageHeightPx: 1000,
+    silhouetteBoundsPx: { minX: 308, minY: 58, maxX: 844, maxY: 935 },
+    centerXPx: 499.5,
+    fullTopPx: 58,
+    fullBottomPx: 934,
+    bodyTopPx: 298,
+    bodyBottomPx: 934,
+    paintedBodyTopPx: 298,
+    colorBodyBottomPx: 934,
+    bodyTraceTopPx: 298,
+    bodyTraceBottomPx: 934,
+    rimTopPx: 235,
+    rimBottomPx: 329,
+    referenceBandTopPx: 301,
+    referenceBandBottomPx: 322,
+    referenceBandCenterYPx: 311.5,
+    referenceBandWidthPx: 378.36,
+    measurementBandTopPx: 301,
+    measurementBandBottomPx: 322,
+    measurementBandCenterYPx: 311.5,
+    measurementBandCenterXPx: 499.5,
+    measurementBandWidthPx: 378.36,
+    measurementBandLeftPx: 310.32,
+    measurementBandRightPx: 688.68,
+    measurementBandRowCount: 22,
+    measurementBandWidthStdDevPx: 0.8,
+    maxCenterWidthPx: 482,
+    referenceHalfWidthPx: 189.18,
+    fitScore: 8.39,
+    profilePoints,
+  };
+}
+
+function buildRticLookupFixture(
+  lookupInput: string,
+  options: { fitDebug?: ReturnType<typeof buildShadowInflatedRticFitDebug> | null } = {},
+) {
   return {
     lookupInput,
     resolvedUrl: RTIC_URL,
@@ -28,7 +112,7 @@ function buildRticLookupFixture(lookupInput: string) {
     modelSourceLabel: "Generated straight tumbler source model",
     imageUrl: RTIC_FIXTURE_IMAGE_URL,
     imageUrls: [RTIC_FIXTURE_IMAGE_URL],
-    fitDebug: null,
+    fitDebug: options.fitDebug ?? null,
     dimensions: {
       lookupProductId: "rtic-20",
       productUrl: RTIC_URL,
@@ -74,7 +158,10 @@ function buildRticLookupFixture(lookupInput: string) {
   };
 }
 
-async function installDeterministicRticLookup(page: Page): Promise<void> {
+async function installDeterministicRticLookup(
+  page: Page,
+  options: { fitDebug?: ReturnType<typeof buildShadowInflatedRticFitDebug> | null } = {},
+): Promise<void> {
   const productImage = getOperatorProductImageUpload();
   const dataUrl = `data:${productImage.mimeType};base64,${productImage.buffer.toString("base64")}`;
 
@@ -84,7 +171,7 @@ async function installDeterministicRticLookup(page: Page): Promise<void> {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(buildRticLookupFixture(payload.lookupInput ?? RTIC_URL)),
+      body: JSON.stringify(buildRticLookupFixture(payload.lookupInput ?? RTIC_URL, options)),
     });
   });
 
@@ -140,4 +227,38 @@ test("RTIC URL lookup exposes cross-brand profile authority and generated source
   await expect(page.getByTestId("body-reference-v1-accept")).toBeEnabled();
   await expect(page.getByTestId("body-reference-v1-generate")).toBeDisabled();
   await expect(page.locator("body")).not.toContainText(/Stanley IceFlow|YETI Rambler 40oz/);
+});
+
+test("RTIC noisy fit keeps BODY CUTOUT QA generation blocked until contour review passes", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(4 * 60 * 1000);
+
+  await page.addInitScript(() => {
+    window.localStorage.clear();
+  });
+  await installDeterministicRticLookup(page, {
+    fitDebug: buildShadowInflatedRticFitDebug(),
+  });
+  await ensureWebGlSupport(page, testInfo, "admin-rtic-lookup-profile-authority-noisy-fit");
+
+  await page.goto("/admin?debug=1", { waitUntil: "networkidle", timeout: 120_000 });
+  await openTemplateGallery(page);
+  await page.getByTestId("template-gallery-create-new").click();
+  await expect(page.getByTestId("template-mode-shell")).toBeVisible();
+
+  await page
+    .getByPlaceholder("https://www.academy.com/... or Stanley IceFlow 30 oz Classic Flip Straw Tumbler")
+    .fill(RTIC_URL);
+  await page.getByTestId("template-create-run-lookup").click();
+
+  await expect(page.getByText("Source ready", { exact: true })).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByTestId("body-reference-v1-accept")).toBeEnabled();
+  await page.getByTestId("body-reference-v1-accept").click();
+
+  await expect(page.getByText(/GUIDES NEED REVIEW/i)).toBeVisible();
+  await expect(page.getByText("Body-only confidence", { exact: true }).first()).toBeVisible();
+  await expect(page.locator("body")).toContainText("low");
+  await expect(page.getByText(/BODY CUTOUT QA generation blocked: review\/fix BODY REFERENCE contour first\./)).toBeVisible();
+  await expect(page.getByTestId("body-reference-v1-generate")).toBeDisabled();
 });
