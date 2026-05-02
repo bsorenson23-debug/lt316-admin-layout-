@@ -249,6 +249,46 @@ function extractUrlVariantParams(url: string | null): {
   }
 }
 
+function buildUrlLookupText(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    const searchValues = [...parsed.searchParams.entries()]
+      .flatMap(([key, value]) => [key, safeDecodeUri(value)])
+      .join(" ");
+    const selectedSizeOz = parseCapacityOz(searchValues);
+    const matchingOfficialProfiles = KNOWN_TUMBLER_PROFILES.filter((profile) =>
+      (profile.officialDomains ?? []).some((domain) => {
+        const normalizedDomain = domain.toLowerCase().replace(/^www\./, "");
+        return hostname === normalizedDomain || hostname.endsWith(`.${normalizedDomain}`);
+      }),
+    );
+    const officialBrandHints = [...new Set(
+      matchingOfficialProfiles.map((profile) => profile.brand),
+    )];
+    const officialProfileHints = selectedSizeOz
+      ? matchingOfficialProfiles
+          .filter((profile) => profile.capacityOz === selectedSizeOz)
+          .flatMap((profile) => [
+            profile.label,
+            profile.model,
+            ...(profile.lookupAliases ?? []),
+          ])
+      : [];
+
+    return [
+      url,
+      hostname,
+      parsed.pathname.replace(/[\/\-_.]+/g, " "),
+      searchValues,
+      ...officialBrandHints,
+      ...officialProfileHints,
+    ].filter(Boolean).join(" ");
+  } catch {
+    return url;
+  }
+}
+
 function getProfileAuthorityLabel(authority: TumblerProfileAuthority): string {
   switch (authority) {
     case "exact-internal-profile":
@@ -1230,10 +1270,6 @@ export async function lookupTumblerItem(args: {
 
     resolvedUrl = finalUrl;
     const openGraph = extractOpenGraphProductMetadata(html, finalUrl);
-    if (!openGraph.title || !openGraph.imageUrl) {
-      throw manualEntryError("Product page is missing required Open Graph title or image metadata.");
-    }
-
     title = openGraph.title ?? extractTitle(html);
     imageUrls = extractImageUrls(html, finalUrl);
     if (openGraph.imageUrl && !imageUrls.includes(openGraph.imageUrl)) {
@@ -1248,7 +1284,7 @@ export async function lookupTumblerItem(args: {
     if (selectedVariantImageUrl && !imageUrls.includes(selectedVariantImageUrl)) {
       imageUrls = [selectedVariantImageUrl, ...imageUrls];
     }
-    lookupText = [lookupInput, title, pageText].filter(Boolean).join(" ");
+    lookupText = [lookupInput, buildUrlLookupText(finalUrl), title, pageText].filter(Boolean).join(" ");
 
     if (sourceUrlMatchesOfficialCatalogDomain(finalUrl)) sourceKind = "official";
     else if (/academy\.com/i.test(finalUrl)) sourceKind = "retailer";

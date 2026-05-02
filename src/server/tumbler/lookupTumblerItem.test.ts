@@ -206,6 +206,50 @@ test("RTIC 20oz Navy URL resolves to official matched profile with generated sou
   assert.equal(Math.round((result.dimensions.wrapWidthMm ?? 0) * 10) / 10, 292.2);
 });
 
+test("known RTIC URL with missing Open Graph metadata resolves before manual fallback", async () => {
+  let extractorCalled = false;
+  installFetchMock({
+    [RTIC_URL]: `
+      <html>
+        <head>
+          <title>RTIC Essential Tumbler 20oz Navy</title>
+        </head>
+        <body>
+          <h1>RTIC Essential Tumbler</h1>
+          <p>Size: 20oz</p>
+          <p>Color: Navy</p>
+          <img src="${PRODUCT_IMAGE_URL}" alt="RTIC 20oz Tumbler Navy" />
+        </body>
+      </html>
+    `,
+  });
+
+  const result = await lookupTumblerItem({
+    lookupInput: RTIC_URL,
+    dimensionExtractor: async () => {
+      extractorCalled = true;
+      return {
+        diameterMm: 91,
+        heightMm: 199,
+        capacityOz: 20,
+        confidence: 0.88,
+      };
+    },
+  });
+
+  assert.equal(extractorCalled, false);
+  assert.equal(result.mode, "matched-profile");
+  assert.equal(result.brand, "RTIC");
+  assert.equal(result.capacityOz, 20);
+  assert.equal(result.matchedProfileId, "rtic-20");
+  assert.equal(result.profileAuthority, "exact-internal-profile");
+  assert.notEqual(result.profileAuthority, "dynamic-llm-extracted");
+  assert.equal(result.dimensions.dimensionSourceKind, "internal-profile");
+  assert.equal(result.dimensions.outsideDiameterMm, 93);
+  assert.equal(result.dimensions.overallHeightMm, 190);
+  assert.equal(result.dimensions.wrapWidthMm, 292.17);
+});
+
 test("official dimensions that differ from an internal profile override with a warning", async () => {
   const rticMismatchUrl = "https://rticoutdoors.com/Tumblers?size=20oz&color=Black";
   installFetchMock({
@@ -332,19 +376,74 @@ test("known profile URL lookups do not call LLM extraction", async () => {
   assert.equal(result.capacityOz, 20);
 });
 
-test("missing Open Graph metadata returns a manual-entry lookup error", async () => {
+test("Stanley and YETI deterministic URL lookups do not call LLM extraction", async () => {
+  const stanleyUrl = "https://www.stanley1913.com/products/quencher-h2-0-flowstate-tumbler-40-oz";
+  const yetiUrl = "https://www.yeti.com/drinkware/tumblers/rambler-40oz.html";
+  let extractorCallCount = 0;
+  installFetchMock({
+    [stanleyUrl]: `
+      <html>
+        <head><title>Stanley Quencher H2.0 FlowState 40 oz tumbler</title></head>
+        <body><h1>Stanley Quencher H2.0 FlowState 40 oz</h1></body>
+      </html>
+    `,
+    [yetiUrl]: `
+      <html>
+        <head><title>YETI Rambler 40 oz tumbler</title></head>
+        <body><h1>YETI Rambler 40 oz tumbler</h1></body>
+      </html>
+    `,
+  });
+
+  const extractor = async () => {
+    extractorCallCount += 1;
+    return {
+      diameterMm: 91,
+      heightMm: 199,
+      capacityOz: 40,
+      confidence: 0.88,
+    };
+  };
+
+  const stanley = await lookupTumblerItem({
+    lookupInput: stanleyUrl,
+    dimensionExtractor: extractor,
+  });
+  const yeti = await lookupTumblerItem({
+    lookupInput: yetiUrl,
+    dimensionExtractor: extractor,
+  });
+
+  assert.equal(extractorCallCount, 0);
+  assert.equal(stanley.mode, "matched-profile");
+  assert.equal(stanley.matchedProfileId, "stanley-quencher-40");
+  assert.notEqual(stanley.profileAuthority, "dynamic-llm-extracted");
+  assert.equal(yeti.mode, "matched-profile");
+  assert.equal(yeti.matchedProfileId, "yeti-rambler-40");
+  assert.notEqual(yeti.profileAuthority, "dynamic-llm-extracted");
+});
+
+test("unknown URL with missing Open Graph metadata returns a manual-entry lookup error after fallbacks fail", async () => {
   const noOgUrl = "https://example.com/products/no-og-cup";
+  let extractorCalled = false;
   installFetchMock({
     [noOgUrl]: "<html><head><title>No OG Cup</title></head><body>20oz cup</body></html>",
   });
 
   await assert.rejects(
-    () => lookupTumblerItem({ lookupInput: noOgUrl }),
+    () => lookupTumblerItem({
+      lookupInput: noOgUrl,
+      dimensionExtractor: async () => {
+        extractorCalled = true;
+        return null;
+      },
+    }),
     (error) => (
       error instanceof TumblerLookupManualEntryError &&
-      error.message.includes("Open Graph")
+      error.message.includes("Could not extract usable tumbler dimensions")
     ),
   );
+  assert.equal(extractorCalled, true);
 });
 
 test("LLM extraction failure for unknown URL returns a manual-entry lookup error", async () => {
