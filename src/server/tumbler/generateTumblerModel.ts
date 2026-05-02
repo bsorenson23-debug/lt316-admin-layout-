@@ -98,6 +98,21 @@ export interface ProfileBodyTraceExtents {
   usedFallback: boolean;
 }
 
+export interface StraightBodyProfileRunFilterResult {
+  runs: ProfileReferenceMeasurementRun[];
+  rowCount: number;
+  rejectedWideRunCount: number;
+  rejectedLowerShelfRunCount: number;
+  rejectedSpikeRunCount: number;
+  usedFallback: boolean;
+  warnings: string[];
+}
+
+export interface StraightBodyRadiusSmoothingResult {
+  values: number[];
+  smoothedSpikeCount: number;
+}
+
 type ProfileSilhouetteFit = {
   bodyProfile: Array<{ yMm: number; radiusMm: number }>;
   bodyTopYmm: number;
@@ -209,6 +224,10 @@ function percentile(values: number[], p: number): number {
   const sorted = [...values].sort((a, b) => a - b);
   const idx = clamp(Math.round((sorted.length - 1) * p), 0, sorted.length - 1);
   return sorted[idx];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function colorDistance(a: Rgb, b: Rgb): number {
@@ -605,6 +624,174 @@ export function deriveBodyTraceExtents(args: {
   };
 }
 
+export function smoothStraightBodyRadiusSeries(
+  values: number[],
+  options: {
+    maxSpikeRatio?: number;
+    minSpikeDeltaPx?: number;
+    windowRadius?: number;
+  } = {},
+): StraightBodyRadiusSmoothingResult {
+  const maxSpikeRatio = Math.max(1.01, options.maxSpikeRatio ?? 1.18);
+  const minSpikeDeltaPx = Math.max(0, options.minSpikeDeltaPx ?? 3);
+  const windowRadius = Math.max(1, Math.round(options.windowRadius ?? 2));
+  const smoothed = [...values];
+  let smoothedSpikeCount = 0;
+
+  for (let index = 0; index < values.length; index += 1) {
+    const start = Math.max(0, index - windowRadius);
+    const end = Math.min(values.length, index + windowRadius + 1);
+    const neighbors = values
+      .slice(start, end)
+      .filter((value, neighborIndex) => start + neighborIndex !== index && Number.isFinite(value));
+    const localMedian = median(neighbors);
+    const value = values[index];
+    if (!Number.isFinite(value) || localMedian <= 0) continue;
+    if (value >= localMedian * maxSpikeRatio && value - localMedian >= minSpikeDeltaPx) {
+      smoothed[index] = localMedian;
+      smoothedSpikeCount += 1;
+    }
+  }
+
+  return {
+    values: smoothed,
+    smoothedSpikeCount,
+  };
+}
+
+export function filterStableStraightBodyProfileRuns(args: {
+  runs: ProfileReferenceMeasurementRun[];
+  centerXPx: number;
+  trustedOutsideDiameterMm?: number | null;
+  referenceBandWidthPx?: number | null;
+  lowerShelfStartYPx?: number | null;
+  minConsecutiveRows?: number;
+  maxSpikeRatio?: number;
+  lowerShelfWidthRatio?: number;
+}): StraightBodyProfileRunFilterResult {
+  const centeredRuns = [...args.runs]
+    .filter((run) =>
+      Number.isFinite(run.y) &&
+      Number.isFinite(run.left) &&
+      Number.isFinite(run.right) &&
+      Number.isFinite(run.width) &&
+      run.left < args.centerXPx &&
+      run.right > args.centerXPx &&
+      run.width > 0,
+    )
+    .sort((a, b) => a.y - b.y);
+  const minimumRows = Math.max(
+    12,
+    Math.round(args.minConsecutiveRows ?? Math.max(36, centeredRuns.length * 0.35)),
+  );
+  if (centeredRuns.length < minimumRows) {
+    return {
+      runs: [],
+      rowCount: 0,
+      rejectedWideRunCount: 0,
+      rejectedLowerShelfRunCount: 0,
+      rejectedSpikeRunCount: 0,
+      usedFallback: true,
+      warnings: ["body-run-insufficient"],
+    };
+  }
+
+  const widthMedian = median(centeredRuns.map((run) => run.width));
+  const referenceBandWidthPx = Number.isFinite(args.referenceBandWidthPx) && Number(args.referenceBandWidthPx) > 0
+    ? Number(args.referenceBandWidthPx)
+    : widthMedian;
+  const trustedOutsideDiameterMm = Number.isFinite(args.trustedOutsideDiameterMm)
+    ? Number(args.trustedOutsideDiameterMm)
+    : null;
+  const envelope = trustedOutsideDiameterMm
+    ? evaluateGenericStraightDiameterEnvelope({
+        trustedOutsideDiameterMm,
+        bodyProfile: [{ radiusMm: trustedOutsideDiameterMm / 2 }],
+      })
+    : null;
+  const maxAllowedWidthPx = envelope?.maxAllowedRadiusMm && envelope.trustedOutsideDiameterMm && referenceBandWidthPx > 0
+    ? Math.max(
+        referenceBandWidthPx * ((envelope.maxAllowedRadiusMm * 2) / envelope.trustedOutsideDiameterMm),
+        widthMedian * 1.12,
+      )
+    : widthMedian * 1.22;
+  const lowerShelfStartYPx = Number.isFinite(args.lowerShelfStartYPx)
+    ? Number(args.lowerShelfStartYPx)
+    : Number.POSITIVE_INFINITY;
+  const lowerShelfWidthRatio = Math.max(1.02, args.lowerShelfWidthRatio ?? 1.12);
+  let rejectedWideRunCount = 0;
+  let rejectedLowerShelfRunCount = 0;
+  const envelopeFilteredRuns = centeredRuns.filter((run) => {
+    if (run.width > maxAllowedWidthPx) {
+      rejectedWideRunCount += 1;
+      return false;
+    }
+    if (run.y >= lowerShelfStartYPx && run.width > widthMedian * lowerShelfWidthRatio) {
+      rejectedLowerShelfRunCount += 1;
+      return false;
+    }
+    return true;
+  });
+  const segment = findLongestRowSegment(envelopeFilteredRuns.map((run) => run.y));
+  if (!segment) {
+    return {
+      runs: [],
+      rowCount: 0,
+      rejectedWideRunCount,
+      rejectedLowerShelfRunCount,
+      rejectedSpikeRunCount: 0,
+      usedFallback: true,
+      warnings: uniqueStrings([
+        rejectedWideRunCount > 0 ? "shadow-run-rejected" : "",
+        rejectedWideRunCount > 0 ? "diameter-envelope-clamped" : "",
+        rejectedLowerShelfRunCount > 0 ? "shadow-run-rejected" : "",
+        "body-run-insufficient",
+      ]),
+    };
+  }
+
+  const segmentRuns = envelopeFilteredRuns.filter((run) => run.y >= segment.start && run.y <= segment.end);
+  const spikeSmoothed = smoothStraightBodyRadiusSeries(
+    segmentRuns.map((run) => run.width),
+    {
+      maxSpikeRatio: args.maxSpikeRatio ?? 1.1,
+      minSpikeDeltaPx: 4,
+      windowRadius: 2,
+    },
+  );
+  let rejectedSpikeRunCount = 0;
+  const spikeFilteredRuns = segmentRuns.filter((run, index) => {
+    const smoothedWidth = spikeSmoothed.values[index];
+    if (run.width > smoothedWidth && run.width - smoothedWidth >= 4) {
+      rejectedSpikeRunCount += 1;
+      return false;
+    }
+    return true;
+  });
+  const finalSegment = findLongestRowSegment(spikeFilteredRuns.map((run) => run.y));
+  const stableRuns = finalSegment
+    ? spikeFilteredRuns.filter((run) => run.y >= finalSegment.start && run.y <= finalSegment.end)
+    : [];
+  const usedFallback = stableRuns.length < minimumRows;
+  const warnings = uniqueStrings([
+    rejectedWideRunCount > 0 || rejectedLowerShelfRunCount > 0 ? "shadow-run-rejected" : "",
+    rejectedWideRunCount > 0 ? "diameter-envelope-clamped" : "",
+    rejectedSpikeRunCount > 0 ? "isolated-radius-spike-smoothed" : "",
+    stableRuns.length < centeredRuns.length ? "straight-body-run-filtered" : "",
+    usedFallback ? "body-run-insufficient" : "",
+  ]);
+
+  return {
+    runs: usedFallback ? [] : stableRuns,
+    rowCount: usedFallback ? 0 : stableRuns.length,
+    rejectedWideRunCount,
+    rejectedLowerShelfRunCount,
+    rejectedSpikeRunCount,
+    usedFallback,
+    warnings,
+  };
+}
+
 function findLongestRowSegment(rows: number[]): { start: number; end: number } | null {
   if (rows.length === 0) return null;
   const sorted = [...rows].sort((a, b) => a - b);
@@ -651,15 +838,17 @@ function buildLatheProfileFromRows(args: {
   bodyBottomYmm: number;
   mmPerPxY: number;
   pxToMmX: number;
+  smoothedSpikeCount: number;
   debugProfilePoints: TumblerItemLookupFitProfilePoint[];
 } {
   const { profile, runs, fullTop, fullHeightPx, bodyTop, bodyBottom, centerX, referenceHalfWidthPx } = args;
   const mmPerPxY = profile.overallHeightMm / Math.max(1, fullHeightPx);
   const bodyRuns = runs.filter((run) => run.y >= bodyTop && run.y <= bodyBottom);
-  const widths = smoothSeries(
+  const radiusSmoothing = smoothStraightBodyRadiusSeries(
     bodyRuns.map((run) => Math.max(1, centerX - run.left, run.right - centerX)),
-    2,
+    { maxSpikeRatio: 1.1, minSpikeDeltaPx: 3, windowRadius: 2 },
   );
+  const widths = smoothSeries(radiusSmoothing.values, 2);
   const topRadiusMm = (profile.topDiameterMm ?? profile.outsideDiameterMm ?? 88.9) / 2;
   const pxToMmX = topRadiusMm / Math.max(1, referenceHalfWidthPx);
   const overallTopYmm = profile.overallHeightMm / 2;
@@ -693,8 +882,24 @@ function buildLatheProfileFromRows(args: {
     bodyBottomYmm: round2(bodyBottomYmm),
     mmPerPxY,
     pxToMmX,
+    smoothedSpikeCount: radiusSmoothing.smoothedSpikeCount,
     debugProfilePoints,
   };
+}
+
+export function resolveGeneratedBodyBandPolicy(
+  profile: TumblerProfile,
+  hasCandidateImage: boolean,
+): NonNullable<TumblerProfile["generatedModelPolicy"]> | null {
+  return profile.generatedModelPolicy ?? (
+    profile.shapeType === "straight" && hasCandidateImage
+      ? { strategy: "body-band-lathe" as const }
+      : null
+  );
+}
+
+function shouldUseGenericStraightPhotoFitGuard(profile: TumblerProfile): boolean {
+  return !profile.generatedModelPolicy && profile.shapeType === "straight";
 }
 
 async function fitProfileBodyBandFromImage(
@@ -724,7 +929,23 @@ async function fitProfileBodyBandFromImage(
   }
   if (runs.length < 40) return null;
 
-  const maxCenterWidth = percentile(runs.map((run) => run.width), 0.95);
+  const usesGenericStraightPhotoGuard = shouldUseGenericStraightPhotoFitGuard(profile);
+  const rawMaxCenterWidth = percentile(runs.map((run) => run.width), 0.95);
+  const verticalSpanPx = bounds.maxY - bounds.minY + 1;
+  const middleBodyWidths = runs
+    .filter((run) =>
+      run.y >= bounds.minY + verticalSpanPx * 0.18 &&
+      run.y <= bounds.minY + verticalSpanPx * 0.82,
+    )
+    .map((run) => run.width);
+  const middleBodyWidth = percentile(middleBodyWidths, 0.65);
+  const maxCenterWidth = usesGenericStraightPhotoGuard && middleBodyWidth > 0
+    ? Math.min(rawMaxCenterWidth, Math.max(middleBodyWidth, percentile(middleBodyWidths, 0.75)))
+    : rawMaxCenterWidth;
+  const fitWarnings: string[] = [];
+  if (usesGenericStraightPhotoGuard && rawMaxCenterWidth > maxCenterWidth * 1.18) {
+    fitWarnings.push("shadow-run-rejected");
+  }
   const stableRows = runs.filter((run) => run.width >= maxCenterWidth * 0.72);
   if (stableRows.length < 20) return null;
 
@@ -796,16 +1017,14 @@ async function fitProfileBodyBandFromImage(
     maxCenterWidthPx: maxCenterWidth,
     minTraceWidthRatio: fitDebugProfile.minTraceWidthRatio,
   });
-  const bodyTop = bodyTrace.topPx;
-  const bodyBottom = bodyTrace.bottomPx;
+  let bodyTop = bodyTrace.topPx;
+  let bodyBottom = bodyTrace.bottomPx;
   if (bodyBottom - bodyTop < fullHeightPx * 0.5) return null;
 
-  const bodyRuns = runs.filter((run) => run.y >= bodyTop && run.y <= bodyBottom);
-  const profileFullBottom = Math.max(fullBottom, bodyBottom);
-  const profileFullHeightPx = profileFullBottom - fullTop + 1;
+  let bodyRuns = runs.filter((run) => run.y >= bodyTop && run.y <= bodyBottom);
   const rimRows = runs.filter((run) => run.y >= rimTop && run.y <= rimBottom);
   const rimHalfWidthPx = avg(rimRows.map((run) => Math.max(1, run.whole.right - centerX)));
-  const measurementBand = deriveReferenceMeasurementBand({
+  let measurementBand = deriveReferenceMeasurementBand({
     runs,
     bodyTopPx: paintedBodyTop,
     bodyBottomPx: bodyBottom,
@@ -815,9 +1034,41 @@ async function fitProfileBodyBandFromImage(
     bandHeightRatio: fitDebugProfile.measurementBandRatio?.height,
   });
 
+  if (usesGenericStraightPhotoGuard) {
+    const stableBodyRunFilter = filterStableStraightBodyProfileRuns({
+      runs: bodyRuns,
+      centerXPx: centerX,
+      trustedOutsideDiameterMm: profile.outsideDiameterMm,
+      referenceBandWidthPx: measurementBand.widthPx,
+      lowerShelfStartYPx: bodyTop + (bodyBottom - bodyTop) * 0.86,
+      minConsecutiveRows: Math.max(36, Math.round(bodyRuns.length * 0.45)),
+    });
+    fitWarnings.push(...stableBodyRunFilter.warnings);
+    if (stableBodyRunFilter.usedFallback) return null;
+
+    const stableBodyRunYs = new Set(stableBodyRunFilter.runs.map((run) => run.y));
+    bodyRuns = bodyRuns.filter((run) => stableBodyRunYs.has(run.y));
+    if (bodyRuns.length < 36) return null;
+    bodyTop = bodyRuns[0].y;
+    bodyBottom = bodyRuns[bodyRuns.length - 1].y;
+    measurementBand = deriveReferenceMeasurementBand({
+      runs: bodyRuns,
+      bodyTopPx: bodyTop,
+      bodyBottomPx: bodyBottom,
+      centerXPx: centerX,
+      fallbackHalfWidthPx: Number.isFinite(rimHalfWidthPx) && rimHalfWidthPx > 0 ? rimHalfWidthPx : maxCenterWidth / 2,
+      bandTopRatio: fitDebugProfile.measurementBandRatio?.top,
+      bandHeightRatio: fitDebugProfile.measurementBandRatio?.height,
+    });
+  }
+
+  const profileFullBottom = usesGenericStraightPhotoGuard
+    ? bodyBottom
+    : Math.max(fullBottom, bodyBottom);
+  const profileFullHeightPx = profileFullBottom - fullTop + 1;
   const profileFit = buildLatheProfileFromRows({
     profile,
-    runs,
+    runs: bodyRuns,
     fullTop,
     fullHeightPx: profileFullHeightPx,
     bodyTop,
@@ -858,6 +1109,9 @@ async function fitProfileBodyBandFromImage(
     taperScore * 1.2 +
     portraitScore * 0.8,
   );
+  if (profileFit.smoothedSpikeCount > 0) {
+    fitWarnings.push("isolated-radius-spike-smoothed");
+  }
 
   const fitDebug: TumblerItemLookupFitDebug = {
     kind: "lathe-body-fit",
@@ -894,6 +1148,7 @@ async function fitProfileBodyBandFromImage(
     maxCenterWidthPx: round2(maxCenterWidth),
     referenceHalfWidthPx: measurementBand.referenceHalfWidthPx,
     fitScore,
+    warnings: uniqueStrings(fitWarnings),
     profilePoints: profileFit.debugProfilePoints,
   };
 
@@ -1020,6 +1275,19 @@ export function evaluateGenericStraightDiameterEnvelope(args: {
   };
 }
 
+export function buildGenericStraightDiameterEnvelopeWarning(args: {
+  trustedOutsideDiameterMm?: number | null;
+  bodyProfile: Array<{ radiusMm: number }>;
+}): string | null {
+  const envelope = evaluateGenericStraightDiameterEnvelope(args);
+  if (!envelope.exceedsEnvelope || !envelope.trustedOutsideDiameterMm) {
+    return null;
+  }
+
+  const imageDiameterMm = round2(envelope.maxRadiusMm * 2);
+  return `diameter-envelope-clamped: Image-derived straight tumbler contour exceeded trusted diameter envelope (${imageDiameterMm} mm vs ${envelope.trustedOutsideDiameterMm} mm); using trusted profile dimensions.`;
+}
+
 function constrainGenericStraightFitToTrustedDiameter(args: {
   profile: TumblerProfile;
   fit: ProfileSilhouetteFit;
@@ -1030,11 +1298,11 @@ function constrainGenericStraightFitToTrustedDiameter(args: {
     return { fit: args.fit, warning: null };
   }
 
-  const envelope = evaluateGenericStraightDiameterEnvelope({
+  const warning = buildGenericStraightDiameterEnvelopeWarning({
     trustedOutsideDiameterMm: args.profile.outsideDiameterMm,
     bodyProfile: args.fit.bodyProfile,
   });
-  if (!envelope.exceedsEnvelope || !envelope.trustedOutsideDiameterMm) {
+  if (!warning) {
     return { fit: args.fit, warning: null };
   }
 
@@ -1044,11 +1312,9 @@ function constrainGenericStraightFitToTrustedDiameter(args: {
     rimColorHex: args.fit.rimColorHex,
     fitDebug: null,
   };
-  const imageDiameterMm = round2(envelope.maxRadiusMm * 2);
   return {
     fit: fallbackFit,
-    warning:
-      `Image-derived straight tumbler contour exceeded trusted diameter envelope (${imageDiameterMm} mm vs ${envelope.trustedOutsideDiameterMm} mm); using trusted profile dimensions.`,
+    warning,
   };
 }
 
@@ -1156,18 +1422,14 @@ export async function ensureGeneratedTumblerGlb(
     primaryImageUrl ||
     (options?.imageUrls ?? []).some((value) => Boolean(value)),
   );
-  const generatedModelPolicy = profile.generatedModelPolicy ?? (
-    profile.shapeType === "straight" && hasCandidateImage
-      ? { strategy: "body-band-lathe" as const }
-      : null
-  );
+  const generatedModelPolicy = resolveGeneratedBodyBandPolicy(profile, hasCandidateImage);
   if (generatedModelPolicy?.strategy !== "body-band-lathe") {
     return { glbPath: "", fitDebug: null };
   }
 
   const fallbackFit: ProfileSilhouetteFit = buildFallbackBodyProfile(profile);
   const warnings: string[] = [];
-  const usesGenericStraightPolicy = !profile.generatedModelPolicy && profile.shapeType === "straight";
+  const usesGenericStraightPolicy = shouldUseGenericStraightPhotoFitGuard(profile);
   let fit: ProfileSilhouetteFit = fallbackFit;
 
   const candidateImageUrls = [
@@ -1210,12 +1472,16 @@ export async function ensureGeneratedTumblerGlb(
     }
   }
 
+  if (hasCandidateImage && !fit.fitDebug) {
+    warnings.push("dimension-fallback-used: no trustworthy image-derived body contour was available; using trusted profile dimensions.");
+  }
+
   const fileStem = generatedModelPolicy.fileStem?.trim() || `${profile.id}-bodyfit-v5`;
   const fileName = `${fileStem}.glb`;
   return {
     glbPath: await writeGeneratedGlb(fileName, buildProfileBodyBandScene(profile, fit)),
     fitDebug: fit.fitDebug ?? null,
-    warnings,
+    warnings: uniqueStrings(warnings),
   };
 }
 

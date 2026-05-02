@@ -131,6 +131,7 @@ export interface TumblerItemLookupFitDebug {
   handleHoleBottomPx?: number | null;
   handleBarWidthPx?: number | null;
   fitScore: number;
+  warnings?: string[];
   profilePoints: TumblerItemLookupFitProfilePoint[];
 }
 
