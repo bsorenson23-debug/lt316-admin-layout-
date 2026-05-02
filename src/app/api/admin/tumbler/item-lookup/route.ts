@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { lookupTumblerItem } from "@/server/tumbler/lookupTumblerItem";
+import {
+  lookupTumblerItem,
+  TumblerLookupManualEntryError,
+} from "@/server/tumbler/lookupTumblerItem";
 
 export const runtime = "nodejs";
 
@@ -17,6 +20,16 @@ export async function POST(request: NextRequest) {
     const result = await lookupTumblerItem({ lookupInput });
     return NextResponse.json(result);
   } catch (error) {
+    if (error instanceof TumblerLookupManualEntryError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          manualEntryRequired: true,
+        },
+        { status: 422 },
+      );
+    }
+
     return NextResponse.json(
       {
         error:

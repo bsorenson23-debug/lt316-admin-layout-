@@ -26,7 +26,7 @@ import {
 } from "@/lib/tumblerPreviewModelState";
 import { resolveProductTemplateModelLanes } from "@/lib/productTemplateModelLanes";
 import { detectTumblerFromImage } from "@/lib/autoDetect";
-import { lookupTumblerItem } from "@/lib/tumblerItemLookup";
+import { TumblerLookupManualEntryError, lookupTumblerItem } from "@/lib/tumblerItemLookup";
 import { summarizeProfileAuthorityBadge } from "@/lib/profileAuthorityBadge";
 import { KNOWN_MATERIAL_PROFILES } from "@/data/materialProfiles";
 import { DEFAULT_ROTARY_PLACEMENT_PRESETS } from "@/data/rotaryPlacementPresets";
@@ -599,11 +599,16 @@ function formatLookupVariantStatus(
 
 function buildLookupTemplateName(result: TumblerItemLookupResponse, fallback: string): string {
   const parts: string[] = [];
+  const capacityOz =
+    result.capacityOz ??
+    result.dimensions.selectedSizeOz ??
+    result.dimensions.dimensionSourceSizeOz ??
+    null;
   if (result.brand) parts.push(result.brand);
   if (result.model) parts.push(result.model);
   const normalizedModel = result.model?.toLowerCase() ?? "";
-  if (result.capacityOz && !normalizedModel.includes(`${result.capacityOz}oz`) && !normalizedModel.includes(`${result.capacityOz} oz`)) {
-    parts.push(`${result.capacityOz}oz`);
+  if (capacityOz && !normalizedModel.includes(`${capacityOz}oz`) && !normalizedModel.includes(`${capacityOz} oz`)) {
+    parts.push(`${capacityOz}oz`);
   }
   return parts.length > 0 ? parts.join(" ") : result.title ?? fallback;
 }
@@ -752,6 +757,7 @@ export function TemplateCreateForm({
   );
   const [lookupError, setLookupError] = React.useState<string | null>(null);
   const [lookupDebugImageUrl, setLookupDebugImageUrl] = React.useState("");
+  const [manualDimensionEntryOpen, setManualDimensionEntryOpen] = React.useState(false);
 
   // ── Dimensions ───────────────────────────────────────────────────
   const [diameterMm, setDiameterMm] = React.useState(editingTemplate?.dimensions.diameterMm ?? 0);
@@ -2210,17 +2216,20 @@ export function TemplateCreateForm({
     brand: string | null | undefined;
     model: string | null | undefined;
     capacityOz?: number | null;
+    matchedProfileId?: string | null;
     scaleDiameterMm?: number | null;
     topDiameterMm?: number | null;
     bottomDiameterMm?: number | null;
     fullProductHeightMm?: number | null;
     bodyHeightMm?: number | null;
   }) => {
-    const profileId = findTumblerProfileIdForBrandModel({
-      brand: args.brand,
-      model: args.model,
-      capacityOz: args.capacityOz,
-    });
+    const profileId = args.matchedProfileId !== undefined
+      ? args.matchedProfileId
+      : findTumblerProfileIdForBrandModel({
+          brand: args.brand,
+          model: args.model,
+          capacityOz: args.capacityOz,
+        });
     const matchedProfile = profileId ? getTumblerProfileById(profileId) : null;
 
     if (args.scaleDiameterMm) {
@@ -2281,6 +2290,7 @@ export function TemplateCreateForm({
     setLookupResult(null);
     setDetectError(null);
     setLookupDebugImageUrl("");
+    setManualDimensionEntryOpen(false);
 
     try {
       const result = await lookupTumblerItem(raw);
@@ -2288,12 +2298,18 @@ export function TemplateCreateForm({
         requireScaleDiameter: true,
         requireExactVariantMatch: true,
       });
+      const resolvedCapacityOz =
+        result.capacityOz ??
+        result.dimensions.selectedSizeOz ??
+        result.dimensions.dimensionSourceSizeOz ??
+        null;
       setLookupResult(result);
       setLookupDimensionsSnapshot(result.dimensions);
+      setManualDimensionEntryOpen(false);
 
       setName(buildLookupTemplateName(result, raw));
       if (result.brand) setBrand(result.brand);
-      if (result.capacityOz) setCapacity(`${result.capacityOz}oz`);
+      if (resolvedCapacityOz) setCapacity(`${resolvedCapacityOz}oz`);
       setProductType("tumbler");
       setGlbPath(result.glbPath || "");
 
@@ -2305,7 +2321,8 @@ export function TemplateCreateForm({
       applyProfileOrDimensions({
         brand: result.brand,
         model: result.model,
-        capacityOz: result.capacityOz,
+        capacityOz: resolvedCapacityOz,
+        matchedProfileId: result.matchedProfileId,
         scaleDiameterMm: authoritySummary.readyForLookupScale
           ? authoritySummary.scaleDiameterMm ?? null
           : null,
@@ -2351,6 +2368,13 @@ export function TemplateCreateForm({
         }
       }
     } catch (e) {
+      if (e instanceof TumblerLookupManualEntryError) {
+        setManualDimensionEntryOpen(true);
+        setLookupError(
+          `${e.message} Manual dimensional entry is open below.`,
+        );
+        return;
+      }
       setLookupError(
         e instanceof Error ? e.message : "Item lookup failed. Fill in manually.",
       );
@@ -3936,6 +3960,7 @@ export function TemplateCreateForm({
                     setLookupError(null);
                     setLookupInput("");
                     setLookupDebugImageUrl("");
+                    setManualDimensionEntryOpen(false);
                   }}
                 >
                   Clear lookup
@@ -4072,6 +4097,23 @@ export function TemplateCreateForm({
             )}
 
             {lookupError && <div className={styles.detectErrorBanner}>{lookupError}</div>}
+            {manualDimensionEntryOpen && !lookupResult && (
+              <div
+                className={styles.lookupSummary}
+                data-testid="template-create-manual-entry-fallback"
+              >
+                <div className={styles.lookupSummaryHeader}>
+                  <div className={styles.lookupSummaryTitle}>Manual dimensional entry required</div>
+                  <div className={styles.lookupBadgeRow}>
+                    <span className={styles.lookupBadgePrimary}>Needs dimensions</span>
+                    <span className={styles.lookupBadgeMuted}>Manual fallback</span>
+                  </div>
+                </div>
+                <div className={styles.lookupMetrics}>
+                  <span>Enter diameter, wrap height context, and product photo manually before BODY REFERENCE review.</span>
+                </div>
+              </div>
+            )}
 
             {lookupResult?.fitDebug && lookupDebugImageUrl && templateCreateDiagnosticsVisible && (
               <details className={styles.compactDetails} open={templateCreateDiagnosticsExpanded}>
@@ -6069,7 +6111,11 @@ export function TemplateCreateForm({
           </span>
         </div>
 
-        <details className={styles.compactDetails} data-testid="template-reference-dimensions-details">
+        <details
+          className={styles.compactDetails}
+          data-testid="template-reference-dimensions-details"
+          open={manualDimensionEntryOpen || undefined}
+        >
           <summary className={styles.compactDetailsSummary}>
             Reference dimensions
           </summary>

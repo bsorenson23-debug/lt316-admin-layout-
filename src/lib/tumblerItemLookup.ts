@@ -1,5 +1,33 @@
 import type { TumblerItemLookupResponse } from "@/types/tumblerItemLookup";
 
+export class TumblerLookupManualEntryError extends Error {
+  readonly manualEntryRequired = true;
+  readonly status: number;
+  readonly payload: unknown;
+
+  constructor(
+    message = "Item lookup could not extract usable dimensions. Enter the tumbler dimensions manually.",
+    options: { status?: number; payload?: unknown } = {},
+  ) {
+    super(message);
+    this.name = "TumblerLookupManualEntryError";
+    this.status = options.status ?? 422;
+    this.payload = options.payload;
+    Object.setPrototypeOf(this, TumblerLookupManualEntryError.prototype);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readErrorMessage(payload: unknown, fallback: string): string {
+  if (isRecord(payload) && typeof payload.error === "string" && payload.error.trim()) {
+    return payload.error;
+  }
+  return fallback;
+}
+
 export async function lookupTumblerItem(
   lookupInput: string,
 ): Promise<TumblerItemLookupResponse> {
@@ -11,16 +39,21 @@ export async function lookupTumblerItem(
     body: JSON.stringify({ lookupInput }),
   });
 
-  const payload = await res.json();
+  let payload: unknown = null;
+  try {
+    payload = await res.json();
+  } catch {
+    payload = null;
+  }
 
   if (!res.ok) {
-    const message =
-      payload &&
-      typeof payload === "object" &&
-      "error" in payload &&
-      typeof payload.error === "string"
-        ? payload.error
-        : "Item lookup failed. Please retry.";
+    const message = readErrorMessage(payload, "Item lookup failed. Please retry.");
+    if (res.status === 422 || (isRecord(payload) && payload.manualEntryRequired === true)) {
+      throw new TumblerLookupManualEntryError(message, {
+        status: res.status,
+        payload,
+      });
+    }
     throw new Error(message);
   }
 

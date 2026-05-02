@@ -17,10 +17,50 @@ import type {
 } from "../../types/tumblerItemLookup.ts";
 import { access } from "node:fs/promises";
 import path from "node:path";
+import OpenAI from "openai";
+import * as cheerio from "cheerio";
 import { computeWrapWidthFromDiameterMm } from "../../lib/productDimensionAuthority.ts";
 import { generatedModelExists } from "../models/generatedModelStorage.ts";
 import { ensureGeneratedTumblerGlb } from "./generateTumblerModel.ts";
 import { extractShopifySelectedVariant } from "./shopifyProductVariant.ts";
+
+const LLM_PAGE_TEXT_LIMIT = 18_000;
+
+export class TumblerLookupManualEntryError extends Error {
+  readonly manualEntryRequired = true;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "TumblerLookupManualEntryError";
+  }
+}
+
+export interface OpenGraphProductMetadata {
+  title: string | null;
+  imageUrl: string | null;
+}
+
+export interface OpenAiTumblerDimensionExtraction {
+  diameterMm: number;
+  heightMm: number;
+  capacityOz: number | null;
+  confidence?: number | null;
+  notes?: string[];
+  rawJson?: string;
+}
+
+export interface PageDimensionExtractionInput {
+  lookupInput: string;
+  resolvedUrl: string;
+  title: string | null;
+  pageText: string;
+  selectedSizeOz: number | null;
+  selectedColorOrFinish: string | null;
+}
+
+export type PageDimensionExtractor = (
+  input: PageDimensionExtractionInput,
+) => Promise<OpenAiTumblerDimensionExtraction | null>;
 
 const IMAGE_META_NAMES = [
   "og:image",
@@ -215,6 +255,8 @@ function getProfileAuthorityLabel(authority: TumblerProfileAuthority): string {
       return "Exact profile";
     case "official-dimensions-over-profile":
       return "Official dimensions";
+    case "dynamic-llm-extracted":
+      return "Dynamic LLM dimensions";
     case "inferred-profile":
       return "Inferred profile";
     case "lookup-dimensions-only":
@@ -237,6 +279,10 @@ function getSourceModelAvailabilityLabel(availability: TumblerSourceModelAvailab
     default:
       return "Source model unavailable";
   }
+}
+
+function manualEntryError(message: string): TumblerLookupManualEntryError {
+  return new TumblerLookupManualEntryError(`${message} Enter the tumbler dimensions manually.`);
 }
 
 function isUsableLookupDimensions(dimensions: TumblerItemLookupDimensions | null | undefined): boolean {
@@ -303,11 +349,21 @@ function classifyProfileAuthority(args: {
   }
 
   if (isUsableLookupDimensions(args.dimensions)) {
+    const sourceKind = args.dimensions?.dimensionSourceKind;
+    if (sourceKind === "llm-page") {
+      return {
+        authority: "dynamic-llm-extracted",
+        reason: "OpenAI extracted usable dimensions directly from the product page without relying on an internal profile.",
+        requiresBodyReferenceReview: true,
+      };
+    }
+    const isTrustedLookupDimensionSource =
+      args.sourceKind === "official";
     return {
-      authority: args.sourceKind === "official" ? "lookup-dimensions-only" : "needs-body-reference",
+      authority: isTrustedLookupDimensionSource ? "lookup-dimensions-only" : "needs-body-reference",
       reason: args.sourceKind === "official"
-        ? "Parsed usable dimensions from an official page without an exact internal profile."
-        : "Parsed dimensions without enough profile authority for source model trust.",
+          ? "Parsed usable dimensions from an official page without an exact internal profile."
+          : "Parsed dimensions without enough profile authority for source model trust.",
       requiresBodyReferenceReview: true,
     };
   }
@@ -324,26 +380,25 @@ interface ParsedDimensionCandidate {
   score: number;
 }
 
+function parseHtml(html: string): cheerio.CheerioAPI {
+  return cheerio.load(html);
+}
+
 function extractMetaContent(html: string, metaName: string): string | null {
-  const escaped = metaName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const patterns = [
-    new RegExp(`<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["']`, "i"),
-    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["']`, "i"),
-    new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']+)["']`, "i"),
-    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${escaped}["']`, "i"),
-  ];
-  for (const pattern of patterns) {
-    const match = html.match(pattern);
-    if (match?.[1]) return decodeHtml(match[1]);
-  }
-  return null;
+  const $ = parseHtml(html);
+  const value =
+    $(`meta[property="${metaName}"]`).first().attr("content") ??
+    $(`meta[name="${metaName}"]`).first().attr("content") ??
+    null;
+  return value ? decodeHtml(value).trim() : null;
 }
 
 function extractTitle(html: string): string | null {
   const title = extractMetaContent(html, "og:title");
   if (title) return title;
-  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return match?.[1] ? decodeHtml(match[1].trim()) : null;
+  const $ = parseHtml(html);
+  const fallbackTitle = $("title").first().text().trim();
+  return fallbackTitle ? decodeHtml(fallbackTitle) : null;
 }
 
 function resolveUrl(baseUrl: string, maybeUrl: string | null): string | null {
@@ -355,7 +410,25 @@ function resolveUrl(baseUrl: string, maybeUrl: string | null): string | null {
   }
 }
 
+export function extractOpenGraphProductMetadata(html: string, baseUrl: string): OpenGraphProductMetadata {
+  return {
+    title: extractMetaContent(html, "og:title"),
+    imageUrl: resolveUrl(baseUrl, extractMetaContent(html, "og:image")),
+  };
+}
+
+export function extractPageBodyText(html: string): string {
+  const $ = parseHtml(html);
+  $("script, style, noscript, svg").remove();
+  const bodyText = $("body").text() || $.root().text();
+  return decodeHtml(bodyText)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, LLM_PAGE_TEXT_LIMIT);
+}
+
 function extractImageUrls(html: string, baseUrl: string): string[] {
+  const $ = parseHtml(html);
   const urls = new Set<string>();
   const addUrl = (value: string | null | undefined) => {
     const resolved = resolveUrl(baseUrl, decodeHtml(value ?? ""));
@@ -367,6 +440,17 @@ function extractImageUrls(html: string, baseUrl: string): string[] {
   for (const metaName of IMAGE_META_NAMES) {
     addUrl(extractMetaContent(html, metaName));
   }
+
+  $("img, source").each((_, element) => {
+    const candidate =
+      $(element).attr("src") ??
+      $(element).attr("data-src") ??
+      $(element).attr("data-image") ??
+      $(element).attr("data-zoom-image") ??
+      null;
+    addUrl(candidate);
+    return urls.size < 16;
+  });
 
   const ldImagePattern = /"image"\s*:\s*(?:"([^"]+)"|\[([\s\S]*?)\])/gi;
   for (const match of html.matchAll(ldImagePattern)) {
@@ -393,6 +477,158 @@ function extractImageUrls(html: string, baseUrl: string): string[] {
   }
 
   return [...urls];
+}
+
+function normalizePositiveNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/[^\d.]+/g, ""));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeCapacityOz(value: unknown): number | null {
+  const parsed = normalizePositiveNumber(value);
+  if (parsed === null) return null;
+  if (parsed < 1 || parsed > 160) return null;
+  return Math.round(parsed);
+}
+
+function normalizeConfidence(value: unknown): number | null {
+  const parsed = normalizePositiveNumber(value);
+  if (parsed === null) return null;
+  return Math.max(0, Math.min(1, round2(parsed)));
+}
+
+export function parseOpenAiDimensionExtraction(raw: string): OpenAiTumblerDimensionExtraction | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  try {
+    const jsonText = trimmed.match(/\{[\s\S]*\}/)?.[0] ?? trimmed;
+    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+    const diameterMm = normalizePositiveNumber(parsed.diameterMm);
+    const heightMm = normalizePositiveNumber(parsed.heightMm);
+    const capacityOz = normalizeCapacityOz(parsed.capacityOz);
+
+    if (diameterMm === null || heightMm === null) return null;
+    if (diameterMm < 35 || diameterMm > 180) return null;
+    if (heightMm < 70 || heightMm > 420) return null;
+
+    const notes = Array.isArray(parsed.notes)
+      ? parsed.notes.filter((note): note is string => typeof note === "string")
+      : [];
+
+    return {
+      diameterMm: round2(diameterMm),
+      heightMm: round2(heightMm),
+      capacityOz,
+      confidence: normalizeConfidence(parsed.confidence),
+      notes,
+      rawJson: jsonText,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function extractDimensionsWithOpenAi(
+  input: PageDimensionExtractionInput,
+): Promise<OpenAiTumblerDimensionExtraction | null> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) return null;
+
+  const client = new OpenAI({ apiKey });
+  const completion = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You extract physical dimensions for laser engraving tumbler setup.",
+          "Return only a strict JSON object with keys diameterMm, heightMm, and capacityOz.",
+          "diameterMm is the outside body/cylinder diameter in millimeters.",
+          "heightMm is the full physical product height in millimeters.",
+          "capacityOz is fluid capacity in ounces.",
+          "Convert inches to millimeters before returning values.",
+          "Use null for unknown fields. Do not include markdown or extra keys.",
+        ].join(" "),
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          url: input.resolvedUrl,
+          title: input.title,
+          selectedSizeOz: input.selectedSizeOz,
+          selectedColorOrFinish: input.selectedColorOrFinish,
+          pageText: input.pageText,
+        }),
+      },
+    ],
+  });
+
+  const raw = completion.choices[0]?.message?.content ?? "";
+  return parseOpenAiDimensionExtraction(raw);
+}
+
+function buildLlmExtractedDimensions(args: {
+  extraction: OpenAiTumblerDimensionExtraction;
+  resolvedUrl: string;
+  lookupInput: string;
+  title: string | null;
+  selectedSizeOz: number | null;
+  selectedColorOrFinish: string | null;
+  availableSizeOz: number[];
+  pageText: string;
+}): TumblerItemLookupDimensions {
+  const capacityOz = args.selectedSizeOz ?? args.extraction.capacityOz;
+  const availableSizeOz = [...new Set([
+    ...args.availableSizeOz,
+    ...(capacityOz ? [capacityOz] : []),
+  ])].sort((left, right) => left - right);
+  const diameterMm = args.extraction.diameterMm;
+  const overallHeightMm = args.extraction.heightMm;
+  const usableHeightMm = round2(overallHeightMm * 0.78);
+  const variantLabel = buildVariantLabel({
+    selectedSizeOz: capacityOz,
+    selectedColorOrFinish: args.selectedColorOrFinish,
+    fallbackLabel: args.title,
+  });
+
+  return {
+    lookupProductId: args.resolvedUrl,
+    productUrl: args.resolvedUrl,
+    selectedVariantId: normalizeVariantId(variantLabel),
+    selectedVariantLabel: variantLabel,
+    selectedSizeOz: capacityOz,
+    selectedColorOrFinish: args.selectedColorOrFinish,
+    availableVariantLabels: availableSizeOz.map((value) => `${value} oz`),
+    availableSizeOz,
+    dimensionSourceUrl: args.resolvedUrl,
+    dimensionSourceText: args.pageText.slice(0, 600),
+    dimensionSourceSizeOz: args.extraction.capacityOz,
+    dimensionSourceKind: "llm-page",
+    titleSizeOz: parseCapacityOz(args.title ?? args.lookupInput),
+    confidence: args.extraction.confidence ?? 0.72,
+    dimensionAuthority: "diameter-primary",
+    diameterMm,
+    bodyDiameterMm: diameterMm,
+    wrapDiameterMm: diameterMm,
+    wrapWidthMm: computeWrapWidthFromDiameterMm(diameterMm) ?? null,
+    fullProductHeightMm: overallHeightMm,
+    bodyHeightMm: usableHeightMm,
+    heightIncludesLidOrStraw: overallHeightMm > usableHeightMm,
+    overallHeightMm,
+    outsideDiameterMm: diameterMm,
+    topDiameterMm: null,
+    bottomDiameterMm: null,
+    usableHeightMm,
+  };
 }
 
 function tokenizeLookupText(text: string): string[] {
@@ -957,6 +1193,7 @@ async function fetchPage(url: string): Promise<{ html: string; finalUrl: string 
 
 export async function lookupTumblerItem(args: {
   lookupInput: string;
+  dimensionExtractor?: PageDimensionExtractor;
 }): Promise<TumblerItemLookupResponse> {
   const lookupInput = args.lookupInput.trim();
   let resolvedUrl: string | null = null;
@@ -974,12 +1211,35 @@ export async function lookupTumblerItem(args: {
   let selectedVariantId: string | null = null;
   let selectedVariantLabel: string | null = null;
   let selectedVariantImageUrl: string | null = null;
+  let pageText = "";
 
   if (isLikelyUrl(lookupInput)) {
-    const { html, finalUrl } = await fetchPage(lookupInput);
+    let html: string;
+    let finalUrl: string;
+    try {
+      const fetchedPage = await fetchPage(lookupInput);
+      html = fetchedPage.html;
+      finalUrl = fetchedPage.finalUrl;
+    } catch (error) {
+      throw manualEntryError(
+        error instanceof Error
+          ? `Could not fetch the product page: ${error.message}.`
+          : "Could not fetch the product page.",
+      );
+    }
+
     resolvedUrl = finalUrl;
-    title = extractTitle(html);
+    const openGraph = extractOpenGraphProductMetadata(html, finalUrl);
+    if (!openGraph.title || !openGraph.imageUrl) {
+      throw manualEntryError("Product page is missing required Open Graph title or image metadata.");
+    }
+
+    title = openGraph.title ?? extractTitle(html);
     imageUrls = extractImageUrls(html, finalUrl);
+    if (openGraph.imageUrl && !imageUrls.includes(openGraph.imageUrl)) {
+      imageUrls = [openGraph.imageUrl, ...imageUrls];
+    }
+    pageText = extractPageBodyText(html);
     const selectedVariant = extractShopifySelectedVariant(html, finalUrl);
     const urlVariant = extractUrlVariantParams(finalUrl);
     selectedVariantLabel = selectedVariant?.title ?? urlVariant.selectedVariantLabel;
@@ -988,7 +1248,7 @@ export async function lookupTumblerItem(args: {
     if (selectedVariantImageUrl && !imageUrls.includes(selectedVariantImageUrl)) {
       imageUrls = [selectedVariantImageUrl, ...imageUrls];
     }
-    lookupText = [lookupInput, title, html.slice(0, 12_000)].filter(Boolean).join(" ");
+    lookupText = [lookupInput, title, pageText].filter(Boolean).join(" ");
 
     if (sourceUrlMatchesOfficialCatalogDomain(finalUrl)) sourceKind = "official";
     else if (/academy\.com/i.test(finalUrl)) sourceKind = "retailer";
@@ -1039,13 +1299,102 @@ export async function lookupTumblerItem(args: {
       availableSizeOz: extractAllCapacitiesOz(lookupText),
       lookupProductId: resolvedUrl,
       sourceKind,
-      shapeType: matchedProfile?.shapeType ?? "straight",
+      shapeType: "straight",
     });
     if (scrapedDims?.overallHeightMm) {
       notes.push("Parsed diameter x height dimensions from the product page text.");
     }
   }
-  const capacityOz = titleSizeOz ?? parseCapacityOz(lookupText) ?? matchedProfile?.capacityOz ?? null;
+
+  if (isLikelyUrl(lookupInput) && resolvedUrl && !matchedProfile && !scrapedDims) {
+    const dimensionExtractor = args.dimensionExtractor ?? extractDimensionsWithOpenAi;
+    try {
+      const llmDimensions = await dimensionExtractor({
+        lookupInput,
+        resolvedUrl,
+        title,
+        pageText,
+        selectedSizeOz: titleSizeOz,
+        selectedColorOrFinish,
+      });
+      if (llmDimensions) {
+        scrapedDims = buildLlmExtractedDimensions({
+          extraction: llmDimensions,
+          resolvedUrl,
+          lookupInput,
+          title,
+          selectedSizeOz: titleSizeOz,
+          selectedColorOrFinish,
+          availableSizeOz: extractAllCapacitiesOz(lookupText),
+          pageText,
+        });
+        notes.push("OpenAI extracted product dimensions from the page text.");
+        for (const note of llmDimensions.notes ?? []) {
+          notes.push(`OpenAI note: ${note}`);
+        }
+      }
+    } catch (error) {
+      notes.push(
+        `OpenAI dimension extraction failed: ${error instanceof Error ? error.message : "unknown error"}.`,
+      );
+    }
+  }
+
+  if (isLikelyUrl(lookupInput) && resolvedUrl && !matchedProfile && scrapedDims?.dimensionSourceKind === "llm-page") {
+    const capacityOz =
+      titleSizeOz ??
+      scrapedDims.selectedSizeOz ??
+      scrapedDims.dimensionSourceSizeOz ??
+      parseCapacityOz(lookupText) ??
+      null;
+    const fallbackAsset = await pickFallbackGlbPath({
+      matchedProfileId: null,
+      imageUrl: selectedImageUrl,
+      imageUrls,
+    });
+
+    return {
+      lookupInput,
+      resolvedUrl,
+      title,
+      brand: null,
+      model: title,
+      capacityOz,
+      matchedProfileId: null,
+      profileAuthority: "dynamic-llm-extracted",
+      profileAuthorityLabel: getProfileAuthorityLabel("dynamic-llm-extracted"),
+      profileAuthorityReason:
+        "OpenAI extracted usable product dimensions directly from page text after deterministic lookup found no exact internal profile.",
+      profileConfidence: scrapedDims.confidence ?? null,
+      sourceModelAvailability: fallbackAsset.sourceModelAvailability,
+      sourceModelAvailabilityLabel: getSourceModelAvailabilityLabel(fallbackAsset.sourceModelAvailability),
+      requiresBodyReferenceReview: true,
+      glbPath: fallbackAsset.glbPath,
+      modelStatus: fallbackAsset.glbPath ? "verified-product-model" : "missing-model",
+      modelSourceLabel: fallbackAsset.glbPath ? "Generated straight tumbler source model" : "Source model unavailable",
+      imageUrl: selectedImageUrl,
+      imageUrls,
+      fitDebug: fallbackAsset.fitDebug,
+      dimensions: scrapedDims,
+      mode: "parsed-page",
+      notes: [
+        ...notes,
+        "OpenAI dynamic geometry was used because no exact internal tumbler profile matched.",
+        `GLB fallback: ${fallbackAsset.glbPath || "none available locally"}.`,
+      ],
+      sources,
+    };
+  }
+
+  if (isLikelyUrl(lookupInput) && resolvedUrl && !matchedProfile && !scrapedDims) {
+    throw manualEntryError("Could not extract usable tumbler dimensions from the product page.");
+  }
+
+  const extractedCapacityOz =
+    scrapedDims?.selectedSizeOz ??
+    scrapedDims?.dimensionSourceSizeOz ??
+    null;
+  const capacityOz = titleSizeOz ?? extractedCapacityOz ?? parseCapacityOz(lookupText) ?? matchedProfile?.capacityOz ?? null;
   const brand = matchedProfile?.brand ?? inferBrandFromCatalogText(lookupText);
   const model = matchedProfile?.model ?? inferModelFromCatalogText(lookupText, brand, capacityOz) ?? title;
 

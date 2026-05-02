@@ -3,8 +3,12 @@ import test from "node:test";
 
 import { computeWrapWidthFromDiameterMm } from "../../lib/productDimensionAuthority.ts";
 import {
+  extractOpenGraphProductMetadata,
+  extractPageBodyText,
   lookupTumblerItem,
   parseDuetDimensionsMm,
+  parseOpenAiDimensionExtraction,
+  TumblerLookupManualEntryError,
 } from "./lookupTumblerItem.ts";
 import { ensureGeneratedTumblerGlb } from "./generateTumblerModel.ts";
 
@@ -51,6 +55,61 @@ function installFetchMock(htmlByUrl: Record<string, string>): void {
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+test("Open Graph metadata extraction resolves product title and image", () => {
+  const metadata = extractOpenGraphProductMetadata(`
+    <html>
+      <head>
+        <meta property="og:title" content="Acme Trail Tumbler 18oz Navy" />
+        <meta property="og:image" content="/cdn/acme-trail-tumbler.png" />
+      </head>
+      <body><h1>ignored</h1></body>
+    </html>
+  `, "https://example.com/products/trail");
+
+  assert.deepEqual(metadata, {
+    title: "Acme Trail Tumbler 18oz Navy",
+    imageUrl: "https://example.com/cdn/acme-trail-tumbler.png",
+  });
+});
+
+test("page body text extraction removes scripts and markup", () => {
+  const text = extractPageBodyText(`
+    <html>
+      <body>
+        <script>window.__DATA__ = "do not include";</script>
+        <style>.x { display: none; }</style>
+        <h1>Acme Trail Tumbler</h1>
+        <p>Capacity 18oz with stainless body.</p>
+      </body>
+    </html>
+  `);
+
+  assert.equal(text.includes("do not include"), false);
+  assert.equal(text.includes("Acme Trail Tumbler"), true);
+  assert.equal(text.includes("Capacity 18oz"), true);
+});
+
+test("OpenAI dimension parser accepts strict JSON and rejects non-mm dimensions", () => {
+  const parsed = parseOpenAiDimensionExtraction(JSON.stringify({
+    diameterMm: 88.9,
+    heightMm: 203.2,
+    capacityOz: 18,
+    confidence: 0.91,
+    notes: ["converted from manufacturer inches"],
+  }));
+
+  assert.deepEqual(parsed, {
+    diameterMm: 88.9,
+    heightMm: 203.2,
+    capacityOz: 18,
+    confidence: 0.91,
+    notes: ["converted from manufacturer inches"],
+    rawJson: "{\"diameterMm\":88.9,\"heightMm\":203.2,\"capacityOz\":18,\"confidence\":0.91,\"notes\":[\"converted from manufacturer inches\"]}",
+  });
+  assert.equal(parseOpenAiDimensionExtraction("{\"diameterMm\":3.5,\"heightMm\":8,\"capacityOz\":18}"), null);
+  assert.equal(parseOpenAiDimensionExtraction("not json"), null);
 });
 
 test("duet parser accepts straight tumbler diameter x height specs", () => {
@@ -155,6 +214,7 @@ test("official dimensions that differ from an internal profile override with a w
         <head>
           <title>RTIC Essential Tumbler 20oz Black</title>
           <meta property="og:title" content="RTIC Essential Tumbler 20oz Black" />
+          <meta property="og:image" content="${PRODUCT_IMAGE_URL}" />
         </head>
         <body>
           <h1>RTIC Essential Tumbler 20oz</h1>
@@ -174,6 +234,142 @@ test("official dimensions that differ from an internal profile override with a w
   assert.equal(
     result.notes.some((note) => note.includes("Official page dimensions override")),
     true,
+  );
+});
+
+test("LLM dimensions create a dynamic parsed-page response without a known profile", async () => {
+  const dynamicUrl = "https://example.com/products/orbit-travel-cup?size=18oz&color=Graphite";
+  const dynamicImageUrl = "https://example.com/images/orbit-travel-cup.png";
+  installFetchMock({
+    [dynamicUrl]: `
+      <html>
+        <head>
+          <meta property="og:title" content="Acme Orbit Travel Cup 18oz Graphite" />
+          <meta property="og:image" content="${dynamicImageUrl}" />
+        </head>
+        <body>
+          <h1>Acme Orbit Travel Cup</h1>
+          <p>Made for commute cup holders. Capacity 18oz.</p>
+          <p>Physical dimensions are listed in a product table image.</p>
+        </body>
+      </html>
+    `,
+  });
+
+  const result = await lookupTumblerItem({
+    lookupInput: dynamicUrl,
+    dimensionExtractor: async (input) => {
+      assert.equal(input.title, "Acme Orbit Travel Cup 18oz Graphite");
+      assert.equal(input.pageText.includes("Capacity 18oz"), true);
+      return {
+        diameterMm: 88.9,
+        heightMm: 203.2,
+        capacityOz: 18,
+        confidence: 0.91,
+        notes: ["manufacturer copy was converted to millimeters"],
+      };
+    },
+  });
+
+  assert.equal(result.mode, "parsed-page");
+  assert.equal(result.matchedProfileId, null);
+  assert.equal(result.profileAuthority, "dynamic-llm-extracted");
+  assert.equal(result.requiresBodyReferenceReview, true);
+  assert.equal(result.title, "Acme Orbit Travel Cup 18oz Graphite");
+  assert.equal(result.capacityOz, 18);
+  assert.equal(result.imageUrl, dynamicImageUrl);
+  assert.equal(result.glbPath, "");
+  assert.equal(result.sourceModelAvailability, "missing-source-model");
+  assert.equal(result.dimensions.dimensionSourceKind, "llm-page");
+  assert.equal(result.dimensions.diameterMm, 88.9);
+  assert.equal(result.dimensions.overallHeightMm, 203.2);
+  assert.equal(result.dimensions.wrapWidthMm, computeWrapWidthFromDiameterMm(88.9));
+  assert.equal(result.notes.some((note) => note.includes("OpenAI extracted product dimensions")), true);
+  assert.equal(result.notes.some((note) => note.includes("no exact internal tumbler profile matched")), true);
+});
+
+test("known profile URL lookups do not call LLM extraction", async () => {
+  const dynamicRticUrl = "https://example.com/products/rtic-compatible?size=20oz&color=Navy";
+  const dynamicImageUrl = PRODUCT_IMAGE_URL;
+  let extractorCalled = false;
+  installFetchMock({
+    [dynamicRticUrl]: `
+      <html>
+        <head>
+          <meta property="og:title" content="RTIC Essential Tumbler 20oz Navy" />
+          <meta property="og:image" content="${dynamicImageUrl}" />
+        </head>
+        <body>
+          <h1>RTIC Essential Tumbler</h1>
+          <p>Capacity 20oz. The product table is rendered client-side.</p>
+        </body>
+      </html>
+    `,
+  });
+
+  const result = await lookupTumblerItem({
+    lookupInput: dynamicRticUrl,
+    dimensionExtractor: async () => {
+      extractorCalled = true;
+      return {
+        diameterMm: 91,
+        heightMm: 199,
+        capacityOz: 20,
+        confidence: 0.88,
+        notes: ["dynamic dimensions should not run"],
+      };
+    },
+  });
+
+  assert.equal(extractorCalled, false);
+  assert.equal(result.mode, "matched-profile");
+  assert.equal(result.matchedProfileId, "rtic-20");
+  assert.equal(result.profileAuthority, "exact-internal-profile");
+  assert.equal(result.profileAuthorityLabel, "Exact profile");
+  assert.equal(result.dimensions.dimensionSourceKind, "internal-profile");
+  assert.equal(result.dimensions.outsideDiameterMm, 93);
+  assert.equal(result.dimensions.overallHeightMm, 190);
+  assert.equal(result.capacityOz, 20);
+});
+
+test("missing Open Graph metadata returns a manual-entry lookup error", async () => {
+  const noOgUrl = "https://example.com/products/no-og-cup";
+  installFetchMock({
+    [noOgUrl]: "<html><head><title>No OG Cup</title></head><body>20oz cup</body></html>",
+  });
+
+  await assert.rejects(
+    () => lookupTumblerItem({ lookupInput: noOgUrl }),
+    (error) => (
+      error instanceof TumblerLookupManualEntryError &&
+      error.message.includes("Open Graph")
+    ),
+  );
+});
+
+test("LLM extraction failure for unknown URL returns a manual-entry lookup error", async () => {
+  const ambiguousUrl = "https://example.com/products/ambiguous-cup";
+  installFetchMock({
+    [ambiguousUrl]: `
+      <html>
+        <head>
+          <meta property="og:title" content="Acme Ambiguous Cup" />
+          <meta property="og:image" content="https://example.com/images/ambiguous-cup.png" />
+        </head>
+        <body><p>Great drinkware with no physical specs.</p></body>
+      </html>
+    `,
+  });
+
+  await assert.rejects(
+    () => lookupTumblerItem({
+      lookupInput: ambiguousUrl,
+      dimensionExtractor: async () => null,
+    }),
+    (error) => (
+      error instanceof TumblerLookupManualEntryError &&
+      error.message.includes("Could not extract usable tumbler dimensions")
+    ),
   );
 });
 

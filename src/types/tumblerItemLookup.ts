@@ -8,6 +8,7 @@ export type TumblerItemLookupMode =
 export type TumblerProfileAuthority =
   | "exact-internal-profile"
   | "official-dimensions-over-profile"
+  | "dynamic-llm-extracted"
   | "inferred-profile"
   | "lookup-dimensions-only"
   | "needs-body-reference"
@@ -16,6 +17,7 @@ export type TumblerProfileAuthority =
 export type TumblerDimensionSourceKind =
   | "internal-profile"
   | "official-page"
+  | "llm-page"
   | "parsed-page"
   | "operator-body-reference"
   | "safe-fallback";
