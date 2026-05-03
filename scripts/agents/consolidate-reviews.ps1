@@ -16,6 +16,12 @@ $ResolvedOutputPath = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $Output
 New-Item -ItemType Directory -Force -Path $ReviewDir, $CurrentDir, $OutboxDir | Out-Null
 Set-Location $RepoRoot
 
+$utilityScript = Join-Path $PSScriptRoot "agent-utils.ps1"
+if (-not (Test-Path -LiteralPath $utilityScript)) {
+  throw "Missing shared utility script: $utilityScript"
+}
+. $utilityScript
+
 function Write-Utf8File {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
@@ -92,25 +98,6 @@ $chatGptRequest = if ($chatGptRequestExists) {
   "No .ai-control/outbox/chatgpt-review-request.md found. Run scripts/agents/write-handoff.ps1 first."
 }
 
-function Get-MarkdownSection {
-  param(
-    [string]$Text,
-    [string]$Heading
-  )
-
-  if ([string]::IsNullOrWhiteSpace($Text)) {
-    return ""
-  }
-
-  $escapedHeading = [regex]::Escape($Heading)
-  $match = [regex]::Match($Text, "(?s)^##\s+$escapedHeading\s*(.*?)(?=^##\s+|\z)", [System.Text.RegularExpressions.RegexOptions]::Multiline)
-  if ($match.Success) {
-    return $match.Groups[1].Value.Trim()
-  }
-
-  return ""
-}
-
 function Test-ClaudeManualPlaceholder {
   param([string]$Text)
 
@@ -142,18 +129,18 @@ function Get-MatchingReviewLines {
     [string]$Pattern
   )
 
-  $ignorePattern = "(?i)^\s*$|^\s*#|^\s*~~~|^\s*-\s*(Generated|Branch|Commit|Mode|Status|Exit code|Write guard):|^\s*-\s*Do not\b|^\s*-\s*Require human approval\b|^\s*Codex is\b|^\s*Read-only review\b|^\s*Claude was not executed\b|^\s*Paste \.ai-control\b|^\s*See \.ai-control\b|^\s*No \.ai-control\b"
-  $matches = New-Object System.Collections.Generic.List[string]
+  $ignorePattern = "(?i)^\s*$|^\s*#|^\s*~~~|^\s*-\s*(Generated|Branch|Commit|Mode|Status):|^\s*Read-only review\b|^\s*Claude was not executed\b|^\s*Paste \.ai-control\b|^\s*See \.ai-control\b|^\s*No \.ai-control\b"
+  $collectedLines = New-Object System.Collections.Generic.List[string]
   foreach ($text in $Texts) {
     foreach ($line in ($text -split "\r?\n")) {
       $trimmed = $line.Trim()
       if ($trimmed -match $Pattern -and $trimmed -notmatch $ignorePattern) {
-        $matches.Add($trimmed)
+        $collectedLines.Add($trimmed)
       }
     }
   }
 
-  return @($matches.ToArray() | Select-Object -First 20)
+  return @($collectedLines.ToArray() | Select-Object -First 20)
 }
 
 function ConvertLinesTo-Bullets {
@@ -167,7 +154,28 @@ function ConvertLinesTo-Bullets {
     return @("- $EmptyText")
   }
 
-  return $values | ForEach-Object { "- $($_.Trim())" }
+  return $values | ForEach-Object { ConvertTo-SafeBulletLine -Line $_ }
+}
+
+function Get-ReviewerExecutionFailures {
+  param([string[]]$Texts)
+
+  $failurePattern = "(?i)(^\s*[-*+]?\s*Exit code\s*:\s*[1-9]\d*\b|^\s*[-*+]?\s*Write guard\s*:\s*FAIL\b|review command failed|failed reviewer execution)"
+  $failures = New-Object System.Collections.Generic.List[string]
+  foreach ($text in $Texts) {
+    foreach ($line in ($text -split "\r?\n")) {
+      $trimmed = $line.Trim()
+      if ([string]::IsNullOrWhiteSpace($trimmed)) {
+        continue
+      }
+
+      if ($trimmed -match $failurePattern) {
+        $failures.Add($trimmed)
+      }
+    }
+  }
+
+  return @($failures.ToArray() | Select-Object -Unique -First 20)
 }
 
 function Test-HandoffValidationFailure {
@@ -208,6 +216,7 @@ function Test-ValidationPending {
 
 function Get-OverallStatus {
   param(
+    [string[]]$ReviewerExecutionFailureLines,
     [string[]]$CriticalLines,
     [string[]]$ImportantLines,
     [string[]]$PendingLines
@@ -224,6 +233,10 @@ function Get-OverallStatus {
 
   if (Test-HandoffValidationFailure -Text $handoffSummary) {
     return "BLOCKED: validation failure reported in handoff."
+  }
+
+  if ($ReviewerExecutionFailureLines.Count -gt 0) {
+    return "BLOCKED: failed reviewer execution detected in review output."
   }
 
   if ($CriticalLines.Count -gt 0) {
@@ -249,7 +262,13 @@ function Get-ExactNextPrompt {
 }
 
 $actualReviewTexts = @(Get-ActualReviewTexts)
+$reviewerExecutionFailureLines = @(Get-ReviewerExecutionFailures -Texts $actualReviewTexts)
 $criticalLines = @(Get-MatchingReviewLines -Texts $actualReviewTexts -Pattern "(?i)\b(P0|critical|severe|unsafe|secret leak|credential leak|blocked|blocker)\b")
+if ($reviewerExecutionFailureLines.Count -gt 0) {
+  foreach ($failureLine in $reviewerExecutionFailureLines) {
+    $criticalLines += "Reviewer execution failure: $failureLine"
+  }
+}
 $importantLines = @(Get-MatchingReviewLines -Texts $actualReviewTexts -Pattern "(?i)\b(P1|P2|important|bug|regression|risk|missing|warning|question)\b")
 $pendingLines = New-Object System.Collections.Generic.List[string]
 if (-not $claudeReviewExists) {
@@ -267,7 +286,7 @@ if (Test-ValidationPending -Text $handoffSummary) {
   $pendingLines.Add("Validation summary is not provided in the handoff.")
 }
 
-$overallStatus = Get-OverallStatus -CriticalLines $criticalLines -ImportantLines $importantLines -PendingLines @($pendingLines)
+$overallStatus = Get-OverallStatus -ReviewerExecutionFailureLines $reviewerExecutionFailureLines -CriticalLines $criticalLines -ImportantLines $importantLines -PendingLines @($pendingLines)
 $exactNextPrompt = Get-ExactNextPrompt -HandoffText $handoffSummary
 
 $lines = @(

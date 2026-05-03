@@ -113,7 +113,7 @@ Output:
 
 The consolidated report includes pass/fail/blocked status, critical findings, important findings, missing validation, reviewer inputs, and the exact next Codex prompt. Codex should treat review findings as advisory until verified against the local codebase.
 
-`BLOCKED` is reserved for missing required handoff input, explicit handoff blockers, failed validation, or real critical reviewer findings. Manual Claude placeholders, missing manual ChatGPT review output, and outbox request prompts are reported as pending review state rather than reviewer findings. When no concrete findings exist but manual review or validation is still pending, the status should be `NEEDS_REVIEW`.
+`BLOCKED` is reserved for missing required handoff input, explicit handoff blockers, failed validation, failed reviewer execution (for example `Exit code: 1`, `Write guard: FAIL`, or `review command failed` in real reviewer output), or real critical reviewer findings. Manual Claude placeholders, missing manual ChatGPT review output, and outbox request prompts are reported as pending review state rather than reviewer findings. When no concrete findings exist but manual review or validation is still pending, the status should be `NEEDS_REVIEW`.
 
 ## 5. Create Next Codex Prompt
 
