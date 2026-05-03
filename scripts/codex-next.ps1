@@ -22,7 +22,7 @@ $ValidationPath = Join-Path $HandoffDir "validation.md"
 $CodexOutputPath = Join-Path $HandoffDir "codex-output.md"
 
 $DefaultValidationCommands = @(
-  "if (Test-Path .\node_modules\.bin\tsc.cmd) { .\node_modules\.bin\tsc.cmd --noEmit --pretty false } else { Write-Error 'Missing local TypeScript compiler at node_modules\.bin\tsc.cmd. Run npm.cmd ci before validation.'; exit 1 }",
+  "if (Get-Command npx.cmd -ErrorAction SilentlyContinue) { npx.cmd tsc --noEmit --pretty false } elseif (Test-Path .\node_modules\.bin\tsc.cmd) { .\node_modules\.bin\tsc.cmd --noEmit --pretty false } else { Write-Error 'Missing npx.cmd and local TypeScript compiler. Run npm.cmd ci before validation.'; exit 1 }",
   "npm.cmd run test:body-reference-contract"
 )
 
@@ -132,6 +132,26 @@ function Assert-SafeCommand {
   }
 }
 
+function Get-SafePowerShellExecutable {
+  $currentProcess = Get-Process -Id $PID -ErrorAction SilentlyContinue
+  if ($null -ne $currentProcess -and -not [string]::IsNullOrWhiteSpace($currentProcess.Path) -and (Test-Path -LiteralPath $currentProcess.Path)) {
+    return $currentProcess.Path
+  }
+
+  $shellName = if ($PSVersionTable.PSEdition -eq "Core") { "pwsh" } else { "powershell" }
+  $shell = Get-Command $shellName -ErrorAction SilentlyContinue
+  if ($null -ne $shell -and -not [string]::IsNullOrWhiteSpace($shell.Source)) {
+    return $shell.Source
+  }
+
+  $fallback = Get-Command "powershell" -ErrorAction SilentlyContinue
+  if ($null -ne $fallback -and -not [string]::IsNullOrWhiteSpace($fallback.Source)) {
+    return $fallback.Source
+  }
+
+  throw "Unable to find a safe PowerShell executable for validation."
+}
+
 function Invoke-ValidationCommand {
   param([Parameter(Mandatory = $true)][string]$Command)
 
@@ -156,7 +176,8 @@ try {
   $parentErrorActionPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = "Continue"
-    $output = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedCommand 2>&1
+    $powerShellExe = Get-SafePowerShellExecutable
+    $output = & $powerShellExe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedCommand 2>&1
     $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $parentErrorActionPreference
@@ -382,6 +403,68 @@ function New-SummaryMarkdown {
   return ($lines -join [Environment]::NewLine)
 }
 
+function Invoke-CodexExecWithPromptFile {
+  param(
+    [Parameter(Mandatory = $true)][string]$CodexPath,
+    [Parameter(Mandatory = $true)][string]$PromptPath
+  )
+
+  $promptText = Get-Content -Raw -LiteralPath $PromptPath
+  $processInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $processInfo.FileName = $CodexPath
+  $processInfo.Arguments = "exec -"
+  $processInfo.WorkingDirectory = $RepoRoot
+  $processInfo.UseShellExecute = $false
+  $processInfo.RedirectStandardInput = $true
+  $processInfo.RedirectStandardOutput = $true
+  $processInfo.RedirectStandardError = $true
+  $processInfo.CreateNoWindow = $true
+
+  $stdout = [System.Text.StringBuilder]::new()
+  $stderr = [System.Text.StringBuilder]::new()
+  $process = [System.Diagnostics.Process]::new()
+  $process.StartInfo = $processInfo
+
+  $stdoutHandler = [System.Diagnostics.DataReceivedEventHandler]{
+    param($sender, $eventArgs)
+    if ($null -ne $eventArgs.Data) {
+      [void]$stdout.AppendLine($eventArgs.Data)
+    }
+  }
+  $stderrHandler = [System.Diagnostics.DataReceivedEventHandler]{
+    param($sender, $eventArgs)
+    if ($null -ne $eventArgs.Data) {
+      [void]$stderr.AppendLine($eventArgs.Data)
+    }
+  }
+
+  $process.add_OutputDataReceived($stdoutHandler)
+  $process.add_ErrorDataReceived($stderrHandler)
+
+  try {
+    [void]$process.Start()
+    $process.BeginOutputReadLine()
+    $process.BeginErrorReadLine()
+    $process.StandardInput.Write($promptText)
+    $process.StandardInput.Close()
+    $process.WaitForExit()
+
+    $combinedOutput = @(
+      $stdout.ToString().TrimEnd()
+      $stderr.ToString().TrimEnd()
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    return [pscustomobject]@{
+      ExitCode = $process.ExitCode
+      Output = ($combinedOutput -join [Environment]::NewLine).Trim()
+    }
+  } finally {
+    $process.remove_OutputDataReceived($stdoutHandler)
+    $process.remove_ErrorDataReceived($stderrHandler)
+    $process.Dispose()
+  }
+}
+
 $branch = Get-TextOrFallback -ScriptBlock { git branch --show-current } -Fallback "(unknown branch)"
 $upstream = Get-TextOrFallback -ScriptBlock { git rev-parse --abbrev-ref --symbolic-full-name "@{u}" } -Fallback "(no upstream)"
 $latestCommit = Get-TextOrFallback -ScriptBlock { git log -1 --format="%H %s" } -Fallback "(no commit)"
@@ -432,19 +515,16 @@ if ($RunNextPrompt) {
     exit 1
   }
 
-  $promptText = Get-Content -Raw -LiteralPath $NextPromptPath
-  $header = "# Codex Output`n`n- Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')`n- Command: $($codex.Source) exec <.codex-handoff/next-prompt.md>`n`n~~~text`n"
+  $header = "# Codex Output`n`n- Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')`n- Command: $($codex.Source) exec - < .codex-handoff/next-prompt.md`n`n~~~text`n"
   Write-Utf8File -Path $CodexOutputPath -Content $header
 
-  $codexOutput = & $codex.Source exec $promptText 2>&1
-  $codexExitCode = $LASTEXITCODE
-  $codexOutputText = (($codexOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine).Trim()
-  Add-Content -LiteralPath $CodexOutputPath -Encoding UTF8 -Value $codexOutputText
-  Add-Content -LiteralPath $CodexOutputPath -Encoding UTF8 -Value "`n~~~`n`nExit code: $codexExitCode`n"
+  $codexResult = Invoke-CodexExecWithPromptFile -CodexPath $codex.Source -PromptPath $NextPromptPath
+  Add-Content -LiteralPath $CodexOutputPath -Encoding UTF8 -Value $codexResult.Output
+  Add-Content -LiteralPath $CodexOutputPath -Encoding UTF8 -Value "`n~~~`n`nExit code: $($codexResult.ExitCode)`n"
 
-  if ($codexExitCode -ne 0) {
-    Write-Error "codex exec failed with exit code $codexExitCode. See .codex-handoff/codex-output.md."
-    exit $codexExitCode
+  if ($codexResult.ExitCode -ne 0) {
+    Write-Error "codex exec failed with exit code $($codexResult.ExitCode). See .codex-handoff/codex-output.md."
+    exit ($codexResult.ExitCode)
   }
 } else {
   if (Test-Path -LiteralPath $CodexOutputPath) {

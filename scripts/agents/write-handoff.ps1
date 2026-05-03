@@ -76,8 +76,16 @@ function Redact-SecretText {
   }
 
   $redacted = $Text
-  $redacted = [regex]::Replace($redacted, '(?i)(api[_-]?key|token|secret|password|authorization|cookie)\s*[:=]\s*\S+', '$1=[REDACTED]')
-  $redacted = [regex]::Replace($redacted, "(?i)bearer\s+[a-z0-9._\-]+", "Bearer [REDACTED]")
+  $secretName = '(?:api[_-]?key|token|secret|password|passwd|pwd|authorization|cookie|connection(?:[_-]?string)?|database[_-]?url|db[_-]?url|mongo(?:db)?[_-]?uri|postgres(?:ql)?[_-]?url|mysql[_-]?url|redis[_-]?url|account[_-]?key)'
+  $secretValue = '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\r\n]*)'
+
+  $redacted = [regex]::Replace($redacted, "(?im)^(\s*(?:export\s+)?[A-Za-z_][\w.-]*$secretName[\w.-]*\s*=\s*)$secretValue", '$1[REDACTED]')
+  $redacted = [regex]::Replace($redacted, "(?im)^(\s*\`$env:[A-Za-z_][\w.-]*$secretName[\w.-]*\s*=\s*)$secretValue", '$1[REDACTED]')
+  $redacted = [regex]::Replace($redacted, "(?im)^(\s*setx\s+[A-Za-z_][\w.-]*$secretName[\w.-]*\s+)$secretValue", '$1[REDACTED]')
+  $redacted = [regex]::Replace($redacted, "(?im)^(\s*[-*]?\s*[A-Za-z0-9_. -]*$secretName[A-Za-z0-9_. -]*\s*[:=]\s*)$secretValue", '$1[REDACTED]')
+  $redacted = [regex]::Replace($redacted, '(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|sqlserver)://[^\s`''")]+', '[REDACTED_CONNECTION_STRING]')
+  $redacted = [regex]::Replace($redacted, '(?i)\b(?:Server|Data Source|Host|User Id|Uid|Password|Pwd|AccountKey)\s*=\s*[^;\r\n]+(?:;[^\r\n]*)?', '[REDACTED_CONNECTION_STRING]')
+  $redacted = [regex]::Replace($redacted, "(?i)bearer\s+[a-z0-9._~+/\-=]+", "Bearer [REDACTED]")
   $redacted = [regex]::Replace($redacted, "sk-ant-[A-Za-z0-9_\-]{20,}", "[REDACTED_API_KEY]")
   $redacted = [regex]::Replace($redacted, "sk-[A-Za-z0-9_\-]{20,}", "[REDACTED_API_KEY]")
   return $redacted

@@ -13,7 +13,7 @@ $CurrentDir = Join-Path $RepoRoot ".ai-control\current"
 $OutboxDir = Join-Path $RepoRoot ".ai-control\outbox"
 $ResolvedOutputPath = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path $RepoRoot $OutputPath }
 
-New-Item -ItemType Directory -Force -Path $ReviewDir, $CurrentDir | Out-Null
+New-Item -ItemType Directory -Force -Path $ReviewDir, $CurrentDir, $OutboxDir | Out-Null
 Set-Location $RepoRoot
 
 function Write-Utf8File {
@@ -34,8 +34,16 @@ function Redact-SecretText {
   }
 
   $redacted = $Text
-  $redacted = [regex]::Replace($redacted, '(?i)(api[_-]?key|token|secret|password|authorization|cookie)\s*[:=]\s*\S+', '$1=[REDACTED]')
-  $redacted = [regex]::Replace($redacted, "(?i)bearer\s+[a-z0-9._\-]+", "Bearer [REDACTED]")
+  $secretName = '(?:api[_-]?key|token|secret|password|passwd|pwd|authorization|cookie|connection(?:[_-]?string)?|database[_-]?url|db[_-]?url|mongo(?:db)?[_-]?uri|postgres(?:ql)?[_-]?url|mysql[_-]?url|redis[_-]?url|account[_-]?key)'
+  $secretValue = '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^\r\n]*)'
+
+  $redacted = [regex]::Replace($redacted, "(?im)^(\s*(?:export\s+)?[A-Za-z_][\w.-]*$secretName[\w.-]*\s*=\s*)$secretValue", '$1[REDACTED]')
+  $redacted = [regex]::Replace($redacted, "(?im)^(\s*\`$env:[A-Za-z_][\w.-]*$secretName[\w.-]*\s*=\s*)$secretValue", '$1[REDACTED]')
+  $redacted = [regex]::Replace($redacted, "(?im)^(\s*setx\s+[A-Za-z_][\w.-]*$secretName[\w.-]*\s+)$secretValue", '$1[REDACTED]')
+  $redacted = [regex]::Replace($redacted, "(?im)^(\s*[-*]?\s*[A-Za-z0-9_. -]*$secretName[A-Za-z0-9_. -]*\s*[:=]\s*)$secretValue", '$1[REDACTED]')
+  $redacted = [regex]::Replace($redacted, '(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|sqlserver)://[^\s`''")]+', '[REDACTED_CONNECTION_STRING]')
+  $redacted = [regex]::Replace($redacted, '(?i)\b(?:Server|Data Source|Host|User Id|Uid|Password|Pwd|AccountKey)\s*=\s*[^;\r\n]+(?:;[^\r\n]*)?', '[REDACTED_CONNECTION_STRING]')
+  $redacted = [regex]::Replace($redacted, "(?i)bearer\s+[a-z0-9._~+/\-=]+", "Bearer [REDACTED]")
   $redacted = [regex]::Replace($redacted, "sk-ant-[A-Za-z0-9_\-]{20,}", "[REDACTED_API_KEY]")
   $redacted = [regex]::Replace($redacted, "sk-[A-Za-z0-9_\-]{20,}", "[REDACTED_API_KEY]")
   return $redacted
@@ -56,6 +64,7 @@ $branch = (& git branch --show-current 2>$null) -join ""
 $commit = (& git log -1 '--format=%H %s' 2>$null) -join ""
 $handoffPath = Join-Path $CurrentDir "handoff.md"
 $claudeReviewPath = Join-Path $ReviewDir "claude-review.md"
+$chatGptReviewPath = Join-Path $ReviewDir "chatgpt-review.md"
 $chatGptRequestPath = Join-Path $OutboxDir "chatgpt-review-request.md"
 $handoffSummary = if (Test-Path -LiteralPath $handoffPath) {
   Redact-SecretText (Get-Content -Raw -LiteralPath $handoffPath)
@@ -66,6 +75,11 @@ $claudeReview = if (Test-Path -LiteralPath $claudeReviewPath) {
   Redact-SecretText (Get-Content -Raw -LiteralPath $claudeReviewPath)
 } else {
   "No .ai-control/reviews/claude-review.md found. Run scripts/agents/claude-review.ps1 first."
+}
+$chatGptReview = if (Test-Path -LiteralPath $chatGptReviewPath) {
+  Redact-SecretText (Get-Content -Raw -LiteralPath $chatGptReviewPath)
+} else {
+  "No .ai-control/reviews/chatgpt-review.md found. Treat .ai-control/outbox/chatgpt-review-request.md as the request stub, not review findings."
 }
 $chatGptRequest = if (Test-Path -LiteralPath $chatGptRequestPath) {
   Redact-SecretText (Get-Content -Raw -LiteralPath $chatGptRequestPath)
@@ -118,7 +132,7 @@ function Get-ExactNextPrompt {
   return "Continue from .ai-control/current/handoff.md and inspect git status before editing."
 }
 
-$overallStatus = Get-SectionStatus -RequiredTexts @($handoffSummary, $claudeReview, $chatGptRequest) -BlockedTexts @($ReviewerNotes)
+$overallStatus = Get-SectionStatus -RequiredTexts @($handoffSummary, $claudeReview, $chatGptRequest) -BlockedTexts @($chatGptReview, $ReviewerNotes)
 $exactNextPrompt = Get-ExactNextPrompt -HandoffText $handoffSummary
 
 $lines = @(
@@ -150,17 +164,17 @@ $lines = @(
   "",
   "## Critical Findings"
 )
-$lines += Get-LinesMatching -Text (($claudeReview, $ReviewerNotes) -join [Environment]::NewLine) -Pattern "(?i)\b(P0|critical|severe|unsafe|secret|credential|laser|machine|push|merge|deploy)\b" -EmptyText "None detected in available review text."
+$lines += Get-LinesMatching -Text (($claudeReview, $chatGptReview, $ReviewerNotes) -join [Environment]::NewLine) -Pattern "(?i)\b(P0|critical|severe|unsafe|secret|credential|laser|machine|push|merge|deploy)\b" -EmptyText "None detected in available review text."
 $lines += @(
   "",
   "## Important Findings"
 )
-$lines += Get-LinesMatching -Text (($claudeReview, $ReviewerNotes) -join [Environment]::NewLine) -Pattern "(?i)\b(P1|P2|important|bug|regression|risk|missing|warning|question)\b" -EmptyText "None detected in available review text."
+$lines += Get-LinesMatching -Text (($claudeReview, $chatGptReview, $ReviewerNotes) -join [Environment]::NewLine) -Pattern "(?i)\b(P1|P2|important|bug|regression|risk|missing|warning|question)\b" -EmptyText "None detected in available review text."
 $lines += @(
   "",
   "## Missing Validation"
 )
-$lines += Get-LinesMatching -Text (($handoffSummary, $claudeReview, $ReviewerNotes) -join [Environment]::NewLine) -Pattern "(?i)missing validation|not run|skipped|pending|no screenshots|none found|blocked" -EmptyText "None detected in available handoff/review text."
+$lines += Get-LinesMatching -Text (($handoffSummary, $claudeReview, $chatGptReview, $ReviewerNotes) -join [Environment]::NewLine) -Pattern "(?i)missing validation|not run|skipped|pending|no screenshots|none found|blocked" -EmptyText "None detected in available handoff/review text."
 $lines += @(
   "",
   "## Reviewer Inputs",
@@ -171,7 +185,13 @@ $lines += @(
   $claudeReview.Trim(),
   "~~~",
   "",
-  "### .ai-control/outbox/chatgpt-review-request.md",
+  "### .ai-control/reviews/chatgpt-review.md",
+  "",
+  "~~~text",
+  $chatGptReview.Trim(),
+  "~~~",
+  "",
+  "### .ai-control/outbox/chatgpt-review-request.md (request stub)",
   "",
   "~~~text",
   $chatGptRequest.Trim(),
