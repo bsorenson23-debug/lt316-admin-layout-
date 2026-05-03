@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "repo": "lt316-admin",
+  "defaultImplementer": "codex",
+  "generatedReportsAreLocalByDefault": true,
+  "globalSafetyRules": {
+    "prohibitedWithoutExplicitHumanApproval": [
+      "push",
+      "merge",
+      "deploy",
+      "delete-branch",
+      "customer-communication",
+      "purchase",
+      "credential-change",
+      "physical-laser-action",
+      "real-machine-action"
+    ],
+    "alwaysProhibitedForAutomation": [
+      "auto-push",
+      "auto-merge",
+      "auto-deploy",
+      "delete-branches",
+      "commit-api-keys-or-secrets",
+      "run-physical-laser-or-machine-actions"
+    ],
+    "secretPolicy": "Do not write API keys, tokens, credentials, cookies, or local environment values into committed files. Generated local reports must be reviewed before sharing."
+  },
+  "agents": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "role": "primary-implementer-and-orchestrator",
+      "defaultCanWriteCode": true,
+      "defaultCanRunValidation": true,
+      "defaultCanCommit": false,
+      "outputs": [
+        ".ai-control/current/handoff.md",
+        ".ai-control/current/consolidated-review.md",
+        ".ai-control/current/next-codex-prompt.md"
+      ],
+      "responsibilities": [
+        "inspect repo state",
+        "implement requested code changes",
+        "run validation",
+        "collect evidence paths",
+        "write handoffs",
+        "consolidate read-only reviews"
+      ]
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "role": "read-only-reviewer",
+      "defaultCanWriteCode": false,
+      "defaultCanRunValidation": false,
+      "defaultCanCommit": false,
+      "outputs": [
+        ".ai-control/reviews/claude-review.md"
+      ],
+      "responsibilities": [
+        "review handoff, changed files, and evidence",
+        "report risks, bugs, missing validation, and open questions",
+        "avoid editing source files"
+      ]
+    },
+    {
+      "id": "chatgpt",
+      "name": "ChatGPT",
+      "role": "read-only-reviewer-via-outbox",
+      "defaultCanWriteCode": false,
+      "defaultCanRunValidation": false,
+      "defaultCanCommit": false,
+      "outputs": [
+        ".ai-control/outbox/chatgpt-review-request.md"
+      ],
+      "responsibilities": [
+        "review copied handoff request outside this repo",
+        "return findings for Codex to consolidate",
+        "avoid requesting secrets or hidden local environment values"
+      ]
+    }
+  ]
+}
