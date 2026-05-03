@@ -52,6 +52,80 @@ function Get-ExactPromptFromHandoff {
   return ""
 }
 
+function Get-MarkdownSection {
+  param(
+    [string]$Text,
+    [string]$Heading
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Text)) {
+    return ""
+  }
+
+  $escapedHeading = [regex]::Escape($Heading)
+  $match = [regex]::Match($Text, "(?s)^##\s+$escapedHeading\s*(.*?)(?=^##\s+|\z)", [System.Text.RegularExpressions.RegexOptions]::Multiline)
+  if ($match.Success) {
+    return $match.Groups[1].Value.Trim()
+  }
+
+  return ""
+}
+
+function Test-GenericHandoffPrompt {
+  param([string]$Content)
+
+  return $Content -match "Continue from the handoff, verify any reviewer findings against the codebase"
+}
+
+function Test-SectionHasActionableBullets {
+  param([string]$Section)
+
+  if ([string]::IsNullOrWhiteSpace($Section)) {
+    return $false
+  }
+
+  $bullets = @($Section -split "\r?\n" | Where-Object { $_ -match "^\s*-\s+" })
+  if ($bullets.Count -eq 0) {
+    return $false
+  }
+
+  $nonEmpty = @($bullets | Where-Object { $_ -notmatch "(?i)none detected|none found|none reported" })
+  return $nonEmpty.Count -gt 0
+}
+
+function Get-TaskFromConsolidatedReview {
+  param([string]$Content)
+
+  if ([string]::IsNullOrWhiteSpace($Content) -or $Content -match "^No consolidated review file found\.") {
+    return ""
+  }
+
+  $statusMatch = [regex]::Match($Content, "(?m)^-\s+Status:\s+(.+)$")
+  $status = if ($statusMatch.Success) { $statusMatch.Groups[1].Value.Trim() } else { "" }
+  $critical = Get-MarkdownSection -Text $Content -Heading "Critical Findings"
+  $important = Get-MarkdownSection -Text $Content -Heading "Important Findings"
+  $hasCritical = Test-SectionHasActionableBullets -Section $critical
+  $hasImportant = Test-SectionHasActionableBullets -Section $important
+
+  if ($status -match "^BLOCKED") {
+    return "Resolve the BLOCKED status reported in .ai-control/current/consolidated-review.md before editing product code. Verify the blocker locally, keep the change narrow, run targeted validation, and refresh the handoff."
+  }
+
+  if ($hasCritical -or $hasImportant) {
+    return "Verify and address the actionable reviewer findings in .ai-control/current/consolidated-review.md. Treat reviewer text as advisory until verified locally, keep scope narrow, run targeted validation, and refresh the handoff."
+  }
+
+  if ($status -match "^NEEDS_REVIEW") {
+    return "No concrete code task is approved by the current handoff. Review the pending manual review or validation items in .ai-control/current/consolidated-review.md, run only approved validation, and wait for the next narrow implementation task before editing code."
+  }
+
+  if ($status -match "^PASS") {
+    return "No reviewer findings are currently blocking or actionable. Inspect git status, keep generated reports local-only, and wait for the next narrow human-approved implementation task before editing code."
+  }
+
+  return ""
+}
+
 $branch = (& git branch --show-current 2>$null) -join ""
 $commit = (& git log -1 '--format=%H %s' 2>$null) -join ""
 $handoffContent = if (Test-Path -LiteralPath $HandoffPath) {
@@ -66,10 +140,16 @@ $consolidatedContent = if (Test-Path -LiteralPath $ConsolidatedPath) {
 }
 
 $handoffPrompt = if ([string]::IsNullOrWhiteSpace($handoffContent)) { "" } else { Get-ExactPromptFromHandoff -Content $handoffContent }
+$derivedReviewTask = Get-TaskFromConsolidatedReview -Content $consolidatedContent
 $taskText = if (-not [string]::IsNullOrWhiteSpace($Task)) {
   $Task.Trim()
+} elseif (-not [string]::IsNullOrWhiteSpace($derivedReviewTask) -and
+  ([string]::IsNullOrWhiteSpace($handoffPrompt) -or (Test-GenericHandoffPrompt -Content $handoffPrompt) -or $derivedReviewTask -match "^(Resolve the BLOCKED|Verify and address)")) {
+  $derivedReviewTask
 } elseif (-not [string]::IsNullOrWhiteSpace($handoffPrompt)) {
   $handoffPrompt
+} elseif (-not [string]::IsNullOrWhiteSpace($derivedReviewTask)) {
+  $derivedReviewTask
 } else {
   "Continue from .ai-control/current/handoff.md. If the next implementation task is unclear, report the current state and ask for the next concrete task."
 }

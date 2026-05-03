@@ -66,59 +66,175 @@ $handoffPath = Join-Path $CurrentDir "handoff.md"
 $claudeReviewPath = Join-Path $ReviewDir "claude-review.md"
 $chatGptReviewPath = Join-Path $ReviewDir "chatgpt-review.md"
 $chatGptRequestPath = Join-Path $OutboxDir "chatgpt-review-request.md"
-$handoffSummary = if (Test-Path -LiteralPath $handoffPath) {
+$handoffExists = Test-Path -LiteralPath $handoffPath
+$claudeReviewExists = Test-Path -LiteralPath $claudeReviewPath
+$chatGptReviewExists = Test-Path -LiteralPath $chatGptReviewPath
+$chatGptRequestExists = Test-Path -LiteralPath $chatGptRequestPath
+
+$handoffSummary = if ($handoffExists) {
   Redact-SecretText (Get-Content -Raw -LiteralPath $handoffPath)
 } else {
   "No .ai-control/current/handoff.md found. Run scripts/agents/write-handoff.ps1 first."
 }
-$claudeReview = if (Test-Path -LiteralPath $claudeReviewPath) {
+$claudeReview = if ($claudeReviewExists) {
   Redact-SecretText (Get-Content -Raw -LiteralPath $claudeReviewPath)
 } else {
-  "No .ai-control/reviews/claude-review.md found. Run scripts/agents/claude-review.ps1 first."
+  "No .ai-control/reviews/claude-review.md found. Manual Claude review is pending."
 }
-$chatGptReview = if (Test-Path -LiteralPath $chatGptReviewPath) {
+$chatGptReview = if ($chatGptReviewExists) {
   Redact-SecretText (Get-Content -Raw -LiteralPath $chatGptReviewPath)
 } else {
-  "No .ai-control/reviews/chatgpt-review.md found. Treat .ai-control/outbox/chatgpt-review-request.md as the request stub, not review findings."
+  "No .ai-control/reviews/chatgpt-review.md found. Manual ChatGPT review is pending; the outbox request is not review findings."
 }
-$chatGptRequest = if (Test-Path -LiteralPath $chatGptRequestPath) {
+$chatGptRequest = if ($chatGptRequestExists) {
   Redact-SecretText (Get-Content -Raw -LiteralPath $chatGptRequestPath)
 } else {
   "No .ai-control/outbox/chatgpt-review-request.md found. Run scripts/agents/write-handoff.ps1 first."
 }
 
-function Get-SectionStatus {
-  param(
-    [string[]]$RequiredTexts,
-    [string[]]$BlockedTexts
-  )
-
-  $missing = @($RequiredTexts | Where-Object { $_ -match "^No \.ai-control/" })
-  if ($missing.Count -gt 0) {
-    return "BLOCKED: missing required handoff/review inputs."
-  }
-
-  $combined = ($RequiredTexts + $BlockedTexts) -join [Environment]::NewLine
-  if ($combined -match "(?i)\bFAIL\b|\bBLOCKED\b|\bERROR\b|validation failed") {
-    return "BLOCKED: failure or blocked text found in handoff/review inputs."
-  }
-
-  return "PASS: required handoff and review request files are present."
-}
-
-function Get-LinesMatching {
+function Get-MarkdownSection {
   param(
     [string]$Text,
-    [string]$Pattern,
+    [string]$Heading
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Text)) {
+    return ""
+  }
+
+  $escapedHeading = [regex]::Escape($Heading)
+  $match = [regex]::Match($Text, "(?s)^##\s+$escapedHeading\s*(.*?)(?=^##\s+|\z)", [System.Text.RegularExpressions.RegexOptions]::Multiline)
+  if ($match.Success) {
+    return $match.Groups[1].Value.Trim()
+  }
+
+  return ""
+}
+
+function Test-ClaudeManualPlaceholder {
+  param([string]$Text)
+
+  return $Text -match "(?m)^-\s+Mode:\s+Manual read-only review request\s*$" -and
+    $Text -match "(?s)## Findings\s+Pending\.?\s*$"
+}
+
+function Get-ActualReviewTexts {
+  $texts = New-Object System.Collections.Generic.List[string]
+
+  if ($claudeReviewExists -and -not (Test-ClaudeManualPlaceholder -Text $claudeReview)) {
+    $texts.Add($claudeReview)
+  }
+
+  if ($chatGptReviewExists) {
+    $texts.Add($chatGptReview)
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($ReviewerNotes)) {
+    $texts.Add((Redact-SecretText $ReviewerNotes.Trim()))
+  }
+
+  return $texts.ToArray()
+}
+
+function Get-MatchingReviewLines {
+  param(
+    [string[]]$Texts,
+    [string]$Pattern
+  )
+
+  $ignorePattern = "(?i)^\s*$|^\s*#|^\s*~~~|^\s*-\s*(Generated|Branch|Commit|Mode|Status|Exit code|Write guard):|^\s*-\s*Do not\b|^\s*-\s*Require human approval\b|^\s*Codex is\b|^\s*Read-only review\b|^\s*Claude was not executed\b|^\s*Paste \.ai-control\b|^\s*See \.ai-control\b|^\s*No \.ai-control\b"
+  $matches = New-Object System.Collections.Generic.List[string]
+  foreach ($text in $Texts) {
+    foreach ($line in ($text -split "\r?\n")) {
+      $trimmed = $line.Trim()
+      if ($trimmed -match $Pattern -and $trimmed -notmatch $ignorePattern) {
+        $matches.Add($trimmed)
+      }
+    }
+  }
+
+  return @($matches.ToArray() | Select-Object -First 20)
+}
+
+function ConvertLinesTo-Bullets {
+  param(
+    [AllowNull()][string[]]$Lines,
     [string]$EmptyText
   )
 
-  $matches = @($Text -split "\r?\n" | Where-Object { $_ -match $Pattern } | Select-Object -First 20)
-  if ($matches.Count -eq 0) {
+  $values = @($Lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($values.Count -eq 0) {
     return @("- $EmptyText")
   }
 
-  return $matches | ForEach-Object { "- $($_.Trim())" }
+  return $values | ForEach-Object { "- $($_.Trim())" }
+}
+
+function Test-HandoffValidationFailure {
+  param([string]$Text)
+
+  $section = Get-MarkdownSection -Text $Text -Heading "Pass/Fail Results"
+  if ([string]::IsNullOrWhiteSpace($section)) {
+    return $false
+  }
+
+  return $section -match "(?im)^\s*-\s*(FAIL|FAILED|BLOCKED|ERROR)\b|^\s*-\s*Overall:\s*(FAIL|FAILED|BLOCKED|ERROR)\b"
+}
+
+function Get-HandoffBlockers {
+  param([string]$Text)
+
+  $section = Get-MarkdownSection -Text $Text -Heading "Blockers"
+  if ([string]::IsNullOrWhiteSpace($section)) {
+    return @()
+  }
+
+  return @($section -split "\r?\n" |
+    ForEach-Object { $_.Trim() } |
+    Where-Object {
+      -not [string]::IsNullOrWhiteSpace($_) -and
+      $_ -notmatch "(?i)^-?\s*none reported\.?$"
+    })
+}
+
+function Test-ValidationPending {
+  param([string]$Text)
+
+  $tests = Get-MarkdownSection -Text $Text -Heading "Tests Run"
+  $results = Get-MarkdownSection -Text $Text -Heading "Pass/Fail Results"
+  return $tests -match "(?i)not provided|not run|pending|skipped" -or
+    $results -match "(?i)not provided|not run|pending|skipped|unknown"
+}
+
+function Get-OverallStatus {
+  param(
+    [string[]]$CriticalLines,
+    [string[]]$ImportantLines,
+    [string[]]$PendingLines
+  )
+
+  if (-not $handoffExists) {
+    return "BLOCKED: missing required handoff input."
+  }
+
+  $blockers = @(Get-HandoffBlockers -Text $handoffSummary)
+  if ($blockers.Count -gt 0) {
+    return "BLOCKED: explicit blocker reported in handoff."
+  }
+
+  if (Test-HandoffValidationFailure -Text $handoffSummary) {
+    return "BLOCKED: validation failure reported in handoff."
+  }
+
+  if ($CriticalLines.Count -gt 0) {
+    return "BLOCKED: critical reviewer finding requires Codex verification."
+  }
+
+  if ($ImportantLines.Count -gt 0 -or $PendingLines.Count -gt 0) {
+    return "NEEDS_REVIEW: no blocking findings, but review or validation follow-up is pending."
+  }
+
+  return "PASS: required handoff files are present and no reviewer findings were detected."
 }
 
 function Get-ExactNextPrompt {
@@ -132,7 +248,26 @@ function Get-ExactNextPrompt {
   return "Continue from .ai-control/current/handoff.md and inspect git status before editing."
 }
 
-$overallStatus = Get-SectionStatus -RequiredTexts @($handoffSummary, $claudeReview, $chatGptRequest) -BlockedTexts @($chatGptReview, $ReviewerNotes)
+$actualReviewTexts = @(Get-ActualReviewTexts)
+$criticalLines = @(Get-MatchingReviewLines -Texts $actualReviewTexts -Pattern "(?i)\b(P0|critical|severe|unsafe|secret leak|credential leak|blocked|blocker)\b")
+$importantLines = @(Get-MatchingReviewLines -Texts $actualReviewTexts -Pattern "(?i)\b(P1|P2|important|bug|regression|risk|missing|warning|question)\b")
+$pendingLines = New-Object System.Collections.Generic.List[string]
+if (-not $claudeReviewExists) {
+  $pendingLines.Add("Manual Claude review has not been requested yet.")
+} elseif (Test-ClaudeManualPlaceholder -Text $claudeReview) {
+  $pendingLines.Add("Manual Claude review is pending; safe placeholder mode was used.")
+}
+if (-not $chatGptReviewExists) {
+  $pendingLines.Add("Manual ChatGPT review output is pending; outbox request stub is not treated as findings.")
+}
+if (-not $chatGptRequestExists) {
+  $pendingLines.Add("ChatGPT review request stub is missing; run write-handoff.ps1 to regenerate local outbox files.")
+}
+if (Test-ValidationPending -Text $handoffSummary) {
+  $pendingLines.Add("Validation summary is not provided in the handoff.")
+}
+
+$overallStatus = Get-OverallStatus -CriticalLines $criticalLines -ImportantLines $importantLines -PendingLines @($pendingLines)
 $exactNextPrompt = Get-ExactNextPrompt -HandoffText $handoffSummary
 
 $lines = @(
@@ -164,17 +299,17 @@ $lines = @(
   "",
   "## Critical Findings"
 )
-$lines += Get-LinesMatching -Text (($claudeReview, $chatGptReview, $ReviewerNotes) -join [Environment]::NewLine) -Pattern "(?i)\b(P0|critical|severe|unsafe|secret|credential|laser|machine|push|merge|deploy)\b" -EmptyText "None detected in available review text."
+$lines += ConvertLinesTo-Bullets -Lines $criticalLines -EmptyText "None detected in available review text."
 $lines += @(
   "",
   "## Important Findings"
 )
-$lines += Get-LinesMatching -Text (($claudeReview, $chatGptReview, $ReviewerNotes) -join [Environment]::NewLine) -Pattern "(?i)\b(P1|P2|important|bug|regression|risk|missing|warning|question)\b" -EmptyText "None detected in available review text."
+$lines += ConvertLinesTo-Bullets -Lines $importantLines -EmptyText "None detected in available review text."
 $lines += @(
   "",
   "## Missing Validation"
 )
-$lines += Get-LinesMatching -Text (($handoffSummary, $claudeReview, $chatGptReview, $ReviewerNotes) -join [Environment]::NewLine) -Pattern "(?i)missing validation|not run|skipped|pending|no screenshots|none found|blocked" -EmptyText "None detected in available handoff/review text."
+$lines += ConvertLinesTo-Bullets -Lines @($pendingLines) -EmptyText "None detected in available handoff/review text."
 $lines += @(
   "",
   "## Reviewer Inputs",

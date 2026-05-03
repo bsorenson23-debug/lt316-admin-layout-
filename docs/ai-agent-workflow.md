@@ -113,6 +113,8 @@ Output:
 
 The consolidated report includes pass/fail/blocked status, critical findings, important findings, missing validation, reviewer inputs, and the exact next Codex prompt. Codex should treat review findings as advisory until verified against the local codebase.
 
+`BLOCKED` is reserved for missing required handoff input, explicit handoff blockers, failed validation, or real critical reviewer findings. Manual Claude placeholders, missing manual ChatGPT review output, and outbox request prompts are reported as pending review state rather than reviewer findings. When no concrete findings exist but manual review or validation is still pending, the status should be `NEEDS_REVIEW`.
+
 ## 5. Create Next Codex Prompt
 
 Run:
@@ -132,6 +134,8 @@ Output:
 - `.ai-control/current/next-codex-prompt.md`
 
 The generated prompt reminds Codex to read `AGENTS.md`, the agent registry, the handoff, and the consolidated review before editing.
+
+If the consolidated review contains only pending/manual placeholders and the handoff has no concrete approved implementation task, the next prompt should ask Codex to wait for the next narrow human-approved task instead of creating a coding task from placeholder review text.
 
 ## 6. Optional Codex Exec
 
