@@ -216,13 +216,15 @@ interface BodyCutoutQaViewFrame {
   signature: string;
 }
 
+const _usableBoxSize = new THREE.Vector3();
+
 function isFinitePositive(value: number): boolean {
   return Number.isFinite(value) && value > 0;
 }
 
 function isUsableBox3(bounds: THREE.Box3 | null | undefined): bounds is THREE.Box3 {
   if (!bounds || bounds.isEmpty()) return false;
-  const size = bounds.getSize(new THREE.Vector3());
+  const size = bounds.getSize(_usableBoxSize);
   return (
     Number.isFinite(bounds.min.x) &&
     Number.isFinite(bounds.min.y) &&
@@ -279,7 +281,7 @@ function resolveBodyCutoutQaViewFrame(args: {
     const runtimeBodyBox = toBox3FromLoadedBounds(args.runtimeBodyBounds);
     if (isUsableBox3(runtimeBodyBox)) {
       return {
-        bounds: runtimeBodyBox.clone(),
+        bounds: runtimeBodyBox,
         source: "runtime-body-mesh",
         signature: getBoxSignature(runtimeBodyBox),
       };
@@ -1508,7 +1510,7 @@ export default function ModelViewer({
       : (modelBounds ? "rendered-model" : "none");
   const activeViewFrameSnapshot = useMemo(() => {
     if (!activeViewFrameBounds || !isUsableBox3(activeViewFrameBounds)) return null;
-    const size = activeViewFrameBounds.getSize(new THREE.Vector3());
+    const size = activeViewFrameBounds.getSize(_usableBoxSize);
     return {
       minY: round2(activeViewFrameBounds.min.y),
       width: round2(size.x),
