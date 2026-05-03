@@ -5,6 +5,7 @@ import test from "node:test";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
+import type { TumblerProfile } from "../../data/tumblerProfiles.ts";
 import type {
   CanonicalBodyProfile,
   CanonicalDimensionCalibration,
@@ -19,11 +20,15 @@ import { buildBodyReferenceGlbSourcePayload } from "../../lib/bodyReferenceGlbSo
 import { hashJsonSha256Node } from "../../lib/hashSha256.node.ts";
 import { stableStringifyForHash } from "../../lib/hashSha256.ts";
 import {
+  buildGenericStraightDiameterEnvelopeWarning,
   deriveBodyTraceExtents,
   deriveEngravingStartGuidePx,
   deriveReferenceMeasurementBand,
   evaluateGenericStraightDiameterEnvelope,
+  filterStableStraightBodyProfileRuns,
   generateBodyReferenceGlb,
+  resolveGeneratedBodyBandPolicy,
+  smoothStraightBodyRadiusSeries,
   type GenerateBodyReferenceGlbInput,
 } from "./generateTumblerModel.ts";
 
@@ -154,6 +159,189 @@ test("generic straight fit keeps sane widths inside trusted diameter envelope", 
   assert.equal(envelope.exceedsEnvelope, false);
   assert.equal(envelope.maxAllowedRadiusMm, 50.22);
   assert.equal(envelope.maxRadiusMm, 49.8);
+});
+
+function createStraightRunRows(args: {
+  topPx?: number;
+  bottomPx?: number;
+  centerXPx?: number;
+  widthPx?: number;
+  lowerShelfStartPx?: number;
+  lowerShelfWidthPx?: number;
+  spikeYPx?: number;
+  spikeWidthPx?: number;
+}) {
+  const topPx = args.topPx ?? 100;
+  const bottomPx = args.bottomPx ?? 560;
+  const centerXPx = args.centerXPx ?? 250;
+  const widthPx = args.widthPx ?? 186;
+  return Array.from({ length: bottomPx - topPx + 1 }, (_, index) => {
+    const y = topPx + index;
+    const width = args.spikeYPx === y
+      ? args.spikeWidthPx ?? widthPx
+      : args.lowerShelfStartPx !== undefined && y >= args.lowerShelfStartPx
+        ? args.lowerShelfWidthPx ?? widthPx
+        : widthPx;
+    const left = Math.round(centerXPx - width / 2);
+    const right = left + width - 1;
+    return { y, left, right, width };
+  });
+}
+
+test("clean straight-tumbler body runs keep image-derived fit rows", () => {
+  const runs = createStraightRunRows({ widthPx: 186 });
+  const filtered = filterStableStraightBodyProfileRuns({
+    runs,
+    centerXPx: 250,
+    trustedOutsideDiameterMm: 93,
+    referenceBandWidthPx: 186,
+  });
+
+  assert.equal(filtered.usedFallback, false);
+  assert.equal(filtered.rowCount, runs.length);
+  assert.equal(filtered.rejectedWideRunCount, 0);
+  assert.equal(filtered.rejectedLowerShelfRunCount, 0);
+  assert.equal(filtered.warnings.includes("dimension-fallback-used"), false);
+});
+
+test("lower shadow shelf rows cannot inflate a 93 mm straight body toward 169 mm", () => {
+  const runs = createStraightRunRows({
+    widthPx: 186,
+    lowerShelfStartPx: 500,
+    lowerShelfWidthPx: 338,
+  });
+  const filtered = filterStableStraightBodyProfileRuns({
+    runs,
+    centerXPx: 250,
+    trustedOutsideDiameterMm: 93,
+    referenceBandWidthPx: 186,
+    lowerShelfStartYPx: 500,
+  });
+  const maxAcceptedWidthPx = Math.max(...filtered.runs.map((run) => run.width));
+  const acceptedDiameterMm = Math.round((maxAcceptedWidthPx * (93 / 186)) * 100) / 100;
+
+  assert.equal(filtered.usedFallback, false);
+  assert.equal(filtered.rejectedWideRunCount > 0, true);
+  assert.equal(filtered.warnings.includes("shadow-run-rejected"), true);
+  assert.equal(filtered.warnings.includes("diameter-envelope-clamped"), true);
+  assert.equal(acceptedDiameterMm, 93);
+});
+
+test("isolated straight-body radius spike is smoothed before profile sampling", () => {
+  const smoothed = smoothStraightBodyRadiusSeries(
+    [46, 46.2, 84.5, 46.1, 46],
+    { maxSpikeRatio: 1.18, minSpikeDeltaPx: 3, windowRadius: 2 },
+  );
+
+  assert.equal(smoothed.smoothedSpikeCount, 1);
+  assert.equal(smoothed.values[2] < 47, true);
+});
+
+test("trusted diameter envelope warning remains the final generic straight guard", () => {
+  const warning = buildGenericStraightDiameterEnvelopeWarning({
+    trustedOutsideDiameterMm: 93,
+    bodyProfile: [
+      { radiusMm: 46.5 },
+      { radiusMm: 84.7 },
+    ],
+  });
+
+  assert.ok(warning);
+  assert.match(warning, /^diameter-envelope-clamped:/);
+  assert.match(warning, /169\.4 mm vs 93 mm/);
+});
+
+test("RTIC-like noisy lower photo keeps accepted body width near 93 mm", () => {
+  const runs = createStraightRunRows({
+    topPx: 80,
+    bottomPx: 680,
+    widthPx: 186,
+    lowerShelfStartPx: 610,
+    lowerShelfWidthPx: 338,
+    spikeYPx: 430,
+    spikeWidthPx: 205,
+  });
+  const filtered = filterStableStraightBodyProfileRuns({
+    runs,
+    centerXPx: 250,
+    trustedOutsideDiameterMm: 93,
+    referenceBandWidthPx: 186,
+    lowerShelfStartYPx: 610,
+  });
+  const maxAcceptedWidthPx = Math.max(...filtered.runs.map((run) => run.width));
+  const acceptedDiameterMm = Math.round((maxAcceptedWidthPx * (93 / 186)) * 100) / 100;
+
+  assert.equal(filtered.usedFallback, false);
+  assert.equal(filtered.rejectedWideRunCount > 0, true);
+  assert.equal(filtered.rejectedSpikeRunCount > 0, true);
+  assert.equal(filtered.warnings.includes("straight-body-run-filtered"), true);
+  assert.equal(acceptedDiameterMm <= 100.5, true);
+});
+
+test("tuned generatedModelPolicy behavior still resolves without generic straight fallback", () => {
+  const profile: TumblerProfile = {
+    id: "tuned-tapered",
+    label: "Tuned tapered profile",
+    brand: "Example",
+    model: "Tuned",
+    capacityOz: 30,
+    shapeType: "tapered",
+    topDiameterMm: 88.9,
+    bottomDiameterMm: 76.2,
+    overallHeightMm: 218.4,
+    usableHeightMm: 150,
+    hasHandle: false,
+    chuckRecommended: true,
+    generatedModelPolicy: {
+      strategy: "body-band-lathe",
+      fitDebugProfile: {
+        minTraceWidthRatio: 0.12,
+      },
+    },
+  };
+
+  assert.equal(resolveGeneratedBodyBandPolicy(profile, false), profile.generatedModelPolicy);
+});
+
+test("generic straight path records useful fit rejection notes", () => {
+  const filtered = filterStableStraightBodyProfileRuns({
+    runs: createStraightRunRows({
+      widthPx: 186,
+      lowerShelfStartPx: 500,
+      lowerShelfWidthPx: 338,
+      spikeYPx: 320,
+      spikeWidthPx: 205,
+    }),
+    centerXPx: 250,
+    trustedOutsideDiameterMm: 93,
+    referenceBandWidthPx: 186,
+    lowerShelfStartYPx: 500,
+  });
+
+  assert.equal(filtered.usedFallback, false);
+  assert.equal(filtered.warnings.includes("shadow-run-rejected"), true);
+  assert.equal(filtered.warnings.includes("diameter-envelope-clamped"), true);
+  assert.equal(filtered.warnings.includes("isolated-radius-spike-smoothed"), true);
+  assert.equal(filtered.warnings.includes("straight-body-run-filtered"), true);
+});
+
+test("tapered product without tuned policy is not auto-faked as straight", () => {
+  const profile: TumblerProfile = {
+    id: "untuned-tapered",
+    label: "Untuned tapered profile",
+    brand: "Example",
+    model: "Untuned",
+    capacityOz: 30,
+    shapeType: "tapered",
+    topDiameterMm: 88.9,
+    bottomDiameterMm: 76.2,
+    overallHeightMm: 218.4,
+    usableHeightMm: 150,
+    hasHandle: false,
+    chuckRecommended: true,
+  };
+
+  assert.equal(resolveGeneratedBodyBandPolicy(profile, true), null);
 });
 
 function createOutline(widthMm = 44.45): EditableBodyOutline {
