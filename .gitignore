@@ -56,3 +56,19 @@ next-env.d.ts
 /.tmp-diag.ts
 /-
 /dummy
+
+# AI orchestration generated reports
+/.codex-handoff/current-summary.md
+/.codex-handoff/next-prompt.md
+/.codex-handoff/validation.md
+/.codex-handoff/codex-output.md
+/.codex-handoff/*.log
+/.codex-handoff/*.json
+/.ai-control/current/*
+!/.ai-control/current/.gitkeep
+/.ai-control/evidence/*
+!/.ai-control/evidence/.gitkeep
+/.ai-control/reviews/*
+!/.ai-control/reviews/.gitkeep
+/.ai-control/outbox/*
+!/.ai-control/outbox/.gitkeep
