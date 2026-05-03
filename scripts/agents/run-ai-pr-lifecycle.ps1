@@ -79,16 +79,35 @@ function ConvertTo-NormalizedPathSet {
 }
 
 function Invoke-ScriptCommand {
-  param([Parameter(Mandatory = $true)][string]$Command)
+  param(
+    [Parameter(Mandatory = $true)]$Command,
+    [object[]]$ArgumentList = @()
+  )
 
-  $output = & ([scriptblock]::Create($Command)) 2>&1
+  $scriptBlock = if ($Command -is [scriptblock]) {
+    $Command
+  } else {
+    [scriptblock]::Create([string]$Command)
+  }
+
+  $output = & $scriptBlock @ArgumentList 2>&1
   $exitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
   return [pscustomobject]@{
-    Command = $Command
+    Command = $Command.ToString().Trim()
     ExitCode = $exitCode
     Succeeded = $exitCode -eq 0
     Output = (($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine).Trim()
   }
+}
+
+function ConvertTo-InvariantDateTimeOffset {
+  param([string]$Value)
+
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    return $null
+  }
+
+  return [DateTimeOffset]::Parse($Value, [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
 function Get-CommandOutputLines {
@@ -292,7 +311,10 @@ function Get-OpenPrForBranch {
     return $null
   }
 
-  $result = Invoke-ScriptCommand -Command "gh pr list --head $Branch --state open --json number,url"
+  $result = Invoke-ScriptCommand -Command {
+    param($HeadBranch)
+    gh pr list --head $HeadBranch --state open --json number,url
+  } -ArgumentList @($Branch)
   if (-not $result.Succeeded -or [string]::IsNullOrWhiteSpace($result.Output)) {
     return $null
   }
@@ -327,7 +349,10 @@ function Get-PrReviewData {
     throw "gh CLI is not available."
   }
 
-  $viewResult = Invoke-ScriptCommand -Command "gh pr view $Number --json headRefOid,mergeStateStatus,reviewDecision,files,comments,reviews,commits,url"
+  $viewResult = Invoke-ScriptCommand -Command {
+    param($PullRequestNumber)
+    gh pr view $PullRequestNumber --json headRefOid,mergeStateStatus,reviewDecision,files,comments,reviews,commits,url
+  } -ArgumentList @($Number)
   if (-not $viewResult.Succeeded -or [string]::IsNullOrWhiteSpace($viewResult.Output)) {
     throw "Unable to read PR #$Number via gh pr view."
   }
@@ -364,7 +389,10 @@ query($owner: String!, $name: String!, $number: Int!) {
   }
 }
 '@
-  $threadResult = Invoke-ScriptCommand -Command ("gh api graphql -f query='{0}' -F owner='{1}' -F name='{2}' -F number={3}" -f (($graphQl -replace "'", "''") -replace "\r?\n", " "), $repoInfo.Owner, $repoInfo.Name, $Number)
+  $threadResult = Invoke-ScriptCommand -Command {
+    param($GraphQlQuery, $Owner, $RepoName, $PullRequestNumber)
+    gh api graphql -f query=$GraphQlQuery -F owner=$Owner -F name=$RepoName -F number=$PullRequestNumber
+  } -ArgumentList @($graphQl, $repoInfo.Owner, $repoInfo.Name, $Number)
   if (-not $threadResult.Succeeded -or [string]::IsNullOrWhiteSpace($threadResult.Output)) {
     throw "Unable to read PR review threads for #$Number via gh api graphql."
   }
@@ -390,7 +418,10 @@ function Get-PrCheckSummary {
     }
   }
 
-  $result = Invoke-ScriptCommand -Command "gh pr checks $Number"
+  $result = Invoke-ScriptCommand -Command {
+    param($PullRequestNumber)
+    gh pr checks $PullRequestNumber --json name,status,conclusion
+  } -ArgumentList @($Number)
   if (-not $result.Succeeded) {
     return [pscustomobject]@{
       Available = $false
@@ -402,16 +433,25 @@ function Get-PrCheckSummary {
 
   $failures = New-Object System.Collections.Generic.List[string]
   $pending = New-Object System.Collections.Generic.List[string]
-  foreach ($line in ($result.Output -split "\r?\n")) {
-    $trimmed = $line.Trim()
-    if ([string]::IsNullOrWhiteSpace($trimmed)) {
+  $checks = @()
+  if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
+    $checks = @($result.Output | ConvertFrom-Json)
+  }
+
+  foreach ($check in $checks) {
+    $checkName = [string]$check.name
+    $status = [string]$check.status
+    $conclusion = [string]$check.conclusion
+    $normalizedStatus = $status.ToLowerInvariant()
+    $normalizedConclusion = $conclusion.ToLowerInvariant()
+
+    if ($normalizedConclusion -in @('failure', 'cancelled', 'timed_out', 'action_required')) {
+      $failures.Add("${checkName}: $conclusion")
       continue
     }
 
-    if ($trimmed -match '(?i)\b(fail|failing|error|cancelled|timed out)\b') {
-      $failures.Add($trimmed)
-    } elseif ($trimmed -match '(?i)\b(pending|in progress|waiting|queued)\b') {
-      $pending.Add($trimmed)
+    if ($normalizedStatus -ne 'completed') {
+      $pending.Add("${checkName}: $status")
     }
   }
 
@@ -512,9 +552,9 @@ function Get-ReviewWatchAssessment {
   if ($view.commits.Count -gt 0) {
     $latestCommit = $view.commits[-1]
     if ($latestCommit.committedDate) {
-      $latestCommitDate = [DateTimeOffset]::Parse($latestCommit.committedDate)
+      $latestCommitDate = ConvertTo-InvariantDateTimeOffset -Value $latestCommit.committedDate
     } elseif ($latestCommit.commit.committedDate) {
-      $latestCommitDate = [DateTimeOffset]::Parse($latestCommit.commit.committedDate)
+      $latestCommitDate = ConvertTo-InvariantDateTimeOffset -Value $latestCommit.commit.committedDate
     }
   }
 
@@ -547,9 +587,9 @@ function Get-ReviewWatchAssessment {
     $commentBody = [string]$latestThreadComment.body
     $commentAuthor = [string]$latestThreadComment.author.login
     $commentDate = if ($latestThreadComment.publishedAt) {
-      [DateTimeOffset]::Parse($latestThreadComment.publishedAt)
+      ConvertTo-InvariantDateTimeOffset -Value $latestThreadComment.publishedAt
     } elseif ($latestThreadComment.createdAt) {
-      [DateTimeOffset]::Parse($latestThreadComment.createdAt)
+      ConvertTo-InvariantDateTimeOffset -Value $latestThreadComment.createdAt
     } else {
       $null
     }
@@ -576,7 +616,7 @@ function Get-ReviewWatchAssessment {
       continue
     }
 
-    $submittedAt = if ($review.submittedAt) { [DateTimeOffset]::Parse($review.submittedAt) } else { $null }
+    $submittedAt = if ($review.submittedAt) { ConvertTo-InvariantDateTimeOffset -Value $review.submittedAt } else { $null }
     $afterLatestHead = $null -eq $latestCommitDate -or ($null -ne $submittedAt -and $submittedAt -ge $latestCommitDate)
     $isAiReviewer = $author -match '(?i)codex|gemini|copilot'
     $needsFix = $body -match '(?i)\b(P1|P2|high|medium|required|must fix|needs fix|should fix|blocker|regression|bug|major issue)\b'
@@ -592,7 +632,7 @@ function Get-ReviewWatchAssessment {
       continue
     }
 
-    $createdAt = if ($comment.createdAt) { [DateTimeOffset]::Parse($comment.createdAt) } else { $null }
+    $createdAt = if ($comment.createdAt) { ConvertTo-InvariantDateTimeOffset -Value $comment.createdAt } else { $null }
     $afterLatestHead = $null -eq $latestCommitDate -or ($null -ne $createdAt -and $createdAt -ge $latestCommitDate)
     $isAiReviewer = $author -match '(?i)codex|gemini|copilot'
     $needsFix = $body -match '(?i)\b(P1|P2|high|medium|required|must fix|needs fix|should fix|blocker|regression|bug|major issue)\b'
@@ -838,13 +878,14 @@ switch ($Mode) {
       $findings.Add("Branch delta contains unexpected files: $($unexpectedDelta -join ', ')")
     }
 
-    if ($initialStash.Count -eq 0) {
-      $findings.Add("No stash entries found; expected stash preservation signal is missing.")
-    }
-
     $forbiddenCommitted = @(Get-ForbiddenPathFindings -Paths $branchDelta)
     if ($forbiddenCommitted.Count -gt 0) {
       $findings.Add("Forbidden committed/generated files detected in branch delta: $($forbiddenCommitted -join ', ')")
+    }
+
+    $endingStash = @(Get-StashListLines)
+    if (-not (Test-ArraysEqual -Left $initialStash -Right $endingStash)) {
+      $findings.Add("Stash list changed during PushReady.")
     }
 
     if ($findings.Count -gt 0) {
@@ -885,7 +926,10 @@ switch ($Mode) {
 
     $comment = if ([string]::IsNullOrWhiteSpace($ReviewPrompt)) { Get-DefaultReviewPrompt } else { $ReviewPrompt.Trim() }
     if (Test-GhAvailable) {
-      $result = Invoke-ScriptCommand -Command ("gh pr comment {0} --body @'`n{1}`n'@" -f $PrNumber, ($comment -replace "'", "''"))
+      $result = Invoke-ScriptCommand -Command {
+        param($PullRequestNumber, $CommentBody)
+        gh pr comment $PullRequestNumber --body $CommentBody
+      } -ArgumentList @($PrNumber, $comment)
       if ($result.Succeeded) {
         Write-Output "REVIEW_REQUEST_POSTED"
         if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
@@ -913,7 +957,14 @@ switch ($Mode) {
       break
     }
 
-    $assessment = Get-ReviewWatchAssessment -Number $PrNumber -ExpectedHead $ExpectedHeadSha
+    try {
+      $assessment = Get-ReviewWatchAssessment -Number $PrNumber -ExpectedHead $ExpectedHeadSha
+    } catch {
+      Write-Output "STOP_REVIEW_FEEDBACK_FOUND"
+      Write-Output "Reason: Unable to inspect PR review state automatically: $($_.Exception.Message)"
+      break
+    }
+
     if ($assessment.IsClean) {
       Write-Output "READY_FOR_HUMAN_MERGE"
       break
@@ -987,8 +1038,9 @@ switch ($Mode) {
       $findings.Add("Forbidden committed/generated files detected in branch delta: $($forbiddenCommitted -join ', ')")
     }
 
-    if ($initialStash.Count -eq 0) {
-      $findings.Add("No stash entries found; expected stash preservation signal is missing.")
+    $endingStash = @(Get-StashListLines)
+    if (-not (Test-ArraysEqual -Left $initialStash -Right $endingStash)) {
+      $findings.Add("Stash list changed during FinalMergeReady.")
     }
 
     if ($findings.Count -gt 0) {

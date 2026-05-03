@@ -9,6 +9,7 @@ The script never auto-merges. The strongest success state it emits is `READY_FOR
 - Never merges PRs.
 - Never deploys.
 - Never modifies stashes.
+- Never requires a stash to exist.
 - Never runs `-RunClaude` unless a human explicitly passes that flag to the separate Claude script.
 - Never runs `-RunNextPrompt` unless a human explicitly passes that flag to the separate Codex script.
 - Never stages or commits generated `.ai-control`, `.codex-handoff`, `.codex-diagnostics`, `.next`, `node_modules`, `test-results`, screenshots, generated GLBs, public model fixtures, or secrets.
@@ -118,6 +119,11 @@ Output:
 
 If `-DoPush` is passed, the script pushes the current branch to origin. If no open PR exists, it opens the PR creation URL.
 
+Stash behavior:
+
+- does not require any stash entries to exist
+- only checks that the stash list did not change while the script ran
+
 Example:
 
 ```powershell
@@ -141,6 +147,8 @@ Inputs:
 - optional `-ReviewPrompt <string>`
 
 If `gh` is available, it posts the PR comment. If `gh` is unavailable, it prints the exact comment for a human to paste.
+
+The script posts the comment directly with `gh pr comment --body` and never needs temporary files or escaping-heavy here-strings.
 
 Default comment:
 
@@ -223,7 +231,7 @@ It checks:
 - PR review is clean
 - no generated reports are staged or committed
 - no secrets were staged or committed
-- stash remained untouched
+- stash remained untouched if entries existed before the run, or remained empty if none existed
 
 Output:
 
