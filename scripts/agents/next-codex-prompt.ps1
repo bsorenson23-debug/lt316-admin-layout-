@@ -16,6 +16,12 @@ $ResolvedOutputPath = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $Output
 New-Item -ItemType Directory -Force -Path $CurrentDir | Out-Null
 Set-Location $RepoRoot
 
+$utilityScript = Join-Path $PSScriptRoot "agent-utils.ps1"
+if (-not (Test-Path -LiteralPath $utilityScript)) {
+  throw "Missing shared utility script: $utilityScript"
+}
+. $utilityScript
+
 function Write-Utf8File {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
@@ -52,6 +58,69 @@ function Get-ExactPromptFromHandoff {
   return ""
 }
 
+function Test-GenericHandoffPrompt {
+  param([string]$Content)
+
+  return $Content -match "Continue from the handoff, verify any reviewer findings against the codebase"
+}
+
+function Get-TaskFromConsolidatedReview {
+  param([string]$Content)
+
+  if ([string]::IsNullOrWhiteSpace($Content) -or $Content -match "^No consolidated review file found\.") {
+    return [pscustomobject]@{
+      Type = "none"
+      Task = ""
+      Priority = 0
+    }
+  }
+
+  $statusMatch = [regex]::Match($Content, "(?m)^-\s+Status:\s+(.+)$")
+  $status = if ($statusMatch.Success) { $statusMatch.Groups[1].Value.Trim() } else { "" }
+  $critical = Get-MarkdownSection -Text $Content -Heading "Critical Findings"
+  $important = Get-MarkdownSection -Text $Content -Heading "Important Findings"
+  $hasCritical = Test-SectionHasActionableBullets -Section $critical
+  $hasImportant = Test-SectionHasActionableBullets -Section $important
+
+  if ($status -match "^BLOCKED") {
+    return [pscustomobject]@{
+      Type = "blocked"
+      Priority = 4
+      Task = "Resolve the BLOCKED status reported in .ai-control/current/consolidated-review.md before editing product code. Verify the blocker locally, keep the change narrow, run targeted validation, and refresh the handoff."
+    }
+  }
+
+  if ($hasCritical -or $hasImportant) {
+    return [pscustomobject]@{
+      Type = "actionable-findings"
+      Priority = 3
+      Task = "Verify and address the actionable reviewer findings in .ai-control/current/consolidated-review.md. Treat reviewer text as advisory until verified locally, keep scope narrow, run targeted validation, and refresh the handoff."
+    }
+  }
+
+  if ($status -match "^NEEDS_REVIEW") {
+    return [pscustomobject]@{
+      Type = "needs-review"
+      Priority = 2
+      Task = "No concrete code task is approved by the current handoff. Review the pending manual review or validation items in .ai-control/current/consolidated-review.md, run only approved validation, and wait for the next narrow implementation task before editing code."
+    }
+  }
+
+  if ($status -match "^PASS") {
+    return [pscustomobject]@{
+      Type = "pass"
+      Priority = 1
+      Task = "No reviewer findings are currently blocking or actionable. Inspect git status, keep generated reports local-only, and wait for the next narrow human-approved implementation task before editing code."
+    }
+  }
+
+  return [pscustomobject]@{
+    Type = "unknown"
+    Task = ""
+    Priority = 0
+  }
+}
+
 $branch = (& git branch --show-current 2>$null) -join ""
 $commit = (& git log -1 '--format=%H %s' 2>$null) -join ""
 $handoffContent = if (Test-Path -LiteralPath $HandoffPath) {
@@ -66,10 +135,17 @@ $consolidatedContent = if (Test-Path -LiteralPath $ConsolidatedPath) {
 }
 
 $handoffPrompt = if ([string]::IsNullOrWhiteSpace($handoffContent)) { "" } else { Get-ExactPromptFromHandoff -Content $handoffContent }
+$derivedReviewTask = Get-TaskFromConsolidatedReview -Content $consolidatedContent
+$preferDerivedTask = $derivedReviewTask.Priority -gt 0 -and
+  ([string]::IsNullOrWhiteSpace($handoffPrompt) -or (Test-GenericHandoffPrompt -Content $handoffPrompt))
 $taskText = if (-not [string]::IsNullOrWhiteSpace($Task)) {
   $Task.Trim()
+} elseif ($preferDerivedTask) {
+  $derivedReviewTask.Task
 } elseif (-not [string]::IsNullOrWhiteSpace($handoffPrompt)) {
   $handoffPrompt
+} elseif ($derivedReviewTask.Priority -gt 0 -and -not [string]::IsNullOrWhiteSpace($derivedReviewTask.Task)) {
+  $derivedReviewTask.Task
 } else {
   "Continue from .ai-control/current/handoff.md. If the next implementation task is unclear, report the current state and ask for the next concrete task."
 }
