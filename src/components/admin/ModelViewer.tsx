@@ -58,7 +58,11 @@ import type { WrapExportProductionReadinessSummary } from "@/lib/wrapExportProdu
 import { buildBodyCutoutQaGuardState } from "@/lib/bodyCutoutQaGuard";
 import type { BodyGeometryAuditArtifactLike } from "@/lib/bodyGeometryDebugReport";
 import { hashArrayBufferSha256, hashFileSha256, hashJsonSha256 } from "@/lib/hashSha256";
-import type { LoadedGltfSceneInspection, LoadedSceneBoundsUnits } from "@/lib/inspectLoadedGltfScene";
+import type {
+  LoadedGltfSceneInspection,
+  LoadedSceneBoundsSummary,
+  LoadedSceneBoundsUnits,
+} from "@/lib/inspectLoadedGltfScene";
 import { inspectLoadedGltfScene } from "@/lib/inspectLoadedGltfScene";
 import {
   resolveGenericTopFinishBandOverlay,
@@ -201,6 +205,101 @@ function toBodyBounds(
     width: round2(bounds.width),
     height: round2(bounds.height),
     depth: round2(bounds.depth),
+  };
+}
+
+type BodyCutoutQaViewFrameSource = "runtime-body-mesh" | "rendered-model" | "none";
+
+interface BodyCutoutQaViewFrame {
+  bounds: THREE.Box3 | null;
+  source: BodyCutoutQaViewFrameSource;
+  signature: string;
+}
+
+const _usableBoxSize = new THREE.Vector3();
+
+function isFinitePositive(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+function isUsableBox3(bounds: THREE.Box3 | null | undefined): bounds is THREE.Box3 {
+  if (!bounds || bounds.isEmpty()) return false;
+  const size = bounds.getSize(_usableBoxSize);
+  return (
+    Number.isFinite(bounds.min.x) &&
+    Number.isFinite(bounds.min.y) &&
+    Number.isFinite(bounds.min.z) &&
+    Number.isFinite(bounds.max.x) &&
+    Number.isFinite(bounds.max.y) &&
+    Number.isFinite(bounds.max.z) &&
+    size.lengthSq() > 1e-8
+  );
+}
+
+function toBox3FromLoadedBounds(bounds: LoadedSceneBoundsSummary | null | undefined): THREE.Box3 | null {
+  if (
+    !bounds ||
+    !isFinitePositive(bounds.width) ||
+    !isFinitePositive(bounds.height) ||
+    !isFinitePositive(bounds.depth) ||
+    !Number.isFinite(bounds.minX) ||
+    !Number.isFinite(bounds.minY) ||
+    !Number.isFinite(bounds.minZ) ||
+    !Number.isFinite(bounds.maxX) ||
+    !Number.isFinite(bounds.maxY) ||
+    !Number.isFinite(bounds.maxZ) ||
+    bounds.maxX <= bounds.minX ||
+    bounds.maxY <= bounds.minY ||
+    bounds.maxZ <= bounds.minZ
+  ) {
+    return null;
+  }
+  return new THREE.Box3(
+    new THREE.Vector3(bounds.minX, bounds.minY, bounds.minZ),
+    new THREE.Vector3(bounds.maxX, bounds.maxY, bounds.maxZ),
+  );
+}
+
+function getBoxSignature(bounds: THREE.Box3 | null): string {
+  if (!bounds || !isUsableBox3(bounds)) return "none";
+  return [
+    bounds.min.x,
+    bounds.min.y,
+    bounds.min.z,
+    bounds.max.x,
+    bounds.max.y,
+    bounds.max.z,
+  ].map((value) => round2(value).toString()).join(",");
+}
+
+function resolveBodyCutoutQaViewFrame(args: {
+  mode: PreviewModelMode | null;
+  renderedModelBounds: THREE.Box3 | null;
+  runtimeBodyBounds: LoadedSceneBoundsSummary | null | undefined;
+}): BodyCutoutQaViewFrame {
+  if (args.mode === "body-cutout-qa") {
+    const runtimeBodyBox = toBox3FromLoadedBounds(args.runtimeBodyBounds);
+    if (isUsableBox3(runtimeBodyBox)) {
+      return {
+        bounds: runtimeBodyBox,
+        source: "runtime-body-mesh",
+        signature: getBoxSignature(runtimeBodyBox),
+      };
+    }
+  }
+
+  if (isUsableBox3(args.renderedModelBounds)) {
+    return {
+      bounds: args.renderedModelBounds.clone(),
+      source: "rendered-model",
+      signature: getBoxSignature(args.renderedModelBounds),
+    };
+  }
+
+  return {
+    bounds: null,
+    source: "none",
+    signature: "none",
   };
 }
 
@@ -417,16 +516,24 @@ function LoadingIndicator() {
 // Auto-fit on first load
 // ---------------------------------------------------------------------------
 
-function AutoFit({ url }: { url: string }) {
+function AutoFit({
+  url,
+  viewFrameBounds,
+  viewFrameSignature,
+}: {
+  url: string;
+  viewFrameBounds?: THREE.Box3 | null;
+  viewFrameSignature?: string;
+}) {
   const bounds = useBounds();
   const camera = useThree((state) => state.camera);
-  const lastUrl = useRef<string | null>(null);
+  const lastFitKey = useRef<string | null>(null);
   useEffect(() => {
-    // Fit camera once per unique model URL — not on every render
-    if (lastUrl.current === url) return;
-    lastUrl.current = url;
+    const fitKey = `${url}|${viewFrameSignature ?? "rendered"}`;
+    if (lastFitKey.current === fitKey) return;
+    lastFitKey.current = fitKey;
     const timer = setTimeout(() => {
-      bounds.refresh().clip().fit();
+      bounds.refresh(viewFrameBounds ?? undefined).clip().fit();
       const { center, distance } = bounds.getSize();
       const direction = camera.position.clone().sub(center);
       if (direction.lengthSq() < 1e-6) {
@@ -438,7 +545,7 @@ function AutoFit({ url }: { url: string }) {
         .lookAt({ target: center });
     }, 180);
     return () => clearTimeout(timer);
-  }, [url, bounds, camera]);
+  }, [url, viewFrameBounds, viewFrameSignature, bounds, camera]);
   return null;
 }
 
@@ -1385,6 +1492,33 @@ export default function ModelViewer({
       ? loadedSceneInspectionState.sceneInspection
       : null;
 
+  const bodyCutoutQaViewFrame = useMemo(
+    () => resolveBodyCutoutQaViewFrame({
+      mode: effectivePreviewMode,
+      renderedModelBounds: modelBounds,
+      runtimeBodyBounds: runtimeDebugSceneInspection?.bounds.body,
+    }),
+    [effectivePreviewMode, modelBounds, runtimeDebugSceneInspection],
+  );
+  const activeViewFrameBounds =
+    effectivePreviewMode === "body-cutout-qa"
+      ? bodyCutoutQaViewFrame.bounds
+      : modelBounds;
+  const activeViewFrameSource =
+    effectivePreviewMode === "body-cutout-qa"
+      ? bodyCutoutQaViewFrame.source
+      : (modelBounds ? "rendered-model" : "none");
+  const activeViewFrameSnapshot = useMemo(() => {
+    if (!activeViewFrameBounds || !isUsableBox3(activeViewFrameBounds)) return null;
+    const size = activeViewFrameBounds.getSize(_usableBoxSize);
+    return {
+      minY: round2(activeViewFrameBounds.min.y),
+      width: round2(size.x),
+      height: round2(size.y),
+      depth: round2(size.z),
+    };
+  }, [activeViewFrameBounds]);
+
   const viewerRuntimeAuditContract = useMemo<BodyGeometryContract | null>(() => {
     if (!viewerRuntimeGlbAudit) return null;
     const emptyContract = createEmptyBodyGeometryContract();
@@ -1629,6 +1763,19 @@ export default function ModelViewer({
       data-body-reference-viewer-scaffold={showScaffoldOverlay ? "present" : "absent"}
       data-engraving-overlay-preview={hasItems ? "present" : "absent"}
       data-engraving-overlay-count={placedItems?.length ?? 0}
+      data-body-cutout-qa-frame-source={
+        effectivePreviewMode === "body-cutout-qa" ? activeViewFrameSource : "not-applicable"
+      }
+      data-body-cutout-qa-floor-source={
+        effectivePreviewMode === "body-cutout-qa" ? activeViewFrameSource : "not-applicable"
+      }
+      data-body-cutout-qa-ring-source={
+        effectivePreviewMode === "body-cutout-qa" ? activeViewFrameSource : "not-applicable"
+      }
+      data-body-cutout-qa-frame-width={activeViewFrameSnapshot?.width ?? "n/a"}
+      data-body-cutout-qa-frame-height={activeViewFrameSnapshot?.height ?? "n/a"}
+      data-body-cutout-qa-frame-depth={activeViewFrameSnapshot?.depth ?? "n/a"}
+      data-body-cutout-qa-frame-min-y={activeViewFrameSnapshot?.minY ?? "n/a"}
       style={{ position: "relative", width: "100%", height: "100%" }}
     >
       {showScaffoldOverlay && (
@@ -1782,15 +1929,27 @@ export default function ModelViewer({
                   onReady={handleModelReady}
                 />
               </Suspense>
-              <AutoFit url={url} />
+              <AutoFit
+                url={url}
+                viewFrameBounds={
+                  effectivePreviewMode === "body-cutout-qa"
+                    ? activeViewFrameBounds
+                    : null
+                }
+                viewFrameSignature={
+                  effectivePreviewMode === "body-cutout-qa"
+                    ? bodyCutoutQaViewFrame.signature
+                    : undefined
+                }
+              />
             </Bounds>
 
-            {tumblerDims && modelBounds && !hasItems && (
-              <EngravableZoneRing dims={tumblerDims} modelBounds={modelBounds} />
+            {tumblerDims && activeViewFrameBounds && !hasItems && (
+              <EngravableZoneRing dims={tumblerDims} modelBounds={activeViewFrameBounds} />
             )}
 
             <ContactShadows
-              position={[0, modelBounds ? modelBounds.min.y - 0.5 : -0.01, 0]}
+              position={[0, activeViewFrameBounds ? activeViewFrameBounds.min.y - 0.5 : -0.01, 0]}
               opacity={0.4}
               scale={shadowScale}
               blur={3}
@@ -1799,7 +1958,7 @@ export default function ModelViewer({
             />
 
             <Grid
-              position={[0, modelBounds ? modelBounds.min.y - 1 : -0.011, 0]}
+              position={[0, activeViewFrameBounds ? activeViewFrameBounds.min.y - 1 : -0.011, 0]}
               infiniteGrid
               cellSize={gridCell}
               cellThickness={0.4}

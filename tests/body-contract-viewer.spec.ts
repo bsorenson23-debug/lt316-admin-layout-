@@ -25,6 +25,20 @@ async function openInspector(page: Page): Promise<void> {
   await expect(page.getByTestId("body-contract-inspector-meshes-section")).toBeVisible();
 }
 
+async function expectBodyCutoutQaRuntimeViewFrame(page: Page): Promise<void> {
+  const viewer = page
+    .getByTestId("body-contract-viewer-viewport")
+    .locator("[data-body-cutout-qa-frame-source]")
+    .first();
+
+  await expect(viewer).toHaveAttribute("data-body-cutout-qa-frame-source", "runtime-body-mesh");
+  await expect(viewer).toHaveAttribute("data-body-cutout-qa-floor-source", "runtime-body-mesh");
+  await expect(viewer).toHaveAttribute("data-body-cutout-qa-ring-source", "runtime-body-mesh");
+  await expect(viewer).toHaveAttribute("data-body-cutout-qa-frame-width", "90");
+  await expect(viewer).toHaveAttribute("data-body-cutout-qa-frame-height", "180");
+  await expect(viewer).toHaveAttribute("data-body-cutout-qa-frame-depth", "90");
+}
+
 async function attachHarnessScreenshot(
   page: Page,
   testInfo: TestInfo,
@@ -91,6 +105,7 @@ test("BODY CUTOUT QA valid body-only fixture shows PASS with no extras", async (
   await expect(page.getByTestId("body-contract-inspector-accessory-meshes")).toContainText("none");
   await expect(page.getByTestId("body-contract-inspector-fallback-meshes")).toContainText("none");
   await expect(page.getByTestId("body-contract-inspector-validation-status")).toContainText("PASS");
+  await expectBodyCutoutQaRuntimeViewFrame(page);
 
   await attachHarnessScreenshot(page, testInfo, "body-cutout-qa-valid");
 });
@@ -103,6 +118,7 @@ test("BODY CUTOUT QA fails when accessory meshes are present", async ({ page }, 
   await expect(page.getByTestId("body-cutout-qa-guard-message")).toHaveText(
     "Accessory meshes detected — BODY CUTOUT QA expects body-only geometry.",
   );
+  await expectBodyCutoutQaRuntimeViewFrame(page);
 
   await openInspector(page);
   await expect(page.getByTestId("body-contract-inspector-status")).toHaveText(/FAIL/);
