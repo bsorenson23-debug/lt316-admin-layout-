@@ -1216,11 +1216,57 @@ function sourceUrlMatchesOfficialCatalogDomain(url: string): boolean {
   );
 }
 
-async function fetchPage(url: string): Promise<{ html: string; finalUrl: string }> {
+const DEFAULT_RETRY_BACKOFF_MS = 40;
+const MAX_RETRY_BACKOFF_MS = 250;
+
+function clampRetryBackoffMs(value: number): number {
+  return Math.max(0, Math.min(MAX_RETRY_BACKOFF_MS, Math.round(value)));
+}
+
+function parseRetryAfterMs(headerValue: string | null): number | null {
+  if (!headerValue) return null;
+
+  const seconds = Number(headerValue);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return clampRetryBackoffMs(seconds * 1000);
+  }
+
+  const retryAt = Date.parse(headerValue);
+  if (!Number.isFinite(retryAt)) {
+    return null;
+  }
+
+  const deltaMs = retryAt - Date.now();
+  return clampRetryBackoffMs(Math.max(0, deltaMs));
+}
+
+async function releaseFailedResponse(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Best-effort cancellation; ignore stream cancellation errors.
+  }
+}
+
+function compute429RetryDelayMs(retryAfterHeader: string | null): number {
+  return parseRetryAfterMs(retryAfterHeader) ?? DEFAULT_RETRY_BACKOFF_MS;
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchPage(
+  url: string,
+  options?: {
+    sleep?: (ms: number) => Promise<void>;
+  },
+): Promise<{ html: string; finalUrl: string }> {
   const userAgents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (compatible; lt316-admin/1.0)",
   ];
+  const sleep = options?.sleep ?? defaultSleep;
 
   let lastError: Error | null = null;
   for (const userAgent of userAgents) {
@@ -1232,7 +1278,11 @@ async function fetchPage(url: string): Promise<{ html: string; finalUrl: string 
       });
 
       if (!response.ok) {
+        await releaseFailedResponse(response);
         if (response.status === 403 || response.status === 429) {
+          if (response.status === 429) {
+            await sleep(compute429RetryDelayMs(response.headers.get("retry-after")));
+          }
           lastError = new Error(`Lookup fetch failed (${response.status})`);
           continue;
         }
@@ -1255,6 +1305,7 @@ async function fetchPage(url: string): Promise<{ html: string; finalUrl: string 
 export async function lookupTumblerItem(args: {
   lookupInput: string;
   dimensionExtractor?: PageDimensionExtractor;
+  fetchSleep?: (ms: number) => Promise<void>;
 }): Promise<TumblerItemLookupResponse> {
   const lookupInput = args.lookupInput.trim();
   let resolvedUrl: string | null = null;
@@ -1278,7 +1329,9 @@ export async function lookupTumblerItem(args: {
     let html: string | null = null;
     let finalUrl: string | null = null;
     try {
-      const fetchedPage = await fetchPage(lookupInput);
+      const fetchedPage = await fetchPage(lookupInput, {
+        sleep: args.fetchSleep,
+      });
       html = fetchedPage.html;
       finalUrl = fetchedPage.finalUrl;
     } catch (error) {

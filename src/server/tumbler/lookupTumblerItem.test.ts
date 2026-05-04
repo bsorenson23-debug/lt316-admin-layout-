@@ -66,6 +66,32 @@ function installFetchResponder(
   };
 }
 
+function makeTrackedFailedResponse(args: {
+  status: number;
+  bodyText?: string;
+  retryAfter?: string;
+  onCancel: () => void;
+}): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const bytes = new TextEncoder().encode(args.bodyText ?? "failed");
+      controller.enqueue(bytes);
+      controller.close();
+    },
+    cancel() {
+      args.onCancel();
+    },
+  });
+  const headers = new Headers({ "content-type": "text/plain; charset=utf-8" });
+  if (args.retryAfter) {
+    headers.set("retry-after", args.retryAfter);
+  }
+  return new Response(stream, {
+    status: args.status,
+    headers,
+  });
+}
+
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
 });
@@ -437,7 +463,13 @@ test("Stanley and YETI deterministic URL lookups do not call LLM extraction", as
 });
 
 test("known official URL still matches profile when fetch is blocked with 403", async () => {
-  installFetchResponder(() => new Response("forbidden", { status: 403 }));
+  let cancelCount = 0;
+  installFetchResponder(() => makeTrackedFailedResponse({
+    status: 403,
+    onCancel: () => {
+      cancelCount += 1;
+    },
+  }));
 
   const result = await lookupTumblerItem({
     lookupInput: RTIC_URL,
@@ -450,14 +482,26 @@ test("known official URL still matches profile when fetch is blocked with 403", 
   assert.equal(result.matchedProfileId, "rtic-20");
   assert.equal(result.resolvedUrl, null);
   assert.equal(result.sources.length, 0);
+  assert.equal(cancelCount, 2);
   assert.equal(result.notes.some((note) => note.includes("Lookup fetch blocked")), true);
 });
 
-test("known official URL still matches profile when fetch is rate-limited with 429", async () => {
-  installFetchResponder(() => new Response("rate limited", { status: 429 }));
+test("known official URL still matches profile when fetch is rate-limited with 429 and uses bounded backoff", async () => {
+  let cancelCount = 0;
+  const delays: number[] = [];
+  installFetchResponder(() => makeTrackedFailedResponse({
+    status: 429,
+    retryAfter: "1",
+    onCancel: () => {
+      cancelCount += 1;
+    },
+  }));
 
   const result = await lookupTumblerItem({
     lookupInput: RTIC_URL,
+    fetchSleep: async (ms) => {
+      delays.push(ms);
+    },
     dimensionExtractor: async () => {
       throw new Error("dimension extractor should not run for blocked URL fallback");
     },
@@ -467,11 +511,20 @@ test("known official URL still matches profile when fetch is rate-limited with 4
   assert.equal(result.matchedProfileId, "rtic-20");
   assert.equal(result.resolvedUrl, null);
   assert.equal(result.sources.length, 0);
+  assert.equal(cancelCount, 2);
+  assert.equal(delays.length, 2);
+  assert.equal(delays.every((value) => value > 0 && value <= 250), true);
   assert.equal(result.notes.some((note) => note.includes("Lookup fetch blocked")), true);
 });
 
 test("known official URL still matches profile when fetch returns 404", async () => {
-  installFetchResponder(() => new Response("not found", { status: 404 }));
+  let cancelCount = 0;
+  installFetchResponder(() => makeTrackedFailedResponse({
+    status: 404,
+    onCancel: () => {
+      cancelCount += 1;
+    },
+  }));
 
   const result = await lookupTumblerItem({
     lookupInput: RTIC_URL,
@@ -484,6 +537,7 @@ test("known official URL still matches profile when fetch returns 404", async ()
   assert.equal(result.matchedProfileId, "rtic-20");
   assert.equal(result.resolvedUrl, null);
   assert.equal(result.sources.length, 0);
+  assert.equal(cancelCount, 2);
   assert.equal(result.notes.some((note) => note.includes("Lookup fetch blocked")), true);
 });
 
