@@ -53,6 +53,19 @@ function installFetchMock(htmlByUrl: Record<string, string>): void {
   };
 }
 
+function installFetchResponder(
+  responder: (url: string) => Response | Promise<Response>,
+): void {
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    return responder(url);
+  };
+}
+
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
 });
@@ -421,6 +434,71 @@ test("Stanley and YETI deterministic URL lookups do not call LLM extraction", as
   assert.equal(yeti.mode, "matched-profile");
   assert.equal(yeti.matchedProfileId, "yeti-rambler-40");
   assert.notEqual(yeti.profileAuthority, "dynamic-llm-extracted");
+});
+
+test("known official URL still matches profile when fetch is blocked with 403", async () => {
+  installFetchResponder(() => new Response("forbidden", { status: 403 }));
+
+  const result = await lookupTumblerItem({
+    lookupInput: RTIC_URL,
+    dimensionExtractor: async () => {
+      throw new Error("dimension extractor should not run for blocked URL fallback");
+    },
+  });
+
+  assert.equal(result.mode, "matched-profile");
+  assert.equal(result.matchedProfileId, "rtic-20");
+  assert.equal(result.resolvedUrl, null);
+  assert.equal(result.sources.length, 0);
+  assert.equal(result.notes.some((note) => note.includes("Lookup fetch blocked")), true);
+});
+
+test("known official URL still matches profile when fetch is rate-limited with 429", async () => {
+  installFetchResponder(() => new Response("rate limited", { status: 429 }));
+
+  const result = await lookupTumblerItem({
+    lookupInput: RTIC_URL,
+    dimensionExtractor: async () => {
+      throw new Error("dimension extractor should not run for blocked URL fallback");
+    },
+  });
+
+  assert.equal(result.mode, "matched-profile");
+  assert.equal(result.matchedProfileId, "rtic-20");
+  assert.equal(result.resolvedUrl, null);
+  assert.equal(result.sources.length, 0);
+  assert.equal(result.notes.some((note) => note.includes("Lookup fetch blocked")), true);
+});
+
+test("known official URL still matches profile when fetch returns 404", async () => {
+  installFetchResponder(() => new Response("not found", { status: 404 }));
+
+  const result = await lookupTumblerItem({
+    lookupInput: RTIC_URL,
+    dimensionExtractor: async () => {
+      throw new Error("dimension extractor should not run for blocked URL fallback");
+    },
+  });
+
+  assert.equal(result.mode, "matched-profile");
+  assert.equal(result.matchedProfileId, "rtic-20");
+  assert.equal(result.resolvedUrl, null);
+  assert.equal(result.sources.length, 0);
+  assert.equal(result.notes.some((note) => note.includes("Lookup fetch blocked")), true);
+});
+
+test("unknown URL with blocked fetch remains non-authoritative safe fallback", async () => {
+  const unknownUrl = "https://example.com/products/unknown-blocked-tumbler";
+  installFetchResponder(() => new Response("not found", { status: 404 }));
+
+  const result = await lookupTumblerItem({ lookupInput: unknownUrl });
+
+  assert.equal(result.mode, "safe-fallback");
+  assert.equal(result.profileAuthority, "unknown");
+  assert.equal(result.matchedProfileId, null);
+  assert.equal(result.resolvedUrl, null);
+  assert.equal(result.sources.length, 0);
+  assert.equal(result.notes.some((note) => note.includes("Lookup fetch blocked")), true);
 });
 
 test("unknown URL with missing Open Graph metadata returns a manual-entry lookup error after fallbacks fail", async () => {
