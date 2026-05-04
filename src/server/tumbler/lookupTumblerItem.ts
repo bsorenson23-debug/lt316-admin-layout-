@@ -1216,24 +1216,96 @@ function sourceUrlMatchesOfficialCatalogDomain(url: string): boolean {
   );
 }
 
-async function fetchPage(url: string): Promise<{ html: string; finalUrl: string }> {
-  const response = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; lt316-admin/1.0)" },
-    cache: "no-store",
-    signal: AbortSignal.timeout(10_000),
-  });
+const DEFAULT_RETRY_BACKOFF_MS = 40;
+const MAX_RETRY_BACKOFF_MS = 250;
 
-  if (!response.ok) {
-    throw new Error(`Lookup fetch failed (${response.status})`);
+function clampRetryBackoffMs(value: number): number {
+  return Math.max(0, Math.min(MAX_RETRY_BACKOFF_MS, Math.round(value)));
+}
+
+function parseRetryAfterMs(headerValue: string | null): number | null {
+  if (!headerValue) return null;
+
+  const seconds = Number(headerValue);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return clampRetryBackoffMs(seconds * 1000);
   }
 
-  const html = await response.text();
-  return { html, finalUrl: response.url || url };
+  const retryAt = Date.parse(headerValue);
+  if (!Number.isFinite(retryAt)) {
+    return null;
+  }
+
+  const deltaMs = retryAt - Date.now();
+  return clampRetryBackoffMs(Math.max(0, deltaMs));
+}
+
+async function releaseFailedResponse(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Best-effort cancellation; ignore stream cancellation errors.
+  }
+}
+
+function compute429RetryDelayMs(retryAfterHeader: string | null): number {
+  return parseRetryAfterMs(retryAfterHeader) ?? DEFAULT_RETRY_BACKOFF_MS;
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchPage(
+  url: string,
+  options?: {
+    sleep?: (ms: number) => Promise<void>;
+  },
+): Promise<{ html: string; finalUrl: string }> {
+  const userAgents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (compatible; lt316-admin/1.0)",
+  ];
+  const sleep = options?.sleep ?? defaultSleep;
+
+  let lastError: Error | null = null;
+  for (const userAgent of userAgents) {
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": userAgent },
+        cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (!response.ok) {
+        await releaseFailedResponse(response);
+        if (response.status === 403 || response.status === 429) {
+          if (response.status === 429) {
+            await sleep(compute429RetryDelayMs(response.headers.get("retry-after")));
+          }
+          lastError = new Error(`Lookup fetch failed (${response.status})`);
+          continue;
+        }
+        throw new Error(`Lookup fetch failed (${response.status})`);
+      }
+
+      const html = await response.text();
+      return { html, finalUrl: response.url || url };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("Lookup fetch failed");
+      if (userAgent === userAgents[userAgents.length - 1]) {
+        throw lastError;
+      }
+    }
+  }
+
+  throw (lastError ?? new Error("Lookup fetch failed"));
 }
 
 export async function lookupTumblerItem(args: {
   lookupInput: string;
   dimensionExtractor?: PageDimensionExtractor;
+  fetchSleep?: (ms: number) => Promise<void>;
 }): Promise<TumblerItemLookupResponse> {
   const lookupInput = args.lookupInput.trim();
   let resolvedUrl: string | null = null;
@@ -1254,72 +1326,75 @@ export async function lookupTumblerItem(args: {
   let pageText = "";
 
   if (isLikelyUrl(lookupInput)) {
-    let html: string;
-    let finalUrl: string;
+    let html: string | null = null;
+    let finalUrl: string | null = null;
     try {
-      const fetchedPage = await fetchPage(lookupInput);
+      const fetchedPage = await fetchPage(lookupInput, {
+        sleep: args.fetchSleep,
+      });
       html = fetchedPage.html;
       finalUrl = fetchedPage.finalUrl;
     } catch (error) {
-      throw manualEntryError(
-        error instanceof Error
-          ? `Could not fetch the product page: ${error.message}.`
-          : "Could not fetch the product page.",
+      notes.push(
+        `Lookup fetch blocked (${error instanceof Error ? error.message : "network error"}). Using internal catalog match only.`,
       );
+      lookupText = buildUrlLookupText(lookupInput);
     }
 
-    resolvedUrl = finalUrl;
-    const openGraph = extractOpenGraphProductMetadata(html, finalUrl);
-    title = openGraph.title ?? extractTitle(html);
-    imageUrls = extractImageUrls(html, finalUrl);
-    if (openGraph.imageUrl && !imageUrls.includes(openGraph.imageUrl)) {
-      imageUrls = [openGraph.imageUrl, ...imageUrls];
-    }
-    pageText = extractPageBodyText(html);
-    const selectedVariant = extractShopifySelectedVariant(html, finalUrl);
-    const urlVariant = extractUrlVariantParams(finalUrl);
-    selectedVariantLabel = selectedVariant?.title ?? urlVariant.selectedVariantLabel;
-    selectedVariantId = selectedVariant?.id ?? normalizeVariantId(selectedVariantLabel);
-    selectedVariantImageUrl = selectedVariant?.imageUrl ?? null;
-    if (selectedVariantImageUrl && !imageUrls.includes(selectedVariantImageUrl)) {
-      imageUrls = [selectedVariantImageUrl, ...imageUrls];
-    }
-    lookupText = [lookupInput, buildUrlLookupText(finalUrl), title, pageText].filter(Boolean).join(" ");
+    if (html !== null && finalUrl !== null) {
+      resolvedUrl = finalUrl;
+      const openGraph = extractOpenGraphProductMetadata(html, finalUrl);
+      title = openGraph.title ?? extractTitle(html);
+      imageUrls = extractImageUrls(html, finalUrl);
+      if (openGraph.imageUrl && !imageUrls.includes(openGraph.imageUrl)) {
+        imageUrls = [openGraph.imageUrl, ...imageUrls];
+      }
+      pageText = extractPageBodyText(html);
+      const selectedVariant = extractShopifySelectedVariant(html, finalUrl);
+      const urlVariant = extractUrlVariantParams(finalUrl);
+      selectedVariantLabel = selectedVariant?.title ?? urlVariant.selectedVariantLabel;
+      selectedVariantId = selectedVariant?.id ?? normalizeVariantId(selectedVariantLabel);
+      selectedVariantImageUrl = selectedVariant?.imageUrl ?? null;
+      if (selectedVariantImageUrl && !imageUrls.includes(selectedVariantImageUrl)) {
+        imageUrls = [selectedVariantImageUrl, ...imageUrls];
+      }
+      lookupText = [lookupInput, buildUrlLookupText(finalUrl), title, pageText].filter(Boolean).join(" ");
 
-    if (sourceUrlMatchesOfficialCatalogDomain(finalUrl)) sourceKind = "official";
-    else if (/academy\.com/i.test(finalUrl)) sourceKind = "retailer";
-    else if (/amazon\.com|walmart\.com|dickssportinggoods\.com/i.test(finalUrl)) sourceKind = "retailer";
+      if (sourceUrlMatchesOfficialCatalogDomain(finalUrl)) sourceKind = "official";
+      else if (/academy\.com/i.test(finalUrl)) sourceKind = "retailer";
+      else if (/amazon\.com|walmart\.com|dickssportinggoods\.com/i.test(finalUrl)) sourceKind = "retailer";
 
-    sources = buildSources(finalUrl, sourceKind, title);
-    titleSizeOz =
-      parseCapacityOz(selectedVariant?.title ?? "") ??
-      urlVariant.selectedSizeOz ??
-      parseCapacityOz(title ?? lookupInput);
-    selectedColorOrFinish =
-      selectedVariant?.selectedColorOrFinish ??
-      urlVariant.selectedColorOrFinish ??
-      inferColorOrFinish([title, lookupInput].filter(Boolean).join(" "));
-    const availableSizeOz = extractAllCapacitiesOz(lookupText);
-    scrapedDims = parseTripletDimensionsMm({
-      text: lookupText,
-      resolvedUrl: finalUrl,
-      lookupInput,
-      title,
-      selectedSizeOz: titleSizeOz,
-      selectedColorOrFinish,
-      availableSizeOz,
-      lookupProductId: finalUrl,
-      sourceKind,
-    });
-    selectedImageUrl = selectedVariantImageUrl ?? await selectBestProductImage({
-      imageUrls,
-      lookupText,
-    });
-    if (scrapedDims?.overallHeightMm) {
-      notes.push("Parsed page dimensions from the product page text.");
-    }
-    if (selectedImageUrl && selectedImageUrl !== imageUrls[0]) {
-      notes.push("Selected the strongest product photo from the scraped page images.");
+      sources = buildSources(finalUrl, sourceKind, title);
+      titleSizeOz =
+        parseCapacityOz(selectedVariant?.title ?? "") ??
+        urlVariant.selectedSizeOz ??
+        parseCapacityOz(title ?? lookupInput);
+      selectedColorOrFinish =
+        selectedVariant?.selectedColorOrFinish ??
+        urlVariant.selectedColorOrFinish ??
+        inferColorOrFinish([title, lookupInput].filter(Boolean).join(" "));
+      const availableSizeOz = extractAllCapacitiesOz(lookupText);
+      scrapedDims = parseTripletDimensionsMm({
+        text: lookupText,
+        resolvedUrl: finalUrl,
+        lookupInput,
+        title,
+        selectedSizeOz: titleSizeOz,
+        selectedColorOrFinish,
+        availableSizeOz,
+        lookupProductId: finalUrl,
+        sourceKind,
+      });
+      selectedImageUrl = selectedVariantImageUrl ?? await selectBestProductImage({
+        imageUrls,
+        lookupText,
+      });
+      if (scrapedDims?.overallHeightMm) {
+        notes.push("Parsed page dimensions from the product page text.");
+      }
+      if (selectedImageUrl && selectedImageUrl !== imageUrls[0]) {
+        notes.push("Selected the strongest product photo from the scraped page images.");
+      }
     }
   }
 
