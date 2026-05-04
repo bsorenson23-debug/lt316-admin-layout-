@@ -14,6 +14,7 @@ The script never auto-merges. The strongest success state it emits is `READY_FOR
 - Never runs `-RunNextPrompt` unless a human explicitly passes that flag to the separate Codex script.
 - Never stages or commits generated `.ai-control`, `.codex-handoff`, `.codex-diagnostics`, `.next`, `node_modules`, `test-results`, screenshots, generated GLBs, public model fixtures, or secrets.
 - Keeps generated reports local-only and ignored.
+- Resets stale `$LASTEXITCODE` before each lifecycle command so Windows PowerShell 5.1 does not leak a prior native exit code into a later PowerShell/scriptblock result.
 
 ## Modes
 
@@ -33,6 +34,7 @@ Behavior:
 - runs `git fetch origin --quiet`
 - stops if tracked files are dirty unless `-AllowDirty` is passed
 - confirms generated `.ai-control` and `.codex-handoff` files remain ignored/local-only
+- runs a small non-destructive self-check for `Invoke-ScriptCommand` so stale `$LASTEXITCODE`, native failures, and PowerShell/scriptblock failures are classified correctly
 - never touches stash
 
 ### LocalValidate
@@ -192,7 +194,17 @@ Uses `gh` when available to inspect:
 Output:
 
 - `READY_FOR_HUMAN_MERGE`
+- `STOP_CHECKS_FAILED`
+- `STOP_CHECKS_PENDING`
+- `STOP_CHECKS_UNAVAILABLE`
 - `STOP_REVIEW_FEEDBACK_FOUND`
+
+Readiness behavior:
+
+- blocks on failed PR checks
+- blocks on pending PR checks
+- blocks when PR check data is unavailable
+- never treats unavailable checks as `READY_FOR_HUMAN_MERGE`; a human can manually review that state, but the script still stops
 
 When it stops, it lists:
 
@@ -236,6 +248,10 @@ It checks:
 Output:
 
 - `READY_FOR_HUMAN_MERGE`
+- `STOP_CHECKS_FAILED`
+- `STOP_CHECKS_PENDING`
+- `STOP_CHECKS_UNAVAILABLE`
+- `STOP_REVIEW_FEEDBACK_FOUND`
 - `STOP`
 
 ## Recommended Flow

@@ -90,14 +90,45 @@ function Invoke-ScriptCommand {
     [scriptblock]::Create([string]$Command)
   }
 
-  $output = & $scriptBlock @ArgumentList 2>&1
-  $exitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+  $global:LASTEXITCODE = 0
+  $hadPowerShellFailure = $false
+  try {
+    $output = & $scriptBlock @ArgumentList 2>&1
+  } catch {
+    $hadPowerShellFailure = $true
+    $output = @($_)
+  }
+
+  $exitCode = if ($null -ne $global:LASTEXITCODE) { [int]$global:LASTEXITCODE } else { 0 }
+  $hadErrorRecord = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }).Count -gt 0
+  $succeeded = (-not $hadPowerShellFailure) -and (-not $hadErrorRecord) -and ($exitCode -eq 0)
   return [pscustomobject]@{
     Command = $Command.ToString().Trim()
     ExitCode = $exitCode
-    Succeeded = $exitCode -eq 0
+    Succeeded = $succeeded
     Output = (($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine).Trim()
   }
+}
+
+function Test-InvokeScriptCommandBehavior {
+  $findings = New-Object System.Collections.Generic.List[string]
+
+  $nativeFailure = Invoke-ScriptCommand -Command "cmd /c exit 7"
+  if ($nativeFailure.Succeeded -or $nativeFailure.ExitCode -ne 7) {
+    $findings.Add("Invoke-ScriptCommand failed to report a non-zero native exit code.")
+  }
+
+  $scriptSuccess = Invoke-ScriptCommand -Command { Write-Output "invoke-self-check-ok" }
+  if (-not $scriptSuccess.Succeeded -or $scriptSuccess.ExitCode -ne 0) {
+    $findings.Add("A successful PowerShell/scriptblock command was marked as failed after a prior native failure.")
+  }
+
+  $scriptFailure = Invoke-ScriptCommand -Command { throw "intentional Invoke-ScriptCommand self-check failure" }
+  if ($scriptFailure.Succeeded) {
+    $findings.Add("A failing PowerShell/scriptblock command was reported as succeeded.")
+  }
+
+  return @($findings.ToArray())
 }
 
 function ConvertTo-InvariantDateTimeOffset {
@@ -420,7 +451,7 @@ function Get-PrCheckSummary {
 
   $result = Invoke-ScriptCommand -Command {
     param($PullRequestNumber)
-    gh pr checks $PullRequestNumber --json name,status,conclusion
+    gh pr checks $PullRequestNumber --json name,state,completedAt,link
   } -ArgumentList @($Number)
   if (-not $result.Succeeded) {
     return [pscustomobject]@{
@@ -438,20 +469,27 @@ function Get-PrCheckSummary {
     $checks = @($result.Output | ConvertFrom-Json)
   }
 
+  if ($checks.Count -eq 0) {
+    return [pscustomobject]@{
+      Available = $false
+      Failures = @()
+      Pending = @()
+      Raw = "No PR checks were returned by gh pr checks."
+    }
+  }
+
   foreach ($check in $checks) {
     $checkName = [string]$check.name
-    $status = [string]$check.status
-    $conclusion = [string]$check.conclusion
-    $normalizedStatus = $status.ToLowerInvariant()
-    $normalizedConclusion = $conclusion.ToLowerInvariant()
+    $state = [string]$check.state
+    $normalizedState = $state.ToLowerInvariant()
 
-    if ($normalizedConclusion -in @('failure', 'cancelled', 'timed_out', 'action_required')) {
-      $failures.Add("${checkName}: $conclusion")
+    if ($normalizedState -in @('fail', 'failure', 'error', 'cancel', 'cancelled', 'timed_out', 'action_required')) {
+      $failures.Add("${checkName}: $state")
       continue
     }
 
-    if ($normalizedStatus -ne 'completed') {
-      $pending.Add("${checkName}: $status")
+    if ($normalizedState -notin @('pass', 'success', 'neutral', 'skipping', 'skipped')) {
+      $pending.Add("${checkName}: $state")
     }
   }
 
@@ -461,6 +499,28 @@ function Get-PrCheckSummary {
     Pending = @($pending.ToArray())
     Raw = $result.Output
   }
+}
+
+function Get-AssessmentStopCode {
+  param([Parameter(Mandatory = $true)]$Assessment)
+
+  if (-not $Assessment.CheckSummary.Available) {
+    return "STOP_CHECKS_UNAVAILABLE"
+  }
+
+  if ($Assessment.CheckSummary.Failures.Count -gt 0) {
+    return "STOP_CHECKS_FAILED"
+  }
+
+  if ($Assessment.CheckSummary.Pending.Count -gt 0) {
+    return "STOP_CHECKS_PENDING"
+  }
+
+  if ($Assessment.Findings.Count -gt 0) {
+    return "STOP_REVIEW_FEEDBACK_FOUND"
+  }
+
+  return "STOP"
 }
 
 function Get-SeverityLabel {
@@ -577,6 +637,14 @@ function Get-ReviewWatchAssessment {
     $reasons.Add("One or more PR checks are failing.")
   }
 
+  if ($checkSummary.Pending.Count -gt 0) {
+    $reasons.Add("One or more PR checks are still pending.")
+  }
+
+  if (-not $checkSummary.Available) {
+    $reasons.Add("PR check data is unavailable. Manual review is required before merge readiness.")
+  }
+
   foreach ($thread in @($data.Threads)) {
     $threadPath = if ($thread.path) { ConvertTo-NormalizedRepoPath -Path $thread.path } else { "n/a" }
     $latestThreadComment = @($thread.comments.nodes)[-1]
@@ -664,7 +732,7 @@ function Get-ReviewWatchAssessment {
     Findings = @($findings.ToArray())
     Reasons = @($reasons.ToArray())
     SuggestedPrompt = $suggestedPrompt
-    IsClean = ($reasons.Count -eq 0) -and ($checkSummary.Failures.Count -eq 0) -and ($findings.Count -eq 0)
+    IsClean = $checkSummary.Available -and ($checkSummary.Failures.Count -eq 0) -and ($checkSummary.Pending.Count -eq 0) -and ($reasons.Count -eq 0) -and ($findings.Count -eq 0)
   }
 }
 
@@ -723,10 +791,14 @@ function Assert-ExpectedFilesProvided {
 }
 
 $initialStash = @(Get-StashListLines)
+$invokeCommandSelfCheckFindings = @(Test-InvokeScriptCommandBehavior)
 
 switch ($Mode) {
   "Preflight" {
     $findings = New-Object System.Collections.Generic.List[string]
+    foreach ($selfCheckFinding in $invokeCommandSelfCheckFindings) {
+      $findings.Add($selfCheckFinding)
+    }
     $trackedStatus = @(Get-TrackedStatusLines)
     $workingTree = @(Get-WorkingTreeStatusLines)
     $ignoredStatus = @(Get-IgnoredGeneratedStatusLines)
@@ -952,7 +1024,7 @@ switch ($Mode) {
     }
 
     if (-not (Test-GhAvailable)) {
-      Write-Output "STOP_REVIEW_FEEDBACK_FOUND"
+      Write-Output "STOP_CHECKS_UNAVAILABLE"
       Write-Output "gh CLI is unavailable; cannot inspect PR review state automatically."
       break
     }
@@ -960,7 +1032,7 @@ switch ($Mode) {
     try {
       $assessment = Get-ReviewWatchAssessment -Number $PrNumber -ExpectedHead $ExpectedHeadSha
     } catch {
-      Write-Output "STOP_REVIEW_FEEDBACK_FOUND"
+      Write-Output "STOP_CHECKS_UNAVAILABLE"
       Write-Output "Reason: Unable to inspect PR review state automatically: $($_.Exception.Message)"
       break
     }
@@ -970,12 +1042,18 @@ switch ($Mode) {
       break
     }
 
-    Write-Output "STOP_REVIEW_FEEDBACK_FOUND"
+    Write-Output (Get-AssessmentStopCode -Assessment $assessment)
     foreach ($reason in @($assessment.Reasons)) {
       Write-Output "Reason: $reason"
     }
+    if (-not $assessment.CheckSummary.Available -and -not [string]::IsNullOrWhiteSpace($assessment.CheckSummary.Raw)) {
+      Write-Output "Check data: $($assessment.CheckSummary.Raw)"
+    }
     foreach ($failure in @($assessment.CheckSummary.Failures)) {
       Write-Output "Failing check: $failure"
+    }
+    foreach ($pendingCheck in @($assessment.CheckSummary.Pending)) {
+      Write-Output "Pending check: $pendingCheck"
     }
     foreach ($finding in @($assessment.Findings)) {
       Write-Output "Reviewer: $($finding.Reviewer)"
@@ -1031,6 +1109,21 @@ switch ($Mode) {
     $reviewAssessment = Get-ReviewWatchAssessment -Number $PrNumber -ExpectedHead $ExpectedHeadSha
     if (-not $reviewAssessment.IsClean) {
       $findings.Add("PR review is not clean.")
+      foreach ($reason in @($reviewAssessment.Reasons)) {
+        $findings.Add("ReviewWatch: $reason")
+      }
+      if (-not $reviewAssessment.CheckSummary.Available -and -not [string]::IsNullOrWhiteSpace($reviewAssessment.CheckSummary.Raw)) {
+        $findings.Add("ReviewWatch check data: $($reviewAssessment.CheckSummary.Raw)")
+      }
+      foreach ($failure in @($reviewAssessment.CheckSummary.Failures)) {
+        $findings.Add("Failing check: $failure")
+      }
+      foreach ($pendingCheck in @($reviewAssessment.CheckSummary.Pending)) {
+        $findings.Add("Pending check: $pendingCheck")
+      }
+      foreach ($reviewFinding in @($reviewAssessment.Findings)) {
+        $findings.Add("Review feedback: $($reviewFinding.File):$($reviewFinding.Line) [$($reviewFinding.Severity)] $($reviewFinding.Summary)")
+      }
     }
 
     $forbiddenCommitted = @(Get-ForbiddenPathFindings -Paths $branchDelta)
@@ -1044,7 +1137,7 @@ switch ($Mode) {
     }
 
     if ($findings.Count -gt 0) {
-      Write-Output "STOP"
+      Write-Output (Get-AssessmentStopCode -Assessment $reviewAssessment)
       $findings | ForEach-Object { Write-Output $_ }
       break
     }
