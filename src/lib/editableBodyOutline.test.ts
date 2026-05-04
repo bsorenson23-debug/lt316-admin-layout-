@@ -170,6 +170,43 @@ test("bottom source bridge normalization lifts narrow source bottoms determinist
   assert.ok(widthAtY(normalized, 260) > widthAtY(normalized, 286.5));
 });
 
+test("bottom source bridge normalization skips full-width straight bottoms", () => {
+  const sourceContour = [
+    { x: -55, y: 0 },
+    { x: -55, y: 300 },
+    { x: 55, y: 300 },
+    { x: 55, y: 0 },
+  ];
+
+  const normalized = normalizeEditableBodyOutlineBottomSourceBridge({
+    contour: sourceContour,
+  });
+
+  assert.deepEqual(normalized, sourceContour);
+  assert.equal(boundsOf(normalized)?.maxY, 300);
+});
+
+test("bottom source bridge normalization does not shorten non-pinched bottoms", () => {
+  const sourceContour = [
+    { x: -55, y: 0 },
+    { x: -55, y: 180 },
+    { x: -50, y: 240 },
+    { x: -46, y: 300 },
+    { x: 46, y: 300 },
+    { x: 50, y: 240 },
+    { x: 55, y: 180 },
+    { x: 55, y: 0 },
+  ];
+
+  const normalized = normalizeEditableBodyOutlineBottomSourceBridge({
+    contour: sourceContour,
+  });
+
+  assert.deepEqual(normalized, sourceContour);
+  assert.equal(boundsOf(normalized)?.maxY, 300);
+  assert.equal(normalized.some((point) => point.y > 300), false);
+});
+
 test("fit-debug body contour normalizes bottom source bridge before source scaling", () => {
   const fitDebug: TumblerItemLookupFitDebug = {
     kind: "lathe-body-fit",

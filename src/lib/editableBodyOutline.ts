@@ -1506,6 +1506,43 @@ function addRaisedTopBridgeInSourceSpace(args: {
   ]);
 }
 
+function shouldNormalizeBottomSourceBridge(args: {
+  contour: EditableBodyOutlineContourPoint[];
+  bounds: EditableBodyOutlineContourBounds;
+  centerX: number;
+  targetBottomY: number;
+}): boolean {
+  const { contour, bounds, centerX, targetBottomY } = args;
+  const referenceWidth = estimateReferenceWidth(contour);
+  if (!(referenceWidth > 0.1)) {
+    return false;
+  }
+
+  const targetSegments = getContourSegmentsAtY(contour, targetBottomY);
+  if (targetSegments.length === 0) {
+    return false;
+  }
+  const targetSegment = selectCenteredContourSegment(targetSegments, centerX);
+
+  const bottomY = round1(bounds.maxY);
+  const nearBottomY = round1(Math.max(bounds.minY, bounds.maxY - Math.max(0.5, bounds.height * 0.01)));
+  const bottomSegments = getContourSegmentsAtY(contour, bottomY);
+  const resolvedBottomSegments =
+    bottomSegments.length > 0
+      ? bottomSegments
+      : getContourSegmentsAtY(contour, nearBottomY);
+  if (resolvedBottomSegments.length === 0) {
+    return false;
+  }
+  const bottomSegment = selectCenteredContourSegment(resolvedBottomSegments, centerX);
+
+  const bottomToReferenceRatio = bottomSegment.width / referenceWidth;
+  const bottomToTargetRatio = bottomSegment.width / Math.max(0.1, targetSegment.width);
+
+  // Only lift when the lower-most source bridge is materially pinched vs. the body width.
+  return bottomToReferenceRatio <= 0.62 && bottomToTargetRatio <= 0.78;
+}
+
 export function normalizeEditableBodyOutlineBottomSourceBridge(args: {
   contour: EditableBodyOutlineContourPoint[];
   liftRatio?: number;
@@ -1534,12 +1571,12 @@ export function normalizeEditableBodyOutlineBottomSourceBridge(args: {
   }
 
   const centerX = estimateBodyCenterX(args.contour);
-  const bottomSegments = getContourSegmentsAtY(args.contour, targetBottomY);
-  if (bottomSegments.length === 0) {
-    return args.contour;
-  }
-  const bottomSegment = selectCenteredContourSegment(bottomSegments, centerX);
-  if (bottomSegment.width < bounds.width * 0.16) {
+  if (!shouldNormalizeBottomSourceBridge({
+    contour: args.contour,
+    bounds,
+    centerX,
+    targetBottomY,
+  })) {
     return args.contour;
   }
 
