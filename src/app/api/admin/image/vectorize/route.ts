@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server.js";
 import sharp from "sharp";
 import { posterize, trace } from "potrace";
 import type { RasterTraceMode, RasterVectorizeResponse } from "@/types/rasterVectorize";
@@ -115,10 +115,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
-  const imageFile = formData.get("image") as File | null;
-  if (!imageFile) {
+  const imageField = formData.get("image");
+  if (!imageField) {
     return NextResponse.json({ error: "No image provided" }, { status: 400 });
   }
+
+  if (!(imageField instanceof File)) {
+    return NextResponse.json({ error: "Invalid image file" }, { status: 400 });
+  }
+
+  const imageFile = imageField;
 
   if (imageFile.size > 15 * 1024 * 1024) {
     return NextResponse.json({ error: "Image too large (max 15 MB)" }, { status: 413 });
