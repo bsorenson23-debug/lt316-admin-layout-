@@ -541,6 +541,56 @@ test("known official URL still matches profile when fetch returns 404", async ()
   assert.equal(result.notes.some((note) => note.includes("Lookup fetch blocked")), true);
 });
 
+test("empty successful HTML response still uses final URL context for deterministic profile matching", async () => {
+  installFetchResponder(() => new Response("", {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+    },
+  }));
+
+  const result = await lookupTumblerItem({
+    lookupInput: RTIC_URL,
+    dimensionExtractor: async () => {
+      throw new Error("dimension extractor should not run when deterministic profile matching succeeds");
+    },
+  });
+
+  assert.equal(result.mode, "matched-profile");
+  assert.equal(result.matchedProfileId, "rtic-20");
+  assert.equal(result.resolvedUrl, RTIC_URL);
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.sources[0]?.url, RTIC_URL);
+});
+
+test("unknown URL with empty successful HTML remains non-authoritative", async () => {
+  const unknownUrl = "https://example.com/products/unknown-empty-body";
+  installFetchResponder(() => new Response("", {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+    },
+  }));
+
+  const result = await lookupTumblerItem({
+    lookupInput: unknownUrl,
+    dimensionExtractor: async () => ({
+      diameterMm: 89,
+      heightMm: 172,
+      capacityOz: null,
+      confidence: 0.74,
+      notes: [],
+    }),
+  });
+
+  assert.equal(result.mode, "parsed-page");
+  assert.equal(result.profileAuthority, "dynamic-llm-extracted");
+  assert.equal(result.matchedProfileId, null);
+  assert.equal(result.resolvedUrl, unknownUrl);
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.sources[0]?.url, unknownUrl);
+});
+
 test("unknown URL with blocked fetch remains non-authoritative safe fallback", async () => {
   const unknownUrl = "https://example.com/products/unknown-blocked-tumbler";
   installFetchResponder(() => new Response("not found", { status: 404 }));

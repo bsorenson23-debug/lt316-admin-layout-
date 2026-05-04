@@ -1341,7 +1341,7 @@ export async function lookupTumblerItem(args: {
       lookupText = buildUrlLookupText(lookupInput);
     }
 
-    if (html && finalUrl) {
+    if (html !== null && finalUrl !== null) {
       resolvedUrl = finalUrl;
       const openGraph = extractOpenGraphProductMetadata(html, finalUrl);
       title = openGraph.title ?? extractTitle(html);
