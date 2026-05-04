@@ -1,3 +1,9 @@
+import {
+  isTemplateCreateLookupInputActionable,
+  shouldTemplateCreateRequireLookupBeforeManualFallback,
+  type TemplateCreateSourceAuthorityState,
+} from "./templateCreateFlow";
+
 export type TemplateCreatePreviewAction =
   | "body-cutout-qa"
   | "wrap-export"
@@ -28,8 +34,12 @@ export function getTemplateCreateLookupActionReason(args: {
   lookingUp: boolean;
 }): string | null {
   if (args.lookingUp) return null;
-  if (!args.lookupInput.trim()) {
+  const trimmed = args.lookupInput.trim();
+  if (!trimmed) {
     return "Enter a product URL or exact tumbler name first.";
+  }
+  if (!isTemplateCreateLookupInputActionable(trimmed)) {
+    return "Enter a full product URL or exact tumbler name first.";
   }
   return null;
 }
@@ -37,10 +47,18 @@ export function getTemplateCreateLookupActionReason(args: {
 export function getTemplateCreateReviewAcceptActionReason(args: {
   hasAcceptedReview: boolean;
   hasLivePipeline: boolean;
+  sourceAuthorityState?: TemplateCreateSourceAuthorityState;
+  lookupInput?: string;
 }): string | null {
   if (args.hasAcceptedReview) return null;
   if (!args.hasLivePipeline) {
     return "Run lookup or auto-detect before accepting BODY REFERENCE.";
+  }
+  if (shouldTemplateCreateRequireLookupBeforeManualFallback({
+    sourceAuthorityState: args.sourceAuthorityState ?? "missing-input",
+    lookupInput: args.lookupInput ?? "",
+  })) {
+    return "Run lookup first so BODY REFERENCE uses authoritative product/profile data when available.";
   }
   return null;
 }
