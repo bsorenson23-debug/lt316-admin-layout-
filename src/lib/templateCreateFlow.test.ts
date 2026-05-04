@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildTemplateCreateDetectedIdentityLabel,
   buildTemplateOperatorSectionStates,
   buildTemplateCreateWorkflowSteps,
   deriveTemplateCreateWorkflowStep,
@@ -12,6 +13,9 @@ import {
   getTemplateCreatePreviewGateNotes,
   getTemplateCreateSaveGateReason,
   getTemplateCreateSourceReadiness,
+  isTemplateCreateLookupInputActionable,
+  resolveTemplateCreateSourceAuthorityState,
+  shouldTemplateCreateRequireLookupBeforeManualFallback,
 } from "./templateCreateFlow.ts";
 
 test("template create workflow stays on source before detect prerequisites exist", () => {
@@ -41,6 +45,86 @@ test("template create workflow stays on source before detect prerequisites exist
     getTemplateCreateNextActionHint(input),
     "Run lookup or upload a product image so detection and BODY REFERENCE review can start.",
   );
+});
+
+test("lookup input is actionable only for product URLs or meaningful exact names", () => {
+  assert.equal(isTemplateCreateLookupInputActionable(""), false);
+  assert.equal(isTemplateCreateLookupInputActionable("20oz"), false);
+  assert.equal(isTemplateCreateLookupInputActionable("unknown unknown 20oz"), false);
+  assert.equal(
+    isTemplateCreateLookupInputActionable(
+      "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz",
+    ),
+    true,
+  );
+  assert.equal(
+    isTemplateCreateLookupInputActionable("Stanley IceFlow 30 oz Classic Flip Straw Tumbler"),
+    true,
+  );
+});
+
+test("source authority distinguishes lookup, detect proposal, manual fallback, and missing input", () => {
+  assert.equal(resolveTemplateCreateSourceAuthorityState({
+    hasLookupAuthoritativeProfile: true,
+    hasDetectedProposal: true,
+    hasManualFallback: false,
+  }), "lookup-authoritative-profile");
+  assert.equal(resolveTemplateCreateSourceAuthorityState({
+    hasLookupAuthoritativeProfile: false,
+    hasDetectedProposal: true,
+    hasManualFallback: false,
+  }), "detected-proposal");
+  assert.equal(resolveTemplateCreateSourceAuthorityState({
+    hasLookupAuthoritativeProfile: false,
+    hasDetectedProposal: true,
+    hasManualFallback: true,
+  }), "manual-fallback");
+  assert.equal(resolveTemplateCreateSourceAuthorityState({
+    hasLookupAuthoritativeProfile: false,
+    hasDetectedProposal: false,
+    hasManualFallback: false,
+  }), "missing-input");
+});
+
+test("detected proposal with a meaningful query requires lookup before BODY REFERENCE acceptance", () => {
+  assert.equal(shouldTemplateCreateRequireLookupBeforeManualFallback({
+    sourceAuthorityState: "detected-proposal",
+    lookupInput: "Stanley IceFlow 30 oz Classic Flip Straw Tumbler",
+  }), true);
+  assert.equal(shouldTemplateCreateRequireLookupBeforeManualFallback({
+    sourceAuthorityState: "detected-proposal",
+    lookupInput: "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz",
+  }), true);
+  assert.equal(shouldTemplateCreateRequireLookupBeforeManualFallback({
+    sourceAuthorityState: "detected-proposal",
+    lookupInput: "unknown unknown 20oz",
+  }), false);
+});
+
+test("lookup-authoritative and confirmed manual fallback authority do not remain blocked by actionable queries", () => {
+  assert.equal(shouldTemplateCreateRequireLookupBeforeManualFallback({
+    sourceAuthorityState: "lookup-authoritative-profile",
+    lookupInput: "Stanley IceFlow 30 oz Classic Flip Straw Tumbler",
+  }), false);
+  assert.equal(shouldTemplateCreateRequireLookupBeforeManualFallback({
+    sourceAuthorityState: "manual-fallback",
+    lookupInput: "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz",
+  }), false);
+});
+
+test("detected identity label avoids placeholder unknown values", () => {
+  assert.equal(buildTemplateCreateDetectedIdentityLabel({
+    brand: "unknown",
+    model: "unknown",
+    capacityOz: 20,
+    productType: "tumbler",
+  }), "20oz tumbler proposal");
+  assert.equal(buildTemplateCreateDetectedIdentityLabel({
+    brand: "Stanley",
+    model: "IceFlow Flip Straw",
+    capacityOz: 30,
+    productType: "tumbler",
+  }), "Stanley IceFlow Flip Straw 30oz");
 });
 
 test("template create workflow moves to review when a detection proposal is staged", () => {

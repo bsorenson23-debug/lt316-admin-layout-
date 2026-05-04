@@ -301,7 +301,9 @@ test("Stanley URL lookup protects BODY REFERENCE to BODY CUTOUT QA operator flow
   const lookupInput = page.getByPlaceholder(
     "https://www.academy.com/... or Stanley IceFlow 30 oz Classic Flip Straw Tumbler",
   );
+  await expect(page.getByTestId("template-create-run-lookup")).toBeDisabled();
   await lookupInput.fill(STANLEY_ICEFLO_URL);
+  await expect(page.getByTestId("template-create-run-lookup")).toBeEnabled();
   await page.getByTestId("template-create-run-lookup").click();
 
   await expect(page.getByText("Source ready", { exact: true })).toBeVisible({ timeout: 120_000 });
@@ -309,6 +311,9 @@ test("Stanley URL lookup protects BODY REFERENCE to BODY CUTOUT QA operator flow
   await waitForTextGone(page, "Upload a product photo first.");
   await expect(page.getByText("Selected size 30 oz", { exact: true })).toBeVisible();
   await expect(page.getByText("Exact variant", { exact: true })).toBeVisible();
+  await expect(page.locator("main")).toContainText(
+    "Lookup is authoritative. Accepting BODY REFERENCE review snapshots the current outline, canonical body profile, and calibration as the QA source of truth.",
+  );
   await expect(page.getByTestId("body-reference-v1-accept")).toBeEnabled();
   await expect(page.getByTestId("body-reference-v1-generate")).toBeDisabled();
   const advancedLookupDebug = page

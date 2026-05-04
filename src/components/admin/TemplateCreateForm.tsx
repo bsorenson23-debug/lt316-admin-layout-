@@ -39,6 +39,7 @@ import { findTumblerProfileIdForBrandModel, getTumblerProfileById, getProfileHan
 import { getDefaultLaserSettings } from "@/lib/scopedDefaults";
 import { getEngravableDimensions } from "@/lib/engravableDimensions";
 import {
+  buildTemplateCreateDetectedIdentityLabel,
   buildTemplateCreateWorkflowSteps,
   deriveTemplateCreateWorkflowStep,
   getTemplateBodyCutoutQaGlbLifecycle,
@@ -47,7 +48,10 @@ import {
   getTemplateCreateNextActionHint,
   getTemplateCreateSaveGateReason,
   getTemplateCreateSourceReadiness,
+  isTemplateCreateLookupInputActionable,
+  isTemplateCreateMeaningfulIdentityValue,
   isTemplateCreateReviewFlowProductType,
+  resolveTemplateCreateSourceAuthorityState,
 } from "@/lib/templateCreateFlow";
 import {
   formatTemplateCreateDisabledActionLabels,
@@ -611,6 +615,30 @@ function buildLookupTemplateName(result: TumblerItemLookupResponse, fallback: st
     parts.push(`${capacityOz}oz`);
   }
   return parts.length > 0 ? parts.join(" ") : result.title ?? fallback;
+}
+
+function buildDetectLookupSeed(result: AutoDetectResult | null): string {
+  if (!result) return "";
+
+  const searchQuery = result.response.analysis.searchQuery?.trim() ?? "";
+  if (isTemplateCreateLookupInputActionable(searchQuery)) {
+    return searchQuery;
+  }
+
+  const suggestion = result.response.suggestion;
+  const parts: string[] = [];
+  if (isTemplateCreateMeaningfulIdentityValue(suggestion.brand)) {
+    parts.push(suggestion.brand!.trim());
+  }
+  if (isTemplateCreateMeaningfulIdentityValue(suggestion.model)) {
+    parts.push(suggestion.model!.trim());
+  }
+  if (typeof suggestion.capacityOz === "number" && Number.isFinite(suggestion.capacityOz) && suggestion.capacityOz > 0) {
+    parts.push(`${suggestion.capacityOz} oz`);
+  }
+
+  const fallback = parts.join(" ").trim();
+  return isTemplateCreateLookupInputActionable(fallback) ? fallback : "";
 }
 
 function resolveDefaultPreviewModelMode(args: {
@@ -2120,6 +2148,42 @@ export function TemplateCreateForm({
     }),
     [lookupInput, lookingUpItem],
   );
+  const detectedLookupSeed = React.useMemo(
+    () => buildDetectLookupSeed(detectResult),
+    [detectResult],
+  );
+  const lookupInputActionable = React.useMemo(
+    () => isTemplateCreateLookupInputActionable(lookupInput),
+    [lookupInput],
+  );
+  const hasLookupAuthoritativeProfile = React.useMemo(
+    () => Boolean(
+      activeLookupDimensions &&
+      activeProfileAuthoritySummary.authority !== "unknown" &&
+      activeLookupDimensions.dimensionSourceKind !== "safe-fallback"
+    ),
+    [activeLookupDimensions, activeProfileAuthoritySummary.authority],
+  );
+  const sourceAuthorityState = React.useMemo(
+    () => resolveTemplateCreateSourceAuthorityState({
+      hasLookupAuthoritativeProfile,
+      hasDetectedProposal: Boolean(detectResult && !lookupResult),
+      hasManualFallback: Boolean(manualDimensionEntryOpen || lookupResult?.mode === "safe-fallback"),
+    }),
+    [detectResult, hasLookupAuthoritativeProfile, lookupResult, manualDimensionEntryOpen],
+  );
+  const sourceAuthorityLabel = React.useMemo(() => {
+    switch (sourceAuthorityState) {
+      case "lookup-authoritative-profile":
+        return "lookup-authoritative profile";
+      case "detected-proposal":
+        return "detected proposal";
+      case "manual-fallback":
+        return "manual fallback";
+      default:
+        return "missing input";
+    }
+  }, [sourceAuthorityState]);
   const templateModeWorkflowHeading = React.useMemo(() => {
     if (!isTemplateCreateReviewFlowProductType(productType)) {
       return "Source and template details";
@@ -2396,14 +2460,18 @@ export function TemplateCreateForm({
       // Auto-fill form fields from detection
       const { draft, response } = result;
       const sug = response.suggestion;
-      // Build a display name from brand + model + capacity
-      const parts: string[] = [];
-      if (sug.brand) parts.push(sug.brand);
-      if (sug.model) parts.push(sug.model);
-      if (sug.capacityOz) parts.push(`${sug.capacityOz}oz`);
-      if (parts.length > 0) setName(parts.join(" "));
-      if (sug.brand) setBrand(sug.brand);
+      setName(buildTemplateCreateDetectedIdentityLabel({
+        brand: sug.brand,
+        model: sug.model,
+        capacityOz: sug.capacityOz,
+        productType: sug.productType,
+      }));
+      setBrand(isTemplateCreateMeaningfulIdentityValue(sug.brand) ? sug.brand! : "");
       if (sug.capacityOz) setCapacity(`${sug.capacityOz}oz`);
+      const seededLookupQuery = buildDetectLookupSeed(result);
+      if (seededLookupQuery) {
+        setLookupInput((current) => current.trim() ? current : seededLookupQuery);
+      }
       // Dimensions
       if (draft.outsideDiameterMm) setDiameterMm(round2(draft.outsideDiameterMm));
       if (draft.usableHeightMm) setPrintHeightMm(round2(draft.usableHeightMm));
@@ -2558,8 +2626,10 @@ export function TemplateCreateForm({
     () => getTemplateCreateReviewAcceptActionReason({
       hasAcceptedReview: hasAcceptedBodyReferenceReview,
       hasLivePipeline: Boolean(liveBodyReferencePipeline),
+      sourceAuthorityState,
+      lookupInput,
     }),
-    [hasAcceptedBodyReferenceReview, liveBodyReferencePipeline],
+    [hasAcceptedBodyReferenceReview, liveBodyReferencePipeline, lookupInput, sourceAuthorityState],
   );
   const generateBodyCutoutActionReason = React.useMemo(
     () => resolveTemplateCreateBlockedActionReason({
@@ -3164,7 +3234,7 @@ export function TemplateCreateForm({
     } else if (hasAcceptedBodyReferenceReview) {
       authoritativeStageLabel = "accepted BODY REFERENCE";
     } else if (templateCreateSourceReadiness.detectReady) {
-      authoritativeStageLabel = "staged detection";
+      authoritativeStageLabel = sourceAuthorityLabel;
     }
 
     return {
@@ -3193,6 +3263,7 @@ export function TemplateCreateForm({
     hasAcceptedBodyReferenceReview,
     hasReviewedBodyCutoutQaGlb,
     loadedBodyGeometryContract,
+    sourceAuthorityLabel,
     reviewedBodyReferenceGlbFreshness.hasGeneratedArtifact,
     reviewedBodyReferenceGlbFreshness.status,
     templateCreateSourceReadiness.detectReady,
@@ -3979,7 +4050,7 @@ export function TemplateCreateForm({
                 type="button"
                 className={styles.detectBtn}
                 onClick={() => void handleItemLookup()}
-                disabled={lookingUpItem || !lookupInput.trim()}
+                disabled={lookingUpItem || !lookupInputActionable}
                 title={lookupActionReason ?? undefined}
                 data-testid="template-create-run-lookup"
               >
@@ -3992,6 +4063,16 @@ export function TemplateCreateForm({
                 data-testid="template-create-lookup-action-reason"
               >
                 Run lookup: {lookupActionReason}
+              </div>
+            )}
+            {!lookupResult && detectResult && (
+              <div
+                className={styles.actionDisabledReason}
+                data-testid="template-create-lookup-authority-note"
+              >
+                {detectedLookupSeed
+                  ? "Lookup recommended: detected identity is still a proposal and is not yet authoritative for BODY REFERENCE readiness."
+                  : "Lookup needed: detected/manual identity is not authoritative yet. Enter a product URL or exact tumbler name when available."}
               </div>
             )}
 
@@ -4173,7 +4254,10 @@ export function TemplateCreateForm({
         {detectResult && !lookupResult && (
           <div className={styles.detectBanner}>
             <span className={styles.detectBannerText}>
-              Detected: <strong>{name || "Unknown product"}</strong> — review and confirm
+              Detected proposal: <strong>{name || "Unknown product"}</strong>
+              {detectedLookupSeed
+                ? " — lookup is ready before review"
+                : " — review and confirm"}
             </span>
             <button
               type="button"
@@ -4379,7 +4463,11 @@ export function TemplateCreateForm({
               <button
                 type="button"
                 className={styles.detectBtn}
-                disabled={!liveBodyReferencePipeline || hasAcceptedBodyReferenceReview}
+                disabled={
+                  !liveBodyReferencePipeline ||
+                  hasAcceptedBodyReferenceReview ||
+                  Boolean(acceptBodyReferenceActionReason)
+                }
                 title={acceptBodyReferenceActionReason ?? undefined}
                 onClick={() => {
                   if (!liveBodyReferencePipeline) return;
@@ -4465,7 +4553,11 @@ export function TemplateCreateForm({
               )}
               {workflowInput.hasStagedDetectResult && !hasAcceptedBodyReferenceReview && liveBodyReferencePipeline && (
                 <div className={styles.reviewScaffoldNote}>
-                  Detection is staged. Accepting BODY REFERENCE review snapshots the current outline, canonical body profile, and calibration as the QA source of truth.
+                  {sourceAuthorityState === "lookup-authoritative-profile"
+                    ? "Lookup is authoritative. Accepting BODY REFERENCE review snapshots the current outline, canonical body profile, and calibration as the QA source of truth."
+                    : sourceAuthorityState === "manual-fallback"
+                      ? "Manual fallback is staged. BODY REFERENCE can continue, but product identity remains manual until deterministic lookup succeeds."
+                      : "Detected proposal is staged. BODY REFERENCE can continue, but product identity is not lookup-authoritative yet."}
                 </div>
               )}
               {hasAcceptedBodyReferenceReview && (

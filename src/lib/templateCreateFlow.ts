@@ -2,6 +2,12 @@ export type TemplateCreateWorkflowStep = "source" | "detect" | "review" | "gener
 
 export type TemplateCreateWorkflowStatus = "ready" | "action" | "review";
 
+export type TemplateCreateSourceAuthorityState =
+  | "lookup-authoritative-profile"
+  | "detected-proposal"
+  | "manual-fallback"
+  | "missing-input";
+
 export type TemplateOperatorSectionCategory =
   | "primary"
   | "proof"
@@ -31,6 +37,109 @@ export interface TemplateCreateWorkflowInput {
   hasReviewedBodyCutoutQa: boolean;
   hasCanonicalBodyProfile: boolean;
   hasCanonicalDimensionCalibration: boolean;
+}
+
+const TEMPLATE_CREATE_PLACEHOLDER_TOKENS = new Set([
+  "unknown",
+  "generic",
+  "manual",
+  "fallback",
+  "n/a",
+  "na",
+  "null",
+  "none",
+]);
+
+function normalizeTemplateCreateIdentityValue(value: string | null | undefined): string {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+export function isTemplateCreateMeaningfulIdentityValue(
+  value: string | null | undefined,
+): boolean {
+  const normalized = normalizeTemplateCreateIdentityValue(value);
+  if (!normalized) return false;
+  return !TEMPLATE_CREATE_PLACEHOLDER_TOKENS.has(normalized);
+}
+
+export function buildTemplateCreateDetectedIdentityLabel(args: {
+  brand?: string | null;
+  model?: string | null;
+  capacityOz?: number | null;
+  productType?: string | null;
+}): string {
+  const parts: string[] = [];
+  const hasMeaningfulBrandOrModel =
+    isTemplateCreateMeaningfulIdentityValue(args.brand) ||
+    isTemplateCreateMeaningfulIdentityValue(args.model);
+  if (isTemplateCreateMeaningfulIdentityValue(args.brand)) {
+    parts.push(args.brand!.trim());
+  }
+  if (isTemplateCreateMeaningfulIdentityValue(args.model)) {
+    parts.push(args.model!.trim());
+  }
+  if (
+    hasMeaningfulBrandOrModel &&
+    typeof args.capacityOz === "number" &&
+    Number.isFinite(args.capacityOz) &&
+    args.capacityOz > 0
+  ) {
+    parts.push(`${args.capacityOz}oz`);
+  }
+  if (parts.length > 0) {
+    return parts.join(" ");
+  }
+
+  const fallbackProductType = args.productType?.trim() || "tumbler";
+  return typeof args.capacityOz === "number" && Number.isFinite(args.capacityOz) && args.capacityOz > 0
+    ? `${args.capacityOz}oz ${fallbackProductType} proposal`
+    : `Unknown ${fallbackProductType} proposal`;
+}
+
+export function isTemplateCreateLookupInputActionable(input: string): boolean {
+  const trimmed = input.trim();
+  if (!trimmed) return false;
+  if (/^https?:\/\//i.test(trimmed)) return true;
+
+  const normalizedTokens = trimmed
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.replace(/[^a-z0-9]+/g, ""))
+    .filter(Boolean);
+  const meaningfulTokens = normalizedTokens.filter((token) => {
+    if (TEMPLATE_CREATE_PLACEHOLDER_TOKENS.has(token)) return false;
+    if (token === "oz") return false;
+    if (/^[0-9]+(?:oz)?$/.test(token)) return false;
+    return /[a-z]/.test(token);
+  });
+
+  if (meaningfulTokens.length >= 2) return true;
+  return meaningfulTokens.length === 1 && trimmed.length >= 12;
+}
+
+export function resolveTemplateCreateSourceAuthorityState(args: {
+  hasLookupAuthoritativeProfile: boolean;
+  hasDetectedProposal: boolean;
+  hasManualFallback: boolean;
+}): TemplateCreateSourceAuthorityState {
+  if (args.hasLookupAuthoritativeProfile) return "lookup-authoritative-profile";
+  if (args.hasManualFallback) return "manual-fallback";
+  if (args.hasDetectedProposal) return "detected-proposal";
+  return "missing-input";
+}
+
+export function shouldTemplateCreateRequireLookupBeforeManualFallback(args: {
+  sourceAuthorityState: TemplateCreateSourceAuthorityState;
+  lookupInput: string;
+}): boolean {
+  return (
+    args.sourceAuthorityState === "detected-proposal" &&
+    isTemplateCreateLookupInputActionable(args.lookupInput)
+  );
 }
 
 export interface TemplateCreateWorkflowStepState {
