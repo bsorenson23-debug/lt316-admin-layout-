@@ -8,6 +8,7 @@ import {
   createEditableBodyOutline,
   createEditableBodyOutlineFromImportedSvg,
   createEditableBodyOutlineFromTraceDebug,
+  normalizeEditableBodyOutlineBottomSourceBridge,
   normalizeMeasurementContour,
   resolveBodyOnlyFlatBottomCutoffControl,
   resolveBodyOnlyRawDetectedTraceContour,
@@ -142,6 +143,83 @@ test("fit-debug body contour top bridge aligns to seam body-top guide without re
   assert.equal(quality.status, "pass");
   assert.equal(quality.expectedBridgeSegmentCount, 2);
   assert.equal(quality.suspiciousJumpCount, 0);
+});
+
+test("bottom source bridge normalization lifts narrow source bottoms deterministically", () => {
+  const sourceContour = [
+    { x: -55, y: 0 },
+    { x: -55, y: 180 },
+    { x: -42, y: 260 },
+    { x: -6, y: 300 },
+    { x: 6, y: 300 },
+    { x: 42, y: 260 },
+    { x: 55, y: 180 },
+    { x: 55, y: 0 },
+  ];
+
+  const normalized = normalizeEditableBodyOutlineBottomSourceBridge({
+    contour: sourceContour,
+  });
+  const bounds = boundsOf(normalized);
+
+  assert.notDeepEqual(normalized, sourceContour);
+  assert.equal(bounds?.minY, 0);
+  assert.equal(bounds?.maxY, 286.5);
+  assert.equal(normalized.some((point) => point.y > 286.5), false);
+  assert.ok(widthAtY(normalized, 286.5) > 35);
+  assert.ok(widthAtY(normalized, 260) > widthAtY(normalized, 286.5));
+});
+
+test("fit-debug body contour normalizes bottom source bridge before source scaling", () => {
+  const fitDebug: TumblerItemLookupFitDebug = {
+    kind: "lathe-body-fit",
+    sourceImageUrl: "https://example.com/source-bridge-body.png",
+    imageWidthPx: 220,
+    imageHeightPx: 320,
+    silhouetteBoundsPx: { minX: 45, minY: 0, maxX: 155, maxY: 300 },
+    centerXPx: 100,
+    fullTopPx: 0,
+    fullBottomPx: 300,
+    bodyTopPx: 0,
+    bodyBottomPx: 300,
+    rimTopPx: 0,
+    rimBottomPx: 0,
+    referenceBandTopPx: 20,
+    referenceBandBottomPx: 50,
+    referenceBandCenterYPx: 35,
+    referenceBandWidthPx: 110,
+    maxCenterWidthPx: 110,
+    referenceHalfWidthPx: 55,
+    fitScore: 9,
+    profilePoints: [
+      { yPx: 0, yMm: 20, radiusPx: 55, radiusMm: 55 },
+      { yPx: 120, yMm: 140, radiusPx: 55, radiusMm: 55 },
+      { yPx: 220, yMm: 240, radiusPx: 47, radiusMm: 47 },
+      { yPx: 260, yMm: 280, radiusPx: 42, radiusMm: 42 },
+      { yPx: 300, yMm: 320, radiusPx: 6, radiusMm: 6 },
+    ],
+  };
+
+  const outline = createEditableBodyOutline({
+    overallHeightMm: 340,
+    bodyTopFromOverallMm: 20,
+    bodyBottomFromOverallMm: 320,
+    diameterMm: 110,
+    topOuterDiameterMm: 110,
+    fitDebug,
+  });
+
+  const sourceBounds = outline.sourceContourBounds;
+  const directBounds = boundsOf(resolveAuthoritativeEditableBodyOutlineContour(outline));
+
+  assert.equal(outline.contourFrame?.kind, "full-body-only-source");
+  assert.equal(outline.contourFrame?.authoritativeForBodyCutoutQa, true);
+  assert.equal(outline.contourFrame?.bodyOnlyReCropSkipped, true);
+  assert.equal(sourceBounds?.maxY, 286.5);
+  assert.equal(outline.sourceContour?.some((point) => point.y > 286.5), false);
+  assert.ok(widthAtY(outline.sourceContour ?? [], 286.5) > 35);
+  assert.ok((directBounds?.maxY ?? 999) < 320);
+  assert.ok((directBounds?.height ?? 0) > 280);
 });
 
 function widthAtY(points: Array<{ x: number; y: number }>, y: number): number {

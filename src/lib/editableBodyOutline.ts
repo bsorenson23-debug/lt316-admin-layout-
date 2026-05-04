@@ -1506,6 +1506,106 @@ function addRaisedTopBridgeInSourceSpace(args: {
   ]);
 }
 
+export function normalizeEditableBodyOutlineBottomSourceBridge(args: {
+  contour: EditableBodyOutlineContourPoint[];
+  liftRatio?: number;
+  minLiftSourceUnits?: number;
+  maxLiftSourceUnits?: number;
+}): EditableBodyOutlineContourPoint[] {
+  const bounds = getBounds(args.contour);
+  if (!bounds || args.contour.length < 4 || bounds.height <= 0 || bounds.width <= 0) {
+    return args.contour;
+  }
+
+  const liftRatio =
+    typeof args.liftRatio === "number" && Number.isFinite(args.liftRatio)
+      ? args.liftRatio
+      : 0.045;
+  const minLift = Math.max(0, args.minLiftSourceUnits ?? 6);
+  const maxLift = Math.max(minLift, args.maxLiftSourceUnits ?? Math.max(8, bounds.height * 0.07));
+  const lift = clamp(bounds.height * clamp(liftRatio, 0.01, 0.12), minLift, maxLift);
+  if (lift <= 0 || lift >= bounds.height * 0.28) {
+    return args.contour;
+  }
+
+  const targetBottomY = round1(bounds.maxY - lift);
+  if (targetBottomY <= bounds.minY + (bounds.height * 0.45)) {
+    return args.contour;
+  }
+
+  const centerX = estimateBodyCenterX(args.contour);
+  const bottomSegments = getContourSegmentsAtY(args.contour, targetBottomY);
+  if (bottomSegments.length === 0) {
+    return args.contour;
+  }
+  const bottomSegment = selectCenteredContourSegment(bottomSegments, centerX);
+  if (bottomSegment.width < bounds.width * 0.16) {
+    return args.contour;
+  }
+
+  const sampleCount = Math.max(36, Math.min(140, Math.round((targetBottomY - bounds.minY) * 0.35)));
+  const rows: Array<{ y: number; leftX: number; rightX: number }> = [];
+  for (let index = 0; index < sampleCount; index += 1) {
+    const t = sampleCount === 1 ? 0 : index / (sampleCount - 1);
+    const y = round1(bounds.minY + ((targetBottomY - bounds.minY) * t));
+    const segments = getContourSegmentsAtY(args.contour, y);
+    if (segments.length === 0) continue;
+    const segment = selectCenteredContourSegment(segments, centerX);
+    if (segment.width <= 0.1) continue;
+    rows.push({
+      y,
+      leftX: segment.leftX,
+      rightX: segment.rightX,
+    });
+  }
+
+  if (rows.length < 8) {
+    return args.contour;
+  }
+
+  if (rows[0]?.y !== bounds.minY) {
+    const topSegments = getContourSegmentsAtY(args.contour, bounds.minY);
+    if (topSegments.length > 0) {
+      const topSegment = selectCenteredContourSegment(topSegments, centerX);
+      rows.unshift({
+        y: bounds.minY,
+        leftX: topSegment.leftX,
+        rightX: topSegment.rightX,
+      });
+    }
+  }
+
+  const topRow = rows[0]!;
+  const bottomRow = rows[rows.length - 1]!;
+  if (bottomRow.y !== targetBottomY || bottomRow.rightX <= bottomRow.leftX) {
+    return args.contour;
+  }
+  if (Math.abs(topRow.rightX - bottomRow.rightX) > bounds.width * 0.9) {
+    return args.contour;
+  }
+
+  const topBridgePoints = args.contour
+    .filter((point) => Math.abs(point.y - bounds.minY) <= 0.1)
+    .sort((left, right) => left.x - right.x);
+  const explicitTopBridge =
+    topBridgePoints.length >= 2
+      ? {
+          leftX: round1(topBridgePoints[0]!.x),
+          rightX: round1(topBridgePoints[topBridgePoints.length - 1]!.x),
+          y: round1(bounds.minY),
+        }
+      : null;
+  const rightSide = rows.map((row) => ({ x: round1(row.rightX), y: round1(row.y) }));
+  if (explicitTopBridge && rightSide[0]?.y !== explicitTopBridge.y) {
+    rightSide.unshift({ x: explicitTopBridge.rightX, y: explicitTopBridge.y });
+  }
+  const leftSide = [...rows].reverse().map((row) => ({ x: round1(row.leftX), y: round1(row.y) }));
+  if (explicitTopBridge && leftSide[leftSide.length - 1]?.y !== explicitTopBridge.y) {
+    leftSide.push({ x: explicitTopBridge.leftX, y: explicitTopBridge.y });
+  }
+  return dedupeContourPoints([...rightSide, ...leftSide]);
+}
+
 function cloneContourBounds(
   bounds: EditableBodyOutlineContourBounds | null | undefined,
 ): EditableBodyOutlineContourBounds | undefined {
@@ -1526,6 +1626,7 @@ function buildDiameterScaledBodyOnlyContour(args: {
   bodyTopFromOverallMm: number;
   sourceDiameterUnits?: number | null;
   topBridgeSourceY?: number | null;
+  normalizeBottomSourceBridge?: boolean;
 }): DiameterScaledContour | null {
   const initialSourceBounds = getBounds(args.sourceContour);
   if (!initialSourceBounds || args.sourceContour.length < 3 || !(args.diameterMm > 0)) {
@@ -1539,10 +1640,15 @@ function buildDiameterScaledBodyOnlyContour(args: {
   if (!(sourceDiameterUnits > 0)) return null;
 
   const mmPerSourceUnit = args.diameterMm / sourceDiameterUnits;
-  const sourceContour = addRaisedTopBridgeInSourceSpace({
+  let sourceContour = addRaisedTopBridgeInSourceSpace({
     contour: args.sourceContour,
     topBridgeY: args.topBridgeSourceY,
   });
+  if (args.normalizeBottomSourceBridge) {
+    sourceContour = normalizeEditableBodyOutlineBottomSourceBridge({
+      contour: sourceContour,
+    });
+  }
   const sourceBounds = getBounds(sourceContour);
   if (!sourceBounds || sourceContour.length < 3) return null;
 
@@ -2653,6 +2759,7 @@ export function createEditableBodyOutline(args: CreateOutlineArgs): EditableBody
         fitDebug.maxCenterWidthPx ??
         null,
       topBridgeSourceY: fitDebug.rimBottomPx,
+      normalizeBottomSourceBridge: true,
     });
 
     if (scaledBodyContour) {
