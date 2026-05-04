@@ -1,10 +1,14 @@
-﻿import { NextRequest, NextResponse } from "next/server.js";
+import type { NextRequest } from "next/server";
 import sharp from "sharp";
 import { posterize, trace } from "potrace";
 import type { RasterTraceMode, RasterVectorizeResponse } from "@/types/rasterVectorize";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+function jsonResponse(body: unknown, init?: ResponseInit): Response {
+  return Response.json(body, init);
+}
 
 function clampInt(value: string | null, fallback: number, min: number, max: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -112,22 +116,22 @@ export async function POST(req: NextRequest) {
   try {
     formData = await req.formData();
   } catch {
-    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+    return jsonResponse({ error: "Invalid request body" }, { status: 400 });
   }
 
   const imageField = formData.get("image");
   if (!imageField) {
-    return NextResponse.json({ error: "No image provided" }, { status: 400 });
+    return jsonResponse({ error: "No image provided" }, { status: 400 });
   }
 
   if (!(imageField instanceof File)) {
-    return NextResponse.json({ error: "Invalid image file" }, { status: 400 });
+    return jsonResponse({ error: "Invalid image file" }, { status: 400 });
   }
 
   const imageFile = imageField;
 
   if (imageFile.size > 15 * 1024 * 1024) {
-    return NextResponse.json({ error: "Image too large (max 15 MB)" }, { status: 413 });
+    return jsonResponse({ error: "Image too large (max 15 MB)" }, { status: 413 });
   }
 
   const mode = (formString(formData, "mode") === "posterize" ? "posterize" : "trace") as RasterTraceMode;
@@ -180,10 +184,10 @@ export async function POST(req: NextRequest) {
       height: viewBox?.height ?? tracedInput.height,
     };
 
-    return NextResponse.json(response);
+    return jsonResponse(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Vectorization failed";
     console.error("[vectorize] error:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonResponse({ error: message }, { status: 500 });
   }
 }
