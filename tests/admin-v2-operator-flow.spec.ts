@@ -103,11 +103,14 @@ const sourceTruthMetricLabels = [
   "Authoritative stage",
 ];
 
-async function readSourceTruthMetrics(page: Page): Promise<Record<string, string>> {
+async function readSourceTruthMetrics(
+  page: Page,
+  labels: string[] = sourceTruthMetricLabels,
+): Promise<Record<string, string>> {
   const panel = page.locator('[data-template-pipeline-summary="present"]').first();
   await expect(panel).toBeVisible({ timeout: 30_000 });
-  return panel.evaluate((root, labels) => {
-    const wanted = new Set(labels);
+  return panel.evaluate((root, wantedLabels) => {
+    const wanted = new Set(wantedLabels);
     const metrics: Record<string, string> = {};
     for (const node of root.querySelectorAll("div")) {
       const label = node.querySelector("span")?.textContent?.trim() ?? "";
@@ -117,7 +120,7 @@ async function readSourceTruthMetrics(page: Page): Promise<Record<string, string
       }
     }
     return metrics;
-  }, sourceTruthMetricLabels);
+  }, labels);
 }
 
 async function createLookupTemplateFromSource(page: Page, templateName: string): Promise<void> {
