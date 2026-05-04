@@ -111,13 +111,12 @@ test("buildLightBurnExportSvg keeps text items as transformed original svg conte
 });
 
 test("buildLightBurnExportSvg emits mm root dimensions for LightBurn sizing", () => {
-  const payload = buildPayload({
-    widthMm: 120,
-    heightMm: 60,
-  });
+  const payload = buildPayload();
+  payload.templateWidthMm = 100;
+  payload.templateHeightMm = 50;
 
   const svg = buildLightBurnExportSvg(payload);
 
-  assert.match(svg, /width="276\.1500mm"/);
-  assert.match(svg, /height="160\.0000mm"/);
+  assert.match(svg, /width="100\.0000mm"/);
+  assert.match(svg, /height="50\.0000mm"/);
 });
