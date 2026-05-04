@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { openTemplateGallery } from "./helpers/adminOperatorFlow";
+import { getBodyContractFixtureBuffers } from "./helpers/glbFixtureFactory";
 import { ensureWebGlSupport } from "./helpers/webglSupport";
 
 const PNG_1X1 = Buffer.from(
@@ -200,6 +201,15 @@ test("admin golden path: detect, review, save, and export smoke", async ({ page 
     });
   });
 
+  await page.route("**/api/admin/models/generated/*.glb", async (route) => {
+    const fixtureBuffers = await getBodyContractFixtureBuffers();
+    await route.fulfill({
+      status: 200,
+      contentType: "model/gltf-binary",
+      body: fixtureBuffers["body-cutout-qa-valid"],
+    });
+  });
+
   await ensureWebGlSupport(page, testInfo, "admin-golden-path");
   await page.goto("/admin?debug=1", { waitUntil: "networkidle", timeout: 120_000 });
 
@@ -236,8 +246,8 @@ test("admin golden path: detect, review, save, and export smoke", async ({ page 
   await expect(acceptV1).toContainText("BODY REFERENCE (v1) locked", { timeout: 60_000 });
 
   await page.getByTestId("template-create-save").click();
-  await expect(page.getByTestId("template-mode-shell")).toHaveCount(0);
   await expect(page.getByTestId("selected-template-change-button")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("template-mode-shell")).not.toBeVisible();
 
   const [download] = await Promise.all([
     page.waitForEvent("download"),
