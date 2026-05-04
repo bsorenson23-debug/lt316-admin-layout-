@@ -134,7 +134,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("admin golden path: detect, review, save, and export smoke", async ({ page }, testInfo) => {
-  test.setTimeout(8 * 60 * 1000);
+  test.setTimeout(120 * 1000);
 
   let detectRequestSeen = false;
   let exportPreprocessSeen = false;
