@@ -53,8 +53,8 @@ function buildPayload(itemOverrides: Partial<LightBurnExportPayload["items"][num
 test("buildLightBurnExportSvg bakes simple geometry into world-space paths", () => {
   const svg = buildLightBurnExportSvg(buildPayload());
 
-  assert.match(svg, /width="1043\.7165"/);
-  assert.match(svg, /height="604\.7244"/);
+  assert.match(svg, /width="276\.1500mm"/);
+  assert.match(svg, /height="160\.0000mm"/);
   const scaleX = ((120 / 30) * LIGHTBURN_PX_PER_MM).toFixed(6);
   const scaleY = ((60 / 15) * LIGHTBURN_PX_PER_MM).toFixed(6);
   assert.match(
@@ -108,4 +108,16 @@ test("buildLightBurnExportSvg keeps text items as transformed original svg conte
     )
   );
   assert.match(svg, /<text x="1" y="5">ABC<\/text>/);
+});
+
+test("buildLightBurnExportSvg emits mm root dimensions for LightBurn sizing", () => {
+  const payload = buildPayload({
+    widthMm: 120,
+    heightMm: 60,
+  });
+
+  const svg = buildLightBurnExportSvg(payload);
+
+  assert.match(svg, /width="276\.1500mm"/);
+  assert.match(svg, /height="160\.0000mm"/);
 });

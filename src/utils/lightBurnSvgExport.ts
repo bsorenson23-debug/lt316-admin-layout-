@@ -152,7 +152,7 @@ export function buildLightBurnExportSvg(payload: LightBurnExportPayload): string
     `<!-- Original SVG geometry preserved; export applies placement transforms only -->`,
     `<!-- SVG coordinates emitted in 96 DPI px so LightBurn imports the intended mm size -->`,
     `<!-- ${rotaryNote} -->`,
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${heightPx}" viewBox="0 0 ${widthPx} ${heightPx}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${formatMm(payload.templateWidthMm)}mm" height="${formatMm(payload.templateHeightMm)}mm" viewBox="0 0 ${widthPx} ${heightPx}">`,
     itemGroups || `  <!-- no items -->`,
     `</svg>`,
   ].join("\n");
