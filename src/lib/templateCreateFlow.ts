@@ -137,7 +137,7 @@ export function shouldTemplateCreateRequireLookupBeforeManualFallback(args: {
   lookupInput: string;
 }): boolean {
   return (
-    (args.sourceAuthorityState === "detected-proposal" || args.sourceAuthorityState === "manual-fallback") &&
+    args.sourceAuthorityState === "detected-proposal" &&
     isTemplateCreateLookupInputActionable(args.lookupInput)
   );
 }

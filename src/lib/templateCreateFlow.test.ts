@@ -86,18 +86,29 @@ test("source authority distinguishes lookup, detect proposal, manual fallback, a
   }), "missing-input");
 });
 
-test("deterministic lookup is required before manual fallback when a real query exists", () => {
+test("detected proposal with a meaningful query requires lookup before BODY REFERENCE acceptance", () => {
   assert.equal(shouldTemplateCreateRequireLookupBeforeManualFallback({
     sourceAuthorityState: "detected-proposal",
     lookupInput: "Stanley IceFlow 30 oz Classic Flip Straw Tumbler",
   }), true);
   assert.equal(shouldTemplateCreateRequireLookupBeforeManualFallback({
-    sourceAuthorityState: "manual-fallback",
+    sourceAuthorityState: "detected-proposal",
     lookupInput: "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz",
   }), true);
   assert.equal(shouldTemplateCreateRequireLookupBeforeManualFallback({
     sourceAuthorityState: "detected-proposal",
     lookupInput: "unknown unknown 20oz",
+  }), false);
+});
+
+test("lookup-authoritative and confirmed manual fallback authority do not remain blocked by actionable queries", () => {
+  assert.equal(shouldTemplateCreateRequireLookupBeforeManualFallback({
+    sourceAuthorityState: "lookup-authoritative-profile",
+    lookupInput: "Stanley IceFlow 30 oz Classic Flip Straw Tumbler",
+  }), false);
+  assert.equal(shouldTemplateCreateRequireLookupBeforeManualFallback({
+    sourceAuthorityState: "manual-fallback",
+    lookupInput: "https://www.stanley1913.com/products/the-iceflow-flip-straw-tumbler-30-oz",
   }), false);
 });
 
