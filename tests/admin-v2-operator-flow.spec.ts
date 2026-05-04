@@ -214,6 +214,58 @@ function expectV2BodyContractDebugReport(report: Record<string, unknown>): void 
   ]);
 }
 
+function normalizePathLikeValue(value: string): string {
+  return value.replace(/\\/g, "/").toLowerCase();
+}
+
+function shouldIgnoreMissingLocalGeneratedGlb(
+  error: unknown,
+  expectedGeneratedGlbPath?: string,
+): error is Error & { code: "ENOENT"; path?: string } {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const nodeError = error as Error & { code?: string; path?: unknown };
+  if (nodeError.code !== "ENOENT") {
+    return false;
+  }
+
+  const expectedGlbFileName = expectedGeneratedGlbPath
+    ?.split("/")
+    .pop()
+    ?.toLowerCase();
+  if (!expectedGlbFileName) {
+    return false;
+  }
+
+  const message = normalizePathLikeValue(nodeError.message ?? "");
+  const pathValue = typeof nodeError.path === "string" ? normalizePathLikeValue(nodeError.path) : "";
+  const combined = `${message} ${pathValue}`;
+
+  const referencesLocalGeneratedModelStore = combined.includes(".local/generated-models");
+  const referencesExpectedGeneratedGlbFile = combined.includes(expectedGlbFileName) && combined.includes(".glb");
+
+  return referencesLocalGeneratedModelStore && referencesExpectedGeneratedGlbFile;
+}
+
+async function buildReportOrAllowMissingLocalGeneratedGlb(
+  payload: GeneratedBodyReferenceResponse,
+  outputPath: string,
+  pageUrl: string,
+  assertReport: (report: Record<string, unknown>) => void,
+): Promise<void> {
+  try {
+    const report = await buildProgrammaticBodyContractDebugReport(payload, outputPath, pageUrl);
+    assertReport(report);
+  } catch (error) {
+    if (shouldIgnoreMissingLocalGeneratedGlb(error, payload.glbPath)) {
+      return;
+    }
+    throw error;
+  }
+}
+
 async function waitForCreateFlowToReturnToWorkspace(page: Page): Promise<void> {
   const createTemplateButton = page.getByTestId("template-gallery-create-new");
   const browseProductsButton = page.getByTestId("browse-products-button");
@@ -380,19 +432,12 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     await expect(page.getByTestId("body-contract-download-debug-report")).toBeVisible();
     await expect(page.getByRole("button", { name: "Copy JSON" })).toBeVisible();
 
-    try {
-      const normalReport = await buildProgrammaticBodyContractDebugReport(
-        initialGeneratedPayload,
-        testInfo.outputPath("normal-body-contract-debug-report.json"),
-        page.url(),
-      );
-      expectNormalBodyContractDebugReport(normalReport);
-    } catch (error) {
-      // Programmatic report generation needs a local generated GLB file path that can be absent in clean CI.
-      if (!(error instanceof Error) || !error.message.includes("ENOENT")) {
-        throw error;
-      }
-    }
+    await buildReportOrAllowMissingLocalGeneratedGlb(
+      initialGeneratedPayload,
+      testInfo.outputPath("normal-body-contract-debug-report.json"),
+      page.url(),
+      expectNormalBodyContractDebugReport,
+    );
     const downloadedNormalReport = await downloadBodyContractDebugReport(
       page,
       testInfo.outputPath("downloaded-normal-body-contract-debug-report.json"),
@@ -635,18 +680,12 @@ test("BODY REFERENCE v2 operator flow stays covered through QA, wrap/export, and
     await openBodyContractInspector(page);
     await expect(page.getByTestId("body-contract-inspector-source-type")).toContainText("body-reference-v2");
 
-    try {
-      const v2Report = await buildProgrammaticBodyContractDebugReport(
-        v2GeneratedPayload,
-        testInfo.outputPath("v2-body-contract-debug-report.json"),
-        page.url(),
-      );
-      expectV2BodyContractDebugReport(v2Report);
-    } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes("ENOENT")) {
-        throw error;
-      }
-    }
+    await buildReportOrAllowMissingLocalGeneratedGlb(
+      v2GeneratedPayload,
+      testInfo.outputPath("v2-body-contract-debug-report.json"),
+      page.url(),
+      expectV2BodyContractDebugReport,
+    );
   });
 
   await test.step("save the template, add artwork, and verify wrap/export persistence", async () => {
