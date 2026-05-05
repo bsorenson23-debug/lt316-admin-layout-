@@ -13,8 +13,60 @@ interface Props {
 type Status = "idle" | "running" | "done" | "error";
 type ThresholdMode = "auto" | "manual";
 
+const INVALID_IMAGE_GUIDANCE = "Image could not be read. Upload a valid PNG, JPG, WebP, AVIF, or SVG and try again.";
+const TOO_LARGE_GUIDANCE = "Image is too large. Resize or compress it, then try again.";
+const GENERIC_VECTORIZE_GUIDANCE = "Image could not be vectorized. Upload a clear PNG, JPG, WebP, AVIF, or SVG and try again.";
+
 function basename(name: string): string {
   return name.replace(/\.[^.]+$/, "");
+}
+
+function getTraceErrorMessage(message: string | undefined, status?: number): string {
+  if (
+    message === INVALID_IMAGE_GUIDANCE ||
+    message === TOO_LARGE_GUIDANCE ||
+    message === GENERIC_VECTORIZE_GUIDANCE
+  ) {
+    return message;
+  }
+
+  const normalized = message?.trim().toLowerCase() ?? "";
+
+  if (status === 413) {
+    return TOO_LARGE_GUIDANCE;
+  }
+
+  if (
+    normalized.includes("invalid image file") ||
+    normalized.includes("idat") ||
+    normalized.includes("sharp") ||
+    normalized.includes("pngload_buffer") ||
+    normalized.includes("end of stream")
+  ) {
+    return INVALID_IMAGE_GUIDANCE;
+  }
+
+  if (
+    normalized.includes("exceeds") ||
+    normalized.includes("too large") ||
+    normalized.includes("maximum upload")
+  ) {
+    return TOO_LARGE_GUIDANCE;
+  }
+
+  return GENERIC_VECTORIZE_GUIDANCE;
+}
+
+function tryParseVectorizePayload(responseText: string): unknown {
+  if (!responseText.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(responseText) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 export function RasterToSvgPanel({ onAddAsset }: Props) {
@@ -132,9 +184,13 @@ export function RasterToSvgPanel({ onAddAsset }: Props) {
         method: "POST",
         body: formData,
       });
-      const payload = (await response.json()) as RasterVectorizeResponse | { error?: string };
-      if (!response.ok || !("svg" in payload)) {
-        throw new Error((payload as { error?: string }).error ?? "Vectorization failed");
+      const responseText = await response.text();
+      const payload = tryParseVectorizePayload(responseText) as RasterVectorizeResponse | { error?: string } | null;
+      if (!response.ok || !payload || !("svg" in payload)) {
+        const serverMessage = payload && typeof payload === "object" && "error" in payload
+          ? payload.error
+          : responseText;
+        throw new Error(getTraceErrorMessage(serverMessage, response.status));
       }
 
       setSvgText(payload.svg);
@@ -146,7 +202,9 @@ export function RasterToSvgPanel({ onAddAsset }: Props) {
       setTraceStatus("done");
     } catch (error) {
       setTraceStatus("error");
-      setTraceError(error instanceof Error ? error.message : "Vectorization failed");
+      setTraceError(
+        getTraceErrorMessage(error instanceof Error ? error.message : undefined),
+      );
     }
   }, [activeFile, traceMode, thresholdMode, threshold, invert, trimWhitespace, normalizeLevels, turdSize, alphaMax, optTolerance, posterizeSteps, outputColor]);
 
