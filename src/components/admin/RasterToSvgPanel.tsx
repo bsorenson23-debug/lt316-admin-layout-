@@ -28,7 +28,7 @@ function getTraceErrorMessage(message: string): string {
     return "Upload a PNG, JPEG, WEBP, or AVIF image with visible artwork and try tracing again.";
   }
 
-  if (normalized.includes("exceeds") || normalized.includes("too large") || normalized.includes("413")) {
+  if (normalized.includes("exceeds") || normalized.includes("too large")) {
     return "Image is too large to trace. Resize it first, then try again.";
   }
 
