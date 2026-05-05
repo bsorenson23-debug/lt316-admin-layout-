@@ -81,7 +81,7 @@ async function buildTraceInput(
   sourceBuffer: Buffer,
   options: { trimWhitespace: boolean; normalizeLevels: boolean; maxDimension: number },
 ): Promise<{ buffer: Buffer; width: number; height: number }> {
-  let pipeline = sharp(sourceBuffer, { failOn: "none", limitInputPixels: false }).rotate();
+  let pipeline = sharp(sourceBuffer, { failOn: "none" }).rotate();
 
   pipeline = pipeline.resize({
     width: options.maxDimension,
@@ -130,10 +130,6 @@ export async function POST(req: NextRequest) {
 
   const imageFile = imageField;
 
-  if (!imageFile.type || !imageFile.type.startsWith("image/")) {
-    return jsonResponse({ error: "Invalid image file" }, { status: 400 });
-  }
-
   if (imageFile.size > 15 * 1024 * 1024) {
     return jsonResponse({ error: "Image too large (max 15 MB)" }, { status: 413 });
   }
@@ -154,48 +150,48 @@ export async function POST(req: NextRequest) {
   try {
     const inputBuffer = Buffer.from(await imageFile.arrayBuffer());
     try {
-      // Validate decodability before tracing so invalid uploads return a stable 400 contract.
-      await sharp(inputBuffer, { failOn: "none", limitInputPixels: false }).metadata();
+      // Validate and preprocess uploaded bytes in the same sharp path used for tracing.
+      await sharp(inputBuffer, { failOn: "none" }).metadata();
+
+      const tracedInput = await buildTraceInput(inputBuffer, {
+        trimWhitespace,
+        normalizeLevels,
+        maxDimension,
+      });
+
+      const sharedOptions = {
+        turdSize,
+        alphaMax,
+        optCurve: true,
+        optTolerance,
+        blackOnWhite: !invert,
+        background: "transparent",
+        ...(thresholdMode === "manual" ? { threshold } : {}),
+      };
+
+      const svg = mode === "posterize"
+        ? await posterizeBuffer(tracedInput.buffer, {
+            ...sharedOptions,
+            steps: posterizeSteps,
+          })
+        : await traceBuffer(tracedInput.buffer, {
+            ...sharedOptions,
+            color: outputColor,
+          });
+
+      const viewBox = parseViewBox(svg);
+      const response: RasterVectorizeResponse = {
+        svg,
+        mode,
+        pathCount: countPaths(svg),
+        width: viewBox?.width ?? tracedInput.width,
+        height: viewBox?.height ?? tracedInput.height,
+      };
+
+      return jsonResponse(response);
     } catch {
       return jsonResponse({ error: "Invalid image file" }, { status: 400 });
     }
-
-    const tracedInput = await buildTraceInput(inputBuffer, {
-      trimWhitespace,
-      normalizeLevels,
-      maxDimension,
-    });
-
-    const sharedOptions = {
-      turdSize,
-      alphaMax,
-      optCurve: true,
-      optTolerance,
-      blackOnWhite: !invert,
-      background: "transparent",
-      ...(thresholdMode === "manual" ? { threshold } : {}),
-    };
-
-    const svg = mode === "posterize"
-      ? await posterizeBuffer(tracedInput.buffer, {
-          ...sharedOptions,
-          steps: posterizeSteps,
-        })
-      : await traceBuffer(tracedInput.buffer, {
-          ...sharedOptions,
-          color: outputColor,
-        });
-
-    const viewBox = parseViewBox(svg);
-    const response: RasterVectorizeResponse = {
-      svg,
-      mode,
-      pathCount: countPaths(svg),
-      width: viewBox?.width ?? tracedInput.width,
-      height: viewBox?.height ?? tracedInput.height,
-    };
-
-    return jsonResponse(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Vectorization failed";
     console.error("[vectorize] error:", message);
