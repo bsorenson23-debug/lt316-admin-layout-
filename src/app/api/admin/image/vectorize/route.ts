@@ -130,6 +130,10 @@ export async function POST(req: NextRequest) {
 
   const imageFile = imageField;
 
+  if (!imageFile.type || !imageFile.type.startsWith("image/")) {
+    return jsonResponse({ error: "Invalid image file" }, { status: 400 });
+  }
+
   if (imageFile.size > 15 * 1024 * 1024) {
     return jsonResponse({ error: "Image too large (max 15 MB)" }, { status: 413 });
   }
@@ -149,6 +153,13 @@ export async function POST(req: NextRequest) {
 
   try {
     const inputBuffer = Buffer.from(await imageFile.arrayBuffer());
+    try {
+      // Validate decodability before tracing so invalid uploads return a stable 400 contract.
+      await sharp(inputBuffer, { failOn: "none", limitInputPixels: false }).metadata();
+    } catch {
+      return jsonResponse({ error: "Invalid image file" }, { status: 400 });
+    }
+
     const tracedInput = await buildTraceInput(inputBuffer, {
       trimWhitespace,
       normalizeLevels,

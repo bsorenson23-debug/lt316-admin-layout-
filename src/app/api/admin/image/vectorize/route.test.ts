@@ -65,3 +65,41 @@ test("vectorize route returns 413 when image exceeds max upload size", async () 
   assert.equal(response.status, 413);
   assert.equal(payload.error, "Image too large (max 15 MB)");
 });
+
+test("vectorize route returns 400 for non-image mime uploads", async () => {
+  const plainTextFile = new File(["hello from text file"], "note.txt", {
+    type: "text/plain",
+  });
+
+  const formData = new FormData();
+  formData.set("image", plainTextFile);
+
+  const request = {
+    formData: async () => formData,
+  };
+
+  const response = await POST(request as unknown as NextRequest);
+  const payload = (await response.json()) as { error?: string };
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, "Invalid image file");
+});
+
+test("vectorize route returns 400 for corrupt image bytes", async () => {
+  const corruptPng = new File(["not-a-real-png"], "corrupt.png", {
+    type: "image/png",
+  });
+
+  const formData = new FormData();
+  formData.set("image", corruptPng);
+
+  const request = {
+    formData: async () => formData,
+  };
+
+  const response = await POST(request as unknown as NextRequest);
+  const payload = (await response.json()) as { error?: string };
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, "Invalid image file");
+});
