@@ -1,5 +1,7 @@
 import type { SmartTemplateLookupResponse } from "../../types/smartTemplateLookup.ts";
 
+const DEFAULT_PRINTABLE_HEIGHT_TO_DIAMETER_RATIO = 1.8;
+
 export interface RunSmartTemplateLookupInput {
   lookupInput?: string;
   imageBytes: Uint8Array;
@@ -15,15 +17,13 @@ function round2(value: number): number {
 export async function runSmartTemplateLookup(
   input: RunSmartTemplateLookupInput,
 ): Promise<SmartTemplateLookupResponse> {
-  if (input.lookupInput === "__throw__") {
-    throw new Error("forced failure");
-  }
-
   const sourceType = input.lookupInput && input.lookupInput.trim().length > 0
     ? "mixed"
     : "image";
 
-  const printableHeightMm = round2(input.profileDiameterMm * 1.8);
+  const printableHeightMm = round2(
+    input.profileDiameterMm * DEFAULT_PRINTABLE_HEIGHT_TO_DIAMETER_RATIO,
+  );
 
   return {
     sourceType,

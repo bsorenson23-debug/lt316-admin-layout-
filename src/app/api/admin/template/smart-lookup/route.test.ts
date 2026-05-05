@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { NextRequest } from "next/server";
-import { POST } from "./route.ts";
+import { POST, createSmartLookupPostHandler } from "./route.ts";
 
 function makeFormDataRequest(formData: FormData): NextRequest {
   return {
@@ -45,13 +45,34 @@ test("returns 400 when profileDiameterMm is invalid", async () => {
   assert.deepEqual(payload, { error: "Invalid profileDiameterMm" });
 });
 
+test("returns 400 when image is too large", async () => {
+  const oversizedImage = new File(
+    [new Uint8Array(10 * 1024 * 1024 + 1)],
+    "huge.png",
+    { type: "image/png" },
+  );
+  const formData = new FormData();
+  formData.set("image", oversizedImage);
+  formData.set("profileDiameterMm", "90");
+
+  const response = await POST(makeFormDataRequest(formData));
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(payload, { error: "Image too large" });
+});
+
 test("returns 500 when server helper throws", async () => {
+  const handlePost = createSmartLookupPostHandler({
+    runLookup: async () => {
+      throw new Error("simulated helper failure");
+    },
+  });
   const formData = new FormData();
   formData.set("image", new File([new Uint8Array([1, 2, 3])], "cup.png", { type: "image/png" }));
   formData.set("profileDiameterMm", "90");
-  formData.set("lookupInput", "__throw__");
 
-  const response = await POST(makeFormDataRequest(formData));
+  const response = await handlePost(makeFormDataRequest(formData));
   const payload = await response.json();
 
   assert.equal(response.status, 500);
