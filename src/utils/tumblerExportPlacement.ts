@@ -10,7 +10,7 @@ import type {
   TopAnchorMode,
   TumblerPlacementProfile,
 } from "../types/export";
-import { isTaperWarpApplicable, applyTaperWarpToExportItem } from "./taperWarp";
+import { isTaperWarpApplicable, applyTaperWarpToExportItem } from "./taperWarp.ts";
 import { resolveRotaryCenterXmm } from "./rotaryCenter.ts";
 import { isFiniteNumber } from "./guards.ts";
 import { round4 as toRounded, round2 as toRounded2 } from "./geometry.ts";
