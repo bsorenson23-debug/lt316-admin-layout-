@@ -81,7 +81,7 @@ async function buildTraceInput(
   sourceBuffer: Buffer,
   options: { trimWhitespace: boolean; normalizeLevels: boolean; maxDimension: number },
 ): Promise<{ buffer: Buffer; width: number; height: number }> {
-  let pipeline = sharp(sourceBuffer, { failOn: "none", limitInputPixels: false }).rotate();
+  let pipeline = sharp(sourceBuffer, { failOn: "none" }).rotate();
 
   pipeline = pipeline.resize({
     width: options.maxDimension,
@@ -149,42 +149,49 @@ export async function POST(req: NextRequest) {
 
   try {
     const inputBuffer = Buffer.from(await imageFile.arrayBuffer());
-    const tracedInput = await buildTraceInput(inputBuffer, {
-      trimWhitespace,
-      normalizeLevels,
-      maxDimension,
-    });
+    try {
+      // Validate and preprocess uploaded bytes in the same sharp path used for tracing.
+      await sharp(inputBuffer, { failOn: "none" }).metadata();
 
-    const sharedOptions = {
-      turdSize,
-      alphaMax,
-      optCurve: true,
-      optTolerance,
-      blackOnWhite: !invert,
-      background: "transparent",
-      ...(thresholdMode === "manual" ? { threshold } : {}),
-    };
+      const tracedInput = await buildTraceInput(inputBuffer, {
+        trimWhitespace,
+        normalizeLevels,
+        maxDimension,
+      });
 
-    const svg = mode === "posterize"
-      ? await posterizeBuffer(tracedInput.buffer, {
-          ...sharedOptions,
-          steps: posterizeSteps,
-        })
-      : await traceBuffer(tracedInput.buffer, {
-          ...sharedOptions,
-          color: outputColor,
-        });
+      const sharedOptions = {
+        turdSize,
+        alphaMax,
+        optCurve: true,
+        optTolerance,
+        blackOnWhite: !invert,
+        background: "transparent",
+        ...(thresholdMode === "manual" ? { threshold } : {}),
+      };
 
-    const viewBox = parseViewBox(svg);
-    const response: RasterVectorizeResponse = {
-      svg,
-      mode,
-      pathCount: countPaths(svg),
-      width: viewBox?.width ?? tracedInput.width,
-      height: viewBox?.height ?? tracedInput.height,
-    };
+      const svg = mode === "posterize"
+        ? await posterizeBuffer(tracedInput.buffer, {
+            ...sharedOptions,
+            steps: posterizeSteps,
+          })
+        : await traceBuffer(tracedInput.buffer, {
+            ...sharedOptions,
+            color: outputColor,
+          });
 
-    return jsonResponse(response);
+      const viewBox = parseViewBox(svg);
+      const response: RasterVectorizeResponse = {
+        svg,
+        mode,
+        pathCount: countPaths(svg),
+        width: viewBox?.width ?? tracedInput.width,
+        height: viewBox?.height ?? tracedInput.height,
+      };
+
+      return jsonResponse(response);
+    } catch {
+      return jsonResponse({ error: "Invalid image file" }, { status: 400 });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Vectorization failed";
     console.error("[vectorize] error:", message);
