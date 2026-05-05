@@ -17,6 +17,20 @@ test("vectorize route returns 400 when image field is missing", async () => {
   assert.equal(payload.error, "No image provided");
 });
 
+test("vectorize route returns 400 when request body parsing fails", async () => {
+  const request = {
+    formData: async () => {
+      throw new Error("malformed multipart body");
+    },
+  };
+
+  const response = await POST(request as unknown as NextRequest);
+  const payload = (await response.json()) as { error?: string };
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, "Invalid request body");
+});
+
 test("vectorize route returns 400 when image field is not a file", async () => {
   const formData = new FormData();
   formData.set("image", "not-a-file");
@@ -30,4 +44,24 @@ test("vectorize route returns 400 when image field is not a file", async () => {
 
   assert.equal(response.status, 400);
   assert.equal(payload.error, "Invalid image file");
+});
+
+test("vectorize route returns 413 when image exceeds max upload size", async () => {
+  const oversizedBytes = new Uint8Array(15 * 1024 * 1024 + 1);
+  const oversizedImage = new File([oversizedBytes], "oversized.png", {
+    type: "image/png",
+  });
+
+  const formData = new FormData();
+  formData.set("image", oversizedImage);
+
+  const request = {
+    formData: async () => formData,
+  };
+
+  const response = await POST(request as unknown as NextRequest);
+  const payload = (await response.json()) as { error?: string };
+
+  assert.equal(response.status, 413);
+  assert.equal(payload.error, "Image too large (max 15 MB)");
 });
