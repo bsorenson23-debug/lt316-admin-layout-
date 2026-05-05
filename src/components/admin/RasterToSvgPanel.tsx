@@ -17,6 +17,24 @@ function basename(name: string): string {
   return name.replace(/\.[^.]+$/, "");
 }
 
+function getTraceErrorMessage(message: string): string {
+  const normalized = message.trim().toLowerCase();
+
+  if (
+    normalized.includes("invalid image file") ||
+    normalized.includes("pngload_buffer") ||
+    normalized.includes("end of stream")
+  ) {
+    return "Upload a PNG, JPEG, WEBP, or AVIF image with visible artwork and try tracing again.";
+  }
+
+  if (normalized.includes("exceeds") || normalized.includes("too large") || normalized.includes("413")) {
+    return "Image is too large to trace. Resize it first, then try again.";
+  }
+
+  return message;
+}
+
 export function RasterToSvgPanel({ onAddAsset }: Props) {
   const [open, setOpen] = React.useState(false);
   const [sourceFile, setSourceFile] = React.useState<File | null>(null);
@@ -146,7 +164,9 @@ export function RasterToSvgPanel({ onAddAsset }: Props) {
       setTraceStatus("done");
     } catch (error) {
       setTraceStatus("error");
-      setTraceError(error instanceof Error ? error.message : "Vectorization failed");
+      setTraceError(
+        getTraceErrorMessage(error instanceof Error ? error.message : "Vectorization failed"),
+      );
     }
   }, [activeFile, traceMode, thresholdMode, threshold, invert, trimWhitespace, normalizeLevels, turdSize, alphaMax, optTolerance, posterizeSteps, outputColor]);
 
