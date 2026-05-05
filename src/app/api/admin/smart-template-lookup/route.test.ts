@@ -33,6 +33,41 @@ test("alias route returns 400 when image field is not a File", async () => {
   assert.deepEqual(payload, { error: "Invalid image file" });
 });
 
+test("alias route returns 400 when image MIME type is invalid", async () => {
+  const formData = new FormData();
+  formData.set("image", new File([new Uint8Array([1, 2, 3])], "notes.txt", { type: "text/plain" }));
+  formData.set("profileDiameterMm", "90");
+
+  const response = await POST(makeFormDataRequest(formData));
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(payload, { error: "Invalid image file" });
+});
+
+test("alias route returns 400 when profileDiameterMm is missing", async () => {
+  const formData = new FormData();
+  formData.set("image", new File([new Uint8Array([1, 2, 3])], "cup.png", { type: "image/png" }));
+
+  const response = await POST(makeFormDataRequest(formData));
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(payload, { error: "Invalid profileDiameterMm" });
+});
+
+test("alias route returns 400 when profileDiameterMm is invalid", async () => {
+  const formData = new FormData();
+  formData.set("image", new File([new Uint8Array([1, 2, 3])], "cup.png", { type: "image/png" }));
+  formData.set("profileDiameterMm", "not-a-number");
+
+  const response = await POST(makeFormDataRequest(formData));
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(payload, { error: "Invalid profileDiameterMm" });
+});
+
 test("alias route returns 400 when image is too large", async () => {
   const oversizedImage = new File(
     [new Uint8Array(10 * 1024 * 1024 + 1)],
