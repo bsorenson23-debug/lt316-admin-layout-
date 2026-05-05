@@ -65,7 +65,14 @@ function expectBodyCutoutQaDebugReport(report: Record<string, unknown>): void {
   expect(svgQuality.expectedBridgeSegmentCount).toBe(2);
 }
 
-function buildStanleyLookupFixture(lookupInput: string) {
+function buildStanleyLookupFixture(
+  lookupInput: string,
+  options: { imageUrl?: string | null; imageUrls?: string[] } = {},
+) {
+  const resolvedImageUrl = options.imageUrl !== undefined ? options.imageUrl : STANLEY_FIXTURE_IMAGE_URL;
+  const resolvedImageUrls = options.imageUrls !== undefined
+    ? options.imageUrls
+    : (resolvedImageUrl ? [resolvedImageUrl] : []);
   const measurementBandWidthPx = 88.9;
   const rightBodyProfile = [
     { x: 44.5, y: 15 },
@@ -118,11 +125,11 @@ function buildStanleyLookupFixture(lookupInput: string) {
     glbPath: "/api/admin/models/generated/stanley-iceflow-30-bodyfit-v5.glb",
     modelStatus: "verified-product-model",
     modelSourceLabel: "profile-driven auto-generator",
-    imageUrl: STANLEY_FIXTURE_IMAGE_URL,
-    imageUrls: [STANLEY_FIXTURE_IMAGE_URL],
+    imageUrl: resolvedImageUrl,
+    imageUrls: resolvedImageUrls,
     fitDebug: {
       kind: "lathe-body-fit",
-      sourceImageUrl: STANLEY_FIXTURE_IMAGE_URL,
+      sourceImageUrl: resolvedImageUrl ?? "",
       imageWidthPx: 600,
       imageHeightPx: 600,
       silhouetteBoundsPx: { minX: 255.5, minY: 15, maxX: 344.5, maxY: 243.3 },
@@ -382,4 +389,59 @@ test("Stanley URL lookup protects BODY REFERENCE to BODY CUTOUT QA operator flow
 
   expect(consoleErrors).toEqual([]);
   expect(requestFailures).toEqual([]);
+});
+
+test("Stanley URL lookup keeps manual product photo fallback when website image is missing", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(120 * 1000);
+
+  let fetchUrlCalls = 0;
+
+  await page.addInitScript(() => {
+    window.localStorage.clear();
+  });
+
+  await page.route("**/api/admin/tumbler/item-lookup", async (route) => {
+    const payload = JSON.parse(route.request().postData() ?? "{}") as { lookupInput?: string };
+    expect(payload.lookupInput).toBe(STANLEY_ICEFLO_URL);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        buildStanleyLookupFixture(payload.lookupInput ?? STANLEY_ICEFLO_URL, {
+          imageUrl: null,
+          imageUrls: [],
+        }),
+      ),
+    });
+  });
+
+  await page.route("**/api/admin/flatbed/fetch-url", async (route) => {
+    fetchUrlCalls += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "unexpected" }),
+    });
+  });
+
+  await ensureWebGlSupport(page, testInfo, "admin-stanley-lookup-missing-image-fallback");
+  await page.goto("/admin?debug=1", { waitUntil: "networkidle", timeout: 120_000 });
+  await openTemplateGallery(page);
+  await page.getByTestId("template-gallery-create-new").click();
+
+  await expect(page.getByText("Upload a product photo first.", { exact: true }).first()).toBeVisible();
+
+  const lookupInput = page.getByPlaceholder(
+    "https://www.academy.com/... or Stanley IceFlow 30 oz Classic Flip Straw Tumbler",
+  );
+  await lookupInput.fill(STANLEY_ICEFLO_URL);
+  await page.getByTestId("template-create-run-lookup").click();
+
+  await expect(page.getByText("Selected size 30 oz", { exact: true })).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText("Upload a product photo first.", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Source pending", { exact: true })).toBeVisible();
+  await expect(page.getByText("Detect blocked", { exact: true })).toBeVisible();
+  expect(fetchUrlCalls).toBe(0);
 });
